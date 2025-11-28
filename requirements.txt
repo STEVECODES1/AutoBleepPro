@@ -1,0 +1,20 @@
+# AutoBleep Pro - Requirements
+
+# Core libraries
+openai-whisper
+better-profanity
+pydub
+numpy
+
+# Video processing
+moviepy
+
+# Audio processing
+scipy
+
+# GUI
+customtkinter
+Pillow
+
+# Utilities
+tqdm
