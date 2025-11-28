@@ -1,6 +1,6 @@
 # 🔇 AutoBleep Pro - Complete Build Guide
 
-## 🎉 What We Just Built Together!
+## 🎉 What I  Built!
 
 **AutoBleep Pro** - Your own professional automatic profanity bleeping software!
 
@@ -186,9 +186,6 @@ AutoBleepPro/
 
 ---
 
-## 🎉 Congratulations!
-
-You've built a professional automatic profanity bleeping tool from scratch!
 
 **Total Lines of Code:** ~400 lines  
 **Time to Build:** Guided step-by-step  
