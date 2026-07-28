@@ -676,6 +676,7 @@ class AutoBleepPro:
     def _confirm_and_export(self):
         selected = [wd for wd, var in zip(self.profane_words, self.word_vars) if var.get()]
         if not selected:
+            safe_remove(self._audio_path_for_export)
             messagebox.showinfo("Nothing to bleep", "All words were unchecked. No changes made.")
             return
         self.confirm_btn.configure(state="disabled")
@@ -754,7 +755,12 @@ class AutoBleepPro:
         encode_preset = ENCODE_PRESETS[self.encode_var.get()]
         custom_words = self._get_custom_words()
         freq = BEEP_PRESETS[self.beep_preset.get()]
-        model, device, mode_label = load_model_speed(model_name, compute_pref)
+        try:
+            model, device, mode_label = load_model_speed(model_name, compute_pref)
+        except Exception as exc:
+            self._batch_log_write(f"❌ Failed to load AI model: {exc}")
+            self.window.after(0, lambda: self.batch_btn.configure(state="normal"))
+            return
         self._batch_log_write(f"Loaded: {mode_label}\n{'─'*50}")
         for idx, fname in enumerate(files, 1):
             video_path = os.path.join(in_dir, fname)
