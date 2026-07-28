@@ -73,3 +73,20 @@ installed:
 ```bash
 python -m unittest discover -s tests -v
 ```
+
+## Troubleshooting
+
+**Transcription fails with `No such file or directory: 'ffmpeg'`**
+Whisper shells out to a **system** `ffmpeg` on PATH for audio decoding —
+moviepy's bundled ffmpeg doesn't cover this. Install ffmpeg separately
+(Windows: `winget install ffmpeg`; macOS: `brew install ffmpeg`; Linux:
+your package manager) and open a new terminal so PATH picks it up. Verify
+with `ffmpeg -version`.
+
+**GPU not being used even though you have an NVIDIA card**
+Run `python -c "import torch; print(torch.cuda.is_available())"`. If that
+prints `False`, your installed `torch` build doesn't have CUDA support (or
+your NVIDIA drivers aren't installed/up to date) — reinstall torch, or
+check `nvidia-smi` works first. `--device auto` (the default) always falls
+back to CPU silently rather than erroring, so this is the way to confirm
+which one you actually got.

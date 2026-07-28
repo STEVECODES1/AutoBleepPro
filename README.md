@@ -136,8 +136,12 @@ codec='libx264'  # Try 'mpeg4' for faster exports
 **"ModuleNotFoundError"**
 → Run INSTALL.bat again
 
-**"ffmpeg not found"**
-→ MoviePy will auto-install it
+**"ffmpeg not found" / whisper transcription fails with a "No such file or directory: 'ffmpeg'" error**
+→ MoviePy bundles its own ffmpeg internally, but Whisper's transcription step
+   always shells out to a **system** `ffmpeg` that needs to be separately
+   installed and on your PATH. On Windows: `winget install ffmpeg` (or
+   download from ffmpeg.org and add its `bin` folder to PATH), then open a
+   new terminal so PATH changes take effect. Verify with `ffmpeg -version`.
 
 **Processing is slow**
 → Use "tiny" model for faster results
