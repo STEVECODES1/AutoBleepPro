@@ -194,3 +194,19 @@ AutoBleepPro/
 ---
 
 **Ready to test it? Run INSTALL.bat now!** 🚀
+
+---
+
+## 🎬 New: AutoReel — AI Video Post-Production Supervisor
+
+Beyond bleeping a single video, **AutoReel** turns a long-form "Full
+Stream" into a YouTube-ToS/kid-friendly compliant video *and* a batch of
+vertical highlight clips ready for Instagram Reels / TikTok — complete
+with a supervisor report of what was censored and what was clipped.
+
+```bash
+python -m autoreel.cli path/to/full_stream.mp4 --output-dir autoreel_output
+```
+
+See [`AUTOREEL_GUIDE.md`](AUTOREEL_GUIDE.md) for full usage, options, and
+architecture.
