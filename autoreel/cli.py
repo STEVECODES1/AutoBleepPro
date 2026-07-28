@@ -25,6 +25,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--num-clips", type=int, default=3)
     parser.add_argument("--clip-min", type=float, default=15.0, help="Minimum clip length in seconds.")
     parser.add_argument("--clip-max", type=float, default=60.0, help="Maximum clip length in seconds.")
+    parser.add_argument(
+        "--device",
+        default="auto",
+        choices=["auto", "cpu", "cuda"],
+        help="Compute device for transcription. 'auto' (default) uses your GPU if available, else CPU.",
+    )
     return parser
 
 
@@ -45,6 +51,7 @@ def main(argv: list[str] | None = None) -> int:
         num_clips=args.num_clips,
         clip_min_duration=args.clip_min,
         clip_max_duration=args.clip_max,
+        device=None if args.device == "auto" else args.device,
     )
 
     report = pipeline.run(args.input)

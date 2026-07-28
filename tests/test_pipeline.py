@@ -65,6 +65,17 @@ class AutoReelPipelineWiringTests(unittest.TestCase):
         self.assertEqual(pipeline.highlight_scorer.max_duration, 45.0)
         self.assertEqual(pipeline.clip_renderer.output_dir, "out")
 
+    def test_device_defaults_to_auto_detect(self):
+        pipeline = AutoReelPipeline(output_dir="out")
+
+        self.assertIsNone(pipeline.device)
+        self.assertIsNone(pipeline.transcriber.device)
+
+    def test_device_override_is_wired_to_transcriber(self):
+        pipeline = AutoReelPipeline(output_dir="out", device="cpu")
+
+        self.assertEqual(pipeline.transcriber.device, "cpu")
+
 
 if __name__ == "__main__":
     unittest.main()

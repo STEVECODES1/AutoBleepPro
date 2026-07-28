@@ -11,11 +11,12 @@ them together and produces a human-readable summary of what it did.
 
 import os
 from dataclasses import dataclass, field
+from typing import Optional
 
 from .clipper import ClipRenderer
 from .compliance import ComplianceEngine, Violation
 from .highlights import Highlight, HighlightScorer
-from .transcription import Transcriber
+from .transcription import Transcriber, detect_device
 from .utils import format_timestamp
 
 
@@ -26,6 +27,7 @@ class SupervisorReport:
     clips: list[Highlight]
     clip_paths: list[str]
     output_video_path: str = ""
+    device_used: str = ""
 
     @property
     def is_kid_friendly(self) -> bool:
@@ -37,6 +39,10 @@ class SupervisorReport:
             "",
             f"**Source:** `{os.path.basename(self.source_path)}`",
             f"**Kid-Friendly:** {'✅ PASS' if self.is_kid_friendly else '⚠️ FAIL (censored)'}",
+        ]
+        if self.device_used:
+            lines.append(f"**Transcribed on:** {self.device_used}")
+        lines += [
             "",
             f"## Compliance Pass ({len(self.violations)} flagged word{'s' if len(self.violations) != 1 else ''})",
         ]
@@ -69,6 +75,7 @@ class AutoReelPipeline:
     num_clips: int = 3
     clip_min_duration: float = 15.0
     clip_max_duration: float = 60.0
+    device: Optional[str] = None  # None = auto-detect (GPU if available, else CPU)
 
     transcriber: Transcriber = field(init=False)
     compliance_engine: ComplianceEngine = field(init=False)
@@ -76,7 +83,7 @@ class AutoReelPipeline:
     clip_renderer: ClipRenderer = field(init=False)
 
     def __post_init__(self) -> None:
-        self.transcriber = Transcriber(model_name=self.model_name)
+        self.transcriber = Transcriber(model_name=self.model_name, device=self.device)
         self.compliance_engine = ComplianceEngine(custom_words=self.custom_words)
         self.highlight_scorer = HighlightScorer(
             min_duration=self.clip_min_duration, max_duration=self.clip_max_duration
@@ -88,6 +95,9 @@ class AutoReelPipeline:
 
         from moviepy import AudioFileClip, VideoFileClip
         from pydub import AudioSegment
+
+        device, device_label = (self.device, "") if self.device else detect_device()
+        device_used = f"{device.upper()} ({device_label})" if device_label else device.upper()
 
         video = VideoFileClip(source_path)
         try:
@@ -139,6 +149,7 @@ class AutoReelPipeline:
             clips=clips,
             clip_paths=clip_paths,
             output_video_path=output_video_path if violations else source_path,
+            device_used=device_used,
         )
 
     @staticmethod

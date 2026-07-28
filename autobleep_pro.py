@@ -7,6 +7,7 @@ Created step-by-step with Claude
 import customtkinter as ctk
 from tkinter import filedialog, messagebox
 import whisper
+import torch
 from better_profanity import profanity
 from pydub import AudioSegment
 from pydub.generators import Sine
@@ -19,6 +20,18 @@ from datetime import timedelta
 
 # Initialize profanity detector
 profanity.load_censor_words()
+
+# Use all CPU cores for local (non-GPU) work; torch defaults to this already,
+# but setting it explicitly avoids surprises if something upstream lowers it.
+torch.set_num_threads(os.cpu_count() or 1)
+
+
+def detect_device():
+    """Pick the fastest available device: NVIDIA GPU (CUDA) if present, else CPU."""
+    if torch.cuda.is_available():
+        return "cuda", torch.cuda.get_device_name(0)
+    return "cpu", f"{os.cpu_count()} CPU cores"
+
 
 class AutoBleepPro:
     def __init__(self):
@@ -248,12 +261,14 @@ class AutoBleepPro:
     def process_video(self):
         """Main processing pipeline - this does all the magic!"""
         try:
-            self.update_status("🔄 Step 1/5: Loading AI model...")
+            device, device_label = detect_device()
+            self.device_info = f"{device.upper()} ({device_label})"
+            self.update_status(f"🔄 Step 1/5: Loading AI model on {self.device_info}...")
             self.progress.set(0.1)
-            
+
             # Extract model name
             model_name = self.model_var.get().split()[0]  # "tiny", "base", or "small"
-            model = whisper.load_model(model_name)
+            model = whisper.load_model(model_name, device=device)
             
             self.update_status("🎵 Step 2/5: Extracting audio from video...")
             self.progress.set(0.2)
@@ -404,12 +419,15 @@ class AutoBleepPro:
     def display_found_words(self):
         """Display the profane words that were found"""
         self.results_text.delete("1.0", "end")
-        
+
+        device_line = f"⚡ Processed on: {getattr(self, 'device_info', 'unknown')}\n\n"
+
         if not self.profane_words:
-            self.results_text.insert("1.0", "✅ No profanity detected!\n\nYour video is clean.")
+            self.results_text.insert("1.0", device_line + "✅ No profanity detected!\n\nYour video is clean.")
             return
-        
-        output = f"🔍 Found {len(self.profane_words)} profane words to bleep:\n\n"
+
+        output = device_line
+        output += f"🔍 Found {len(self.profane_words)} profane words to bleep:\n\n"
         output += "=" * 70 + "\n"
         
         for i, word_data in enumerate(self.profane_words, 1):
