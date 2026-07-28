@@ -12,6 +12,7 @@ categories below are simple, dependency-free keyword lists so the engine
 degrades gracefully (and stays fully testable) without that package.
 """
 
+import re
 from dataclasses import dataclass
 from typing import Iterable, Optional
 
@@ -74,15 +75,21 @@ class ComplianceEngine:
         if not normalized:
             return None
 
-        if self.use_profanity_filter and HAS_BETTER_PROFANITY and _profanity.contains_profanity(normalized):
-            return "profanity"
+        # Whisper attaches contractions/possessives directly to tokens (e.g.
+        # "word's"), which stops exact-match profanity checks from firing on
+        # the base word. Check both forms.
+        core = re.sub(r"'(s|ll|d|m|re|ve|t)$", "", normalized)
 
-        if any(custom and custom in normalized for custom in self.custom_words):
-            return "custom_word"
+        for candidate in (normalized, core):
+            if self.use_profanity_filter and HAS_BETTER_PROFANITY and _profanity.contains_profanity(candidate):
+                return "profanity"
 
-        for category, phrases in self.categories.items():
-            if any(phrase in normalized for phrase in phrases):
-                return category
+            if any(custom and custom in candidate for custom in self.custom_words):
+                return "custom_word"
+
+            for category, phrases in self.categories.items():
+                if any(phrase in candidate for phrase in phrases):
+                    return category
 
         return None
 

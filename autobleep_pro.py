@@ -12,6 +12,7 @@ from pydub import AudioSegment
 from pydub.generators import Sine
 from moviepy import VideoFileClip, AudioFileClip
 import os
+import re
 import threading
 import numpy as np
 from datetime import timedelta
@@ -282,11 +283,25 @@ class AutoBleepPro:
                 if 'words' in segment:
                     for word_info in segment['words']:
                         word = word_info['word'].strip().lower()
-                        
+                        # Whisper attaches punctuation and contractions/possessives
+                        # (e.g. "word," or "word's") directly to tokens, which stops
+                        # exact-match profanity checks from firing. Strip both so a
+                        # flagged word is still caught with trailing punctuation or
+                        # a 's/'ll/'d/'m/'re/'ve/'t suffix attached.
+                        stripped = word.strip('.,!?;:"()[]{}-')
+                        core = re.sub(r"'(s|ll|d|m|re|ve|t)$", "", stripped)
+
                         # Check if word is profane
-                        is_profane = profanity.contains_profanity(word)
-                        is_custom = any(custom in word for custom in custom_words if custom)
-                        
+                        is_profane = (
+                            profanity.contains_profanity(word)
+                            or profanity.contains_profanity(stripped)
+                            or profanity.contains_profanity(core)
+                        )
+                        is_custom = any(
+                            custom in word or custom in stripped or custom in core
+                            for custom in custom_words if custom
+                        )
+
                         if is_profane or is_custom:
                             self.profane_words.append({
                                 'word': word_info['word'],

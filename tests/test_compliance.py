@@ -24,7 +24,7 @@ class ComplianceEngineTests(unittest.TestCase):
 
     def test_flags_sensitive_categories(self):
         engine = ComplianceEngine()
-        words = [word("heroin", 2.0, 2.4), word("suicide", 5.0, 5.6)]
+        words = [word("cocaine", 2.0, 2.4), word("suicide", 5.0, 5.6)]
 
         violations = engine.scan_words(words)
 
@@ -67,6 +67,19 @@ class ComplianceEngineTests(unittest.TestCase):
         violations = engine.scan_words([word("Acme!", 0.0, 0.4)])
 
         self.assertEqual(len(violations), 1)
+
+    def test_possessive_and_contraction_suffixes_still_match(self):
+        engine = ComplianceEngine(custom_words=("acme",))
+
+        violations = engine.scan_words(
+            [
+                word("Acme's", 0.0, 0.4),
+                word("Acme'll", 0.4, 0.8),
+                word("Acme've", 0.8, 1.2),
+            ]
+        )
+
+        self.assertEqual(len(violations), 3)
 
 
 if __name__ == "__main__":
