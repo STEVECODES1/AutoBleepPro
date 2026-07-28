@@ -1,26 +1,34 @@
-# AutoBleep Pro v2.0 — pinned dependencies
+# AutoBleep Pro v2.1 — Speed Stack
 # Run: pip install -r requirements.txt
+# NOTE: For NVIDIA GPU users, install PyTorch with CUDA from https://pytorch.org
 
-# AI transcription
-openai-whisper==20231117
+# ── AI Transcription (speed-optimized) ──────────────────────────────────────
+faster-whisper==1.1.1          # 4x faster than openai-whisper
+stable-ts[fw]==2.19.1          # word-level timestamps on top of faster-whisper
 
-# Profanity detection
+# ── Profanity detection ──────────────────────────────────────────────────────
 better-profanity==0.7.0
 
-# Audio processing
+# ── Audio processing ─────────────────────────────────────────────────────────
 pydub==0.25.1
 numpy>=1.24,<2.0
 scipy==1.11.4
 
-# Video processing
+# ── Video processing ─────────────────────────────────────────────────────────
 moviepy==2.0.0
 
-# GUI
+# ── GUI ──────────────────────────────────────────────────────────────────────
 customtkinter==5.2.2
 Pillow==10.3.0
 
-# Smart crop / face detection (AutoReel)
+# ── Smart crop / face detection (AutoReel) ───────────────────────────────────
 mediapipe==0.10.9
 
-# Progress display
+# ── Progress display ─────────────────────────────────────────────────────────
 tqdm==4.66.4
+
+# ── System requirement ───────────────────────────────────────────────────────
+# ffmpeg must be installed and on PATH:
+#   Windows: winget install ffmpeg
+#   Mac:     brew install ffmpeg
+#   Linux:   sudo apt install ffmpeg
