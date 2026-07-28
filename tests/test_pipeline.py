@@ -100,6 +100,18 @@ class AutoReelPipelineWiringTests(unittest.TestCase):
 
         self.assertFalse(pipeline.censor_profanity)
 
+    def test_face_tracking_defaults_to_true_and_is_wired_to_renderer(self):
+        pipeline = AutoReelPipeline(output_dir="out")
+
+        self.assertTrue(pipeline.face_tracking)
+        self.assertTrue(pipeline.clip_renderer.face_tracking)
+
+    def test_face_tracking_can_be_disabled(self):
+        pipeline = AutoReelPipeline(output_dir="out", face_tracking=False)
+
+        self.assertFalse(pipeline.face_tracking)
+        self.assertFalse(pipeline.clip_renderer.face_tracking)
+
 
 if __name__ == "__main__":
     unittest.main()

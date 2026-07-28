@@ -85,6 +85,7 @@ class AutoReelPipeline:
     clip_max_duration: float = 60.0
     device: Optional[str] = None  # None = auto-detect (GPU if available, else CPU)
     censor_profanity: bool = True  # False = detect and report violations but leave audio untouched
+    face_tracking: bool = True  # False = always use the static center crop
 
     transcriber: Transcriber = field(init=False)
     compliance_engine: ComplianceEngine = field(init=False)
@@ -97,7 +98,7 @@ class AutoReelPipeline:
         self.highlight_scorer = HighlightScorer(
             min_duration=self.clip_min_duration, max_duration=self.clip_max_duration
         )
-        self.clip_renderer = ClipRenderer(output_dir=self.output_dir)
+        self.clip_renderer = ClipRenderer(output_dir=self.output_dir, face_tracking=self.face_tracking)
 
     def run(self, source_path: str) -> SupervisorReport:
         os.makedirs(self.output_dir, exist_ok=True)

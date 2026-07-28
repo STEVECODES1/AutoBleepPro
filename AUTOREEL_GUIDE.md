@@ -7,12 +7,17 @@ AutoReel takes a long-form "Full Stream" video and:
    Kids" / kid-friendly standards (profanity, drug references, violent
    phrasing, self-harm references, sexual content, plus any custom words
    you supply), and censors it (beep or silence) — the same word-level
-   precision as AutoBleep Pro.
+   precision as AutoBleep Pro. You can disable censoring with `--no-censor`
+   if you just want violations reported without the audio being touched.
 2. **Highlight detection** — scores the transcript for engaging moments
    (reactions, exclamations, keyword-dense bursts) and greedily selects a
    non-overlapping set of clip windows.
 3. **Vertical clip rendering** — cuts each selected window, reframes it to
-   1080×1920 (9:16) for Reels/TikTok, and burns in a caption.
+   1080×1920 (9:16) for Reels/TikTok, and burns in a caption. When a face
+   is detected (e.g. a facecam layout), the crop dynamically follows it
+   instead of a fixed center-crop, so it doesn't get cut out of frame.
+   Falls back to a static center-crop automatically when no face is found.
+   Disable with `--no-face-tracking`.
 4. **Supervisor report** — a markdown summary of what was censored and
    which clips were produced, written to `supervisor_report.md`.
 
@@ -40,6 +45,9 @@ START_AUTOREEL.bat "stream.mp4" --num-clips 5
 | `--num-clips` | `3` | Number of short clips to generate |
 | `--clip-min` | `15` | Minimum clip length in seconds |
 | `--clip-max` | `60` | Maximum clip length in seconds |
+| `--device` | `auto` | Compute device for transcription (`auto`/`cpu`/`cuda`) |
+| `--no-censor` | *(off)* | Report violations but leave the audio untouched |
+| `--no-face-tracking` | *(off)* | Always use a static center crop instead of following a detected face |
 
 ## Output
 

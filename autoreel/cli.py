@@ -36,6 +36,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Detect and report flagged words but leave the audio untouched (clips are still cut).",
     )
+    parser.add_argument(
+        "--no-face-tracking",
+        action="store_true",
+        help="Always use a static center crop instead of tracking a detected face.",
+    )
     return parser
 
 
@@ -58,6 +63,7 @@ def main(argv: list[str] | None = None) -> int:
         clip_max_duration=args.clip_max,
         device=None if args.device == "auto" else args.device,
         censor_profanity=not args.no_censor,
+        face_tracking=not args.no_face_tracking,
     )
 
     report = pipeline.run(args.input)

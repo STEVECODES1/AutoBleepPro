@@ -9,6 +9,9 @@ numpy
 # Video processing
 moviepy
 
+# Face detection / smart crop (AutoReel)
+mediapipe
+
 # Audio processing
 scipy
 
