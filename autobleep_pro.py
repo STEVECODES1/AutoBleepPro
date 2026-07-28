@@ -95,42 +95,33 @@ BEEP_PRESETS = {
 # WORD DETECTION ENGINE v2.2
 # ═══════════════════════════════════════════════════════════════════════════════
 
-# ── Leet-speak character map ──────────────────────────────────────────────────
-# Maps common character substitutions back to their letter equivalents.
 LEET_MAP = str.maketrans({
     '0': 'o', '1': 'i', '3': 'e', '4': 'a', '5': 's',
     '6': 'g', '7': 't', '8': 'b', '9': 'g',
     '@': 'a', '$': 's', '!': 'i', '+': 't', '#': 'h',
-    '*': '',  # asterisks stripped so f**k → fk (still caught by bypass check)
+    '*': '',
 })
 
-# ── Symbol-bypass pattern: f**k, s**t, b***h, etc. ───────────────────────────
-# Detects words where inner letters are replaced with * or other symbols.
 BYPASS_PATTERN = re.compile(
     r'\b([a-z])[*@#$!]{1,4}([a-z])\b|\b([a-z])[*@#$!]{2,}\b',
     re.IGNORECASE
 )
 
-# Profanity starts that signal a bypass attempt (first + last letter present)
 BYPASS_STARTS = {
-    'f': {'k'},           # f**k
-    's': {'t', 'r'},      # s**t, s***r
-    'b': {'h', 'd'},      # b***h, b***d
-    'a': {'e'},           # a**hole (first letter)
-    'c': {'t', 'k'},      # c**t, c***k
-    'd': {'k'},           # d**k
-    'p': {'s', 'y'},      # p**s, p***y
-    'h': {'l'},           # h**l
-    'n': {'r', 'a'},      # n****r, n***a
-    'w': {'e'},           # w***e
-    'j': {'z'},           # j**z (not actually profane but example)
+    'f': {'k'},
+    's': {'t', 'r'},
+    'b': {'h', 'd'},
+    'a': {'e'},
+    'c': {'t', 'k'},
+    'd': {'k'},
+    'p': {'s', 'y'},
+    'h': {'l'},
+    'n': {'r', 'a'},
+    'w': {'e'},
+    'j': {'z'},
 }
 
-# ── Homophones / soft substitutes ────────────────────────────────────────────
-# Words Whisper might transcribe instead of the actual profanity.
-# Format: substitute → [what it might mean in context]
 HOMOPHONES: dict[str, list[str]] = {
-    # Common Whisper mishear substitutions
     "fudge": ["fuck"],
     "frick": ["fuck"],
     "freak": ["fuck"],
@@ -149,7 +140,7 @@ HOMOPHONES: dict[str, list[str]] = {
     "crud": ["crap"],
     "witch": ["bitch"],
     "beach": ["bitch"],
-    "rich": ["bitch"],   # "son of a rich" context
+    "rich": ["bitch"],
     "bass": ["ass"],
     "butt": ["ass"],
     "behind": ["ass"],
@@ -158,12 +149,8 @@ HOMOPHONES: dict[str, list[str]] = {
     "son of a gun": ["son of a bitch"],
 }
 
-# Homophones that are ONLY profane in context — flagged with lower confidence
-# These are reviewed rather than auto-bleeped.
 CONTEXT_ONLY: set[str] = {"witch", "beach", "bass", "rich", "sheet"}
 
-# ── Context window triggers ───────────────────────────────────────────────────
-# If this phrase appears in the surrounding transcript, flag the next word.
 CONTEXT_TRIGGERS: list[tuple[str, str]] = [
     ("son of a", "bitch"),
     ("what the", "hell"),
@@ -178,53 +165,41 @@ CONTEXT_TRIGGERS: list[tuple[str, str]] = [
     ("piece of", "shit"),
 ]
 
-# ── Whisper mishear map ───────────────────────────────────────────────────────
-# Common words Whisper mishears as clean words — check the phonetic original.
 WHISPER_MISHEARDS: dict[str, str] = {
-    "shirt": "shit",       # very common Whisper substitution
+    "shirt": "shit",
     "witch": "bitch",
     "batch": "bitch",
     "ditch": "bitch",
-    "rich": "bitch",       # only in context
+    "rich": "bitch",
     "cluck": "fuck",
     "duck": "fuck",
-    "luck": "fuck",        # only in context
-    "truck": "fuck",       # only in context
-    "stuck": "fuck",       # only in context
+    "luck": "fuck",
+    "truck": "fuck",
+    "stuck": "fuck",
     "shut": "shit",
     "shot": "shit",
     "ship": "shit",
     "shop": "shit",
 }
 
-# Context-only misheards — only flag if surrounded by profanity context words
 MISHEARD_CONTEXT_ONLY: set[str] = {"luck", "truck", "stuck", "rich", "shot", "shop"}
 
 
 def _normalize(text: str) -> str:
-    """Lowercase, strip accents, remove punctuation."""
     text = unicodedata.normalize('NFD', text.lower())
     text = ''.join(c for c in text if unicodedata.category(c) != 'Mn')
     return re.sub(r"[^a-z0-9@$!*#+]", "", text)
 
 
 def _deleet(text: str) -> str:
-    """Convert leet-speak to normal letters."""
     return text.translate(LEET_MAP)
 
 
 def _strip_affixes(word: str) -> list[str]:
-    """
-    Return a list of candidate stems by removing common prefixes/suffixes.
-    e.g. 'motherfucker' → ['motherfucker', 'fucker', 'fuck']
-         'bullshitting'  → ['bullshitting', 'bullshit', 'shit']
-    """
     candidates = [word]
-    # Remove common suffixes
     for suffix in ('ing', 'ed', 'er', 'ers', 'in', 's', "'s", "'d", "n't"):
         if word.endswith(suffix) and len(word) - len(suffix) >= 3:
             candidates.append(word[:-len(suffix)])
-    # Remove common prefixes
     for prefix in ('mother', 'bull', 'horse', 'cluster', 'jack', 'dumb',
                    'god', 'holy', 'un', 'out'):
         if word.startswith(prefix) and len(word) > len(prefix) + 2:
@@ -233,16 +208,11 @@ def _strip_affixes(word: str) -> list[str]:
 
 
 def _is_bypass(raw_word: str) -> bool:
-    """
-    Detect symbol-bypass patterns: f**k, s**t, b***h, a**hole, etc.
-    Returns True if the word looks like censored profanity.
-    """
     if BYPASS_PATTERN.search(raw_word):
         first = raw_word[0].lower()
         last = re.sub(r'[^a-z]', '', raw_word.lower())[-1:]
         if first in BYPASS_STARTS and last in BYPASS_STARTS.get(first, set()):
             return True
-        # Even without matching last letter, multiple symbols in short word = flag
         if len(raw_word) <= 6 and raw_word.count('*') >= 2:
             return True
     return False
@@ -253,35 +223,19 @@ def _check_word(
     context_words: list[str],
     custom_words: list[str]
 ) -> tuple[bool, str]:
-    """
-    Master word check. Returns (is_profane, reason).
-
-    Checks in order:
-      1. Symbol bypass  (f**k, s**t)
-      2. Leet-speak     (sh1t, f@ck)
-      3. better-profanity on raw + stripped + stemmed variants
-      4. Homophone list (fudge, shoot, frick)
-      5. Whisper mishear map (shirt → shit)
-      6. Context window ("son of a" → flag next word)
-      7. Custom words
-    """
-    # ── 1. Symbol bypass ─────────────────────────────────────────────────────
     if _is_bypass(raw_word):
         return True, "Symbol bypass (f**k style)"
 
-    # Normalize for remaining checks
     norm = _normalize(raw_word)
     deleet = _deleet(norm)
-    stripped = re.sub(r"^[^a-z]+|[^a-z]+$", "", norm)  # strip leading/trailing non-alpha
+    stripped = re.sub(r"^[^a-z]+|[^a-z]+$", "", norm)
     core = re.sub(r"'(s|ll|d|m|re|ve|t|n't)$", "", stripped)
 
-    # ── 2. Leet-speak ────────────────────────────────────────────────────────
-    if deleet != norm:  # something was converted
+    if deleet != norm:
         for v in _strip_affixes(deleet):
             if profanity.contains_profanity(v):
                 return True, "Leet-speak profanity"
 
-    # ── 3. better-profanity on all variants ──────────────────────────────────
     candidates = set()
     for base in (norm, stripped, core, deleet):
         candidates.update(_strip_affixes(base))
@@ -290,18 +244,15 @@ def _check_word(
         if candidate and profanity.contains_profanity(candidate):
             return True, "Profanity detected"
 
-    # ── 4. Homophones ────────────────────────────────────────────────────────
     clean_word = re.sub(r"[^a-z]", "", stripped)
     if clean_word in HOMOPHONES:
         if clean_word not in CONTEXT_ONLY:
             return True, f"Likely profanity substitute ('{clean_word}')"
-        # context-only homophones: only flag if context words present
         ctx_str = " ".join(context_words)
         for trigger, _ in CONTEXT_TRIGGERS:
             if trigger in ctx_str:
                 return True, f"Context homophone ('{clean_word}')"
 
-    # ── 5. Whisper mishear ───────────────────────────────────────────────────
     if clean_word in WHISPER_MISHEARDS:
         if clean_word not in MISHEAR_CONTEXT_ONLY:
             return True, f"Whisper mishear of '{WHISPER_MISHEARDS[clean_word]}'"
@@ -310,13 +261,11 @@ def _check_word(
                for cw in context_words):
             return True, f"Whisper mishear (context) of '{WHISPER_MISHEARDS[clean_word]}'"
 
-    # ── 6. Context window ────────────────────────────────────────────────────
-    ctx_str = " ".join(context_words[-4:])  # last 4 words
+    ctx_str = " ".join(context_words[-4:])
     for trigger, target in CONTEXT_TRIGGERS:
         if trigger in ctx_str and clean_word == target:
             return True, f"Context trigger ('{trigger} {target}')"
 
-    # ── 7. Custom words ──────────────────────────────────────────────────────
     for cw in custom_words:
         if cw and (cw in norm or cw in stripped or cw in core):
             return True, "Custom word"
@@ -328,17 +277,10 @@ def find_profanity_v2(
     result: dict,
     custom_words: list[str]
 ) -> list[dict]:
-    """
-    Upgraded profanity finder.
-    - Builds a rolling context window of preceding words.
-    - Checks each word through the full detection engine.
-    - Deduplicates by (start_time) to avoid double entries.
-    """
     found = []
     seen_starts: set[float] = set()
     all_words: list[dict] = []
 
-    # Flatten all words from all segments for context window access
     for segment in result.get("segments", []):
         for word_info in segment.get("words", []):
             all_words.append(word_info)
@@ -348,7 +290,6 @@ def find_profanity_v2(
         start = word_info.get("start", 0.0)
         end = word_info.get("end", 0.0)
 
-        # Context = clean text of previous 5 words
         context = [
             re.sub(r"[^a-z]", "", all_words[i]["word"].strip().lower())
             for i in range(max(0, idx - 5), idx)
@@ -691,10 +632,13 @@ class AutoBleepPro:
             self._video_path_for_export = video_path
             self.window.after(0, self._populate_review_panel)
         except Exception as exc:
+            # FIX: Python 3 deletes `exc` after the except block ends.
+            # Capture it into a plain local variable NOW so the lambda can use it.
+            err_msg = str(exc)
             safe_remove(audio_path)
-            self._update_status(f"❌ Error: {exc}", 0)
+            self._update_status(f"❌ Error: {err_msg}", 0)
             self.window.after(0, lambda: [
-                messagebox.showerror("Error", str(exc)),
+                messagebox.showerror("Error", err_msg),
                 self.process_btn.configure(state="normal")
             ])
 
@@ -771,9 +715,12 @@ class AutoBleepPro:
                 self.process_btn.configure(state="normal")
             ])
         except Exception as exc:
-            self._update_status(f"❌ Export error: {exc}", 0)
+            # FIX: Python 3 deletes `exc` after the except block ends.
+            # Capture it into a plain local variable NOW so the lambda can use it.
+            err_msg = str(exc)
+            self._update_status(f"❌ Export error: {err_msg}", 0)
             self.window.after(0, lambda: [
-                messagebox.showerror("Export Error", str(exc)),
+                messagebox.showerror("Export Error", err_msg),
                 self.confirm_btn.configure(state="normal")
             ])
         finally:
