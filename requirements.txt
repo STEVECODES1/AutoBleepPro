@@ -5,6 +5,7 @@
 # ── AI Transcription (speed-optimized) ──────────────────────────────────────
 faster-whisper==1.1.1          # 4x faster than openai-whisper
 stable-ts[fw]==2.19.1          # word-level timestamps on top of faster-whisper
+openai-whisper                 # still used directly by AutoReel's transcriber
 
 # ── Profanity detection ──────────────────────────────────────────────────────
 better-profanity==0.7.0

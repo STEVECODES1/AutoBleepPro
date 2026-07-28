@@ -47,10 +47,13 @@ try:
     import stable_whisper
     SPEED_MODE = True
 except ImportError:
-    import whisper as openai_whisper
     SPEED_MODE = False
     print("[AutoBleep] stable-ts not found — using openai-whisper. "
           "Run: pip install stable-ts[fw] for 4x speed.")
+
+# Always available as the last-resort fallback in load_model_speed(), even
+# when stable-ts imported fine but its own load attempts fail at runtime.
+import whisper as openai_whisper
 
 # ── Profanity filter init ────────────────────────────────────────────────────
 profanity.load_censor_words()
@@ -254,7 +257,7 @@ def _check_word(
                 return True, f"Context homophone ('{clean_word}')"
 
     if clean_word in WHISPER_MISHEARDS:
-        if clean_word not in MISHEAR_CONTEXT_ONLY:
+        if clean_word not in MISHEARD_CONTEXT_ONLY:
             return True, f"Whisper mishear of '{WHISPER_MISHEARDS[clean_word]}'"
         ctx_str = " ".join(context_words)
         if any(profanity.contains_profanity(cw) or cw in HOMOPHONES
