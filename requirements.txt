@@ -23,7 +23,7 @@ customtkinter==5.2.2
 Pillow==10.3.0
 
 # ── Smart crop / face detection (AutoReel) ───────────────────────────────────
-mediapipe==0.10.9
+mediapipe>=0.10.14
 
 # ── Progress display ─────────────────────────────────────────────────────────
 tqdm==4.66.4
