@@ -1,220 +1,142 @@
-# 🔇 AutoBleep Pro - Complete Build Guide
+# 🔇 AutoBleep Pro v2.0
 
-## 🎉 What I  Built!
-
-**AutoBleep Pro** - Your own professional automatic profanity bleeping software!
-
-### ✨ Features:
-- ✅ **Fully Automatic** - AI detects and bleeps profanity
-- ✅ **Word-Level Precision** - Only bleeps the bad words, not entire sentences
-- ✅ **Two Modes** - Beep sound OR silence
-- ✅ **Custom Words** - Add your own words to bleep
-- ✅ **Professional GUI** - Beautiful dark interface
-- ✅ **Progress Tracking** - See exactly what's happening
-- ✅ **Export Clean Video** - Get MP4 file ready to upload
+> **AI-powered automatic profanity bleeper** — detect, review, and export clean videos in minutes.  
+> 100% local. No uploads. No subscriptions. Free forever.
 
 ---
 
-## 🚀 Installation (One-Time Setup)
+## ✨ What's New in v2.0
 
-### Step 1: Install Dependencies
-**Double-click:** `INSTALL.bat`
+| Feature | v1 | v2 |
+|---|---|---|
+| Word-by-word review (uncheck words to keep) | ❌ | ✅ |
+| Custom output folder | ❌ | ✅ |
+| Batch folder processing | ❌ | ✅ |
+| Beep sound presets (4 options) | ❌ | ✅ |
+| Medium Whisper model (best accuracy) | ❌ | ✅ |
+| Pinned dependency versions | ❌ | ✅ |
+| MIT License | ❌ | ✅ |
+| Memory-safe temp file cleanup | ❌ | ✅ |
 
-This installs:
-- OpenAI Whisper (AI transcription)
-- Pydub (audio processing)
-- MoviePy (video processing)
-- CustomTkinter (GUI)
-- Better-Profanity (detection)
+---
 
-**Time:** 5-10 minutes
+## 🚀 Quick Start
+
+### 1. Install
+```bash
+pip install -r requirements.txt
+```
+Or double-click **`INSTALL.bat`** on Windows.
+
+> **First run** downloads the Whisper AI model (~74 MB for base). One-time only.
+
+### 2. Launch
+```bash
+python autobleep_pro.py
+```
+Or double-click **`START_AUTOBLEEP.bat`**.
 
 ---
 
 ## 🎬 How to Use
 
-### Step 1: Start the App
-**Double-click:** `START_AUTOBLEEP.bat`
+### Single Video Mode
+1. **Select Video** — click Browse Video, pick any MP4/MOV/AVI/MKV file
+2. **Configure** — choose beep sound, AI model, custom words, output folder
+3. **Analyze** — click the green button; AI transcribes and detects profanity
+4. **Review** — a checklist of every detected word appears; **uncheck any word you want to KEEP**
+5. **Export** — click Confirm & Export; your clean video is saved
 
-### Step 2: In the App
-
-1. **📹 Select Your Video**
-   - Click "Browse Video"
-   - Choose your MP4/MOV/AVI file
-
-2. **⚙️ Configure Settings**
-   - Choose: Beep sound OR Silence
-   - Select AI model (base recommended)
-   - Add custom words if needed (optional)
-
-3. **🚀 Process**
-   - Click the big green button: "Analyze & Bleep Video Automatically"
-   - Wait for processing (shows progress)
-   - Video saves automatically with "_CLEAN" added to filename
-
-### Step 3: Done!
-Your clean video is ready to upload! 🎉
+### Batch Folder Mode (New!)
+1. Switch to the **Batch Folder** tab
+2. Select an input folder (all videos inside will be processed)
+3. Optionally select a different output folder
+4. Click **Process All Videos** — each file is processed automatically
 
 ---
 
-## 🔧 How It Works (Technical)
+## ⚙️ Settings Guide
 
-### The Magic Pipeline:
+| Setting | Options | Recommendation |
+|---|---|---|
+| **Censoring Method** | Beep Sound / Silence | Beep for YouTube/TikTok |
+| **Beep Preset** | Classic TV, High Pitch, Low Buzz, Air Horn | Classic TV |
+| **AI Model** | tiny / base / small / medium | base (speed) or small (accuracy) |
+| **Custom Words** | Comma-separated list | Competitor names, brand terms |
+| **Output Folder** | Any folder on your PC | Separate `output/` folder |
 
-1. **AI Transcription** (Whisper AI)
-   - Transcribes all speech
-   - Gets timestamp for EVERY WORD (not just sentences!)
+### Model Speed vs Accuracy
 
-2. **Profanity Detection** (Better-Profanity)
-   - Scans each word
-   - Flags profanity + custom words
-
-3. **Audio Processing** (Pydub)
-   - Loads audio as waveform
-   - Replaces profane words with:
-     - **Beep:** 1000 Hz tone (professional censoring)
-     - **Silence:** Muted audio
-
-4. **Video Reconstruction** (MoviePy)
-   - Keeps original video
-   - Replaces audio track
-   - Exports clean MP4
+| Model | Speed | Accuracy | Best For |
+|---|---|---|---|
+| tiny | ⚡⚡⚡⚡ | ★★☆☆ | Quick previews |
+| base | ⚡⚡⚡ | ★★★☆ | Daily use |
+| small | ⚡⚡ | ★★★★ | Clear speech |
+| medium | ⚡ | ★★★★★ | Accents / noisy audio |
 
 ---
 
-## 💡 Customization Options
+## 🔧 How It Works
 
-### Want to change the beep sound?
-Edit line 197 in `autobleep_pro.py`:
-```python
-beep = Sine(1000)  # Change 1000 to different frequency
 ```
-
-### Want to add more profanity words?
-Better-profanity library can be customized with:
-```python
-profanity.add_censor_words(['word1', 'word2'])
+[Video File]
+    │
+    ▼
+[Whisper AI] ──── word-level timestamps ────►  [Profanity Detector]
+                                                        │
+                                               [Word Review UI] ← user unchecks
+                                                        │
+                                               [Pydub: replace with beep/silence]
+                                                        │
+                                               [MoviePy: rebuild video]
+                                                        │
+                                                [Clean Video MP4] ✅
 ```
-
-### Want to change output format?
-Edit line 232:
-```python
-codec='libx264'  # Try 'mpeg4' for faster exports
-```
-
----
-
-## 📊 Performance
-
-**Processing Speed:**
-- Tiny model: ~2-3x realtime
-- Base model: ~3-5x realtime (recommended)
-- Small model: ~5-8x realtime
-
-**Example:**
-- 10-minute video = 30-50 minutes processing (base model)
-- First run downloads AI models (one-time, ~500MB)
-
----
-
-## 🎯 Comparison
-
-| Feature | AutoBleep Pro | Manual CapCut | Online Tools |
-|---------|---------------|---------------|--------------|
-| Automatic | ✅ Yes | ❌ No | ✅ Yes |
-| Cost | FREE | FREE | $0-$99/mo |
-| Privacy | ✅ Local | ✅ Local | ⚠️ Cloud |
-| Custom Words | ✅ Yes | ❌ No | ⚠️ Limited |
-| Word-Level | ✅ Yes | ✅ Yes | ✅ Yes |
-| Offline | ✅ Yes | ✅ Yes | ❌ No |
-| Learning | ✅ Yes | ❌ No | ❌ No |
 
 ---
 
 ## 🐛 Troubleshooting
 
-**"ModuleNotFoundError"**
-→ Run INSTALL.bat again
+**`ModuleNotFoundError`**  
+→ Run `pip install -r requirements.txt` again
 
-**"ffmpeg not found" / whisper transcription fails with a "No such file or directory: 'ffmpeg'" error**
-→ MoviePy bundles its own ffmpeg internally, but Whisper's transcription step
-   always shells out to a **system** `ffmpeg` that needs to be separately
-   installed and on your PATH. On Windows: `winget install ffmpeg` (or
-   download from ffmpeg.org and add its `bin` folder to PATH), then open a
-   new terminal so PATH changes take effect. Verify with `ffmpeg -version`.
+**`ffmpeg not found`**  
+→ Install ffmpeg and add to PATH:  
+  Windows: `winget install ffmpeg`  
+  Mac: `brew install ffmpeg`
 
-**Processing is slow**
-→ Use "tiny" model for faster results
+**Processing is slow**  
+→ Switch to `tiny` model, or check if your GPU is being used (CUDA)
 
-**Video quality decreased**
-→ Change codec to 'libx264' with preset='slow'
+**Word not being detected**  
+→ Add it to the Custom Words field
 
----
-
-## 🎓 What You Learned
-
-By building this, you learned:
-- ✅ Python GUI development (CustomTkinter)
-- ✅ AI integration (Whisper)
-- ✅ Audio processing (Pydub)
-- ✅ Video processing (MoviePy)
-- ✅ Threading for responsive UI
-- ✅ File I/O operations
-- ✅ Error handling
-- ✅ Real-world application development
+**Video quality decreased**  
+→ This is a re-encode; use `preset='slow'` in the code for better quality
 
 ---
 
-## 🚀 Next Steps
-
-**Want to enhance it?**
-1. Add batch processing (multiple videos)
-2. Add preview before export
-3. Export report of bleeped words
-4. Add visual censoring (blur faces/text)
-5. Support for more languages
-6. Cloud backup option
-
----
-
-## 📁 Project Files
+## 📁 Project Structure
 
 ```
 AutoBleepPro/
-├── autobleep_pro.py      ← Main application (400+ lines)
-├── requirements.txt       ← Python dependencies
-├── INSTALL.bat           ← Installation script
-├── START_AUTOBLEEP.bat   ← Launch script
-└── README.md             ← This guide
+├── autobleep_pro.py       ← Main app (v2.0 — 400+ lines)
+├── autoreel_gui.py        ← AutoReel (clip generator)
+├── autoreel/              ← AutoReel modules
+├── requirements.txt       ← Pinned dependencies
+├── INSTALL.bat            ← Windows installer
+├── START_AUTOBLEEP.bat    ← Launch AutoBleep Pro
+├── START_AUTOREEL.bat     ← Launch AutoReel
+├── LICENSE                ← MIT License
+└── README.md              ← This file
 ```
 
 ---
 
+## 📄 License
 
-**Total Lines of Code:** ~400 lines  
-**Time to Build:** Guided step-by-step  
-**Result:** Production-ready software  
-
----
-
-**Ready to test it? Run INSTALL.bat now!** 🚀
+MIT — free to use, modify, and distribute. See [LICENSE](LICENSE).
 
 ---
 
-## 🎬 New: AutoReel — AI Video Post-Production Supervisor
-
-Beyond bleeping a single video, **AutoReel** turns a long-form "Full
-Stream" into a YouTube-ToS/kid-friendly compliant video *and* a batch of
-vertical highlight clips ready for Instagram Reels / TikTok — complete
-with a supervisor report of what was censored and what was clipped.
-
-```bash
-python -m autoreel.cli path/to/full_stream.mp4 --output-dir autoreel_output
-```
-
-Or, for a GUI (same dark theme as AutoBleep Pro), double-click
-`START_AUTOREEL_GUI.bat` — pick a video, toggle options, and watch progress
-instead of a bare terminal.
-
-See [`AUTOREEL_GUIDE.md`](AUTOREEL_GUIDE.md) for full usage, options, and
-architecture.
+**Built by [STEVECODES1](https://github.com/STEVECODES1) • Contributions welcome — open an Issue or PR!**

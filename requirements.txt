@@ -1,23 +1,26 @@
-# AutoBleep Pro - Requirements
+# AutoBleep Pro v2.0 — pinned dependencies
+# Run: pip install -r requirements.txt
 
-# Core libraries
-openai-whisper
-better-profanity
-pydub
-numpy
+# AI transcription
+openai-whisper==20231117
 
-# Video processing
-moviepy
-
-# Face detection / smart crop (AutoReel)
-mediapipe
+# Profanity detection
+better-profanity==0.7.0
 
 # Audio processing
-scipy
+pydub==0.25.1
+numpy>=1.24,<2.0
+scipy==1.11.4
+
+# Video processing
+moviepy==2.0.0
 
 # GUI
-customtkinter
-Pillow
+customtkinter==5.2.2
+Pillow==10.3.0
 
-# Utilities
-tqdm
+# Smart crop / face detection (AutoReel)
+mediapipe==0.10.9
+
+# Progress display
+tqdm==4.66.4
