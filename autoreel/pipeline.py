@@ -28,17 +28,25 @@ class SupervisorReport:
     clip_paths: list[str]
     output_video_path: str = ""
     device_used: str = ""
+    censored: bool = True
 
     @property
     def is_kid_friendly(self) -> bool:
         return len(self.violations) == 0
 
     def to_markdown(self) -> str:
+        if self.is_kid_friendly:
+            status = "✅ PASS"
+        elif self.censored:
+            status = "⚠️ FAIL (censored)"
+        else:
+            status = "❌ FAIL (censoring disabled — profanity left in audio)"
+
         lines = [
             "# AutoReel Supervisor Report",
             "",
             f"**Source:** `{os.path.basename(self.source_path)}`",
-            f"**Kid-Friendly:** {'✅ PASS' if self.is_kid_friendly else '⚠️ FAIL (censored)'}",
+            f"**Kid-Friendly:** {status}",
         ]
         if self.device_used:
             lines.append(f"**Transcribed on:** {self.device_used}")
@@ -76,6 +84,7 @@ class AutoReelPipeline:
     clip_min_duration: float = 15.0
     clip_max_duration: float = 60.0
     device: Optional[str] = None  # None = auto-detect (GPU if available, else CPU)
+    censor_profanity: bool = True  # False = detect and report violations but leave audio untouched
 
     transcriber: Transcriber = field(init=False)
     compliance_engine: ComplianceEngine = field(init=False)
@@ -114,7 +123,7 @@ class AutoReelPipeline:
                 self.output_dir, f"{self._basename(source_path)}_CLEAN.mp4"
             )
 
-            if violations:
+            if violations and self.censor_profanity:
                 audio_segment = AudioSegment.from_wav(audio_path)
                 censored = self.compliance_engine.censor_audio(
                     audio_segment, violations, method=self.bleep_method
@@ -143,13 +152,15 @@ class AutoReelPipeline:
                 if os.path.exists(temp_path):
                     os.remove(temp_path)
 
+        was_censored = bool(violations) and self.censor_profanity
         return SupervisorReport(
             source_path=source_path,
             violations=violations,
             clips=clips,
             clip_paths=clip_paths,
-            output_video_path=output_video_path if violations else source_path,
+            output_video_path=output_video_path if was_censored else source_path,
             device_used=device_used,
+            censored=self.censor_profanity,
         )
 
     @staticmethod

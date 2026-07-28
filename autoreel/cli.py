@@ -31,6 +31,11 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["auto", "cpu", "cuda"],
         help="Compute device for transcription. 'auto' (default) uses your GPU if available, else CPU.",
     )
+    parser.add_argument(
+        "--no-censor",
+        action="store_true",
+        help="Detect and report flagged words but leave the audio untouched (clips are still cut).",
+    )
     return parser
 
 
@@ -52,6 +57,7 @@ def main(argv: list[str] | None = None) -> int:
         clip_min_duration=args.clip_min,
         clip_max_duration=args.clip_max,
         device=None if args.device == "auto" else args.device,
+        censor_profanity=not args.no_censor,
     )
 
     report = pipeline.run(args.input)

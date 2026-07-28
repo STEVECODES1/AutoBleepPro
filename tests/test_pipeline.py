@@ -46,6 +46,20 @@ class SupervisorReportTests(unittest.TestCase):
         self.assertIn("Insane play!", markdown)
         self.assertIn("9.5", markdown)
 
+    def test_uncensored_violations_are_flagged_distinctly_from_censored(self):
+        violations = [Violation(word="darn", start=1.0, end=1.5, category="profanity")]
+
+        censored_report = SupervisorReport(
+            source_path="stream.mp4", violations=violations, clips=[], clip_paths=[], censored=True
+        )
+        uncensored_report = SupervisorReport(
+            source_path="stream.mp4", violations=violations, clips=[], clip_paths=[], censored=False
+        )
+
+        self.assertIn("censored", censored_report.to_markdown().lower())
+        self.assertIn("disabled", uncensored_report.to_markdown().lower())
+        self.assertNotEqual(censored_report.to_markdown(), uncensored_report.to_markdown())
+
 
 class AutoReelPipelineWiringTests(unittest.TestCase):
     def test_components_receive_configured_options(self):
@@ -75,6 +89,16 @@ class AutoReelPipelineWiringTests(unittest.TestCase):
         pipeline = AutoReelPipeline(output_dir="out", device="cpu")
 
         self.assertEqual(pipeline.transcriber.device, "cpu")
+
+    def test_censor_profanity_defaults_to_true(self):
+        pipeline = AutoReelPipeline(output_dir="out")
+
+        self.assertTrue(pipeline.censor_profanity)
+
+    def test_censor_profanity_can_be_disabled(self):
+        pipeline = AutoReelPipeline(output_dir="out", censor_profanity=False)
+
+        self.assertFalse(pipeline.censor_profanity)
 
 
 if __name__ == "__main__":
