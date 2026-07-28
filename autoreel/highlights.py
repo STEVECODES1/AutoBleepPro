@@ -9,6 +9,7 @@ This module is pure Python (no video/audio libraries) so it can be
 exercised with plain dicts in unit tests.
 """
 
+import re
 from dataclasses import dataclass, field
 from typing import Iterable, Optional
 
@@ -19,6 +20,14 @@ DEFAULT_ENGAGEMENT_KEYWORDS: dict[str, float] = {
     "clutch": 3, "let's go": 2.5, "amazing": 2, "incredible": 2,
     "crazy": 2, "wow": 2, "wtf": 2, "what": 1, "huge": 1.5,
     "epic": 2, "unreal": 2.5, "poggers": 2, "gg": 1.5,
+    # Laughter
+    "hahaha": 2.5, "haha": 2, "lmao": 2.5, "lol": 1.5, "lmfao": 3,
+    # Streamer/chat callouts
+    "clip that": 3, "clip it": 3, "chat": 1, "clipped": 2,
+    # Disbelief / hype
+    "no shot": 3, "no freaking way": 3, "what just happened": 3,
+    "let's gooo": 3, "actually insane": 3.5, "sheesh": 2, "oh my gosh": 2.5,
+    "bro": 1, "dude": 1, "holy": 1.5,
 }
 
 
@@ -39,7 +48,8 @@ class HighlightScorer:
     keywords: dict[str, float] = field(default_factory=lambda: dict(DEFAULT_ENGAGEMENT_KEYWORDS))
 
     def score_segment(self, segment: dict) -> float:
-        text = segment.get("text", "").lower()
+        original_text = segment.get("text", "")
+        text = original_text.lower()
         score = 0.0
 
         for phrase, weight in self.keywords.items():
@@ -48,6 +58,19 @@ class HighlightScorer:
 
         score += text.count("!") * 0.75
         score += text.count("?") * 0.25
+
+        # ALL-CAPS words often mean Whisper is rendering shouted/emphasized
+        # speech; each one is a signal of an excited, clip-worthy moment.
+        caps_words = [
+            w for w in re.findall(r"[A-Za-z']+", original_text)
+            if len(w) >= 3 and w.isupper()
+        ]
+        score += len(caps_words) * 1.5
+
+        # Elongated words ("noooo", "yesss", "heeey") signal a drawn-out
+        # reaction - a single hit is enough of a signal on its own.
+        if re.search(r"([a-z])\1{2,}", text):
+            score += 1.5
 
         # Longer bursts of speech in a segment suggest higher energy talk.
         word_count = len(segment.get("words", [])) or len(text.split())

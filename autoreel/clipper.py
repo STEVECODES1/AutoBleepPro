@@ -19,7 +19,6 @@ VERTICAL_HEIGHT = 1920
 @dataclass
 class ClipRenderer:
     output_dir: str
-    caption_font_size: int = 64
     face_tracking: bool = True
 
     def _to_vertical(self, clip):
@@ -84,24 +83,9 @@ class ClipRenderer:
             return []
         return smooth_centers(samples)
 
-    def _caption_clip(self, text: str, duration: float):
-        from moviepy import TextClip
-
-        caption = TextClip(
-            text=text,
-            font_size=self.caption_font_size,
-            color="white",
-            stroke_color="black",
-            stroke_width=3,
-            size=(int(VERTICAL_WIDTH * 0.9), None),
-            method="caption",
-        ).with_duration(duration)
-
-        return caption.with_position(("center", "bottom"))
-
     def render(self, source_path: str, highlight: Highlight, filename: str) -> str:
-        """Cut, reformat, and caption one highlight; returns the output path."""
-        from moviepy import CompositeVideoClip, VideoFileClip
+        """Cut and reframe one highlight to vertical; returns the output path."""
+        from moviepy import VideoFileClip
 
         os.makedirs(self.output_dir, exist_ok=True)
         output_path = os.path.join(self.output_dir, filename)
@@ -115,13 +99,8 @@ class ClipRenderer:
             else:
                 vertical = self._to_vertical(subclip)
 
-            layers = [vertical]
-            if highlight.text:
-                layers.append(self._caption_clip(highlight.text, vertical.duration))
-
-            final = CompositeVideoClip(layers, size=(VERTICAL_WIDTH, VERTICAL_HEIGHT))
-            final.write_videofile(output_path, codec="libx264", audio_codec="aac", logger=None)
-            final.close()
+            vertical.write_videofile(output_path, codec="libx264", audio_codec="aac", logger=None)
+            vertical.close()
 
         return output_path
 

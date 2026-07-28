@@ -9,15 +9,16 @@ AutoReel takes a long-form "Full Stream" video and:
    you supply), and censors it (beep or silence) — the same word-level
    precision as AutoBleep Pro. You can disable censoring with `--no-censor`
    if you just want violations reported without the audio being touched.
-2. **Highlight detection** — scores the transcript for engaging moments
-   (reactions, exclamations, keyword-dense bursts) and greedily selects a
-   non-overlapping set of clip windows.
-3. **Vertical clip rendering** — cuts each selected window, reframes it to
-   1080×1920 (9:16) for Reels/TikTok, and burns in a caption. When a face
-   is detected (e.g. a facecam layout), the crop dynamically follows it
-   instead of a fixed center-crop, so it doesn't get cut out of frame.
-   Falls back to a static center-crop automatically when no face is found.
-   Disable with `--no-face-tracking`.
+2. **Highlight detection** — scores the transcript for engaging, clip-worthy
+   moments (reactions, laughter, shouting, elongated words, exclamations,
+   keyword-dense bursts) and greedily selects a non-overlapping set of clip
+   windows.
+3. **Vertical clip rendering** — cuts each selected window and reframes it
+   to 1080×1920 (9:16) for Reels/TikTok. When a face is detected (e.g. a
+   facecam layout), the crop dynamically follows it instead of a fixed
+   center-crop, so it doesn't get cut out of frame. Falls back to a static
+   center-crop automatically when no face is found. Disable with
+   `--no-face-tracking`.
 4. **Supervisor report** — a markdown summary of what was censored and
    which clips were produced, written to `supervisor_report.md`.
 
@@ -77,7 +78,7 @@ The pipeline is split into small, independently testable pieces under
 - `transcription.py` — wraps Whisper (word-level timestamps)
 - `compliance.py` — `ComplianceEngine`: flags + censors non-compliant audio
 - `highlights.py` — `HighlightScorer`: scores and selects clip-worthy windows
-- `clipper.py` — `ClipRenderer`: cuts, reframes to 9:16, and captions clips
+- `clipper.py` — `ClipRenderer`: cuts and reframes clips to 9:16
 - `pipeline.py` — `AutoReelPipeline` wires the stages together and builds
   the `SupervisorReport`
 - `cli.py` — command-line entry point

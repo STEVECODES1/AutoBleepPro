@@ -73,6 +73,27 @@ class HighlightScorerTests(unittest.TestCase):
 
         self.assertEqual(clips, [])
 
+    def test_streaming_reaction_phrases_score_higher(self):
+        scorer = HighlightScorer()
+        reaction = segment(0, 5, "Hahaha no shot, chat clip that!")
+        boring = segment(5, 10, "So then we went to the store.")
+
+        self.assertGreater(scorer.score_segment(reaction), scorer.score_segment(boring))
+
+    def test_all_caps_shouting_scores_higher_than_lowercase(self):
+        scorer = HighlightScorer()
+        shouted = segment(0, 5, "THIS IS ACTUALLY HAPPENING RIGHT NOW")
+        calm = segment(5, 10, "this is actually happening right now")
+
+        self.assertGreater(scorer.score_segment(shouted), scorer.score_segment(calm))
+
+    def test_elongated_words_score_higher_than_normal_form(self):
+        scorer = HighlightScorer()
+        elongated = segment(0, 5, "noooooo not like that")
+        normal = segment(5, 10, "no not like that")
+
+        self.assertGreater(scorer.score_segment(elongated), scorer.score_segment(normal))
+
 
 if __name__ == "__main__":
     unittest.main()
