@@ -34,6 +34,15 @@ terminal so you can pass a file):
 START_AUTOREEL.bat "stream.mp4" --num-clips 5
 ```
 
+### GUI
+
+Prefer a window over the command line? Double-click `START_AUTOREEL_GUI.bat`
+(same dark customtkinter interface as AutoBleep Pro). Pick a video, set the
+model/device/censoring/face-tracking options and number of clips, hit
+**Transcribe, Censor & Cut Clips**, and watch progress and the final
+supervisor report right in the window. A **📂 Open Output Folder** button
+appears once it's done.
+
 ### Options
 
 | Flag | Default | Description |

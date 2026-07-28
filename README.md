@@ -212,5 +212,9 @@ with a supervisor report of what was censored and what was clipped.
 python -m autoreel.cli path/to/full_stream.mp4 --output-dir autoreel_output
 ```
 
+Or, for a GUI (same dark theme as AutoBleep Pro), double-click
+`START_AUTOREEL_GUI.bat` — pick a video, toggle options, and watch progress
+instead of a bare terminal.
+
 See [`AUTOREEL_GUIDE.md`](AUTOREEL_GUIDE.md) for full usage, options, and
 architecture.
