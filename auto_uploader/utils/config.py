@@ -1,0 +1,151 @@
+"""
+Loads config.json (non-secret settings, titles, templates, folders) and
+merges in secrets from .env (credentials) via python-dotenv. Keeping
+secrets out of config.json means config.json is safe to commit/share.
+"""
+
+import json
+import os
+from dataclasses import dataclass, field
+from typing import Optional
+
+from dotenv import load_dotenv
+
+
+@dataclass
+class YouTubeConfig:
+    channel: str
+    privacy: str
+    category_id: str
+    made_for_kids: bool
+    title_format: str
+    description_template: str
+    tags: list
+    playlist_id: str
+    thumbnail_path: str
+    client_secrets_path: str
+    token_path: str
+
+
+@dataclass
+class RumbleConfig:
+    channel: str
+    privacy: str
+    title_format: str
+    description_template: str
+    tags: list
+    thumbnail_path: str
+    username: str
+    password: str
+    login_url: str
+    upload_url: str
+
+
+@dataclass
+class GeneralConfig:
+    watch_folder: str
+    uploaded_folder: str
+    logs_folder: str
+    date_style: str
+    max_retries: int
+    retry_delays: tuple
+    ask_for_title: bool
+    default_title: str
+    supported_formats: tuple
+    enable_desktop_notifications: bool
+    dry_run_mode: bool
+    stability_check_seconds: int
+    duplicate_store_path: str
+
+
+@dataclass
+class AppConfig:
+    youtube: YouTubeConfig
+    rumble: RumbleConfig
+    general: GeneralConfig
+    project_root: str
+
+
+def load_config(config_path: str = "config.json", env_path: str = ".env") -> AppConfig:
+    project_root = os.path.dirname(os.path.abspath(config_path)) or "."
+    load_dotenv(env_path)
+
+    with open(config_path, "r", encoding="utf-8") as f:
+        raw = json.load(f)
+
+    yt = raw["youtube"]
+    rb = raw["rumble"]
+    gen = raw["general"]
+
+    youtube = YouTubeConfig(
+        channel=yt["channel"],
+        privacy=yt.get("privacy", "public"),
+        category_id=str(yt.get("category_id", "20")),
+        made_for_kids=bool(yt.get("made_for_kids", False)),
+        title_format=yt["title_format"],
+        description_template=yt["description_template"],
+        tags=list(yt.get("tags", [])),
+        playlist_id=os.environ.get("YOUTUBE_PLAYLIST_ID", yt.get("playlist_id", "")),
+        thumbnail_path=yt.get("thumbnail_path", ""),
+        client_secrets_path=os.environ.get(
+            "YOUTUBE_CLIENT_SECRETS_PATH",
+            os.path.join(project_root, "client_secrets.json"),
+        ),
+        token_path=os.path.join(project_root, "youtube_token.json"),
+    )
+
+    rumble = RumbleConfig(
+        channel=rb["channel"],
+        privacy=rb.get("privacy", "public"),
+        title_format=rb["title_format"],
+        description_template=rb["description_template"],
+        tags=list(rb.get("tags", [])),
+        thumbnail_path=rb.get("thumbnail_path", ""),
+        username=os.environ.get("RUMBLE_USERNAME", ""),
+        password=os.environ.get("RUMBLE_PASSWORD", ""),
+        login_url=rb.get("login_url", "https://rumble.com/login.php"),
+        upload_url=rb.get("upload_url", "https://rumble.com/upload.php"),
+    )
+
+    general = GeneralConfig(
+        watch_folder=os.path.join(project_root, gen.get("watch_folder", "./watch_folder")),
+        uploaded_folder=os.path.join(project_root, gen.get("uploaded_folder", "./uploaded")),
+        logs_folder=os.path.join(project_root, gen.get("logs_folder", "./logs")),
+        date_style=gen.get("date_style", "M/D/YY"),
+        max_retries=int(gen.get("max_retries", 3)),
+        retry_delays=tuple(gen.get("retry_delays", [60, 300, 900])),
+        ask_for_title=bool(gen.get("ask_for_title", True)),
+        default_title=gen.get("default_title", "Gaming Stream"),
+        supported_formats=tuple(
+            e.lower() for e in gen.get("supported_formats", [".mp4", ".mov", ".avi", ".mkv", ".flv", ".wmv"])
+        ),
+        enable_desktop_notifications=bool(gen.get("enable_desktop_notifications", True)),
+        dry_run_mode=bool(gen.get("dry_run_mode", False)),
+        stability_check_seconds=int(gen.get("stability_check_seconds", 5)),
+        duplicate_store_path=os.path.join(project_root, gen.get("duplicate_store_path", "./uploaded_hashes.json")),
+    )
+
+    return AppConfig(youtube=youtube, rumble=rumble, general=general, project_root=project_root)
+
+
+def validate_config(cfg: AppConfig) -> list:
+    """Returns a list of human-readable problems; empty list = all good.
+    Used by --test-config. Doesn't make any network calls."""
+    problems = []
+
+    if not os.path.exists(cfg.youtube.client_secrets_path):
+        problems.append(
+            f"YouTube client_secrets.json not found at: {cfg.youtube.client_secrets_path} "
+            "(download it from Google Cloud Console - see README)"
+        )
+    if not cfg.rumble.username or not cfg.rumble.password:
+        problems.append("RUMBLE_USERNAME / RUMBLE_PASSWORD not set in .env")
+    if "{title}" not in cfg.youtube.title_format or "{date}" not in cfg.youtube.title_format:
+        problems.append("youtube.title_format must contain both {title} and {date}")
+    if "{title}" not in cfg.rumble.title_format or "{date}" not in cfg.rumble.title_format:
+        problems.append("rumble.title_format must contain both {title} and {date}")
+
+    for folder in (cfg.general.watch_folder, cfg.general.uploaded_folder, cfg.general.logs_folder):
+        os.makedirs(folder, exist_ok=True)
+
+    return problems

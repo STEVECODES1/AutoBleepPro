@@ -2,3 +2,14 @@ __pycache__/
 *.pyc
 *_CLEAN.mp4
 autoreel_output/
+
+# auto_uploader secrets/state - never commit these
+auto_uploader/.env
+auto_uploader/client_secrets.json
+auto_uploader/youtube_token.json
+auto_uploader/uploaded_hashes.json
+auto_uploader/logs/*.log
+auto_uploader/watch_folder/*
+!auto_uploader/watch_folder/.gitkeep
+auto_uploader/uploaded/*
+!auto_uploader/uploaded/.gitkeep

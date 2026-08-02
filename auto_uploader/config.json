@@ -1,0 +1,42 @@
+{
+  "_comment": "Non-secret settings only. Credentials live in .env (see .env.example) so this file is safe to back up/share. Placeholders in title_format ({title}, {date}) and description_template ([DATE], [STREAM TITLE]) get filled in automatically at upload time.",
+
+  "youtube": {
+    "channel": "@StackswopoGames",
+    "privacy": "public",
+    "category_id": "20",
+    "made_for_kids": false,
+    "title_format": "\"{title}\" {date} Stackswopo Stream",
+    "description_template": "This stream first aired on [DATE] with the title \"[STREAM TITLE]\" on the Stackswopo channel.\n\n📌 Also on Rumble (BinScripts): https://rumble.com/user/BinScripts\n🎮 Main channel: https://www.youtube.com/@stackswopo_\n📺 Twitch: https://www.twitch.tv/stackswopo\n\nThis is a replay of one of my own past streams, archived here so it stays available.\n\nThe stream contains live reactions, jokes, and real-life conversations in my usual unfiltered style.\n\n🔥 Missed the original broadcast? Enjoy the full replay with every moment, from the funny bits to the wild reactions.\n🎥 Want more? Check the channel for additional past streams, full VODs, and highlights.\n\n👍 If you enjoy these replays, consider subscribing!\n\nTags: #StacksWopo #StreamReplay #FullVOD #GamingHighlights #FunnyMoments #GTA5 #GTAOnline #Roleplay #StreamerMoments #UncutReplay #Entertainment",
+    "tags": ["StacksWopo", "StreamReplay", "FullVOD", "GamingHighlights", "FunnyMoments", "GTA5", "GTAOnline", "Roleplay", "StreamerMoments", "UncutReplay", "Entertainment"],
+    "playlist_id": "",
+    "thumbnail_path": "./thumbnails/default.jpg"
+  },
+
+  "rumble": {
+    "channel": "BinScripts",
+    "privacy": "public",
+    "login_url": "https://rumble.com/login.php",
+    "upload_url": "https://rumble.com/upload.php",
+    "title_format": "\"{title}\" {date} Stackswopo Stream",
+    "description_template": "My YouTube Channel: https://www.youtube.com/@StackswopoGames\nInstagram: https://www.instagram.com/stackswopomanz/\nMonkeyAPP Content: https://www.youtube.com/@BinScript\nStack's Channel: https://www.youtube.com/@stackswopo_\nStack's Twitch Channel: https://www.twitch.tv/stackswopo\nOnlyThaGuys Channel: https://www.youtube.com/@OnlyThaGuys26\n\nThis stream first aired on [DATE] with the title \"[STREAM TITLE]\" on the Stackswopo channel.\n\nThis is a replay of one of my own past streams, archived here so it stays available.\n\nThe stream contains live reactions, jokes, and real-life conversations in my usual unfiltered style.\n\n🔥 Missed the original broadcast? Enjoy the full replay with every moment, from the funny bits to the wild reactions.\n🎥 Want more? Check the channel for additional past streams, full VODs, and highlights.\n\n👍 If you enjoy these replays, consider subscribing!\n\nTags: #StacksWopo #StreamReplay #FullVOD #GamingHighlights #FunnyMoments #GTA5 #GTAOnline #Roleplay #StreamerMoments #UncutReplay #Entertainment",
+    "tags": ["StacksWopo", "StreamReplay", "FullVOD", "GamingHighlights", "FunnyMoments", "GTA5", "GTAOnline", "Roleplay", "StreamerMoments", "UncutReplay", "Entertainment"],
+    "thumbnail_path": "./thumbnails/default.jpg"
+  },
+
+  "general": {
+    "watch_folder": "./watch_folder",
+    "uploaded_folder": "./uploaded",
+    "logs_folder": "./logs",
+    "duplicate_store_path": "./uploaded_hashes.json",
+    "date_style": "M/D/YY",
+    "max_retries": 3,
+    "retry_delays": [60, 300, 900],
+    "ask_for_title": true,
+    "default_title": "Gaming Stream",
+    "supported_formats": [".mp4", ".mov", ".avi", ".mkv", ".flv", ".wmv"],
+    "enable_desktop_notifications": true,
+    "dry_run_mode": false,
+    "stability_check_seconds": 5
+  }
+}

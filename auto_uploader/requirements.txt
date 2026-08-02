@@ -1,0 +1,19 @@
+# Auto-Upload System - Requirements
+# Run: pip install -r requirements.txt
+# Then (one-time): playwright install chromium
+
+# YouTube Data API v3 (official, OAuth2)
+google-auth-oauthlib==1.2.1
+google-api-python-client==2.146.0
+
+# Rumble upload via browser automation (no public Rumble API exists)
+playwright==1.47.0
+
+# Folder watching
+watchdog==4.0.2
+
+# Desktop notifications (Windows toast / macOS / Linux libnotify)
+plyer==2.1.0
+
+# .env file support
+python-dotenv==1.0.1

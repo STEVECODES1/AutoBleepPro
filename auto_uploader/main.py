@@ -1,0 +1,228 @@
+"""
+Auto-Upload System for Stackswopo streams -> YouTube + Rumble.
+
+Usage:
+    python main.py --watch                       # watch watch_folder/, upload new videos as they arrive
+    python main.py --dry-run                      # same as --watch but previews only, uploads nothing
+    python main.py --file "video.mp4" --title "My Stream"   # upload one specific file now
+    python main.py --batch ./watch_folder          # process every video already sitting in a folder
+    python main.py --test-config                   # validate config.json/.env without uploading anything
+"""
+
+import argparse
+import os
+import shutil
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from datetime import datetime
+
+from utils.config import load_config, validate_config
+from utils.duplicate_checker import DuplicateChecker
+from utils.file_watcher import FolderWatcher
+from utils.logging_setup import setup_logger
+from utils.notifier import notify
+from utils.retry import retry_with_backoff
+from utils.rumble_uploader import RumbleUploader
+from utils.templating import build_description, build_title, format_date
+from utils.youtube_uploader import YouTubeUploader
+
+
+def get_stream_title(video_path: str, cli_title: str, cfg) -> str:
+    if cli_title:
+        return cli_title
+
+    sidecar = os.path.splitext(video_path)[0] + ".txt"
+    if os.path.exists(sidecar):
+        with open(sidecar, "r", encoding="utf-8") as f:
+            text = f.read().strip()
+        if text:
+            return text.splitlines()[0].strip()
+
+    if cfg.general.ask_for_title:
+        prompt = f"\nNew video detected: {os.path.basename(video_path)}\nStream title (Enter for default '{cfg.general.default_title}'): "
+        typed = input(prompt).strip()
+        return typed or cfg.general.default_title
+
+    return cfg.general.default_title
+
+
+def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChecker,
+                  yt_logger, rb_logger, dry_run: bool) -> dict:
+    filename = os.path.basename(video_path)
+
+    if dup_checker.is_duplicate(video_path):
+        print(f"[SKIP] {filename} already uploaded previously (matched by content hash).")
+        return {"skipped": "duplicate"}
+
+    if os.path.splitext(video_path)[1].lower() not in cfg.general.supported_formats:
+        print(f"[SKIP] {filename} is not a supported video format.")
+        return {"skipped": "unsupported_format"}
+
+    stream_title = get_stream_title(video_path, cli_title, cfg)
+    now = datetime.now()
+    date_str = format_date(now, cfg.general.date_style)
+
+    yt_title = build_title(stream_title, date_str, cfg.youtube.title_format)
+    yt_description = build_description(cfg.youtube.description_template, date_str, stream_title)
+    rb_title = build_title(stream_title, date_str, cfg.rumble.title_format)
+    rb_description = build_description(cfg.rumble.description_template, date_str, stream_title)
+
+    print(f"\n{'='*70}\nProcessing: {filename}")
+    print(f"YouTube title: {yt_title}")
+    print(f"Rumble title:  {rb_title}")
+    print(f"{'='*70}")
+
+    if dry_run:
+        print("[DRY RUN] Would upload with the title/description above. Nothing was uploaded.")
+        print("\n--- YouTube description preview ---")
+        print(yt_description)
+        print("\n--- Rumble description preview ---")
+        print(rb_description)
+        return {"dry_run": True}
+
+    results = {}
+
+    notify("Upload starting", filename, cfg.general.enable_desktop_notifications)
+
+    # --- YouTube ---
+    try:
+        yt = YouTubeUploader(cfg.youtube.client_secrets_path, cfg.youtube.token_path)
+
+        def yt_progress(pct):
+            print(f"\r[YouTube] Uploading... {pct}%", end="", flush=True)
+
+        def yt_on_retry(attempt, delay, exc):
+            yt_logger.warning(f"{filename}: attempt {attempt} failed ({exc}); retrying in {delay}s")
+
+        url = retry_with_backoff(
+            lambda: yt.upload(
+                video_path, yt_title, yt_description, cfg.youtube.tags,
+                privacy=cfg.youtube.privacy, category_id=cfg.youtube.category_id,
+                made_for_kids=cfg.youtube.made_for_kids,
+                thumbnail_path=cfg.youtube.thumbnail_path or None,
+                playlist_id=cfg.youtube.playlist_id or None,
+                progress_callback=yt_progress,
+            ),
+            max_retries=cfg.general.max_retries, delays=cfg.general.retry_delays, on_retry=yt_on_retry,
+        )
+        print()
+        yt_logger.info(f"{filename}: uploaded successfully -> {url}")
+        notify("YouTube upload complete", url, cfg.general.enable_desktop_notifications)
+        results["youtube"] = url
+    except Exception as exc:
+        print()
+        yt_logger.error(f"{filename}: FAILED after {cfg.general.max_retries} retries: {exc}")
+        notify("YouTube upload FAILED", f"{filename}: {exc}", cfg.general.enable_desktop_notifications)
+        results["youtube"] = f"FAILED: {exc}"
+
+    # --- Rumble ---
+    try:
+        rb = RumbleUploader(cfg.rumble.username, cfg.rumble.password, cfg.rumble.login_url, cfg.rumble.upload_url)
+
+        def rb_progress(pct):
+            print(f"\r[Rumble] Uploading... {pct}%", end="", flush=True)
+
+        def rb_on_retry(attempt, delay, exc):
+            rb_logger.warning(f"{filename}: attempt {attempt} failed ({exc}); retrying in {delay}s")
+
+        url = retry_with_backoff(
+            lambda: rb.upload(
+                video_path, rb_title, rb_description, cfg.rumble.tags,
+                privacy=cfg.rumble.privacy, thumbnail_path=cfg.rumble.thumbnail_path or None,
+                progress_callback=rb_progress,
+            ),
+            max_retries=cfg.general.max_retries, delays=cfg.general.retry_delays, on_retry=rb_on_retry,
+        )
+        print()
+        rb_logger.info(f"{filename}: uploaded successfully -> {url}")
+        notify("Rumble upload complete", url, cfg.general.enable_desktop_notifications)
+        results["rumble"] = url
+    except Exception as exc:
+        print()
+        rb_logger.error(f"{filename}: FAILED after {cfg.general.max_retries} retries: {exc}")
+        notify("Rumble upload FAILED", f"{filename}: {exc}", cfg.general.enable_desktop_notifications)
+        results["rumble"] = f"FAILED: {exc}"
+
+    dup_checker.mark_uploaded(video_path, results)
+
+    dest = os.path.join(cfg.general.uploaded_folder, filename)
+    os.makedirs(cfg.general.uploaded_folder, exist_ok=True)
+    try:
+        shutil.move(video_path, dest)
+    except Exception as exc:
+        print(f"[WARN] Could not move {filename} to uploaded/: {exc}")
+
+    return results
+
+
+def main(argv=None) -> int:
+    parser = argparse.ArgumentParser(description="Auto-upload streams to YouTube + Rumble.")
+    parser.add_argument("--watch", action="store_true", help="Watch the configured folder for new videos.")
+    parser.add_argument("--dry-run", action="store_true", help="Preview titles/descriptions; upload nothing.")
+    parser.add_argument("--file", help="Upload one specific video file now.")
+    parser.add_argument("--title", help="Stream title to use with --file (skips the interactive prompt).")
+    parser.add_argument("--batch", help="Process every supported video already in the given folder.")
+    parser.add_argument("--test-config", action="store_true", help="Validate config.json/.env, then exit.")
+    args = parser.parse_args(argv)
+
+    config_dir = os.path.dirname(os.path.abspath(__file__))
+    cfg = load_config(os.path.join(config_dir, "config.json"), os.path.join(config_dir, ".env"))
+
+    if args.test_config:
+        problems = validate_config(cfg)
+        if problems:
+            print("Config problems found:")
+            for p in problems:
+                print(f"  - {p}")
+            return 1
+        print("Config looks good. Folders created/verified. (This does not test real YouTube/Rumble login.)")
+        return 0
+
+    validate_config(cfg)  # ensures folders exist even outside --test-config
+    dry_run = args.dry_run or cfg.general.dry_run_mode
+
+    yt_logger = setup_logger("youtube", cfg.general.logs_folder)
+    rb_logger = setup_logger("rumble", cfg.general.logs_folder)
+    dup_checker = DuplicateChecker(cfg.general.duplicate_store_path)
+
+    if args.file:
+        process_file(args.file, cfg, args.title, dup_checker, yt_logger, rb_logger, dry_run)
+        return 0
+
+    if args.batch:
+        for fname in sorted(os.listdir(args.batch)):
+            path = os.path.join(args.batch, fname)
+            if os.path.isfile(path):
+                process_file(path, cfg, None, dup_checker, yt_logger, rb_logger, dry_run)
+        return 0
+
+    if args.watch or dry_run:
+        print(f"Watching {cfg.general.watch_folder} for new videos... (Ctrl+C to stop)")
+        if dry_run:
+            print("[DRY RUN MODE] Nothing will actually be uploaded.")
+
+        def on_ready(path):
+            process_file(path, cfg, None, dup_checker, yt_logger, rb_logger, dry_run)
+
+        watcher = FolderWatcher(
+            cfg.general.watch_folder, cfg.general.supported_formats,
+            cfg.general.stability_check_seconds, on_ready,
+        )
+        watcher.start()
+        try:
+            import time
+            while True:
+                time.sleep(1)
+        except KeyboardInterrupt:
+            print("\nStopping...")
+            watcher.stop()
+        return 0
+
+    parser.print_help()
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
