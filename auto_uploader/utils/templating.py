@@ -6,6 +6,7 @@ from main.py, the file watcher, and --dry-run previews without dragging in
 any upload-library imports.
 """
 
+import os
 import re
 from datetime import datetime
 from typing import Optional
@@ -43,6 +44,44 @@ def extract_date_from_filename(filename: str) -> Optional[datetime]:
                 return datetime(year, month, day)
             except ValueError:
                 continue  # e.g. "13-45-26" matched the shape but isn't a real date
+    return None
+
+
+# Straight and "smart"/curly quote characters, in matched pairs, tried in
+# order. Covers filenames like "'!howl' 3-20-26 ..." (single) and
+# "\"Back from the dead\" 05/08/26 ..." (double).
+_QUOTE_PAIRS = (("'", "'"), ('"', '"'), ("‘", "’"), ("“", "”"))
+
+
+def extract_title_from_filename(filename: str) -> Optional[str]:
+    """Best-effort stream-title extraction for backlog files, so batch
+    processing doesn't have to stop and ask for every single one:
+
+    - Quoted filenames use the quoted text: "'!howl' 3-20-26 Stackswopo
+      Kick Stream.mp4" -> "!howl".
+    - Unquoted filenames use whatever's before the date:
+      "!howl 2026-03-19_21_23.mp4" -> "!howl".
+
+    Returns None (caller should fall back to asking, same as today) if
+    neither approach finds anything usable - better to ask once than to
+    silently title a video with something wrong.
+    """
+    name = os.path.splitext(filename)[0]
+
+    for open_q, close_q in _QUOTE_PAIRS:
+        match = re.search(re.escape(open_q) + r"([^" + re.escape(open_q + close_q) + r"]+)" + re.escape(close_q), name)
+        if match:
+            candidate = match.group(1).strip()
+            if candidate:
+                return candidate
+
+    for pattern, _ in _DATE_PATTERNS:
+        match = pattern.search(name)
+        if match:
+            candidate = name[: match.start()].strip(" _-'\"")
+            if candidate:
+                return candidate
+
     return None
 
 

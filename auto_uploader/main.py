@@ -26,7 +26,13 @@ from utils.logging_setup import setup_logger
 from utils.notifier import notify
 from utils.retry import retry_with_backoff
 from utils.rumble_uploader import RumbleUploader
-from utils.templating import build_description, build_title, extract_date_from_filename, format_date
+from utils.templating import (
+    build_description,
+    build_title,
+    extract_date_from_filename,
+    extract_title_from_filename,
+    format_date,
+)
 from utils.youtube_checker import fetch_existing_videos, find_existing_video
 from utils.youtube_uploader import YouTubeUploader
 
@@ -41,6 +47,14 @@ def get_stream_title(video_path: str, cli_title: str, cfg) -> str:
             text = f.read().strip()
         if text:
             return text.splitlines()[0].strip()
+
+    # Backlog filenames often already carry a usable title (quoted, or the
+    # text before the date) - use it instead of stopping to ask, so a
+    # --batch run over a big folder doesn't need to be babysat file by
+    # file. Falls through to asking (or the default) when nothing's found.
+    extracted = extract_title_from_filename(os.path.basename(video_path))
+    if extracted:
+        return extracted
 
     if cfg.general.ask_for_title:
         prompt = f"\nNew video detected: {os.path.basename(video_path)}\nStream title (Enter for default '{cfg.general.default_title}'): "
