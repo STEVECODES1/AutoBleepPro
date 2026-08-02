@@ -13,3 +13,5 @@ auto_uploader/watch_folder/*
 !auto_uploader/watch_folder/.gitkeep
 auto_uploader/uploaded/*
 !auto_uploader/uploaded/.gitkeep
+auto_uploader/censored/*
+!auto_uploader/censored/.gitkeep

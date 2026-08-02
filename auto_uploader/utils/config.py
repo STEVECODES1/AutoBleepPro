@@ -56,6 +56,12 @@ class GeneralConfig:
     dry_run_mode: bool
     stability_check_seconds: int
     duplicate_store_path: str
+    censor_before_upload: bool
+    censor_model: str
+    censor_bleep_method: str
+    censor_device: Optional[str]
+    censor_custom_words: tuple
+    censored_folder: str
 
 
 @dataclass
@@ -123,6 +129,12 @@ def load_config(config_path: str = "config.json", env_path: str = ".env") -> App
         dry_run_mode=bool(gen.get("dry_run_mode", False)),
         stability_check_seconds=int(gen.get("stability_check_seconds", 5)),
         duplicate_store_path=os.path.join(project_root, gen.get("duplicate_store_path", "./uploaded_hashes.json")),
+        censor_before_upload=bool(gen.get("censor_before_upload", True)),
+        censor_model=gen.get("censor_model", "base"),
+        censor_bleep_method=gen.get("censor_bleep_method", "beep"),
+        censor_device=os.environ.get("CENSOR_DEVICE") or gen.get("censor_device") or None,
+        censor_custom_words=tuple(gen.get("censor_custom_words", [])),
+        censored_folder=os.path.join(project_root, gen.get("censored_folder", "./censored")),
     )
 
     return AppConfig(youtube=youtube, rumble=rumble, general=general, project_root=project_root)

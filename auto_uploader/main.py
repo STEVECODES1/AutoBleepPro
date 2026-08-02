@@ -18,6 +18,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from datetime import datetime
 
+from utils.censor import censor_video
 from utils.config import load_config, validate_config
 from utils.duplicate_checker import DuplicateChecker, hash_file
 from utils.file_watcher import FolderWatcher
@@ -77,11 +78,36 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
 
     if dry_run:
         print("[DRY RUN] Would upload with the title/description above. Nothing was uploaded.")
+        if cfg.general.censor_before_upload:
+            print("[DRY RUN] Censoring pass would run before the real upload (skipped here for speed).")
         print("\n--- YouTube description preview ---")
         print(yt_description)
         print("\n--- Rumble description preview ---")
         print(rb_description)
         return {"dry_run": True}
+
+    upload_path = video_path
+    if cfg.general.censor_before_upload:
+        print(f"[Censor] Transcribing + scanning for profanity (model={cfg.general.censor_model})...")
+        censor_result = censor_video(
+            video_path, cfg.general.censored_folder,
+            model_name=cfg.general.censor_model,
+            bleep_method=cfg.general.censor_bleep_method,
+            custom_words=cfg.general.censor_custom_words,
+            device=cfg.general.censor_device,
+        )
+        upload_path = censor_result.output_path
+        if censor_result.violation_count == -1:
+            print("[Censor] Reusing a censored copy from a previous attempt.")
+        elif censor_result.was_censored:
+            print(f"[Censor] Bleeped {censor_result.violation_count} word(s): {', '.join(censor_result.censored_words)}")
+            notify(
+                "Video censored before upload",
+                f"{filename}: {censor_result.violation_count} word(s) bleeped",
+                cfg.general.enable_desktop_notifications,
+            )
+        else:
+            print("[Censor] No profanity/mature language detected - uploading original audio.")
 
     results = {}
 
@@ -108,7 +134,7 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
 
             url = retry_with_backoff(
                 lambda: yt.upload(
-                    video_path, yt_title, yt_description, cfg.youtube.tags,
+                    upload_path, yt_title, yt_description, cfg.youtube.tags,
                     privacy=cfg.youtube.privacy, category_id=cfg.youtube.category_id,
                     made_for_kids=cfg.youtube.made_for_kids,
                     thumbnail_path=cfg.youtube.thumbnail_path or None,
@@ -151,7 +177,7 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
 
             url = retry_with_backoff(
                 lambda: rb.upload(
-                    video_path, rb_title, rb_description, cfg.rumble.tags,
+                    upload_path, rb_title, rb_description, cfg.rumble.tags,
                     privacy=cfg.rumble.privacy, thumbnail_path=cfg.rumble.thumbnail_path or None,
                     progress_callback=rb_progress,
                 ),
@@ -176,6 +202,8 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
             shutil.move(video_path, dest)
         except Exception as exc:
             print(f"[WARN] Could not move {filename} to uploaded/: {exc}")
+        if upload_path != video_path and os.path.exists(upload_path):
+            os.remove(upload_path)  # temp censored copy, no longer needed once fully uploaded
     else:
         print(f"[INFO] {filename} left in place (not every platform succeeded yet) - "
               f"rerun --file or --batch on it later to retry just what's still missing.")

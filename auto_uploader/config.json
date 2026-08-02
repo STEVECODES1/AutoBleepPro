@@ -37,6 +37,14 @@
     "supported_formats": [".mp4", ".mov", ".avi", ".mkv", ".flv", ".wmv", ".ts"],
     "enable_desktop_notifications": true,
     "dry_run_mode": false,
-    "stability_check_seconds": 5
+    "stability_check_seconds": 5,
+
+    "_censor_comment": "Bleeps profanity before upload (reuses the AutoReel censoring engine) so YouTube doesn't age-restrict/demonetize over spoken language. censor_device: null = auto-detect GPU/CPU, or set 'cuda'/'cpu'.",
+    "censor_before_upload": true,
+    "censor_model": "base",
+    "censor_bleep_method": "beep",
+    "censor_device": null,
+    "censor_custom_words": [],
+    "censored_folder": "./censored"
   }
 }
