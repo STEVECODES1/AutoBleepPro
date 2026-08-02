@@ -2,12 +2,20 @@
 Duplicate-upload detection: filename + sha256 content hash, tracked in a
 small local JSON store next to this project (not moviepy/API-dependent so
 it's trivially testable).
+
+Tracking is per-platform and persisted immediately after each platform's
+result is known - NOT batched until both platforms are attempted. That
+matters: if the process is interrupted (Ctrl+C, crash) after YouTube
+succeeds but before Rumble finishes, a later re-run must remember that
+YouTube already succeeded and only retry Rumble, instead of re-uploading
+to YouTube and creating a real duplicate video.
 """
 
 import hashlib
 import json
 import os
 from dataclasses import dataclass, field
+from typing import Optional
 
 
 def hash_file(path: str, chunk_size: int = 8 * 1024 * 1024) -> str:
@@ -18,6 +26,10 @@ def hash_file(path: str, chunk_size: int = 8 * 1024 * 1024) -> str:
         while chunk := f.read(chunk_size):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _is_success(result: Optional[str]) -> bool:
+    return bool(result) and not result.startswith("FAILED:")
 
 
 @dataclass
@@ -40,18 +52,29 @@ class DuplicateChecker:
         with open(self.store_path, "w", encoding="utf-8") as f:
             json.dump(self._seen, f, indent=2)
 
-    def is_duplicate(self, path: str) -> bool:
-        """True if this exact file content (by hash) has already been
-        uploaded, regardless of filename or which folder it's in now."""
-        return hash_file(path) in self._seen
+    def get_platform_result(self, file_hash: str, platform: str) -> Optional[str]:
+        """The recorded URL for `platform` if this exact file content
+        already succeeded there, else None. A prior FAILED result doesn't
+        count - that platform is still eligible for a fresh attempt."""
+        record = self._seen.get(file_hash)
+        if not record:
+            return None
+        result = record.get("results", {}).get(platform)
+        return result if _is_success(result) else None
 
-    def mark_uploaded(self, path: str, results: dict) -> None:
-        """Record a file as uploaded. `results` is e.g.
-        {"youtube": "https://...", "rumble": "https://..."} - stored for
-        reference so upload history is inspectable in the JSON file."""
-        file_hash = hash_file(path)
-        self._seen[file_hash] = {
-            "filename": os.path.basename(path),
-            "results": results,
-        }
+    def record_platform_result(self, file_hash: str, filename: str, platform: str, result: str) -> None:
+        """Persist one platform's result immediately (not batched with the
+        other platform), so a partially-completed run is resumable."""
+        record = self._seen.setdefault(file_hash, {"filename": filename, "results": {}})
+        record["filename"] = filename
+        record["results"][platform] = result
         self._save()
+
+    def is_fully_uploaded(self, file_hash: str, platforms: tuple = ("youtube", "rumble")) -> bool:
+        """True only if every platform in `platforms` already has a
+        successful (non-FAILED) result recorded for this file content."""
+        record = self._seen.get(file_hash)
+        if not record:
+            return False
+        results = record.get("results", {})
+        return all(_is_success(results.get(p)) for p in platforms)

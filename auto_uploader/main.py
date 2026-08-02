@@ -19,7 +19,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from datetime import datetime
 
 from utils.config import load_config, validate_config
-from utils.duplicate_checker import DuplicateChecker
+from utils.duplicate_checker import DuplicateChecker, hash_file
 from utils.file_watcher import FolderWatcher
 from utils.logging_setup import setup_logger
 from utils.notifier import notify
@@ -51,9 +51,10 @@ def get_stream_title(video_path: str, cli_title: str, cfg) -> str:
 def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChecker,
                   yt_logger, rb_logger, dry_run: bool) -> dict:
     filename = os.path.basename(video_path)
+    file_hash = hash_file(video_path)
 
-    if dup_checker.is_duplicate(video_path):
-        print(f"[SKIP] {filename} already uploaded previously (matched by content hash).")
+    if dup_checker.is_fully_uploaded(file_hash):
+        print(f"[SKIP] {filename} already uploaded to both platforms previously (matched by content hash).")
         return {"skipped": "duplicate"}
 
     if os.path.splitext(video_path)[1].lower() not in cfg.general.supported_formats:
@@ -87,72 +88,97 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
     notify("Upload starting", filename, cfg.general.enable_desktop_notifications)
 
     # --- YouTube ---
-    try:
-        yt = YouTubeUploader(cfg.youtube.client_secrets_path, cfg.youtube.token_path)
+    # Check per-platform, not just "was this file ever seen": if a previous
+    # run already succeeded on YouTube (and only died later, e.g. Ctrl+C
+    # during Rumble's retry wait), re-attempting here would create a real
+    # duplicate video on the channel. Skip straight to reusing that result.
+    existing_yt = dup_checker.get_platform_result(file_hash, "youtube")
+    if existing_yt:
+        print(f"[YouTube] {filename} already uploaded here previously -> {existing_yt} (skipping)")
+        results["youtube"] = existing_yt
+    else:
+        try:
+            yt = YouTubeUploader(cfg.youtube.client_secrets_path, cfg.youtube.token_path)
 
-        def yt_progress(pct):
-            print(f"\r[YouTube] Uploading... {pct}%", end="", flush=True)
+            def yt_progress(pct):
+                print(f"\r[YouTube] Uploading... {pct}%", end="", flush=True)
 
-        def yt_on_retry(attempt, delay, exc):
-            yt_logger.warning(f"{filename}: attempt {attempt} failed ({exc}); retrying in {delay}s")
+            def yt_on_retry(attempt, delay, exc):
+                yt_logger.warning(f"{filename}: attempt {attempt} failed ({exc}); retrying in {delay}s")
 
-        url = retry_with_backoff(
-            lambda: yt.upload(
-                video_path, yt_title, yt_description, cfg.youtube.tags,
-                privacy=cfg.youtube.privacy, category_id=cfg.youtube.category_id,
-                made_for_kids=cfg.youtube.made_for_kids,
-                thumbnail_path=cfg.youtube.thumbnail_path or None,
-                playlist_id=cfg.youtube.playlist_id or None,
-                progress_callback=yt_progress,
-            ),
-            max_retries=cfg.general.max_retries, delays=cfg.general.retry_delays, on_retry=yt_on_retry,
-        )
-        print()
-        yt_logger.info(f"{filename}: uploaded successfully -> {url}")
-        notify("YouTube upload complete", url, cfg.general.enable_desktop_notifications)
-        results["youtube"] = url
-    except Exception as exc:
-        print()
-        yt_logger.error(f"{filename}: FAILED after {cfg.general.max_retries} retries: {exc}")
-        notify("YouTube upload FAILED", f"{filename}: {exc}", cfg.general.enable_desktop_notifications)
-        results["youtube"] = f"FAILED: {exc}"
+            url = retry_with_backoff(
+                lambda: yt.upload(
+                    video_path, yt_title, yt_description, cfg.youtube.tags,
+                    privacy=cfg.youtube.privacy, category_id=cfg.youtube.category_id,
+                    made_for_kids=cfg.youtube.made_for_kids,
+                    thumbnail_path=cfg.youtube.thumbnail_path or None,
+                    playlist_id=cfg.youtube.playlist_id or None,
+                    progress_callback=yt_progress,
+                ),
+                max_retries=cfg.general.max_retries, delays=cfg.general.retry_delays, on_retry=yt_on_retry,
+            )
+            print()
+            yt_logger.info(f"{filename}: uploaded successfully -> {url}")
+            notify("YouTube upload complete", url, cfg.general.enable_desktop_notifications)
+            results["youtube"] = url
+        except Exception as exc:
+            print()
+            yt_logger.error(f"{filename}: FAILED: {exc}")
+            notify("YouTube upload FAILED", f"{filename}: {exc}", cfg.general.enable_desktop_notifications)
+            results["youtube"] = f"FAILED: {exc}"
+        finally:
+            # Runs even on an uncaught KeyboardInterrupt (Ctrl+C), which is
+            # exactly what we need: whatever happened gets persisted
+            # immediately, so a Ctrl+C here can't cause a later re-upload -
+            # but the interrupt still propagates and actually stops the
+            # script, instead of being silently swallowed.
+            dup_checker.record_platform_result(file_hash, filename, "youtube", results.get("youtube", "FAILED: interrupted"))
 
     # --- Rumble ---
-    try:
-        rb = RumbleUploader(cfg.rumble.username, cfg.rumble.password, cfg.rumble.login_url, cfg.rumble.upload_url)
+    existing_rb = dup_checker.get_platform_result(file_hash, "rumble")
+    if existing_rb:
+        print(f"[Rumble] {filename} already uploaded here previously -> {existing_rb} (skipping)")
+        results["rumble"] = existing_rb
+    else:
+        try:
+            rb = RumbleUploader(cfg.rumble.username, cfg.rumble.password, cfg.rumble.login_url, cfg.rumble.upload_url)
 
-        def rb_progress(pct):
-            print(f"\r[Rumble] Uploading... {pct}%", end="", flush=True)
+            def rb_progress(pct):
+                print(f"\r[Rumble] Uploading... {pct}%", end="", flush=True)
 
-        def rb_on_retry(attempt, delay, exc):
-            rb_logger.warning(f"{filename}: attempt {attempt} failed ({exc}); retrying in {delay}s")
+            def rb_on_retry(attempt, delay, exc):
+                rb_logger.warning(f"{filename}: attempt {attempt} failed ({exc}); retrying in {delay}s")
 
-        url = retry_with_backoff(
-            lambda: rb.upload(
-                video_path, rb_title, rb_description, cfg.rumble.tags,
-                privacy=cfg.rumble.privacy, thumbnail_path=cfg.rumble.thumbnail_path or None,
-                progress_callback=rb_progress,
-            ),
-            max_retries=cfg.general.max_retries, delays=cfg.general.retry_delays, on_retry=rb_on_retry,
-        )
-        print()
-        rb_logger.info(f"{filename}: uploaded successfully -> {url}")
-        notify("Rumble upload complete", url, cfg.general.enable_desktop_notifications)
-        results["rumble"] = url
-    except Exception as exc:
-        print()
-        rb_logger.error(f"{filename}: FAILED after {cfg.general.max_retries} retries: {exc}")
-        notify("Rumble upload FAILED", f"{filename}: {exc}", cfg.general.enable_desktop_notifications)
-        results["rumble"] = f"FAILED: {exc}"
+            url = retry_with_backoff(
+                lambda: rb.upload(
+                    video_path, rb_title, rb_description, cfg.rumble.tags,
+                    privacy=cfg.rumble.privacy, thumbnail_path=cfg.rumble.thumbnail_path or None,
+                    progress_callback=rb_progress,
+                ),
+                max_retries=cfg.general.max_retries, delays=cfg.general.retry_delays, on_retry=rb_on_retry,
+            )
+            print()
+            rb_logger.info(f"{filename}: uploaded successfully -> {url}")
+            notify("Rumble upload complete", url, cfg.general.enable_desktop_notifications)
+            results["rumble"] = url
+        except Exception as exc:
+            print()
+            rb_logger.error(f"{filename}: FAILED: {exc}")
+            notify("Rumble upload FAILED", f"{filename}: {exc}", cfg.general.enable_desktop_notifications)
+            results["rumble"] = f"FAILED: {exc}"
+        finally:
+            dup_checker.record_platform_result(file_hash, filename, "rumble", results.get("rumble", "FAILED: interrupted"))
 
-    dup_checker.mark_uploaded(video_path, results)
-
-    dest = os.path.join(cfg.general.uploaded_folder, filename)
-    os.makedirs(cfg.general.uploaded_folder, exist_ok=True)
-    try:
-        shutil.move(video_path, dest)
-    except Exception as exc:
-        print(f"[WARN] Could not move {filename} to uploaded/: {exc}")
+    if dup_checker.is_fully_uploaded(file_hash):
+        dest = os.path.join(cfg.general.uploaded_folder, filename)
+        os.makedirs(cfg.general.uploaded_folder, exist_ok=True)
+        try:
+            shutil.move(video_path, dest)
+        except Exception as exc:
+            print(f"[WARN] Could not move {filename} to uploaded/: {exc}")
+    else:
+        print(f"[INFO] {filename} left in place (not every platform succeeded yet) - "
+              f"rerun --file or --batch on it later to retry just what's still missing.")
 
     return results
 
