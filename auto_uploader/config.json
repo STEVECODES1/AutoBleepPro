@@ -25,7 +25,7 @@
   },
 
   "general": {
-    "watch_folder": "./watch_folder",
+    "watch_folder": "D:/videos stizz",
     "uploaded_folder": "./uploaded",
     "logs_folder": "./logs",
     "duplicate_store_path": "./uploaded_hashes.json",

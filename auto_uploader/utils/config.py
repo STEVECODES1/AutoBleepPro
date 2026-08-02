@@ -72,6 +72,15 @@ class AppConfig:
     project_root: str
 
 
+def _resolve_path(project_root: str, path: str) -> str:
+    """Join `path` onto `project_root` unless `path` is already absolute
+    (explicit check, not relying on os.path.join's implicit "an absolute
+    component resets everything before it" behavior - this way a Windows
+    drive path like "D:/videos stizz" for watch_folder is unambiguously
+    left as-is instead of depending on join's platform-specific rules)."""
+    return path if os.path.isabs(path) else os.path.join(project_root, path)
+
+
 def load_config(config_path: str = "config.json", env_path: str = ".env") -> AppConfig:
     project_root = os.path.dirname(os.path.abspath(config_path)) or "."
     load_dotenv(env_path)
@@ -114,9 +123,9 @@ def load_config(config_path: str = "config.json", env_path: str = ".env") -> App
     )
 
     general = GeneralConfig(
-        watch_folder=os.path.join(project_root, gen.get("watch_folder", "./watch_folder")),
-        uploaded_folder=os.path.join(project_root, gen.get("uploaded_folder", "./uploaded")),
-        logs_folder=os.path.join(project_root, gen.get("logs_folder", "./logs")),
+        watch_folder=_resolve_path(project_root, gen.get("watch_folder", "./watch_folder")),
+        uploaded_folder=_resolve_path(project_root, gen.get("uploaded_folder", "./uploaded")),
+        logs_folder=_resolve_path(project_root, gen.get("logs_folder", "./logs")),
         date_style=gen.get("date_style", "M/D/YY"),
         max_retries=int(gen.get("max_retries", 3)),
         retry_delays=tuple(gen.get("retry_delays", [60, 300, 900])),
@@ -128,13 +137,13 @@ def load_config(config_path: str = "config.json", env_path: str = ".env") -> App
         enable_desktop_notifications=bool(gen.get("enable_desktop_notifications", True)),
         dry_run_mode=bool(gen.get("dry_run_mode", False)),
         stability_check_seconds=int(gen.get("stability_check_seconds", 5)),
-        duplicate_store_path=os.path.join(project_root, gen.get("duplicate_store_path", "./uploaded_hashes.json")),
+        duplicate_store_path=_resolve_path(project_root, gen.get("duplicate_store_path", "./uploaded_hashes.json")),
         censor_before_upload=bool(gen.get("censor_before_upload", True)),
         censor_model=gen.get("censor_model", "base"),
         censor_bleep_method=gen.get("censor_bleep_method", "beep"),
         censor_device=os.environ.get("CENSOR_DEVICE") or gen.get("censor_device") or None,
         censor_custom_words=tuple(gen.get("censor_custom_words", [])),
-        censored_folder=os.path.join(project_root, gen.get("censored_folder", "./censored")),
+        censored_folder=_resolve_path(project_root, gen.get("censored_folder", "./censored")),
     )
 
     return AppConfig(youtube=youtube, rumble=rumble, general=general, project_root=project_root)
