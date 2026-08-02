@@ -17,7 +17,14 @@ from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from googleapiclient.http import MediaFileUpload
 
-SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
+SCOPES = [
+    "https://www.googleapis.com/auth/youtube.upload",
+    # channels.list/playlistItems.list (used by youtube_checker.py's
+    # existing-video dedup check) need read access, which upload alone
+    # doesn't grant - without this, that check 403s with
+    # "insufficient authentication scopes" and silently skips itself.
+    "https://www.googleapis.com/auth/youtube.readonly",
+]
 
 
 class YouTubeUploader:

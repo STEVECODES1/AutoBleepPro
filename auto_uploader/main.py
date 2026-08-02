@@ -277,6 +277,7 @@ def main(argv=None) -> int:
     dup_checker = DuplicateChecker(cfg.general.duplicate_store_path)
 
     existing_youtube_videos = []
+    existing_videos_fetch_failed = False
     if not dry_run:
         # Fetched once per run (not once per file) - cheap (a couple of
         # quota units regardless of channel size) and lets backlog
@@ -286,7 +287,22 @@ def main(argv=None) -> int:
             existing_youtube_videos = fetch_existing_videos(yt_for_check.get_service())
             print(f"[YouTube] Found {len(existing_youtube_videos)} existing video(s) on the channel for dedup checks.")
         except Exception as exc:
+            existing_videos_fetch_failed = True
             print(f"[WARN] Could not fetch existing YouTube videos ({exc}); dedup-by-date check will be skipped.")
+
+    # --batch is the case where uploading everything blind is actually
+    # dangerous (a folder full of old VODs, many likely already on
+    # YouTube) - refuse to run it without the safety net rather than
+    # silently uploading duplicates of everything. --file/--watch proceed
+    # regardless, since duplicating one specific/freshly-recorded video is
+    # much lower-stakes than blind-uploading an entire backlog folder.
+    if args.batch and existing_videos_fetch_failed:
+        print(
+            "[ABORTED] Refusing to run --batch without the existing-video dedup check working "
+            "(it would risk re-uploading videos already on the channel). Fix the YouTube auth "
+            "issue above, then try again. (--file and --watch aren't blocked by this.)"
+        )
+        return 1
 
     if args.file:
         process_file(args.file, cfg, args.title, dup_checker, yt_logger, rb_logger, dry_run, existing_youtube_videos)
