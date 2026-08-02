@@ -117,7 +117,7 @@ def load_config(config_path: str = "config.json", env_path: str = ".env") -> App
         ask_for_title=bool(gen.get("ask_for_title", True)),
         default_title=gen.get("default_title", "Gaming Stream"),
         supported_formats=tuple(
-            e.lower() for e in gen.get("supported_formats", [".mp4", ".mov", ".avi", ".mkv", ".flv", ".wmv"])
+            e.lower() for e in gen.get("supported_formats", [".mp4", ".mov", ".avi", ".mkv", ".flv", ".wmv", ".ts"])
         ),
         enable_desktop_notifications=bool(gen.get("enable_desktop_notifications", True)),
         dry_run_mode=bool(gen.get("dry_run_mode", False)),

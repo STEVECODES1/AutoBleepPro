@@ -34,7 +34,7 @@
     "retry_delays": [60, 300, 900],
     "ask_for_title": true,
     "default_title": "Gaming Stream",
-    "supported_formats": [".mp4", ".mov", ".avi", ".mkv", ".flv", ".wmv"],
+    "supported_formats": [".mp4", ".mov", ".avi", ".mkv", ".flv", ".wmv", ".ts"],
     "enable_desktop_notifications": true,
     "dry_run_mode": false,
     "stability_check_seconds": 5
