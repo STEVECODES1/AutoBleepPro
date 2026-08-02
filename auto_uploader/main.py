@@ -95,6 +95,31 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
     print(f"Rumble title:  {rb_title}")
     print(f"{'='*70}")
 
+    # Determined here (before the dry-run branch) so a dry run can show
+    # "would skip - already exists" instead of pretending it would
+    # actually upload to YouTube - otherwise the preview isn't a real
+    # preview of what a --batch run against a backlog folder would do.
+    # Check per-platform, not just "was this file ever seen": if a
+    # previous run already succeeded on YouTube (and only died later,
+    # e.g. Ctrl+C during Rumble's retry wait), re-attempting here would
+    # create a real duplicate video on the channel.
+    existing_yt = dup_checker.get_platform_result(file_hash, "youtube")
+    existing_yt_match = None
+    if not existing_yt and existing_youtube_videos:
+        # Not something *this tool* uploaded before, but might already be
+        # on the channel from a manual upload in the past (common for a
+        # backlog folder) - matched by date in the title, since this
+        # channel's title style has changed over the years but always
+        # includes the date. Rumble is NOT skipped in this case - these
+        # old VODs were typically only ever uploaded to YouTube manually.
+        existing_yt_match = find_existing_video(existing_youtube_videos, now)
+        if existing_yt_match:
+            existing_yt = existing_yt_match.url
+
+    if existing_yt:
+        note = " (would skip on a real run, still would try Rumble)" if dry_run else " (skipping, still trying Rumble)"
+        print(f"[YouTube] {filename} already exists -> {existing_yt}{note}")
+
     if dry_run:
         print("[DRY RUN] Would upload with the title/description above. Nothing was uploaded.")
         if cfg.general.censor_before_upload:
@@ -104,6 +129,11 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
         print("\n--- Rumble description preview ---")
         print(rb_description)
         return {"dry_run": True}
+
+    if existing_yt_match:
+        # Only persisted on a real run - a dry run must not have side
+        # effects on the duplicate-tracking store.
+        dup_checker.record_platform_result(file_hash, filename, "youtube", existing_yt_match.url)
 
     upload_path = video_path
     if cfg.general.censor_before_upload:
@@ -133,27 +163,10 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
     notify("Upload starting", filename, cfg.general.enable_desktop_notifications)
 
     # --- YouTube ---
-    # Check per-platform, not just "was this file ever seen": if a previous
-    # run already succeeded on YouTube (and only died later, e.g. Ctrl+C
-    # during Rumble's retry wait), re-attempting here would create a real
-    # duplicate video on the channel. Skip straight to reusing that result.
-    existing_yt = dup_checker.get_platform_result(file_hash, "youtube")
-    if not existing_yt and existing_youtube_videos:
-        # Not something *this tool* uploaded before, but might already be
-        # on the channel from a manual upload in the past (common for a
-        # backlog folder) - matched by date in the title, since this
-        # channel's title style has changed over the years but always
-        # includes the date. Rumble is NOT skipped in this case - these
-        # old VODs were typically only ever uploaded to YouTube manually.
-        match = find_existing_video(existing_youtube_videos, now)
-        if match:
-            existing_yt = match.url
-            dup_checker.record_platform_result(file_hash, filename, "youtube", match.url)
-            print(f"[YouTube] {filename} matches an existing upload by date -> {match.url} (skipping, still trying Rumble)")
-
+    # existing_yt was already determined (and, if it came from
+    # find_existing_video, already persisted) above the dry-run check.
     if existing_yt:
-        print(f"[YouTube] {filename} already uploaded here previously -> {existing_yt} (skipping)")
-        results["youtube"] = existing_yt
+        results["youtube"] = existing_yt  # already announced above
     else:
         try:
             yt = YouTubeUploader(cfg.youtube.client_secrets_path, cfg.youtube.token_path)
@@ -278,17 +291,17 @@ def main(argv=None) -> int:
 
     existing_youtube_videos = []
     existing_videos_fetch_failed = False
-    if not dry_run:
-        # Fetched once per run (not once per file) - cheap (a couple of
-        # quota units regardless of channel size) and lets backlog
-        # processing skip anything already manually uploaded in the past.
-        try:
-            yt_for_check = YouTubeUploader(cfg.youtube.client_secrets_path, cfg.youtube.token_path)
-            existing_youtube_videos = fetch_existing_videos(yt_for_check.get_service())
-            print(f"[YouTube] Found {len(existing_youtube_videos)} existing video(s) on the channel for dedup checks.")
-        except Exception as exc:
-            existing_videos_fetch_failed = True
-            print(f"[WARN] Could not fetch existing YouTube videos ({exc}); dedup-by-date check will be skipped.")
+    # Runs for dry runs too: the whole point of previewing a backlog batch
+    # is seeing which files would be skipped as already-on-YouTube, which
+    # is impossible without this. Fetched once per run (not once per
+    # file) - cheap (a couple of quota units regardless of channel size).
+    try:
+        yt_for_check = YouTubeUploader(cfg.youtube.client_secrets_path, cfg.youtube.token_path)
+        existing_youtube_videos = fetch_existing_videos(yt_for_check.get_service())
+        print(f"[YouTube] Found {len(existing_youtube_videos)} existing video(s) on the channel for dedup checks.")
+    except Exception as exc:
+        existing_videos_fetch_failed = True
+        print(f"[WARN] Could not fetch existing YouTube videos ({exc}); dedup-by-date check will be skipped.")
 
     # --batch is the case where uploading everything blind is actually
     # dangerous (a folder full of old VODs, many likely already on
@@ -296,7 +309,10 @@ def main(argv=None) -> int:
     # silently uploading duplicates of everything. --file/--watch proceed
     # regardless, since duplicating one specific/freshly-recorded video is
     # much lower-stakes than blind-uploading an entire backlog folder.
-    if args.batch and existing_videos_fetch_failed:
+    # Only blocks real runs - a dry run uploads nothing, so it's safe (and
+    # useful) to let it proceed and preview titles/dates even when the
+    # dedup check is unavailable.
+    if args.batch and existing_videos_fetch_failed and not dry_run:
         print(
             "[ABORTED] Refusing to run --batch without the existing-video dedup check working "
             "(it would risk re-uploading videos already on the channel). Fix the YouTube auth "
