@@ -67,11 +67,37 @@ class RumbleUploader:
 
     def _login(self, page) -> None:
         page.goto(self.login_url, timeout=60_000)
+        # Rumble's login redirects to a JS-rendered auth subdomain; give it
+        # a moment to finish rendering the form before we try to find fields.
+        page.wait_for_load_state("networkidle", timeout=30_000)
 
-        # Best-effort locators - update these first if login breaks.
-        page.get_by_label("Username or Email").or_(page.locator("#login-username")).fill(self.username)
-        page.get_by_label("Password").or_(page.locator("#login-password")).fill(self.password)
-        page.get_by_role("button", name="Login").click()
+        # Type-based selectors first (input[type=email/password] is nearly
+        # universal across login forms regardless of exact markup/labels),
+        # falling back to label/id guesses. If login still fails here, run
+        # `playwright codegen https://rumble.com/login.php` locally, log in
+        # manually, and swap in the exact selectors it records.
+        username_field = (
+            page.locator("input[type='email']")
+            .or_(page.locator("input[name*='user' i]"))
+            .or_(page.locator("input[name*='email' i]"))
+            .or_(page.get_by_label("Username or Email"))
+            .or_(page.locator("#login-username"))
+        )
+        password_field = (
+            page.locator("input[type='password']")
+            .or_(page.get_by_label("Password"))
+            .or_(page.locator("#login-password"))
+        )
+        username_field.first.fill(self.username)
+        password_field.first.fill(self.password)
+
+        submit_button = (
+            page.locator("button[type='submit']")
+            .or_(page.get_by_role("button", name="Login"))
+            .or_(page.get_by_role("button", name="Log in"))
+            .or_(page.get_by_role("button", name="Sign in"))
+        )
+        submit_button.first.click()
 
         # Give Rumble a moment to either land on the homepage or prompt 2FA.
         page.wait_for_timeout(3000)
