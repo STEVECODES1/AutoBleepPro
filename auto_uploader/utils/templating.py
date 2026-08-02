@@ -13,10 +13,18 @@ from typing import Optional
 # Tried in order, most-specific/least-ambiguous first. All assume
 # month-first (US) ordering, matching every real filename/title seen on
 # this channel so far (e.g. "7/31/26", "09-14-2025").
+#
+# The separator is `\D` (any single non-digit character), not a literal
+# [-/] class: "/" is illegal in Windows filenames, so any tool that
+# generates a "M/D/YY"-style filename has to substitute *some* look-alike
+# Unicode character for the slash instead (fullwidth solidus, fraction
+# slash, en dash, etc. have all been seen in the wild) - trying to
+# enumerate every possible look-alike is a losing game, so this just
+# accepts any single non-digit character in that position instead.
 _DATE_PATTERNS = (
-    (re.compile(r"(?<!\d)(\d{4})-(\d{1,2})-(\d{1,2})(?!\d)"), lambda m: (int(m[1]), int(m[2]), int(m[3]))),  # YYYY-MM-DD
-    (re.compile(r"(?<!\d)(\d{1,2})[-/](\d{1,2})[-/](\d{4})(?!\d)"), lambda m: (int(m[3]), int(m[1]), int(m[2]))),  # M-D-YYYY
-    (re.compile(r"(?<!\d)(\d{1,2})[-/](\d{1,2})[-/](\d{2})(?!\d)"), lambda m: (2000 + int(m[3]), int(m[1]), int(m[2]))),  # M-D-YY
+    (re.compile(r"(?<!\d)(\d{4})\D(\d{1,2})\D(\d{1,2})(?!\d)"), lambda m: (int(m[1]), int(m[2]), int(m[3]))),  # YYYY-MM-DD
+    (re.compile(r"(?<!\d)(\d{1,2})\D(\d{1,2})\D(\d{4})(?!\d)"), lambda m: (int(m[3]), int(m[1]), int(m[2]))),  # M-D-YYYY
+    (re.compile(r"(?<!\d)(\d{1,2})\D(\d{1,2})\D(\d{2})(?!\d)"), lambda m: (2000 + int(m[3]), int(m[1]), int(m[2]))),  # M-D-YY
 )
 
 
