@@ -39,6 +39,7 @@ class RumbleConfig:
     password: str
     login_url: str
     upload_url: str
+    cdp_url: Optional[str]
 
 
 @dataclass
@@ -120,6 +121,7 @@ def load_config(config_path: str = "config.json", env_path: str = ".env") -> App
         password=os.environ.get("RUMBLE_PASSWORD", ""),
         login_url=rb.get("login_url", "https://rumble.com/login.php"),
         upload_url=rb.get("upload_url", "https://rumble.com/upload.php"),
+        cdp_url=os.environ.get("RUMBLE_CDP_URL") or rb.get("cdp_url") or None,
     )
 
     general = GeneralConfig(
@@ -159,8 +161,10 @@ def validate_config(cfg: AppConfig) -> list:
             f"YouTube client_secrets.json not found at: {cfg.youtube.client_secrets_path} "
             "(download it from Google Cloud Console - see README)"
         )
-    if not cfg.rumble.username or not cfg.rumble.password:
-        problems.append("RUMBLE_USERNAME / RUMBLE_PASSWORD not set in .env")
+    if not cfg.rumble.cdp_url and (not cfg.rumble.username or not cfg.rumble.password):
+        problems.append(
+            "Neither rumble.cdp_url (config.json) nor RUMBLE_USERNAME/RUMBLE_PASSWORD (.env) are set."
+        )
     if "{title}" not in cfg.youtube.title_format or "{date}" not in cfg.youtube.title_format:
         problems.append("youtube.title_format must contain both {title} and {date}")
     if "{title}" not in cfg.rumble.title_format or "{date}" not in cfg.rumble.title_format:

@@ -32,15 +32,39 @@ playwright install chromium
 5. Click **Download JSON** on the credential you just created. Rename the downloaded file to `client_secrets.json` and put it in this `auto_uploader/` folder.
 6. The first time you run an upload, a browser window will open asking you to log into the Google account that owns `@StackswopoGames` and grant access. After that, a `youtube_token.json` file is saved here and you won't be asked again (it auto-refreshes).
 
-## 3. Set up Rumble credentials
+## 3. Set up Rumble authentication
 
 Rumble has no public API for regular creators, so uploads are done via
-browser automation (Playwright drives the real upload page). You just
-need your normal login:
+browser automation (Playwright drives the real upload page). Two ways to
+authenticate:
+
+### Recommended: attach to a Chrome window you're already logged into
+
+This avoids storing your Rumble password anywhere and skips fighting
+login-form selectors entirely - the uploader just reuses a browser window
+you logged into normally.
+
+1. Close all Chrome windows first (a running Chrome instance without the debug flag will conflict).
+2. Launch Chrome with remote debugging enabled:
+   ```
+   "C:\Program Files\Google\Chrome\Application\chrome.exe" --remote-debugging-port=9222 --user-data-dir="C:\RumbleChromeProfile"
+   ```
+3. In that Chrome window, log into Rumble normally (handle 2FA there if prompted). Leave the window open.
+4. In `config.json`, set `"rumble": { "cdp_url": "http://localhost:9222", ... }`.
+5. Run the uploader as usual - it'll attach to that window instead of launching its own and logging in.
+
+You need to leave that Chrome window open and logged in for as long as you want uploads to work. Re-run step 2 (same `--user-data-dir`) any time you restart your PC - it'll remember the login.
+
+### Fallback: username/password
+
+If you'd rather not deal with the Chrome debug-port setup:
 
 1. Copy `.env.example` to `.env`.
 2. Fill in `RUMBLE_USERNAME` and `RUMBLE_PASSWORD` with your Rumble login.
-3. If your account has 2FA enabled, the first run will pause and ask you to type the code into the terminal when Rumble prompts for it.
+3. Leave `cdp_url` as `null` in `config.json`.
+4. If your account has 2FA enabled, the first run will pause and ask you to type the code into the terminal when Rumble prompts for it.
+
+This path automates the actual login form, which is more fragile (depends on correctly guessing Rumble's current login-page selectors) than the CDP-attach option above.
 
 **If Rumble changes their upload page and this breaks:** run
 `playwright codegen https://rumble.com/upload.php` in a terminal, log in
@@ -78,6 +102,26 @@ the terminal, then upload to both platforms with:
 Successfully processed files get moved to `uploaded/`. Already-uploaded
 files (matched by content hash, not filename — so renaming a file won't
 fool it) are skipped automatically.
+
+### Backfilling an old folder of VODs
+
+`--batch` also works great for a folder of old recordings that were only
+ever manually uploaded to YouTube in the past:
+
+- **Date comes from the filename when there is one** (e.g. `"'!howl' 3-20-26
+  Stackswopo Stream.mp4"` → March 20, 2026), instead of always using
+  today's date — so backfilled titles get the date the stream actually
+  aired, not the date you happened to run the batch.
+- **Before uploading, it checks your real YouTube channel** for a video
+  whose title already contains that same date (covers both this
+  channel's old title style, `*Title* - 05/08/26 - ...`, and the new one
+  this tool generates) and skips the YouTube upload if a match is found
+  - it still uploads to Rumble, since old VODs were typically only ever
+  put on YouTube manually. This check runs once per `--batch`/`--watch`
+  run (not once per file), so it's cheap regardless of how many videos
+  are on the channel already.
+- Run one or two files first with `--file` before pointing `--batch` at
+  a big folder, to make sure the results look right.
 
 ## 5. Skip the title prompt
 

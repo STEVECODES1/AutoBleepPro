@@ -52,6 +52,12 @@ class YouTubeUploader:
             self._service = build("youtube", "v3", credentials=self._get_credentials())
         return self._service
 
+    def get_service(self):
+        """Public accessor for the raw googleapiclient service object, so
+        other modules (e.g. youtube_checker.py) can make their own API
+        calls without duplicating the OAuth/credential-caching logic."""
+        return self._client()
+
     def upload(
         self,
         video_path: str,

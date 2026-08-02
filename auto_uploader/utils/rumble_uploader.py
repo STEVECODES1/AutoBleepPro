@@ -4,22 +4,28 @@ Rumble uploader via browser automation (Playwright).
 IMPORTANT - read this before relying on it: Rumble has no public API for
 regular creators to upload programmatically, unlike YouTube's official,
 documented Data API. This module drives Rumble's own web upload form the
-same way a human would, using Playwright. That means:
-
-  - It needs your real Rumble username/password (from .env).
-  - It's fragile: if Rumble redesigns their upload page, the locators
-    below may stop matching and this will need updating.
-  - If your account has 2FA enabled, this pauses and asks you to type the
-    code into the terminal - it can't (and shouldn't try to) bypass 2FA.
-  - Automated form-filling on a site that doesn't offer an API for it is
-    a gray area against most platforms' terms of use for bot traffic;
-    this runs as one interactive login per session (not a high-volume
-    scraper), but you're responsible for how you use it.
-
-If Rumble ever changes their page and a step below fails, the fastest fix
-is: `playwright codegen https://rumble.com/upload.php` in a terminal,
+same way a human would. That means it's fragile if Rumble redesigns their
+page, and if Rumble ever changes it and a step below fails, the fastest
+fix is: `playwright codegen https://rumble.com/upload.php` in a terminal,
 manually click through an upload, and update the locator on the matching
 line here from what codegen records.
+
+Two ways to authenticate:
+
+1. **CDP attach (recommended)** - set `rumble.cdp_url` in config.json (e.g.
+   "http://localhost:9222") and launch Chrome yourself with remote
+   debugging enabled, log into Rumble in that window like normal, and
+   leave it open. This uploader then attaches to YOUR already-logged-in
+   session instead of automating the login form at all - no stored
+   password needed, no login-selector guessing, and 2FA is simply
+   whatever you already did manually. See README.md for the exact
+   command to launch Chrome this way.
+2. **Username/password (fallback)** - if `rumble.cdp_url` isn't set, this
+   launches a fresh browser and automates the login form using your
+   RUMBLE_USERNAME/RUMBLE_PASSWORD from .env. More fragile (depends on
+   guessing the right login-form selectors) and needs your password
+   stored locally. If 2FA is prompted, this pauses and asks you to type
+   the code into the terminal.
 """
 
 import os
@@ -30,7 +36,15 @@ from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeo
 
 
 class RumbleUploader:
-    def __init__(self, username: str, password: str, login_url: str, upload_url: str, headless: bool = False):
+    def __init__(
+        self,
+        username: str,
+        password: str,
+        login_url: str,
+        upload_url: str,
+        headless: bool = False,
+        cdp_url: Optional[str] = None,
+    ):
         self.username = username
         self.password = password
         self.login_url = login_url
@@ -38,6 +52,7 @@ class RumbleUploader:
         # Headless=False by default so you can see what's happening (and
         # solve 2FA/captchas manually) the first few times you run this.
         self.headless = headless
+        self.cdp_url = cdp_url
 
     def upload(
         self,
@@ -49,19 +64,32 @@ class RumbleUploader:
         thumbnail_path: Optional[str] = None,
         progress_callback: Optional[Callable[[int], None]] = None,
     ) -> str:
-        if not self.username or not self.password:
-            raise RuntimeError("RUMBLE_USERNAME / RUMBLE_PASSWORD not set in .env")
-
         with sync_playwright() as p:
-            browser = p.chromium.launch(headless=self.headless)
-            page = browser.new_page()
+            if self.cdp_url:
+                browser = p.chromium.connect_over_cdp(self.cdp_url)
+                context = browser.contexts[0] if browser.contexts else browser.new_context()
+                page = context.new_page()
+                should_close_browser = False  # it's the user's own Chrome window - don't close it
+            else:
+                if not self.username or not self.password:
+                    raise RuntimeError(
+                        "Neither rumble.cdp_url (config.json) nor RUMBLE_USERNAME/RUMBLE_PASSWORD (.env) are set."
+                    )
+                browser = p.chromium.launch(headless=self.headless)
+                page = browser.new_page()
+                should_close_browser = True
+
             try:
-                self._login(page)
+                if not self.cdp_url:
+                    self._login(page)
                 video_url = self._upload_video(
                     page, video_path, title, description, tags, privacy, thumbnail_path, progress_callback
                 )
             finally:
-                browser.close()
+                if should_close_browser:
+                    browser.close()
+                else:
+                    page.close()
 
         return video_url
 
@@ -73,9 +101,7 @@ class RumbleUploader:
 
         # Type-based selectors first (input[type=email/password] is nearly
         # universal across login forms regardless of exact markup/labels),
-        # falling back to label/id guesses. If login still fails here, run
-        # `playwright codegen https://rumble.com/login.php` locally, log in
-        # manually, and swap in the exact selectors it records.
+        # falling back to label/id guesses.
         username_field = (
             page.locator("input[type='email']")
             .or_(page.locator("input[name*='user' i]"))
@@ -114,9 +140,10 @@ class RumbleUploader:
     ) -> str:
         page.goto(self.upload_url, timeout=60_000)
 
-        # File input is usually a hidden <input type="file">; Playwright
-        # can set it directly without needing the native file picker dialog.
-        file_input = page.locator("input[type='file']").first
+        # "Filedata" is Rumble's actual field id (confirmed via a
+        # community open-source Rumble uploader); type-based fallback
+        # first in case it's changed since, then this specific id.
+        file_input = page.locator("input[type='file']").or_(page.locator("#Filedata")).first
         file_input.set_input_files(video_path)
 
         # Rumble starts processing/uploading immediately after file select;
@@ -144,6 +171,16 @@ class RumbleUploader:
             if thumb_input.count() > 0:
                 thumb_input.first.set_input_files(thumbnail_path)
 
+        # Rumble's upload form has a required "I agree to terms" checkbox
+        # (sometimes two) before the submit button will actually do
+        # anything - check any that are present and unchecked.
+        for checkbox in page.locator("input[type='checkbox']").all():
+            try:
+                if checkbox.is_visible() and not checkbox.is_checked():
+                    checkbox.check()
+            except Exception:
+                continue  # a stray/detached checkbox shouldn't abort the whole upload
+
         # Poll Rumble's own upload-progress indicator if present, so we can
         # report percentage back the same way the YouTube uploader does.
         progress_bar = page.locator("[role='progressbar'], .progress-bar, .upload-progress")
@@ -159,7 +196,11 @@ class RumbleUploader:
                     if last_reported >= 100:
                         break
 
-            submit_button = page.get_by_role("button", name="Submit").or_(page.get_by_role("button", name="Publish"))
+            submit_button = (
+                page.get_by_role("button", name="Submit")
+                .or_(page.get_by_role("button", name="Publish"))
+                .or_(page.get_by_role("button", name="Upload"))
+            )
             if submit_button.count() > 0 and submit_button.first.is_enabled():
                 submit_button.first.click()
                 break

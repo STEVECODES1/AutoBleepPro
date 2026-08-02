@@ -26,7 +26,8 @@ from utils.logging_setup import setup_logger
 from utils.notifier import notify
 from utils.retry import retry_with_backoff
 from utils.rumble_uploader import RumbleUploader
-from utils.templating import build_description, build_title, format_date
+from utils.templating import build_description, build_title, extract_date_from_filename, format_date
+from utils.youtube_checker import fetch_existing_videos, find_existing_video
 from utils.youtube_uploader import YouTubeUploader
 
 
@@ -50,7 +51,7 @@ def get_stream_title(video_path: str, cli_title: str, cfg) -> str:
 
 
 def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChecker,
-                  yt_logger, rb_logger, dry_run: bool) -> dict:
+                  yt_logger, rb_logger, dry_run: bool, existing_youtube_videos: list = None) -> dict:
     filename = os.path.basename(video_path)
     file_hash = hash_file(video_path)
 
@@ -63,7 +64,11 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
         return {"skipped": "unsupported_format"}
 
     stream_title = get_stream_title(video_path, cli_title, cfg)
-    now = datetime.now()
+    # A freshly-finished stream should be dated today; an old VOD being
+    # backfilled should keep its original air date if the filename has one
+    # (e.g. "'!howl' 3-20-26 ...") - otherwise every backlog upload would
+    # get today's date instead of when it actually aired.
+    now = extract_date_from_filename(filename) or datetime.now()
     date_str = format_date(now, cfg.general.date_style)
 
     yt_title = build_title(stream_title, date_str, cfg.youtube.title_format)
@@ -119,6 +124,19 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
     # during Rumble's retry wait), re-attempting here would create a real
     # duplicate video on the channel. Skip straight to reusing that result.
     existing_yt = dup_checker.get_platform_result(file_hash, "youtube")
+    if not existing_yt and existing_youtube_videos:
+        # Not something *this tool* uploaded before, but might already be
+        # on the channel from a manual upload in the past (common for a
+        # backlog folder) - matched by date in the title, since this
+        # channel's title style has changed over the years but always
+        # includes the date. Rumble is NOT skipped in this case - these
+        # old VODs were typically only ever uploaded to YouTube manually.
+        match = find_existing_video(existing_youtube_videos, now)
+        if match:
+            existing_yt = match.url
+            dup_checker.record_platform_result(file_hash, filename, "youtube", match.url)
+            print(f"[YouTube] {filename} matches an existing upload by date -> {match.url} (skipping, still trying Rumble)")
+
     if existing_yt:
         print(f"[YouTube] {filename} already uploaded here previously -> {existing_yt} (skipping)")
         results["youtube"] = existing_yt
@@ -167,7 +185,10 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
         results["rumble"] = existing_rb
     else:
         try:
-            rb = RumbleUploader(cfg.rumble.username, cfg.rumble.password, cfg.rumble.login_url, cfg.rumble.upload_url)
+            rb = RumbleUploader(
+                cfg.rumble.username, cfg.rumble.password, cfg.rumble.login_url, cfg.rumble.upload_url,
+                cdp_url=cfg.rumble.cdp_url,
+            )
 
             def rb_progress(pct):
                 print(f"\r[Rumble] Uploading... {pct}%", end="", flush=True)
@@ -241,15 +262,27 @@ def main(argv=None) -> int:
     rb_logger = setup_logger("rumble", cfg.general.logs_folder)
     dup_checker = DuplicateChecker(cfg.general.duplicate_store_path)
 
+    existing_youtube_videos = []
+    if not dry_run:
+        # Fetched once per run (not once per file) - cheap (a couple of
+        # quota units regardless of channel size) and lets backlog
+        # processing skip anything already manually uploaded in the past.
+        try:
+            yt_for_check = YouTubeUploader(cfg.youtube.client_secrets_path, cfg.youtube.token_path)
+            existing_youtube_videos = fetch_existing_videos(yt_for_check.get_service())
+            print(f"[YouTube] Found {len(existing_youtube_videos)} existing video(s) on the channel for dedup checks.")
+        except Exception as exc:
+            print(f"[WARN] Could not fetch existing YouTube videos ({exc}); dedup-by-date check will be skipped.")
+
     if args.file:
-        process_file(args.file, cfg, args.title, dup_checker, yt_logger, rb_logger, dry_run)
+        process_file(args.file, cfg, args.title, dup_checker, yt_logger, rb_logger, dry_run, existing_youtube_videos)
         return 0
 
     if args.batch:
         for fname in sorted(os.listdir(args.batch)):
             path = os.path.join(args.batch, fname)
             if os.path.isfile(path):
-                process_file(path, cfg, None, dup_checker, yt_logger, rb_logger, dry_run)
+                process_file(path, cfg, None, dup_checker, yt_logger, rb_logger, dry_run, existing_youtube_videos)
         return 0
 
     if args.watch or dry_run:
@@ -258,7 +291,7 @@ def main(argv=None) -> int:
             print("[DRY RUN MODE] Nothing will actually be uploaded.")
 
         def on_ready(path):
-            process_file(path, cfg, None, dup_checker, yt_logger, rb_logger, dry_run)
+            process_file(path, cfg, None, dup_checker, yt_logger, rb_logger, dry_run, existing_youtube_videos)
 
         watcher = FolderWatcher(
             cfg.general.watch_folder, cfg.general.supported_formats,

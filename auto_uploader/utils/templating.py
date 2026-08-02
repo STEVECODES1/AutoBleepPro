@@ -6,7 +6,36 @@ from main.py, the file watcher, and --dry-run previews without dragging in
 any upload-library imports.
 """
 
+import re
 from datetime import datetime
+from typing import Optional
+
+# Tried in order, most-specific/least-ambiguous first. All assume
+# month-first (US) ordering, matching every real filename/title seen on
+# this channel so far (e.g. "7/31/26", "09-14-2025").
+_DATE_PATTERNS = (
+    (re.compile(r"(?<!\d)(\d{4})-(\d{1,2})-(\d{1,2})(?!\d)"), lambda m: (int(m[1]), int(m[2]), int(m[3]))),  # YYYY-MM-DD
+    (re.compile(r"(?<!\d)(\d{1,2})[-/](\d{1,2})[-/](\d{4})(?!\d)"), lambda m: (int(m[3]), int(m[1]), int(m[2]))),  # M-D-YYYY
+    (re.compile(r"(?<!\d)(\d{1,2})[-/](\d{1,2})[-/](\d{2})(?!\d)"), lambda m: (2000 + int(m[3]), int(m[1]), int(m[2]))),  # M-D-YY
+)
+
+
+def extract_date_from_filename(filename: str) -> Optional[datetime]:
+    """Best-effort date extraction for backlog files (e.g.
+    "'!howl' 3-20-26 Stackswopo Kick Stream.mp4" -> 2026-03-20,
+    "!howl 2026-03-18_19_32.mp4" -> 2026-03-18). Returns None if nothing
+    matches, so callers can fall back to today's date - appropriate for a
+    freshly-finished stream being uploaded live, but not for backfilling
+    an old VOD where the filename is the only clue to when it aired."""
+    for pattern, to_ymd in _DATE_PATTERNS:
+        match = pattern.search(filename)
+        if match:
+            try:
+                year, month, day = to_ymd(match)
+                return datetime(year, month, day)
+            except ValueError:
+                continue  # e.g. "13-45-26" matched the shape but isn't a real date
+    return None
 
 
 def format_date(dt: datetime, date_style: str) -> str:
