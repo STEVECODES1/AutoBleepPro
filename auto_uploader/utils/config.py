@@ -44,6 +44,8 @@ class RumbleConfig:
     primary_category: str
     secondary_category: str
     censor_uploads: bool
+    rss_url: str
+    skip_if_exists: bool
 
 
 @dataclass
@@ -130,6 +132,8 @@ def load_config(config_path: str = "config.json", env_path: str = ".env") -> App
         primary_category=rb.get("primary_category", "Gaming"),
         secondary_category=rb.get("secondary_category", ""),
         censor_uploads=bool(rb.get("censor_uploads", False)),
+        rss_url=rb.get("rss_url") or f"https://rumble.com/user/{rb['channel']}/index.xml",
+        skip_if_exists=bool(rb.get("skip_if_exists", True)),
     )
 
     general = GeneralConfig(

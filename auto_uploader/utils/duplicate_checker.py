@@ -62,13 +62,29 @@ class DuplicateChecker:
         result = record.get("results", {}).get(platform)
         return result if _is_success(result) else None
 
-    def record_platform_result(self, file_hash: str, filename: str, platform: str, result: str) -> None:
+    def record_platform_result(self, file_hash: str, filename: str, platform: str, result: str,
+                               title: str = None) -> None:
         """Persist one platform's result immediately (not batched with the
-        other platform), so a partially-completed run is resumable."""
+        other platform), so a partially-completed run is resumable. `title`
+        (the generated upload title) enables title-based dedup for
+        re-encoded copies of the same stream, whose hashes differ."""
         record = self._seen.setdefault(file_hash, {"filename": filename, "results": {}})
         record["filename"] = filename
         record["results"][platform] = result
+        if title:
+            record.setdefault("titles", {})[platform] = title
         self._save()
+
+    def find_platform_title(self, platform: str, title: str):
+        """URL of a previous SUCCESSFUL upload to `platform` with this exact
+        generated title, or None. Catches the same stream arriving as a
+        different file (re-encode/remux), which hash matching can't."""
+        for record in self._seen.values():
+            if record.get("titles", {}).get(platform) == title and _is_success(
+                record.get("results", {}).get(platform)
+            ):
+                return record["results"][platform]
+        return None
 
     def is_fully_uploaded(self, file_hash: str, platforms: tuple = ("youtube", "rumble")) -> bool:
         """True only if every platform in `platforms` already has a

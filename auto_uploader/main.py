@@ -21,7 +21,7 @@ from datetime import datetime
 # Bump when shipping user-visible changes, so --test-config can prove
 # which build is actually running (stale extracts have silently caused
 # several confusing "the fix did nothing" runs).
-BUILD = "2026-08-03.3 rumble-categories-from-real-markup"
+BUILD = "2026-08-03.4 rumble-dedup"
 
 from utils.censor import censor_video
 from utils.config import load_config, validate_config
@@ -30,6 +30,7 @@ from utils.file_watcher import FolderWatcher
 from utils.logging_setup import setup_logger
 from utils.notifier import notify
 from utils.retry import retry_with_backoff
+from utils.rumble_checker import fetch_rumble_videos
 from utils.rumble_uploader import RumbleUploader
 from utils.templating import (
     build_description,
@@ -70,7 +71,8 @@ def get_stream_title(video_path: str, cli_title: str, cfg) -> str:
 
 
 def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChecker,
-                  yt_logger, rb_logger, dry_run: bool, existing_youtube_videos: list = None) -> dict:
+                  yt_logger, rb_logger, dry_run: bool, existing_youtube_videos: list = None,
+                  existing_rumble_videos: list = None) -> dict:
     filename = os.path.basename(video_path)
     file_hash = hash_file(video_path)
 
@@ -125,6 +127,22 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
         note = " (would skip on a real run, still would try Rumble)" if dry_run else " (skipping, still trying Rumble)"
         print(f"[YouTube] {filename} already exists -> {existing_yt}{note}")
 
+    # Same idea for Rumble, in the order the user specified: local history
+    # by content hash (get_platform_result), local history by generated
+    # title (catches re-encoded copies of the same stream), then the
+    # channel's public RSS feed matched by stream date.
+    existing_rb = dup_checker.get_platform_result(file_hash, "rumble")
+    existing_rb_match_url = None
+    if not existing_rb and cfg.rumble.skip_if_exists:
+        existing_rb = dup_checker.find_platform_title("rumble", rb_title)
+        if not existing_rb and existing_rumble_videos:
+            rb_match = find_existing_video(existing_rumble_videos, now)
+            if rb_match:
+                existing_rb = existing_rb_match_url = rb_match.url
+    if existing_rb:
+        note = " (would skip on a real run)" if dry_run else ""
+        print(f"[Rumble] Video already exists on Rumble -> {existing_rb}{note}")
+
     if dry_run:
         print("[DRY RUN] Would upload with the title/description above. Nothing was uploaded.")
         if cfg.general.censor_before_upload:
@@ -140,7 +158,9 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
     if existing_yt_match:
         # Only persisted on a real run - a dry run must not have side
         # effects on the duplicate-tracking store.
-        dup_checker.record_platform_result(file_hash, filename, "youtube", existing_yt_match.url)
+        dup_checker.record_platform_result(file_hash, filename, "youtube", existing_yt_match.url, title=yt_title)
+    if existing_rb_match_url:
+        dup_checker.record_platform_result(file_hash, filename, "rumble", existing_rb_match_url, title=rb_title)
 
     # Censoring is per-platform and computed lazily: YouTube gets the
     # censored copy (it age-restricts/demonetizes over spoken profanity),
@@ -222,12 +242,12 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
             # immediately, so a Ctrl+C here can't cause a later re-upload -
             # but the interrupt still propagates and actually stops the
             # script, instead of being silently swallowed.
-            dup_checker.record_platform_result(file_hash, filename, "youtube", results.get("youtube", "FAILED: interrupted"))
+            dup_checker.record_platform_result(file_hash, filename, "youtube", results.get("youtube", "FAILED: interrupted"), title=yt_title)
 
     # --- Rumble ---
-    existing_rb = dup_checker.get_platform_result(file_hash, "rumble")
+    # existing_rb was already determined (hash -> stored title -> RSS feed)
+    # above the dry-run check, and announced there.
     if existing_rb:
-        print(f"[Rumble] {filename} already uploaded here previously -> {existing_rb} (skipping)")
         results["rumble"] = existing_rb
     else:
         try:
@@ -262,7 +282,7 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
             notify("Rumble upload FAILED", f"{filename}: {exc}", cfg.general.enable_desktop_notifications)
             results["rumble"] = f"FAILED: {exc}"
         finally:
-            dup_checker.record_platform_result(file_hash, filename, "rumble", results.get("rumble", "FAILED: interrupted"))
+            dup_checker.record_platform_result(file_hash, filename, "rumble", results.get("rumble", "FAILED: interrupted"), title=rb_title)
 
     if dup_checker.is_fully_uploaded(file_hash):
         dest = os.path.join(cfg.general.uploaded_folder, filename)
@@ -350,14 +370,16 @@ def main(argv=None) -> int:
         return 1
 
     if args.file:
-        process_file(args.file, cfg, args.title, dup_checker, yt_logger, rb_logger, dry_run, existing_youtube_videos)
+        process_file(args.file, cfg, args.title, dup_checker, yt_logger, rb_logger, dry_run,
+                     existing_youtube_videos, existing_rumble_videos)
         return 0
 
     if args.batch:
         for fname in sorted(os.listdir(args.batch)):
             path = os.path.join(args.batch, fname)
             if os.path.isfile(path):
-                process_file(path, cfg, None, dup_checker, yt_logger, rb_logger, dry_run, existing_youtube_videos)
+                process_file(path, cfg, None, dup_checker, yt_logger, rb_logger, dry_run,
+                             existing_youtube_videos, existing_rumble_videos)
         return 0
 
     if args.watch or dry_run:
@@ -366,7 +388,8 @@ def main(argv=None) -> int:
             print("[DRY RUN MODE] Nothing will actually be uploaded.")
 
         def on_ready(path):
-            process_file(path, cfg, None, dup_checker, yt_logger, rb_logger, dry_run, existing_youtube_videos)
+            process_file(path, cfg, None, dup_checker, yt_logger, rb_logger, dry_run,
+                         existing_youtube_videos, existing_rumble_videos)
 
         watcher = FolderWatcher(
             cfg.general.watch_folder, cfg.general.supported_formats,
