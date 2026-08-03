@@ -9,6 +9,7 @@ aimed squarely at YouTube age-restricting/demonetizing streams over
 spoken profanity - it doesn't touch anything visual.
 """
 
+import json
 import os
 import sys
 from dataclasses import dataclass
@@ -24,6 +25,10 @@ class CensorResult:
     was_censored: bool
     violation_count: int
     censored_words: list  # e.g. ["shit", "damn's"] - for logging/notifications, not the full Violation objects
+
+
+def transcript_cache_path(work_dir: str, basename: str) -> str:
+    return os.path.join(work_dir, f"{basename}_transcript.json")
 
 
 def censor_video(
@@ -67,6 +72,19 @@ def censor_video(
 
         transcriber = Transcriber(model_name=model_name, device=device)
         result = transcriber.transcribe(raw_audio_path)
+
+        # Cache the transcript so content_optimizer can build its report
+        # without a second multi-minute Whisper pass over the same video.
+        transcript_path = transcript_cache_path(work_dir, basename)
+        try:
+            with open(transcript_path, "w", encoding="utf-8") as f:
+                json.dump(
+                    [{"start": float(s.get("start", 0)), "end": float(s.get("end", 0)),
+                      "text": s.get("text", "")} for s in result["segments"]],
+                    f,
+                )
+        except Exception:
+            pass  # a failed cache write must never fail the censor pass
 
         engine = ComplianceEngine(custom_words=custom_words)
         violations = engine.scan_segments(result["segments"])

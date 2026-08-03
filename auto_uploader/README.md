@@ -143,6 +143,28 @@ Censoring runs **lazily**: if YouTube is skipped as already-uploaded and
 Rumble isn't censoring, transcription never runs at all - which saves
 many minutes per stream on a backlog run.
 
+## Extras (config.json -> "features")
+
+- **Health check** — `python main.py --health`: disk space, CPU/RAM,
+  YouTube/Rumble reachability, and cleanup of stale temp files (old page
+  dumps, leftover censored copies, `__pycache__`). Problems raise a
+  desktop notification.
+- **Social announcements** (`social_promoter`, off by default) — after a
+  successful NEW upload (never for skipped duplicates), posts the title +
+  links to Discord (just set `DISCORD_WEBHOOK_URL` in `.env` and flip
+  `"enabled": true`). Twitter/X and Reddit are supported too but need
+  their API keys in `.env` plus `pip install tweepy` / `praw`.
+- **Content optimizer** (`content_optimizer`, on by default) — after each
+  new upload, writes `<video>_optimize.md` next to the uploaded file:
+  alternate title ideas, ready-to-paste YouTube chapter markers,
+  high-energy timestamps for thumbnails, and ~30s Shorts windows. Reuses
+  the transcript the censor pass already produced - it never runs a
+  second transcription just for the report.
+- **Rumble duplicate detection** (`rumble.skip_if_exists`, on by default)
+  — before uploading to Rumble: local history by file hash, local history
+  by title (catches re-encoded copies), then the channel RSS feed matched
+  by stream date. Matches are skipped and logged with the existing URL.
+
 ## 5. Skip the title prompt
 
 Set `"ask_for_title": false` in `config.json`'s `general` section, and

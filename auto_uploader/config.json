@@ -58,5 +58,12 @@
     "censor_device": null,
     "censor_custom_words": [],
     "censored_folder": "./censored"
+  },
+
+  "features": {
+    "_comment": "Optional extras. self_healing: python main.py --health. social_promoter posts AFTER a successful new upload (Discord needs DISCORD_WEBHOOK_URL in .env; twitter/reddit need their API keys + pip install tweepy/praw). content_optimizer writes an SEO/chapters report next to each uploaded video, reusing the censor pass's transcript.",
+    "self_healing": { "enabled": true, "min_free_gb": 10, "cleanup_age_days": 7 },
+    "social_promoter": { "enabled": false, "discord": true, "twitter": false, "reddit": false, "reddit_subreddit": "" },
+    "content_optimizer": { "enabled": true, "transcribe_if_missing": false }
   }
 }

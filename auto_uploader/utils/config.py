@@ -77,6 +77,7 @@ class AppConfig:
     rumble: RumbleConfig
     general: GeneralConfig
     project_root: str
+    features: dict = field(default_factory=dict)
 
 
 def _resolve_path(project_root: str, path: str) -> str:
@@ -160,7 +161,8 @@ def load_config(config_path: str = "config.json", env_path: str = ".env") -> App
         censored_folder=_resolve_path(project_root, gen.get("censored_folder", "./censored")),
     )
 
-    return AppConfig(youtube=youtube, rumble=rumble, general=general, project_root=project_root)
+    return AppConfig(youtube=youtube, rumble=rumble, general=general, project_root=project_root,
+                     features=raw.get("features", {}))
 
 
 def validate_config(cfg: AppConfig) -> list:

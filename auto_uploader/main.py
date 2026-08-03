@@ -21,7 +21,7 @@ from datetime import datetime
 # Bump when shipping user-visible changes, so --test-config can prove
 # which build is actually running (stale extracts have silently caused
 # several confusing "the fix did nothing" runs).
-BUILD = "2026-08-03.4 rumble-dedup"
+BUILD = "2026-08-03.5 health-social-optimizer"
 
 from utils.censor import censor_video
 from utils.config import load_config, validate_config
@@ -31,6 +31,7 @@ from utils.logging_setup import setup_logger
 from utils.notifier import notify
 from utils.retry import retry_with_backoff
 from utils.rumble_checker import fetch_rumble_videos
+from utils.self_healing import run_health_check
 from utils.rumble_uploader import RumbleUploader
 from utils.templating import (
     build_description,
@@ -198,6 +199,7 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
         return _censored["path"]
 
     results = {}
+    newly_uploaded = {}
 
     notify("Upload starting", filename, cfg.general.enable_desktop_notifications)
 
@@ -231,6 +233,7 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
             yt_logger.info(f"{filename}: uploaded successfully -> {url}")
             notify("YouTube upload complete", url, cfg.general.enable_desktop_notifications)
             results["youtube"] = url
+            newly_uploaded["youtube"] = url
         except Exception as exc:
             print()
             yt_logger.error(f"{filename}: FAILED: {exc}")
@@ -276,6 +279,7 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
             rb_logger.info(f"{filename}: uploaded successfully -> {url}")
             notify("Rumble upload complete", url, cfg.general.enable_desktop_notifications)
             results["rumble"] = url
+            newly_uploaded["rumble"] = url
         except Exception as exc:
             print()
             rb_logger.error(f"{filename}: FAILED: {exc}")
@@ -298,6 +302,30 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
         print(f"[INFO] {filename} left in place (not every platform succeeded yet) - "
               f"rerun --file or --batch on it later to retry just what's still missing.")
 
+    # Post-upload extras - strictly best-effort, only for uploads that
+    # actually happened THIS run (never for pre-existing skips), and never
+    # in a dry run. A failure here must not mark the upload as failed.
+    if newly_uploaded:
+        try:
+            from utils.social_promoter import announce_upload
+            announce_upload(cfg.features.get("social_promoter", {}), yt_title, newly_uploaded)
+        except Exception as exc:
+            print(f"[Social] WARNING: announce failed: {exc}")
+        try:
+            optimizer_cfg = cfg.features.get("content_optimizer", {})
+            if optimizer_cfg.get("enabled", True):
+                from utils.censor import transcript_cache_path
+                from utils.content_optimizer import generate_report
+                base = os.path.splitext(filename)[0]
+                report = generate_report(
+                    base, transcript_cache_path(cfg.general.censored_folder, base),
+                    stream_title, date_str, cfg.general.uploaded_folder, optimizer_cfg,
+                )
+                if report:
+                    print(f"[Optimize] SEO/chapters report written -> {report}")
+        except Exception as exc:
+            print(f"[Optimize] WARNING: report failed: {exc}")
+
     return results
 
 
@@ -309,10 +337,15 @@ def main(argv=None) -> int:
     parser.add_argument("--title", help="Stream title to use with --file (skips the interactive prompt).")
     parser.add_argument("--batch", help="Process every supported video already in the given folder.")
     parser.add_argument("--test-config", action="store_true", help="Validate config.json/.env, then exit.")
+    parser.add_argument("--health", action="store_true", help="Run disk/CPU/network health checks + temp cleanup, then exit.")
     args = parser.parse_args(argv)
 
     config_dir = os.path.dirname(os.path.abspath(__file__))
     cfg = load_config(os.path.join(config_dir, "config.json"), os.path.join(config_dir, ".env"))
+
+    if args.health:
+        ok = run_health_check(cfg, cfg.features.get("self_healing", {}))
+        return 0 if ok else 1
 
     if args.test_config:
         print(f"Build: {BUILD}")

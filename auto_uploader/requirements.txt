@@ -25,3 +25,10 @@ openai-whisper
 better-profanity
 pydub
 moviepy
+
+# Health checks (--health): CPU/RAM stats; disk checks work without it
+psutil==7.2.2
+
+# Optional social posting (only if you enable them in config features):
+# tweepy   - Twitter/X
+# praw     - Reddit
