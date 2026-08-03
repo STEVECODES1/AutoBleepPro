@@ -140,6 +140,35 @@ class RumbleUploader:
             page.get_by_role("button", name="Verify").or_(page.get_by_role("button", name="Submit")).click()
             page.wait_for_timeout(3000)
 
+    def _dump_page(self, page) -> str:
+        """Save the live page HTML next to this module for inspection."""
+        path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "logs",
+            f"rumble_page_dump_{int(time.time())}.html",
+        )
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(page.content())
+            return path
+        except Exception:
+            return "(could not write page dump)"
+
+    def _describe_buttons(self, page) -> str:
+        """Short summary of clickable things on the page, for error output."""
+        described = []
+        try:
+            for loc in page.locator("button, input[type='submit'], input[type='button']").all()[:25]:
+                try:
+                    label = (loc.inner_text() or loc.get_attribute("value") or "").strip()
+                    described.append(f"{label!r}{'' if loc.is_visible() else ' (hidden)'}")
+                except Exception:
+                    continue
+        except Exception:
+            pass
+        return ", ".join(described) or "(none found)"
+
     def _select_categories(self, page) -> None:
         """Pick the primary (and secondary, if present) category. Required
         by Rumble - the submit button stays inert until primary is set."""
@@ -154,17 +183,32 @@ class RumbleUploader:
                 # the config holds (e.g. "Gaming") - Rumble's underlying
                 # option values are opaque numeric ids.
                 dropdown.select_option(label=desired, timeout=10_000)
+                print(f"[Rumble] Category set: {desired}")
+                continue
             except Exception:
-                # Fall back to a case-insensitive match against whatever
-                # options this particular dropdown actually offers, so a
-                # slightly-off config string doesn't block the upload.
-                try:
-                    options = dropdown.locator("option").all_text_contents()
-                    match = next((o for o in options if o.strip().lower() == desired.strip().lower()), None)
-                    if match:
-                        dropdown.select_option(label=match, timeout=10_000)
-                except Exception:
-                    continue
+                pass
+
+            # Fall back to a case-insensitive / partial match against
+            # whatever options this dropdown actually offers, so a
+            # slightly-off config string doesn't silently block the upload.
+            try:
+                options = [o.strip() for o in dropdown.locator("option").all_text_contents()]
+                match = next((o for o in options if o.lower() == desired.strip().lower()), None)
+                if not match:
+                    match = next((o for o in options if desired.strip().lower() in o.lower()), None)
+                if match:
+                    dropdown.select_option(label=match, timeout=10_000)
+                    print(f"[Rumble] Category set: {match} (matched from config value {desired!r})")
+                else:
+                    # Loud, not silent: an unset REQUIRED category is
+                    # precisely what leaves the submit button dead, and a
+                    # silent failure here previously cost several runs.
+                    print(
+                        f"[Rumble] WARNING: category {desired!r} not found in dropdown. "
+                        f"Available options: {options}"
+                    )
+            except Exception as exc:
+                print(f"[Rumble] WARNING: could not set category {desired!r}: {exc}")
 
     def _wait_for_upload_complete(self, page, progress_callback, timeout_seconds: int = 60 * 90) -> None:
         """Block until Rumble's own progress readout reaches 100%.
@@ -271,11 +315,18 @@ class RumbleUploader:
         )
         try:
             submit_button.first.click(timeout=120_000)
-        except PlaywrightTimeoutError as exc:
+        except Exception as exc:
+            # Dump the live page so the actual submit-button markup can be
+            # inspected instead of guessed at - blind selector guessing has
+            # cost several failed runs already.
+            dump_path = self._dump_page(page)
+            visible = self._describe_buttons(page)
             raise RuntimeError(
-                "Rumble upload form never became submittable - a required field is probably "
-                "unset or the page layout changed. The browser window is still open so you can "
-                "finish/inspect it manually."
+                "Rumble upload form never became submittable. "
+                f"Page HTML saved to: {dump_path}\n"
+                f"Buttons/inputs currently on the page: {visible}\n"
+                "The video may still be uploaded on Rumble's side - check your Rumble "
+                "account before retrying, and send the dumped HTML if this keeps happening."
             ) from exc
 
         # After submit, Rumble usually redirects to the video's own page.
