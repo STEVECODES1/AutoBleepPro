@@ -21,7 +21,7 @@ from datetime import datetime
 # Bump when shipping user-visible changes, so --test-config can prove
 # which build is actually running (stale extracts have silently caused
 # several confusing "the fix did nothing" runs).
-BUILD = "2026-08-03.1 per-platform-censoring"
+BUILD = "2026-08-03.2 rumble-category-fixes"
 
 from utils.censor import censor_video
 from utils.config import load_config, validate_config

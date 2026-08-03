@@ -196,8 +196,12 @@ class RumbleUploader:
     # "Feature video on the top of your profile" and "Send mobile push
     # notification to followers" - the latter spams every follower, once per
     # uploaded video. Opt in explicitly, never by default.
+    # "agreement" listed explicitly: \bagree\b does NOT match "agreement",
+    # which caused a real run to skip Rumble's required rights attestation
+    # ("You have not signed an exclusive agreement with any other parties").
     _TERMS_PATTERN = re.compile(
-        r"\b(terms|conditions|agree|rights|licen[cs]e|authori[sz]ed|own|policy)\b", re.I
+        r"\b(terms|conditions|agree|agreement|rights|licen[cs]e|authori[sz]ed|own|policy|exclusive)\b",
+        re.I,
     )
 
     def _submit(self, page) -> None:
@@ -215,7 +219,7 @@ class RumbleUploader:
         )
 
         clicked_any = False
-        for step in range(2):  # details form, then rights/terms form
+        for step in range(3):  # details form, rights/terms form, +1 retry slot
             candidates = [c for c in submit_locator.all() if self._is_clickable(c)]
             if not candidates:
                 break
@@ -224,6 +228,17 @@ class RumbleUploader:
             clicked_any = True
             print(f"[Rumble] Submit step {step + 1} clicked.")
             page.wait_for_timeout(3000)
+
+            # If Rumble rejected the submit over the missing required
+            # category, fix it and let the loop click submit again.
+            try:
+                if page.get_by_text(re.compile(r"select at least one category", re.I)).count() > 0:
+                    print("[Rumble] Category error after submit - retrying category selection.")
+                    self._select_categories(page)
+                    page.wait_for_timeout(800)
+                    continue
+            except Exception:
+                pass
 
             # The rights/terms checkboxes usually only render on the second
             # form, so accept them after the first click rather than before.
@@ -307,39 +322,83 @@ class RumbleUploader:
         the form refuses to submit ("Please select at least one category")
         until primary is set.
 
-        Rumble uses custom dropdown widgets, not native <select> elements,
-        so this tries the native path first and falls back to driving the
-        widget the way a user would: click it open, then click the option.
+        Searches EVERY frame on the page, not just the top document: a real
+        run showed the dropdowns clearly visible on screen while both the
+        native-select and custom-widget lookups found nothing in the main
+        document - the classic signature of the form living in an iframe,
+        which page-level locators don't pierce.
         """
-        native = page.locator("select").all()
-        if native:
-            self._select_native(native)
-            return
+        # The category section can also render a beat LATER than the rest
+        # of the form (a real run found the checkboxes but not the
+        # dropdowns, which were visibly on screen moments later) - so poll
+        # for up to 30s for either a native <select> or the placeholder
+        # text to exist anywhere before concluding they're absent.
+        found_custom = False
+        deadline = time.time() + 30
+        while time.time() < deadline and not found_custom:
+            for frame in page.frames:
+                try:
+                    if frame.locator("select").count() > 0:
+                        self._select_native(frame.locator("select").all())
+                        return
+                    if frame.get_by_text(re.compile(r"-\s*Primary\s+category\s*-", re.I)).count() > 0:
+                        found_custom = True
+                        break
+                except Exception:
+                    continue
+            if not found_custom:
+                page.wait_for_timeout(1500)
 
+        all_ok = True
         for placeholder, desired in (
             ("Primary", self.primary_category),
             ("Secondary", self.secondary_category),
         ):
-            if desired:
-                self._select_custom_dropdown(page, placeholder, desired)
+            if desired and not self._select_custom_dropdown(page, placeholder, desired):
+                all_ok = False
 
-    def _select_custom_dropdown(self, page, placeholder: str, desired: str) -> None:
-        """Open a custom (non-<select>) dropdown and pick a matching option."""
+        if not all_ok:
+            # Selector inference has failed enough times - capture the real
+            # markup so the next fix comes from data, and tell the user the
+            # manual-rescue path (clicks in the visible window still count).
+            dump = self._dump_page(page)
+            print(
+                f"[Rumble] Category selection failed - page HTML dumped to: {dump}\n"
+                "[Rumble] You can pick the categories manually in the browser window "
+                "right now; the upload will continue and submit normally."
+            )
+
+    def _select_custom_dropdown(self, page, placeholder: str, desired: str) -> bool:
+        """Open a custom (non-<select>) dropdown and pick a matching option.
+        Returns True on success. Checks every frame, not just the page."""
+        pattern = re.compile(rf"-\s*{placeholder}\s+category\s*-", re.I)
+
+        control = None
+        control_frame = None
+        for frame in page.frames:
+            try:
+                candidate = frame.get_by_text(pattern)
+                if candidate.count() > 0:
+                    control = candidate.first
+                    control_frame = frame
+                    break
+            except Exception:
+                continue
+
         try:
-            # The closed control shows placeholder text like
-            # "- Primary category -"; click whatever element carries it.
-            control = page.get_by_text(re.compile(rf"-\s*{placeholder}\s+category\s*-", re.I)).first
-            if control.count() == 0:
+            if control is None:
                 print(f"[Rumble] WARNING: could not find the {placeholder} category dropdown.")
-                return
+                return False
+            page_or_frame = control_frame
             control.click(timeout=15_000)
             page.wait_for_timeout(600)  # let the option list render
 
             # Some of these widgets include a search box - typing narrows a
             # long list (Rumble's game list is huge) so the option is
-            # actually rendered and clickable.
+            # actually rendered and clickable. Searched within the same
+            # frame the control lives in.
             try:
-                search = page.locator("input[type='text']:visible, input[type='search']:visible").last
+                search = page_or_frame.locator("input[type='text']:visible, input[type='search']:visible").last
                 if search.count() > 0:
                     search.fill(desired, timeout=5_000)
                     page.wait_for_timeout(800)
@@ -347,20 +406,22 @@ class RumbleUploader:
                 pass
 
             option = (
-                page.get_by_role("option", name=re.compile(re.escape(desired), re.I))
-                .or_(page.locator("li, [role='option'], .option, .dropdown-item")
+                page_or_frame.get_by_role("option", name=re.compile(re.escape(desired), re.I))
+                .or_(page_or_frame.locator("li, [role='option'], .option, .dropdown-item")
                      .filter(has_text=re.compile(re.escape(desired), re.I)))
             )
             if option.count() == 0:
                 print(f"[Rumble] WARNING: no option matching {desired!r} in the {placeholder} dropdown.")
                 page.keyboard.press("Escape")
-                return
+                return False
 
             option.first.click(timeout=15_000)
             print(f"[Rumble] Category set: {desired} ({placeholder})")
             page.wait_for_timeout(400)
+            return True
         except Exception as exc:
             print(f"[Rumble] WARNING: could not set {placeholder} category {desired!r}: {exc}")
+            return False
 
     def _select_native(self, selects) -> None:
         """Native <select> path (kept in case Rumble ever serves plain selects)."""
