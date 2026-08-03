@@ -711,13 +711,37 @@ class RumbleUploader:
                 "account before retrying, and send the dumped HTML if this keeps happening."
             ) from exc
 
-        # After submit, Rumble usually redirects to the video's own page.
-        try:
-            page.wait_for_url("**/v*", timeout=120_000)
-        except PlaywrightTimeoutError:
-            pass
+        # Rumble doesn't redirect after submit - it shows a "Direct Link"
+        # box on the same upload.php page (observed in a real run, where
+        # waiting for a redirect burned 120s per file and then recorded
+        # upload.php as the "video URL"). Scrape the real link instead.
+        direct_url = None
+        deadline = time.time() + 45
+        while time.time() < deadline and not direct_url:
+            direct_url = self._find_video_url(page)
+            if not direct_url:
+                page.wait_for_timeout(2000)
 
         if progress_callback:
             progress_callback(100)
 
-        return page.url
+        return direct_url or page.url
+
+    def _find_video_url(self, page):
+        """The published video's URL from the success page: the Direct Link
+        input's value first, then any rumble.com/v... link in the HTML."""
+        try:
+            values = page.evaluate(
+                "() => Array.from(document.querySelectorAll('input,textarea')).map(e => e.value || '')"
+            )
+        except Exception:
+            values = []
+        candidates = [v for v in values if isinstance(v, str) and v.startswith("https://rumble.com/")]
+        try:
+            candidates += re.findall(r"https://rumble\.com/v[A-Za-z0-9._-]+", page.content())
+        except Exception:
+            pass
+        for candidate in candidates:
+            if "/upload" not in candidate:
+                return candidate.rstrip('\'"')
+        return None
