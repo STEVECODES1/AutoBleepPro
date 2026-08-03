@@ -76,15 +76,20 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
                   yt_logger, rb_logger, dry_run: bool, existing_youtube_videos: list = None,
                   existing_rumble_videos: list = None) -> dict:
     filename = os.path.basename(video_path)
+
+    # Cheap checks first. Hashing reads the whole file, so doing it before
+    # the extension test meant a folder of in-progress yt-dlp downloads
+    # (multi-GB *.part files) got read end-to-end off the drive purely to
+    # throw the result away - and those files are still being written to.
+    if os.path.splitext(video_path)[1].lower() not in cfg.general.supported_formats:
+        print(f"[SKIP] {filename} is not a supported video format.")
+        return {"skipped": "unsupported_format"}
+
     file_hash = hash_file(video_path)
 
     if dup_checker.is_fully_uploaded(file_hash):
         print(f"[SKIP] {filename} already uploaded to both platforms previously (matched by content hash).")
         return {"skipped": "duplicate"}
-
-    if os.path.splitext(video_path)[1].lower() not in cfg.general.supported_formats:
-        print(f"[SKIP] {filename} is not a supported video format.")
-        return {"skipped": "unsupported_format"}
 
     stream_title = get_stream_title(video_path, cli_title, cfg)
     # A freshly-finished stream should be dated today; an old VOD being
