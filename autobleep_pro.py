@@ -1,67 +1,57 @@
 """
-AutoBleep Pro v2.2 - Automatic Video Profanity Bleeper
-=====================================================
-SPEED STACK:
-  - faster-whisper  → ~4x faster transcription vs openai-whisper
-  - stable-ts       → accurate word-level timestamps on faster-whisper
-  - int8 / float16  → compute mode selection (less RAM, faster)
-  - ffmpeg extract  → fast 16kHz mono WAV extraction
-  - libx264 presets → ultrafast / fast encode options
-  - Turbo model     → added to model picker
+AutoBleep Pro v2.2.1 - Automatic Video Profanity Bleeper (GUI)
+==============================================================
+All detection/audio/model logic lives in `bleep_engine.py`. This module is
+the customtkinter GUI and its worker threads - nothing else.
 
-WORD DETECTION v2.2:
-  - Leet-speak decoder  (sh1t → shit, f@ck → fuck, etc.)
-  - Common homophones   (fudge/ship/shoot/dang/crap/etc.)
-  - Asterisk/symbol bypass (f**k, s**t, b***h)
-  - Whisper mishear list (common transcription substitutes)
-  - Context window      (bitch in "son of a" regardless of word alone)
-  - Deduplication       (no double-bleep if word matches twice)
-  - better-profanity    (large built-in wordlist, still used as base)
+Threading contract
+------------------
+Tk is not thread-safe. Two rules, enforced throughout:
 
-Features:
-  - Word review UI  (uncheck words you don't want bleeped)
-  - Output folder picker
-  - Batch folder processing
-  - Multiple beep sound presets
-  - Custom word list
-  - GPU auto-detection
+1. Worker threads never read a Tk variable. Every setting is snapshotted
+   into an immutable `Settings` on the main thread before the thread
+   starts (v2.2 called `self.bleep_method.get()` etc. from inside the
+   worker loops).
+2. Worker threads never touch a widget directly - they go through
+   `self._on_main(...)`, which marshals onto the Tk event loop.
+
+Run with:  python autobleep_pro.py
 """
+
+from __future__ import annotations
+
+import os
+import queue
+import tempfile
+import threading
+from dataclasses import dataclass, field
 
 import customtkinter as ctk
 from tkinter import filedialog, messagebox
-import torch
-from better_profanity import profanity
+
 from pydub import AudioSegment
-from pydub.generators import Sine
 from moviepy import VideoFileClip, AudioFileClip
-import os
-import re
-import threading
-import subprocess
-import unicodedata
-import numpy as np
-from datetime import timedelta
 
-# ── Try importing speed stack; fall back to openai-whisper if not installed ──
-try:
-    import stable_whisper
-    SPEED_MODE = True
-except ImportError:
-    SPEED_MODE = False
-    print("[AutoBleep] stable-ts not found — using openai-whisper. "
-          "Run: pip install stable-ts[fw] for 4x speed.")
+import bleep_engine as engine
+from bleep_engine import (
+    SPEED_MODE,
+    ModelCache,
+    apply_bleeps,
+    build_output_path,
+    configure_threads,
+    extract_audio_fast,
+    find_profanity_v2,
+    is_generated_output,
+    safe_remove,
+    transcribe_words,
+)
 
-# Always available as the last-resort fallback in load_model_speed(), even
-# when stable-ts imported fine but its own load attempts fail at runtime.
-import whisper as openai_whisper
+APP_VERSION = "2.2.1"
 
-# ── Profanity filter init ────────────────────────────────────────────────────
-profanity.load_censor_words()
+configure_threads()
 
-# Use all CPU cores for local (non-GPU) work
-torch.set_num_threads(os.cpu_count() or 1)
+# ── Picker options ───────────────────────────────────────────────────────────
 
-# ── Model options ────────────────────────────────────────────────────────────
 MODEL_MAP = {
     "tiny   — max speed (less accurate)": "tiny",
     "base   — recommended (balanced)": "base",
@@ -70,7 +60,6 @@ MODEL_MAP = {
     "turbo  — fast large model (GPU recommended)": "turbo",
 }
 
-# ── Compute type options (faster-whisper / stable-ts) ────────────────────────
 COMPUTE_MAP = {
     "Auto (GPU=float16, CPU=int8)": "auto",
     "int8 — fastest / least RAM": "int8",
@@ -78,7 +67,6 @@ COMPUTE_MAP = {
     "float32 — max compatibility": "float32",
 }
 
-# ── Encode preset options ────────────────────────────────────────────────────
 ENCODE_PRESETS = {
     "ultrafast — fastest export": "ultrafast",
     "fast — good balance": "fast",
@@ -86,7 +74,6 @@ ENCODE_PRESETS = {
     "slow — best compression": "slow",
 }
 
-# ── Beep preset frequencies (Hz) ─────────────────────────────────────────────
 BEEP_PRESETS = {
     "Classic TV Bleep (1000 Hz)": 1000,
     "High Pitch (1500 Hz)": 1500,
@@ -94,303 +81,44 @@ BEEP_PRESETS = {
     "Air Horn (600 Hz)": 600,
 }
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# WORD DETECTION ENGINE v2.2
-# ═══════════════════════════════════════════════════════════════════════════════
-
-LEET_MAP = str.maketrans({
-    '0': 'o', '1': 'i', '3': 'e', '4': 'a', '5': 's',
-    '6': 'g', '7': 't', '8': 'b', '9': 'g',
-    '@': 'a', '$': 's', '!': 'i', '+': 't', '#': 'h',
-    '*': '',
-})
-
-BYPASS_PATTERN = re.compile(
-    r'\b([a-z])[*@#$!]{1,4}([a-z])\b|\b([a-z])[*@#$!]{2,}\b',
-    re.IGNORECASE
-)
-
-BYPASS_STARTS = {
-    'f': {'k'},
-    's': {'t', 'r'},
-    'b': {'h', 'd'},
-    'a': {'e'},
-    'c': {'t', 'k'},
-    'd': {'k'},
-    'p': {'s', 'y'},
-    'h': {'l'},
-    'n': {'r', 'a'},
-    'w': {'e'},
-    'j': {'z'},
-}
-
-HOMOPHONES: dict[str, list[str]] = {
-    "fudge": ["fuck"],
-    "frick": ["fuck"],
-    "freak": ["fuck"],
-    "freaking": ["fucking"],
-    "frickin": ["fucking"],
-    "frigging": ["fucking"],
-    "effing": ["fucking"],
-    "shoot": ["shit"],
-    "ship": ["shit"],
-    "sugar": ["shit"],
-    "sheet": ["shit"],
-    "dang": ["damn"],
-    "darn": ["damn"],
-    "dagnabbit": ["goddammit"],
-    "crap": ["shit"],
-    "crud": ["crap"],
-    "witch": ["bitch"],
-    "beach": ["bitch"],
-    "rich": ["bitch"],
-    "bass": ["ass"],
-    "butt": ["ass"],
-    "behind": ["ass"],
-    "heck": ["hell"],
-    "what the heck": ["what the hell"],
-    "son of a gun": ["son of a bitch"],
-}
-
-CONTEXT_ONLY: set[str] = {"witch", "beach", "bass", "rich", "sheet"}
-
-CONTEXT_TRIGGERS: list[tuple[str, str]] = [
-    ("son of a", "bitch"),
-    ("what the", "hell"),
-    ("what the", "heck"),
-    ("go to", "hell"),
-    ("holy", "shit"),
-    ("bull", "shit"),
-    ("horse", "shit"),
-    ("no", "shit"),
-    ("you piece of", "shit"),
-    ("mother", "fucker"),
-    ("piece of", "shit"),
+VIDEO_FILETYPES = [
+    ("Video Files", "*.mp4 *.avi *.mov *.mkv *.flv *.wmv *.m4v *.webm *.ts"),
+    ("All Files", "*.*"),
 ]
 
-WHISPER_MISHEARDS: dict[str, str] = {
-    "shirt": "shit",
-    "witch": "bitch",
-    "batch": "bitch",
-    "ditch": "bitch",
-    "rich": "bitch",
-    "cluck": "fuck",
-    "duck": "fuck",
-    "luck": "fuck",
-    "truck": "fuck",
-    "stuck": "fuck",
-    "shut": "shit",
-    "shot": "shit",
-    "ship": "shit",
-    "shop": "shit",
-}
 
-MISHEARD_CONTEXT_ONLY: set[str] = {"luck", "truck", "stuck", "rich", "shot", "shop"}
+@dataclass(frozen=True)
+class Settings:
+    """An immutable snapshot of the control panel, taken on the main thread."""
+    model_name: str
+    compute_pref: str
+    encode_preset: str
+    bleep_method: str
+    beep_freq: int
+    fuzzy: bool
+    output_dir: str | None
+    custom_words: tuple[str, ...] = field(default=())
 
 
-def _normalize(text: str) -> str:
-    text = unicodedata.normalize('NFD', text.lower())
-    text = ''.join(c for c in text if unicodedata.category(c) != 'Mn')
-    return re.sub(r"[^a-z0-9@$!*#+]", "", text)
+def _new_temp_wav() -> str:
+    """A unique temp .wav path.
 
+    v2.2 used `video_path + "__temp_audio.wav"`, which collides whenever
+    two videos share a stem, breaks on read-only input folders, and leaves
+    debris next to the user's footage.
+    """
+    fd, path = tempfile.mkstemp(prefix="autobleep_", suffix=".wav")
+    os.close(fd)
+    return path
 
-def _deleet(text: str) -> str:
-    return text.translate(LEET_MAP)
-
-
-def _strip_affixes(word: str) -> list[str]:
-    candidates = [word]
-    for suffix in ('ing', 'ed', 'er', 'ers', 'in', 's', "'s", "'d", "n't"):
-        if word.endswith(suffix) and len(word) - len(suffix) >= 3:
-            candidates.append(word[:-len(suffix)])
-    for prefix in ('mother', 'bull', 'horse', 'cluster', 'jack', 'dumb',
-                   'god', 'holy', 'un', 'out'):
-        if word.startswith(prefix) and len(word) > len(prefix) + 2:
-            candidates.append(word[len(prefix):])
-    return candidates
-
-
-def _is_bypass(raw_word: str) -> bool:
-    if BYPASS_PATTERN.search(raw_word):
-        first = raw_word[0].lower()
-        last = re.sub(r'[^a-z]', '', raw_word.lower())[-1:]
-        if first in BYPASS_STARTS and last in BYPASS_STARTS.get(first, set()):
-            return True
-        if len(raw_word) <= 6 and raw_word.count('*') >= 2:
-            return True
-    return False
-
-
-def _check_word(
-    raw_word: str,
-    context_words: list[str],
-    custom_words: list[str]
-) -> tuple[bool, str]:
-    if _is_bypass(raw_word):
-        return True, "Symbol bypass (f**k style)"
-
-    norm = _normalize(raw_word)
-    deleet = _deleet(norm)
-    stripped = re.sub(r"^[^a-z]+|[^a-z]+$", "", norm)
-    core = re.sub(r"'(s|ll|d|m|re|ve|t|n't)$", "", stripped)
-
-    if deleet != norm:
-        for v in _strip_affixes(deleet):
-            if profanity.contains_profanity(v):
-                return True, "Leet-speak profanity"
-
-    candidates = set()
-    for base in (norm, stripped, core, deleet):
-        candidates.update(_strip_affixes(base))
-
-    for candidate in candidates:
-        if candidate and profanity.contains_profanity(candidate):
-            return True, "Profanity detected"
-
-    clean_word = re.sub(r"[^a-z]", "", stripped)
-    if clean_word in HOMOPHONES:
-        if clean_word not in CONTEXT_ONLY:
-            return True, f"Likely profanity substitute ('{clean_word}')"
-        ctx_str = " ".join(context_words)
-        for trigger, _ in CONTEXT_TRIGGERS:
-            if trigger in ctx_str:
-                return True, f"Context homophone ('{clean_word}')"
-
-    if clean_word in WHISPER_MISHEARDS:
-        if clean_word not in MISHEARD_CONTEXT_ONLY:
-            return True, f"Whisper mishear of '{WHISPER_MISHEARDS[clean_word]}'"
-        ctx_str = " ".join(context_words)
-        if any(profanity.contains_profanity(cw) or cw in HOMOPHONES
-               for cw in context_words):
-            return True, f"Whisper mishear (context) of '{WHISPER_MISHEARDS[clean_word]}'"
-
-    ctx_str = " ".join(context_words[-4:])
-    for trigger, target in CONTEXT_TRIGGERS:
-        if trigger in ctx_str and clean_word == target:
-            return True, f"Context trigger ('{trigger} {target}')"
-
-    for cw in custom_words:
-        if cw and (cw in norm or cw in stripped or cw in core):
-            return True, "Custom word"
-
-    return False, ""
-
-
-def find_profanity_v2(
-    result: dict,
-    custom_words: list[str]
-) -> list[dict]:
-    found = []
-    seen_starts: set[float] = set()
-    all_words: list[dict] = []
-
-    for segment in result.get("segments", []):
-        for word_info in segment.get("words", []):
-            all_words.append(word_info)
-
-    for idx, word_info in enumerate(all_words):
-        raw = word_info.get("word", "")
-        start = word_info.get("start", 0.0)
-        end = word_info.get("end", 0.0)
-
-        context = [
-            re.sub(r"[^a-z]", "", all_words[i]["word"].strip().lower())
-            for i in range(max(0, idx - 5), idx)
-        ]
-
-        is_bad, reason = _check_word(raw.strip(), context, custom_words)
-
-        if is_bad and start not in seen_starts:
-            seen_starts.add(start)
-            found.append({
-                "word": raw,
-                "start": start,
-                "end": end,
-                "reason": reason,
-            })
-
-    return found
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# DEVICE / MODEL / AUDIO HELPERS
-# ═══════════════════════════════════════════════════════════════════════════════
-
-def detect_device():
-    if torch.cuda.is_available():
-        return "cuda", torch.cuda.get_device_name(0)
-    return "cpu", f"{os.cpu_count()} CPU cores"
-
-
-def make_beep(duration_ms: int, freq_hz: int, _cache: dict = {}) -> AudioSegment:
-    key = (duration_ms, freq_hz)
-    if key not in _cache:
-        base = Sine(freq_hz).to_audio_segment(duration=100)
-        repeated = base * (duration_ms // 100 + 1)
-        _cache[key] = repeated[:duration_ms]
-    return _cache[key]
-
-
-def safe_remove(*paths):
-    for p in paths:
-        try:
-            os.remove(p)
-        except FileNotFoundError:
-            pass
-
-
-def extract_audio_fast(video_path: str, wav_path: str) -> bool:
-    try:
-        subprocess.run(
-            ["ffmpeg", "-y", "-i", video_path,
-             "-ac", "1", "-ar", "16000", "-vn", wav_path],
-            check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        )
-        return True
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        return False
-
-
-def load_model_speed(model_name: str, compute_pref: str):
-    device, dev_label = detect_device()
-    if SPEED_MODE:
-        compute_type = ("float16" if device == "cuda" else "int8") \
-            if compute_pref == "auto" else compute_pref
-        try:
-            model = stable_whisper.load_faster_whisper(
-                model_name, device=device, compute_type=compute_type)
-            return model, device, f"faster-whisper [{compute_type}] on {device.upper()} ({dev_label})"
-        except Exception as e:
-            print(f"[AutoBleep] faster-whisper failed ({e}), trying stable-ts...")
-            try:
-                model = stable_whisper.load_model(model_name, device=device)
-                return model, device, f"stable-ts on {device.upper()} ({dev_label})"
-            except Exception as e2:
-                print(f"[AutoBleep] stable-ts failed ({e2}), falling back...")
-    model = openai_whisper.load_model(model_name, device=device)
-    return model, device, f"openai-whisper on {device.upper()} ({dev_label})"
-
-
-def transcribe_words(model, audio_path: str, speed_mode: bool) -> dict:
-    if speed_mode:
-        result = model.transcribe(audio_path, word_timestamps=True)
-        segments = []
-        for seg in result.segments:
-            words = [{"word": w.word, "start": float(w.start), "end": float(w.end)}
-                     for w in (seg.words or [])]
-            segments.append({"words": words, "text": seg.text})
-        return {"segments": segments}
-    return model.transcribe(audio_path, word_timestamps=True)
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# GUI
-# ═══════════════════════════════════════════════════════════════════════════════
 
 class AutoBleepPro:
+    # How often the main thread checks for work queued by worker threads.
+    _UI_POLL_MS = 40
+
     def __init__(self):
         self.window = ctk.CTk()
-        self.window.title("AutoBleep Pro v2.2 — Smart Detection ⚡")
+        self.window.title(f"AutoBleep Pro v{APP_VERSION} — Smart Detection ⚡")
         self.window.geometry("1080x960")
         self.window.minsize(800, 700)
         ctk.set_appearance_mode("dark")
@@ -400,20 +128,98 @@ class AutoBleepPro:
         self.output_dir: str | None = None
         self.profane_words: list[dict] = []
         self.word_vars: list[ctk.BooleanVar] = []
-        self.device_info = "unknown"
+        self.device_info: str = "unknown"
+
+        # v2.2 assigned these mid-run and read them elsewhere, so any error
+        # before the assignment raised AttributeError instead of the real
+        # problem.
+        self._audio_path_for_export: str | None = None
+        self._video_path_for_export: str | None = None
         self._batch_input_dir: str | None = None
         self._batch_output_dir: str | None = None
+        self._busy = False
+        self._temp_files: set[str] = set()
+
+        self._model_cache = ModelCache()
+
+        self._ui_queue: queue.Queue = queue.Queue()
+        self._closing = False
+        self._poll_id: str | None = None
 
         self._setup_ui()
+        self.window.protocol("WM_DELETE_WINDOW", self._on_close)
+        self._drain_ui_queue()   # starts the main-thread poll loop
+
+    # ── Thread marshalling ───────────────────────────────────────────────────
+
+    def _on_main(self, fn, *args, **kwargs) -> None:
+        """Queue `fn` to run on the Tk event loop. Safe from any thread.
+
+        Deliberately NOT `window.after(0, ...)`: `after()` is itself a Tcl
+        call that registers a command on the interpreter, so calling it
+        from a worker is unsafe and raises outright
+        ("RuntimeError: main thread is not in main loop") whenever the main
+        thread isn't sitting inside mainloop() - during shutdown, during a
+        modal dialog, or under a test harness driving update(). v2.2 used
+        that pattern everywhere, so those updates were silently lost.
+
+        `queue.Queue.put` touches no Tcl at all; `_drain_ui_queue` runs the
+        callbacks on the main thread.
+        """
+        self._ui_queue.put((fn, args, kwargs))
+
+    def _drain_ui_queue(self) -> None:
+        """Main thread only: run whatever the workers queued up."""
+        try:
+            while True:
+                fn, args, kwargs = self._ui_queue.get_nowait()
+                try:
+                    fn(*args, **kwargs)
+                except Exception as exc:  # a broken UI update must not kill the poller
+                    print(f"[AutoBleep] UI update failed: {exc}")
+        except queue.Empty:
+            pass
+        if not self._closing:
+            self._poll_id = self.window.after(self._UI_POLL_MS, self._drain_ui_queue)
+
+    def _update_status(self, msg: str, progress: float | None = None) -> None:
+        def _apply():
+            self.status_label.configure(text=msg)
+            if progress is not None:
+                self.progress.set(max(0.0, min(1.0, progress)))
+        self._on_main(_apply)
+
+    def _batch_log_write(self, line: str) -> None:
+        def _apply():
+            self.batch_log.insert("end", line + "\n")
+            self.batch_log.see("end")
+        self._on_main(_apply)
+
+    def _show_error(self, title: str, message: str) -> None:
+        self._on_main(messagebox.showerror, title, message)
+
+    def _set_buttons(self, *, process=None, confirm=None, batch=None) -> None:
+        def _apply():
+            if process is not None:
+                self.process_btn.configure(state="normal" if process else "disabled")
+            if confirm is not None:
+                self.confirm_btn.configure(state="normal" if confirm else "disabled")
+            if batch is not None:
+                self.batch_btn.configure(state="normal" if batch else "disabled")
+        self._on_main(_apply)
+
+    # ── UI construction ──────────────────────────────────────────────────────
 
     def _setup_ui(self):
         hdr = ctk.CTkFrame(self.window, fg_color="transparent")
         hdr.pack(pady=(18, 4), padx=20, fill="x")
         ctk.CTkLabel(hdr, text="🔇 AutoBleep Pro",
                      font=("Arial", 36, "bold")).pack()
-        speed_label = ("⚡ v2.2 — Smart Detection  •  faster-whisper + stable-ts"
-                       if SPEED_MODE
-                       else "v2.2 — Smart Detection  •  openai-whisper (install stable-ts[fw] for 4x speed)")
+        speed_label = (
+            f"⚡ v{APP_VERSION} — Smart Detection  •  faster-whisper + stable-ts"
+            if SPEED_MODE else
+            f"v{APP_VERSION} — Smart Detection  •  openai-whisper "
+            "(install stable-ts[fw] for 4x speed)")
         ctk.CTkLabel(hdr, text=speed_label, font=("Arial", 13),
                      text_color="#4f98a3" if SPEED_MODE else "gray").pack(pady=2)
 
@@ -430,7 +236,7 @@ class AutoBleepPro:
         self.progress.pack(pady=(10, 4), padx=20, fill="x")
         self.progress.set(0)
         self.status_label = ctk.CTkLabel(bot, text="Ready — select a video to begin",
-                                          font=("Arial", 13))
+                                         font=("Arial", 13))
         self.status_label.pack(pady=(0, 8))
 
     def _build_single_tab(self, parent):
@@ -441,7 +247,7 @@ class AutoBleepPro:
         row = ctk.CTkFrame(s1, fg_color="transparent")
         row.pack(fill="x", padx=14, pady=4)
         self.file_label = ctk.CTkLabel(row, text="No video selected",
-                                        font=("Arial", 12), anchor="w")
+                                       font=("Arial", 12), anchor="w")
         self.file_label.pack(side="left", fill="x", expand=True, padx=6)
         ctk.CTkButton(row, text="Browse Video", command=self._pick_single_video,
                       width=150, height=34).pack(side="right", padx=6)
@@ -487,6 +293,16 @@ class AutoBleepPro:
         ctk.CTkOptionMenu(inner, values=list(ENCODE_PRESETS.keys()),
                           variable=self.encode_var, width=320).pack(anchor="w")
 
+        # Default ON = v2.2 behaviour. The escape hatch matters most in
+        # batch mode, which has no review step to untick false positives.
+        self.fuzzy_var = ctk.BooleanVar(value=True)
+        ctk.CTkCheckBox(
+            inner,
+            text="Fuzzy matching — also flag minced oaths (fudge, shoot, dang) "
+                 "and likely mishears (duck, shirt)",
+            variable=self.fuzzy_var, font=("Arial", 11),
+        ).pack(anchor="w", pady=(14, 2))
+
         ctk.CTkLabel(inner, text="Extra words to bleep (comma-separated, optional):",
                      font=("Arial", 12)).pack(anchor="w", pady=(12, 2))
         self.custom_words_var = ctk.StringVar()
@@ -498,7 +314,7 @@ class AutoBleepPro:
         out_row = ctk.CTkFrame(inner, fg_color="transparent")
         out_row.pack(anchor="w", fill="x")
         self.out_label = ctk.CTkLabel(out_row, text="Same folder as input",
-                                       font=("Arial", 11), text_color="gray", anchor="w")
+                                      font=("Arial", 11), text_color="gray", anchor="w")
         self.out_label.pack(side="left", fill="x", expand=True)
         ctk.CTkButton(out_row, text="Choose Folder", command=self._pick_output_dir,
                       width=140, height=30).pack(side="right", padx=4)
@@ -540,7 +356,7 @@ class AutoBleepPro:
         brow = ctk.CTkFrame(bf, fg_color="transparent")
         brow.pack(fill="x", padx=14, pady=4)
         self.batch_dir_label = ctk.CTkLabel(brow, text="No folder selected",
-                                             font=("Arial", 11), text_color="gray", anchor="w")
+                                            font=("Arial", 11), text_color="gray", anchor="w")
         self.batch_dir_label.pack(side="left", fill="x", expand=True)
         ctk.CTkButton(brow, text="Browse Folder", command=self._pick_batch_folder,
                       width=150, height=34).pack(side="right", padx=6)
@@ -550,7 +366,7 @@ class AutoBleepPro:
         orow = ctk.CTkFrame(bf, fg_color="transparent")
         orow.pack(fill="x", padx=14, pady=4)
         self.batch_out_label = ctk.CTkLabel(orow, text="Same as input folder",
-                                             font=("Arial", 11), text_color="gray", anchor="w")
+                                            font=("Arial", 11), text_color="gray", anchor="w")
         self.batch_out_label.pack(side="left", fill="x", expand=True)
         ctk.CTkButton(orow, text="Choose Folder", command=self._pick_batch_output,
                       width=150, height=34).pack(side="right", padx=6)
@@ -559,8 +375,8 @@ class AutoBleepPro:
         bs.pack(pady=8, padx=10, fill="x")
         ctk.CTkLabel(bs, text="⚙️ Batch Settings",
                      font=("Arial", 14, "bold")).pack(anchor="w", padx=14, pady=8)
-        ctk.CTkLabel(bs, text="Uses same Method / Model / Compute / Encode / Beep / Custom Words "
-                     "as the Single Video tab.",
+        ctk.CTkLabel(bs, text="Uses same Method / Model / Compute / Encode / Beep / Fuzzy / "
+                             "Custom Words as the Single Video tab.",
                      font=("Arial", 11), text_color="gray").pack(anchor="w", padx=28, pady=(0, 10))
 
         self.batch_btn = ctk.CTkButton(
@@ -573,13 +389,11 @@ class AutoBleepPro:
         self.batch_log.pack(pady=4, padx=14, fill="both", expand=True)
         self.batch_log.insert("1.0", "Batch log will appear here...\n")
 
-    # ── File pickers ──────────────────────────────────────────────────────────
+    # ── File pickers (main thread only) ──────────────────────────────────────
 
     def _pick_single_video(self):
-        path = filedialog.askopenfilename(
-            title="Select Video File",
-            filetypes=[("Video Files", "*.mp4 *.avi *.mov *.mkv *.flv *.wmv"),
-                       ("All Files", "*.*")])
+        path = filedialog.askopenfilename(title="Select Video File",
+                                          filetypes=VIDEO_FILETYPES)
         if path:
             self.video_paths = [path]
             self.file_label.configure(text=f"✅ {os.path.basename(path)}")
@@ -605,245 +419,332 @@ class AutoBleepPro:
             self._batch_output_dir = d
             self.batch_out_label.configure(text=d, text_color="white")
 
-    # ── Single video analyze ──────────────────────────────────────────────────
+    # ── Settings snapshot ────────────────────────────────────────────────────
+
+    def _snapshot_settings(self) -> Settings:
+        """Read every Tk variable ONCE, on the main thread."""
+        raw = self.custom_words_var.get()
+        return Settings(
+            model_name=MODEL_MAP[self.model_var.get()],
+            compute_pref=COMPUTE_MAP[self.compute_var.get()],
+            encode_preset=ENCODE_PRESETS[self.encode_var.get()],
+            bleep_method=self.bleep_method.get(),
+            beep_freq=BEEP_PRESETS[self.beep_preset.get()],
+            fuzzy=bool(self.fuzzy_var.get()),
+            output_dir=self.output_dir,
+            custom_words=tuple(w.strip().lower() for w in raw.split(",") if w.strip()),
+        )
+
+    # ── Shared worker helpers ────────────────────────────────────────────────
+
+    def _track_temp(self, path: str) -> str:
+        self._temp_files.add(path)
+        return path
+
+    def _drop_temp(self, *paths: str | None) -> None:
+        safe_remove(*paths)
+        for p in paths:
+            self._temp_files.discard(p)
+
+    def _extract_audio(self, video_path: str, wav_path: str) -> None:
+        """ffmpeg first, moviepy as fallback. Raises with a readable message."""
+        if extract_audio_fast(video_path, wav_path):
+            return
+        clip = None
+        try:
+            clip = VideoFileClip(video_path)
+            if clip.audio is None:
+                raise RuntimeError(
+                    f"{os.path.basename(video_path)} has no audio track — "
+                    "nothing to bleep.")
+            clip.audio.write_audiofile(wav_path, logger=None)
+        finally:
+            if clip is not None:
+                try:
+                    clip.close()
+                except Exception:
+                    pass
+
+    def _render(self, video_path: str, cleaned_audio_path: str,
+                out_path: str, encode_preset: str) -> None:
+        """Mux the cleaned audio back onto the video. Always closes its clips."""
+        video = audio = final = None
+        try:
+            video = VideoFileClip(video_path)
+            audio = AudioFileClip(cleaned_audio_path)
+            final = video.with_audio(audio)
+            final.write_videofile(out_path, codec="libx264", audio_codec="aac",
+                                  preset=encode_preset, threads=os.cpu_count() or 4,
+                                  logger=None)
+        finally:
+            for clip in (final, audio, video):
+                if clip is not None:
+                    try:
+                        clip.close()
+                    except Exception:
+                        pass
+
+    # ── Single video: analyze ────────────────────────────────────────────────
 
     def _start_single(self):
-        self.process_btn.configure(state="disabled")
-        self.confirm_btn.configure(state="disabled")
+        if self._busy or not self.video_paths:
+            return
+        self._busy = True
+        settings = self._snapshot_settings()          # main thread
+        self._set_buttons(process=False, confirm=False)
         threading.Thread(target=self._analyze_video,
-                         args=(self.video_paths[0],), daemon=True).start()
+                         args=(self.video_paths[0], settings), daemon=True).start()
 
-    def _analyze_video(self, video_path: str):
-        audio_path = video_path + "__temp_audio.wav"
+    def _analyze_video(self, video_path: str, settings: Settings):
+        audio_path = self._track_temp(_new_temp_wav())
         try:
-            model_name = MODEL_MAP[self.model_var.get()]
-            compute_pref = COMPUTE_MAP[self.compute_var.get()]
             self._update_status("[1/3] Loading AI model…", 0.08)
-            model, device, mode_label = load_model_speed(model_name, compute_pref)
-            self.device_info = mode_label
-            self._update_status(f"[2/3] Extracting audio ({mode_label})…", 0.22)
-            if not extract_audio_fast(video_path, audio_path):
-                video = VideoFileClip(video_path)
-                video.audio.write_audiofile(audio_path, logger=None)
-                video.close()
+            bundle = self._model_cache.get(settings.model_name, settings.compute_pref)
+            self.device_info = bundle.label
+
+            self._update_status(f"[2/3] Extracting audio ({bundle.label})…", 0.22)
+            self._extract_audio(video_path, audio_path)
+
             self._update_status("[3/3] AI transcription + smart word detection…", 0.42)
-            result = transcribe_words(model, audio_path, SPEED_MODE)
-            custom_words = self._get_custom_words()
-            found = find_profanity_v2(result, custom_words)
+            result = transcribe_words(bundle, audio_path)
+            found = find_profanity_v2(result, settings.custom_words, fuzzy=settings.fuzzy)
+
             self.profane_words = found
             self._audio_path_for_export = audio_path
             self._video_path_for_export = video_path
-            self.window.after(0, self._populate_review_panel)
+            self._on_main(self._populate_review_panel)
         except Exception as exc:
-            # FIX: Python 3 deletes `exc` after the except block ends.
-            # Capture it into a plain local variable NOW so the lambda can use it.
-            err_msg = str(exc)
-            safe_remove(audio_path)
+            err_msg = str(exc) or exc.__class__.__name__
+            self._drop_temp(audio_path)
+            self._audio_path_for_export = None
+            self._busy = False
             self._update_status(f"❌ Error: {err_msg}", 0)
-            self.window.after(0, lambda: [
-                messagebox.showerror("Error", err_msg),
-                self.process_btn.configure(state="normal")
-            ])
+            self._show_error("Error", err_msg)
+            self._set_buttons(process=True)
 
     def _populate_review_panel(self):
+        """Main thread only - rebuilds the checkbox list."""
         for w in self.review_scroll.winfo_children():
             w.destroy()
-        self.word_vars.clear()
+        self.word_vars = []
+
         if not self.profane_words:
             ctk.CTkLabel(self.review_scroll,
                          text="✅ No profanity detected — your video is clean!",
                          font=("Arial", 13), text_color="#6daa45").pack(pady=10)
             self._update_status("No profanity found.", 1.0)
+            self._drop_temp(self._audio_path_for_export)
+            self._audio_path_for_export = None
+            self._busy = False
             self.process_btn.configure(state="normal")
-            safe_remove(self._audio_path_for_export)
             return
+
         ctk.CTkLabel(self.review_scroll,
-                     text=f"Found {len(self.profane_words)} word(s) — uncheck any you want to KEEP:",
+                     text=f"Found {len(self.profane_words)} word(s) — "
+                          "uncheck any you want to KEEP:",
                      font=("Arial", 12, "bold")).pack(anchor="w", padx=4, pady=(4, 8))
         for word_data in self.profane_words:
             var = ctk.BooleanVar(value=True)
             self.word_vars.append(var)
-            ts = self._fmt_ts(word_data["start"])
-            label = f"  [{ts}]  '{word_data['word']}'  — {word_data['reason']}"
+            label = (f"  [{self._fmt_ts(word_data['start'])}]  "
+                     f"'{word_data['word'].strip()}'  — {word_data['reason']}")
             ctk.CTkCheckBox(self.review_scroll, text=label, variable=var,
                             font=("Consolas", 11)).pack(anchor="w", padx=8, pady=2)
+
         self.confirm_btn.configure(state="normal")
         self._update_status(
             f"Found {len(self.profane_words)} word(s). Review & confirm below.", 0.65)
 
-    # ── Export ────────────────────────────────────────────────────────────────
+    # ── Single video: export ─────────────────────────────────────────────────
 
     def _confirm_and_export(self):
+        # Never zip two lists that drifted out of sync - that would bleep
+        # the wrong timestamps rather than fail loudly.
+        if len(self.profane_words) != len(self.word_vars):
+            messagebox.showerror(
+                "Out of sync",
+                "The detected-word list and the review checkboxes no longer "
+                "match. Re-run the analysis before exporting.")
+            return
+        if not self._audio_path_for_export or not self._video_path_for_export:
+            messagebox.showerror("Nothing to export",
+                                 "Run an analysis first.")
+            return
+
         selected = [wd for wd, var in zip(self.profane_words, self.word_vars) if var.get()]
         if not selected:
-            safe_remove(self._audio_path_for_export)
-            messagebox.showinfo("Nothing to bleep", "All words were unchecked. No changes made.")
+            self._drop_temp(self._audio_path_for_export)
+            self._audio_path_for_export = None
+            self._busy = False
+            self.process_btn.configure(state="normal")
+            self.confirm_btn.configure(state="disabled")
+            messagebox.showinfo("Nothing to bleep",
+                                "All words were unchecked. No changes made.")
             return
+
+        settings = self._snapshot_settings()          # main thread
         self.confirm_btn.configure(state="disabled")
         threading.Thread(
             target=self._export_video,
             args=(self._video_path_for_export, self._audio_path_for_export,
-                  selected, self.output_dir),
+                  selected, settings),
             daemon=True).start()
 
-    def _export_video(self, video_path, audio_path, words_to_bleep, out_dir):
-        cleaned_audio_path = video_path + "__cleaned_audio.wav"
+    def _export_video(self, video_path: str, audio_path: str,
+                      words_to_bleep: list[dict], settings: Settings):
+        cleaned_audio_path = self._track_temp(_new_temp_wav())
         try:
-            freq = BEEP_PRESETS[self.beep_preset.get()]
-            encode_preset = ENCODE_PRESETS[self.encode_var.get()]
-            self._update_status(f"Bleeping {len(words_to_bleep)} word(s)…", 0.70)
-            audio_seg = AudioSegment.from_wav(audio_path)
-            for i, wd in enumerate(words_to_bleep):
-                s_ms = int(wd["start"] * 1000)
-                e_ms = int(wd["end"] * 1000)
-                dur = max(e_ms - s_ms, 50)
-                bleep_seg = (make_beep(dur, freq) if self.bleep_method.get() == "beep"
-                             else AudioSegment.silent(duration=dur))
-                audio_seg = audio_seg[:s_ms] + bleep_seg + audio_seg[e_ms:]
-                self._update_status(f"Bleeping word {i+1}/{len(words_to_bleep)}…",
-                                     0.70 + 0.20 * (i + 1) / len(words_to_bleep))
-            audio_seg.export(cleaned_audio_path, format="wav")
-            self._update_status(f"Creating final video [preset={encode_preset}]…", 0.92)
-            out_path = self._build_output_path(video_path, out_dir)
-            video = VideoFileClip(video_path)
-            clean_audio = AudioFileClip(cleaned_audio_path)
-            final = video.with_audio(clean_audio)
-            final.write_videofile(out_path, codec="libx264", audio_codec="aac",
-                                  preset=encode_preset, threads=os.cpu_count() or 4,
-                                  logger=None)
-            video.close(); clean_audio.close(); final.close()
-            self._update_status("✅ Done! Video saved.", 1.0)
-            self.window.after(0, lambda: [
-                messagebox.showinfo("Success! ✅",
-                                    f"Bleeped {len(words_to_bleep)} word(s)\n\nSaved to:\n{out_path}"),
-                self.process_btn.configure(state="normal")
-            ])
-        except Exception as exc:
-            # FIX: Python 3 deletes `exc` after the except block ends.
-            # Capture it into a plain local variable NOW so the lambda can use it.
-            err_msg = str(exc)
-            self._update_status(f"❌ Export error: {err_msg}", 0)
-            self.window.after(0, lambda: [
-                messagebox.showerror("Export Error", err_msg),
-                self.confirm_btn.configure(state="normal")
-            ])
-        finally:
-            safe_remove(audio_path, cleaned_audio_path)
+            n = len(words_to_bleep)
+            self._update_status(f"Bleeping {n} word(s)…", 0.70)
 
-    # ── Batch ─────────────────────────────────────────────────────────────────
+            audio_seg = AudioSegment.from_wav(audio_path)
+            cleaned = apply_bleeps(
+                audio_seg, words_to_bleep,
+                method=settings.bleep_method, freq_hz=settings.beep_freq,
+                progress=lambda done, total: self._update_status(
+                    f"Bleeping {done}/{total}…", 0.70 + 0.20 * done / max(total, 1)),
+            )
+            cleaned.export(cleaned_audio_path, format="wav")
+
+            self._update_status(
+                f"Creating final video [preset={settings.encode_preset}]…", 0.92)
+            out_path = build_output_path(video_path, settings.output_dir)
+            self._render(video_path, cleaned_audio_path, out_path, settings.encode_preset)
+
+            self._update_status("✅ Done! Video saved.", 1.0)
+            self._on_main(messagebox.showinfo, "Success! ✅",
+                          f"Bleeped {n} word(s)\n\nSaved to:\n{out_path}")
+            self._set_buttons(process=True)
+        except Exception as exc:
+            err_msg = str(exc) or exc.__class__.__name__
+            self._update_status(f"❌ Export error: {err_msg}", 0)
+            self._show_error("Export Error", err_msg)
+            self._set_buttons(confirm=True)
+        finally:
+            self._drop_temp(audio_path, cleaned_audio_path)
+            self._audio_path_for_export = None
+            self._busy = False
+
+    # ── Batch ────────────────────────────────────────────────────────────────
 
     def _start_batch(self):
+        if self._busy or not self._batch_input_dir:
+            return
+        self._busy = True
+        settings = self._snapshot_settings()          # main thread
+        in_dir, out_dir = self._batch_input_dir, self._batch_output_dir
         self.batch_btn.configure(state="disabled")
         self.batch_log.delete("1.0", "end")
-        threading.Thread(target=self._run_batch, daemon=True).start()
+        threading.Thread(target=self._run_batch,
+                         args=(in_dir, out_dir, settings), daemon=True).start()
 
-    def _run_batch(self):
-        in_dir = self._batch_input_dir
-        out_dir = getattr(self, "_batch_output_dir", None)
-        if not in_dir:
-            return
-        exts = {".mp4", ".avi", ".mov", ".mkv", ".flv", ".wmv"}
-        files = [f for f in os.listdir(in_dir)
-                 if os.path.splitext(f)[1].lower() in exts]
-        if not files:
-            self._batch_log_write("No video files found.")
-            self.window.after(0, lambda: self.batch_btn.configure(state="normal"))
-            return
-        self._batch_log_write(f"Found {len(files)} video(s).\n{'─'*50}")
-        model_name = MODEL_MAP[self.model_var.get()]
-        compute_pref = COMPUTE_MAP[self.compute_var.get()]
-        encode_preset = ENCODE_PRESETS[self.encode_var.get()]
-        custom_words = self._get_custom_words()
-        freq = BEEP_PRESETS[self.beep_preset.get()]
+    def _finish_batch(self, message: str, progress: float | None = None):
+        self._update_status(message, progress)
+        self._set_buttons(batch=True)
+        self._busy = False
+
+    def _run_batch(self, in_dir: str, out_dir: str | None, settings: Settings):
         try:
-            model, device, mode_label = load_model_speed(model_name, compute_pref)
+            names = sorted(os.listdir(in_dir))
+        except OSError as exc:
+            self._batch_log_write(f"❌ Cannot read folder: {exc}")
+            self._finish_batch("❌ Batch failed.", 0)
+            return
+
+        files = [f for f in names
+                 if os.path.splitext(f)[1].lower() in engine.VIDEO_EXTS
+                 and not is_generated_output(f)]
+        if not files:
+            self._batch_log_write("No video files found (already-cleaned "
+                                  "'_CLEAN' files are skipped).")
+            self._finish_batch("Nothing to do.", 0)
+            return
+
+        self._batch_log_write(f"Found {len(files)} video(s).\n{'─' * 50}")
+        try:
+            bundle = self._model_cache.get(settings.model_name, settings.compute_pref)
         except Exception as exc:
             self._batch_log_write(f"❌ Failed to load AI model: {exc}")
-            self.window.after(0, lambda: self.batch_btn.configure(state="normal"))
+            self._finish_batch("❌ Batch failed.", 0)
             return
-        self._batch_log_write(f"Loaded: {mode_label}\n{'─'*50}")
+        self._batch_log_write(f"Loaded: {bundle.label}\n{'─' * 50}")
+
+        ok = failed = 0
         for idx, fname in enumerate(files, 1):
             video_path = os.path.join(in_dir, fname)
             self._batch_log_write(f"\n[{idx}/{len(files)}] {fname}")
             self._update_status(f"Batch: {fname} ({idx}/{len(files)})…",
-                                 (idx - 1) / len(files))
-            audio_path = video_path + "__temp_audio.wav"
-            cleaned_audio_path = video_path + "__cleaned_audio.wav"
+                                (idx - 1) / len(files))
+
+            audio_path = self._track_temp(_new_temp_wav())
+            cleaned_audio_path = self._track_temp(_new_temp_wav())
             try:
-                if not extract_audio_fast(video_path, audio_path):
-                    v = VideoFileClip(video_path)
-                    v.audio.write_audiofile(audio_path, logger=None)
-                    v.close()
-                result = transcribe_words(model, audio_path, SPEED_MODE)
-                found = find_profanity_v2(result, custom_words)
+                self._extract_audio(video_path, audio_path)
+                result = transcribe_words(bundle, audio_path)
+                found = find_profanity_v2(result, settings.custom_words,
+                                          fuzzy=settings.fuzzy)
                 if not found:
                     self._batch_log_write("  → Clean.")
-                    safe_remove(audio_path)
+                    ok += 1
                     continue
+
                 self._batch_log_write(f"  → {len(found)} word(s). Bleeping...")
-                audio_seg = AudioSegment.from_wav(audio_path)
-                for wd in found:
-                    s_ms = int(wd["start"] * 1000)
-                    e_ms = int(wd["end"] * 1000)
-                    dur = max(e_ms - s_ms, 50)
-                    bleep_seg = (make_beep(dur, freq) if self.bleep_method.get() == "beep"
-                                 else AudioSegment.silent(duration=dur))
-                    audio_seg = audio_seg[:s_ms] + bleep_seg + audio_seg[e_ms:]
-                audio_seg.export(cleaned_audio_path, format="wav")
-                out_path = self._build_output_path(video_path, out_dir)
-                v2 = VideoFileClip(video_path)
-                ca = AudioFileClip(cleaned_audio_path)
-                final = v2.with_audio(ca)
-                final.write_videofile(out_path, codec="libx264", audio_codec="aac",
-                                      preset=encode_preset, threads=os.cpu_count() or 4,
-                                      logger=None)
-                v2.close(); ca.close(); final.close()
+                cleaned = apply_bleeps(
+                    AudioSegment.from_wav(audio_path), found,
+                    method=settings.bleep_method, freq_hz=settings.beep_freq)
+                cleaned.export(cleaned_audio_path, format="wav")
+
+                out_path = build_output_path(video_path, out_dir)
+                self._render(video_path, cleaned_audio_path, out_path,
+                             settings.encode_preset)
                 self._batch_log_write(f"  → Saved: {os.path.basename(out_path)}")
+                ok += 1
             except Exception as exc:
+                failed += 1
                 self._batch_log_write(f"  ❌ Error: {exc}")
             finally:
-                safe_remove(audio_path, cleaned_audio_path)
-        self._update_status("✅ Batch complete!", 1.0)
-        self._batch_log_write(f"\n{'─'*50}\n✅ All done!")
-        self.window.after(0, lambda: self.batch_btn.configure(state="normal"))
+                self._drop_temp(audio_path, cleaned_audio_path)
 
-    # ── Helpers ───────────────────────────────────────────────────────────────
+        self._batch_log_write(f"\n{'─' * 50}\n✅ Done — {ok} succeeded, {failed} failed.")
+        self._finish_batch("✅ Batch complete!", 1.0)
 
-    def _get_custom_words(self) -> list[str]:
-        raw = self.custom_words_var.get()
-        return [w.strip().lower() for w in raw.split(",") if w.strip()]
-
-    @staticmethod
-    def _build_output_path(video_path: str, out_dir: str | None) -> str:
-        base, ext = os.path.splitext(video_path)
-        fname = os.path.basename(base) + "_CLEAN" + ext
-        folder = out_dir if out_dir else os.path.dirname(video_path)
-        return os.path.join(folder, fname)
+    # ── Helpers ──────────────────────────────────────────────────────────────
 
     @staticmethod
     def _fmt_ts(seconds: float) -> str:
-        return f"{int(seconds // 60):02d}:{int(seconds % 60):02d}"
+        seconds = max(0, int(seconds))
+        h, rem = divmod(seconds, 3600)
+        m, s = divmod(rem, 60)
+        return f"{h}:{m:02d}:{s:02d}" if h else f"{m:02d}:{s:02d}"
 
-    def _update_status(self, msg: str, progress: float | None = None):
-        def _apply():
-            self.status_label.configure(text=msg)
-            if progress is not None:
-                self.progress.set(max(0.0, min(1.0, progress)))
-        self.window.after(0, _apply)
-
-    def _batch_log_write(self, line: str):
-        self.window.after(0, lambda: [
-            self.batch_log.insert("end", line + "\n"),
-            self.batch_log.see("end")
-        ])
+    def _on_close(self):
+        """Don't leave temp WAVs behind if the user quits mid-review."""
+        self._closing = True
+        # Cancel the poll before destroying the window, or Tk complains
+        # ('invalid command name "..._drain_ui_queue"') when the pending
+        # callback fires against a dead interpreter.
+        if self._poll_id is not None:
+            try:
+                self.window.after_cancel(self._poll_id)
+            except Exception:
+                pass
+            self._poll_id = None
+        self._drop_temp(*list(self._temp_files), self._audio_path_for_export)
+        self._model_cache.release()
+        self.window.destroy()
 
     def run(self):
         self.window.mainloop()
 
 
-if __name__ == "__main__":
+def main() -> None:
     print("=" * 60)
-    print("  AutoBleep Pro v2.2 — Smart Detection ⚡")
-    print(f"  Speed mode: {'faster-whisper + stable-ts' if SPEED_MODE else 'openai-whisper (fallback)'}")
+    print(f"  AutoBleep Pro v{APP_VERSION} — Smart Detection ⚡")
+    print(f"  Speed mode: "
+          f"{'faster-whisper + stable-ts' if SPEED_MODE else 'openai-whisper (fallback)'}")
     print("=" * 60)
     AutoBleepPro().run()
+
+
+if __name__ == "__main__":
+    main()

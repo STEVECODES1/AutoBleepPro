@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    name: Detection tests (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install test dependencies
+        # bleep_engine imports torch / whisper / pydub / moviepy defensively,
+        # so the detection tests need none of the ML or video stack. Keeping
+        # this list minimal is what makes the job finish in well under a
+        # minute on a GitHub-hosted runner with no CUDA.
+        run: |
+          python -m pip install --upgrade pip
+          pip install pytest better-profanity
+
+      - name: Install full requirements (best effort)
+        # The pinned stack includes GPU-oriented and platform-specific wheels
+        # (faster-whisper, mediapipe, torch) that need not resolve on a
+        # hosted runner. A failure here must NOT fail the build - the unit
+        # tests above are the gate.
+        continue-on-error: true
+        run: pip install -r requirements.txt
+
+      - name: Show resolved environment
+        run: |
+          python -c "import sys; print(sys.version)"
+          python -c "import bleep_engine as e; print('SPEED_MODE =', e.SPEED_MODE)"
+          pip list
+
+      - name: Run detection tests
+        run: pytest tests/test_detection.py -q
+
+  lint:
+    name: Byte-compile
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Compile every module
+        # Catches syntax errors in the GUI without needing a display or the
+        # heavy imports that actually running it would pull in.
+        run: python -m compileall -q bleep_engine.py autobleep_pro.py autoreel_gui.py autoreel auto_uploader tests

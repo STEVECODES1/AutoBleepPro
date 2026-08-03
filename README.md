@@ -1,6 +1,13 @@
-# 🔇 AutoBleep Pro v2.0
+# 🔇 AutoBleep Pro
 
-> **AI-powered automatic profanity bleeper** — detect, review, and export clean videos in minutes.  
+[![CI](https://github.com/STEVECODES1/AutoBleepPro/actions/workflows/ci.yml/badge.svg)](https://github.com/STEVECODES1/AutoBleepPro/actions/workflows/ci.yml)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+[![Windows](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)](#-quick-start)
+
+> Finds spoken profanity in your video with faster-whisper — roughly **4× quicker than
+> openai-whisper** — lets you untick anything it got wrong, and exports a clean copy
+> with each word beeped or muted.
 > 100% local. No uploads. No subscriptions. Free forever.
 
 ---
