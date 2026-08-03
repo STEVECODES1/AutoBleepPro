@@ -3,6 +3,7 @@ Auto-Upload System for Stackswopo streams -> YouTube + Rumble.
 
 Usage:
     python main.py --watch                       # watch watch_folder/, upload new videos as they arrive
+    python main.py --watch "D:\\Videos"           # ...or watch some other folder, no config edit needed
     python main.py --dry-run                      # same as --watch but previews only, uploads nothing
     python main.py --file "video.mp4" --title "My Stream"   # upload one specific file now
     python main.py --batch                         # process every video already sitting in watch_folder/
@@ -22,7 +23,7 @@ from datetime import datetime
 # Bump when shipping user-visible changes, so --test-config can prove
 # which build is actually running (stale extracts have silently caused
 # several confusing "the fix did nothing" runs).
-BUILD = "2026-08-03.11 build-banner"
+BUILD = "2026-08-03.12 watch-takes-a-folder"
 
 from utils.censor import censor_video
 from utils.config import load_config, validate_config
@@ -355,7 +356,13 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="Auto-upload streams to YouTube + Rumble.")
-    parser.add_argument("--watch", action="store_true", help="Watch the configured folder for new videos.")
+    # Optional value, same as --batch. Passing the folder on the command
+    # line means re-extracting the ZIP (which overwrites config.json, and
+    # therefore any watch_folder edit) can't silently point this at the
+    # wrong place.
+    parser.add_argument("--watch", nargs="?", const="", metavar="FOLDER",
+                        help="Watch a folder for new videos and upload them "
+                             "(defaults to general.watch_folder from config.json).")
     parser.add_argument("--dry-run", action="store_true", help="Preview titles/descriptions; upload nothing.")
     parser.add_argument("--file", help="Upload one specific video file now.")
     parser.add_argument("--title", help="Stream title to use with --file (skips the interactive prompt).")
@@ -402,9 +409,17 @@ def main(argv=None) -> int:
 
     # None = flag not passed at all; "" = bare `--batch` (use the config's
     # watch folder); anything else = an explicit folder for this run only.
+    # None = flag absent; "" = bare --watch (use config); else an explicit folder.
+    watch_folder = cfg.general.watch_folder
+    if args.watch is not None and args.watch:
+        watch_folder = os.path.abspath(os.path.expanduser(args.watch))
+        if not os.path.isdir(watch_folder):
+            print(f"[ERROR] --watch folder does not exist: {watch_folder}")
+            return 1
+
     batch_folder = None
     if args.batch is not None:
-        batch_folder = args.batch or cfg.general.watch_folder
+        batch_folder = os.path.abspath(args.batch or cfg.general.watch_folder)
         if not os.path.isdir(batch_folder):
             print(f"[ERROR] --batch folder does not exist: {batch_folder}")
             return 1
@@ -470,9 +485,8 @@ def main(argv=None) -> int:
                              existing_youtube_videos, existing_rumble_videos)
         return 0
 
-    if args.watch or dry_run:
-        print(f"Watching {os.path.abspath(cfg.general.watch_folder)} "
-              f"for new videos... (Ctrl+C to stop)")
+    if args.watch is not None or dry_run:
+        print(f"Watching {watch_folder} for new videos... (Ctrl+C to stop)")
         if dry_run:
             print("[DRY RUN MODE] Nothing will actually be uploaded.")
 
@@ -481,8 +495,8 @@ def main(argv=None) -> int:
         # that it's being ignored.
         try:
             already = [
-                f for f in sorted(os.listdir(cfg.general.watch_folder))
-                if os.path.isfile(os.path.join(cfg.general.watch_folder, f))
+                f for f in sorted(os.listdir(watch_folder))
+                if os.path.isfile(os.path.join(watch_folder, f))
                 and os.path.splitext(f)[1].lower() in cfg.general.supported_formats
                 and not is_intermediate_download(f)
             ]
@@ -495,7 +509,9 @@ def main(argv=None) -> int:
                 print(f"         - {f}")
             if len(already) > 5:
                 print(f"         ... and {len(already) - 5} more")
-            print("       Run `python main.py --batch` (in another window, or "
+            hint = ("--batch" if watch_folder == os.path.abspath(cfg.general.watch_folder)
+                    else f'--batch "{watch_folder}"')
+            print(f"       Run `python main.py {hint}` (in another window, or "
                   "stop this first) to upload those.\n")
 
         def on_ready(path):
@@ -506,7 +522,7 @@ def main(argv=None) -> int:
                          allow_prompt=False)
 
         watcher = FolderWatcher(
-            cfg.general.watch_folder, cfg.general.supported_formats,
+            watch_folder, cfg.general.supported_formats,
             cfg.general.stability_check_seconds, on_ready,
         )
         watcher.start()

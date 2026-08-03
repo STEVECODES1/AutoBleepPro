@@ -102,8 +102,20 @@ you've just dropped in a couple of finished VODs. With no path after it,
 
 ### Fully hands-off: auto-upload finished downloads
 
-Point `general.watch_folder` at wherever your recorder/downloader writes,
-then leave `python main.py --watch` running. New videos upload themselves.
+Leave `--watch` running and new videos upload themselves. Give it the
+folder your recorder/downloader writes to:
+
+```bash
+python main.py --watch "D:\Videos"
+```
+
+Passing the folder on the command line is the reliable way to do it -
+re-extracting the ZIP overwrites `config.json`, so a `watch_folder` edit
+there silently reverts and you end up watching the wrong place. With no
+path, `--watch` falls back to `general.watch_folder` from `config.json`.
+
+`--watch` only reacts to files *arriving*, so anything already sitting in
+the folder is listed on startup with a pointer to `--batch`.
 
 `--watch` is built to run unattended, which means two things:
 
