@@ -69,6 +69,8 @@ class GeneralConfig:
     censor_device: Optional[str]
     censor_custom_words: tuple
     censored_folder: str
+    # Optional; defaulted so older config.json files keep loading.
+    filename_channel_prefixes: tuple = ()
 
 
 @dataclass
@@ -145,6 +147,7 @@ def load_config(config_path: str = "config.json", env_path: str = ".env") -> App
         max_retries=int(gen.get("max_retries", 3)),
         retry_delays=tuple(gen.get("retry_delays", [60, 300, 900])),
         ask_for_title=bool(gen.get("ask_for_title", True)),
+        filename_channel_prefixes=tuple(gen.get("filename_channel_prefixes", []) or []),
         default_title=gen.get("default_title", "Gaming Stream"),
         supported_formats=tuple(
             e.lower() for e in gen.get("supported_formats", [".mp4", ".mov", ".avi", ".mkv", ".flv", ".wmv", ".ts"])

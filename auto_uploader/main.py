@@ -22,12 +22,12 @@ from datetime import datetime
 # Bump when shipping user-visible changes, so --test-config can prove
 # which build is actually running (stale extracts have silently caused
 # several confusing "the fix did nothing" runs).
-BUILD = "2026-08-03.9 batch-defaults-to-watch-folder"
+BUILD = "2026-08-03.10 unattended-watch"
 
 from utils.censor import censor_video
 from utils.config import load_config, validate_config
 from utils.duplicate_checker import DuplicateChecker, hash_file
-from utils.file_watcher import FolderWatcher
+from utils.file_watcher import FolderWatcher, is_intermediate_download
 from utils.logging_setup import setup_logger
 from utils.notifier import notify
 from utils.retry import retry_with_backoff
@@ -45,7 +45,13 @@ from utils.youtube_checker import fetch_existing_videos, find_existing_video
 from utils.youtube_uploader import YouTubeUploader
 
 
-def get_stream_title(video_path: str, cli_title: str, cfg) -> str:
+def get_stream_title(video_path: str, cli_title: str, cfg, allow_prompt: bool = True) -> str:
+    """Work out the stream title, most-explicit source first.
+
+    `allow_prompt=False` is used by --watch: that runs unattended in a
+    background thread, where `input()` would block forever with nobody at
+    the keyboard and silently wedge the upload.
+    """
     if cli_title:
         return cli_title
 
@@ -56,25 +62,30 @@ def get_stream_title(video_path: str, cli_title: str, cfg) -> str:
         if text:
             return text.splitlines()[0].strip()
 
-    # Backlog filenames often already carry a usable title (quoted, or the
-    # text before the date) - use it instead of stopping to ask, so a
-    # --batch run over a big folder doesn't need to be babysat file by
-    # file. Falls through to asking (or the default) when nothing's found.
-    extracted = extract_title_from_filename(os.path.basename(video_path))
+    # Filenames often already carry a usable title (quoted, the text before
+    # the date, or a yt-dlp "<channel> - <title>-<id>" name) - use it
+    # instead of stopping to ask, so a --batch or --watch run doesn't need
+    # to be babysat file by file.
+    extracted = extract_title_from_filename(
+        os.path.basename(video_path), cfg.general.filename_channel_prefixes)
     if extracted:
         return extracted
 
-    if cfg.general.ask_for_title:
+    if cfg.general.ask_for_title and allow_prompt:
         prompt = f"\nNew video detected: {os.path.basename(video_path)}\nStream title (Enter for default '{cfg.general.default_title}'): "
         typed = input(prompt).strip()
         return typed or cfg.general.default_title
 
+    if cfg.general.ask_for_title:
+        print(f"[TITLE] Could not read a title from {os.path.basename(video_path)}; "
+              f"using '{cfg.general.default_title}'. Drop a .txt file next to the "
+              f"video (same name, title on line 1) to set it without prompting.")
     return cfg.general.default_title
 
 
 def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChecker,
                   yt_logger, rb_logger, dry_run: bool, existing_youtube_videos: list = None,
-                  existing_rumble_videos: list = None) -> dict:
+                  existing_rumble_videos: list = None, allow_prompt: bool = True) -> dict:
     filename = os.path.basename(video_path)
 
     # Cheap checks first. Hashing reads the whole file, so doing it before
@@ -85,13 +96,20 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
         print(f"[SKIP] {filename} is not a supported video format.")
         return {"skipped": "unsupported_format"}
 
+    # e.g. "Stream.f140.mp4" - yt-dlp's audio-only half, downloaded in full
+    # but not yet muxed with the video. Real extension, real size, and it
+    # stops growing, so nothing else here would catch it.
+    if is_intermediate_download(video_path):
+        print(f"[SKIP] {filename} is a partial download (pre-merge), not a finished video.")
+        return {"skipped": "intermediate_download"}
+
     file_hash = hash_file(video_path)
 
     if dup_checker.is_fully_uploaded(file_hash):
         print(f"[SKIP] {filename} already uploaded to both platforms previously (matched by content hash).")
         return {"skipped": "duplicate"}
 
-    stream_title = get_stream_title(video_path, cli_title, cfg)
+    stream_title = get_stream_title(video_path, cli_title, cfg, allow_prompt)
     # A freshly-finished stream should be dated today; an old VOD being
     # backfilled should keep its original air date if the filename has one
     # (e.g. "'!howl' 3-20-26 ...") - otherwise every backlog upload would
@@ -454,8 +472,11 @@ def main(argv=None) -> int:
             print("[DRY RUN MODE] Nothing will actually be uploaded.")
 
         def on_ready(path):
+            # allow_prompt=False: this runs in the watcher's background
+            # thread with nobody at the keyboard.
             process_file(path, cfg, None, dup_checker, yt_logger, rb_logger, dry_run,
-                         existing_youtube_videos, existing_rumble_videos)
+                         existing_youtube_videos, existing_rumble_videos,
+                         allow_prompt=False)
 
         watcher = FolderWatcher(
             cfg.general.watch_folder, cfg.general.supported_formats,

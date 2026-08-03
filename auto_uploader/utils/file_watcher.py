@@ -5,12 +5,33 @@ otherwise a half-copied file would get "uploaded" mid-write.
 """
 
 import os
+import re
 import threading
 import time
 from typing import Callable
 
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
+
+# Downloaders leave finished-but-not-final files lying around that already
+# have a real video extension:
+#
+#   "Stream.f140.mp4"  yt-dlp's audio-only stream, before muxing
+#   "Stream.f299.mp4"  yt-dlp's video-only stream, before muxing
+#   "Stream.temp.mp4"  ffmpeg's mux target
+#
+# The .part/.ytdl files are already ignored by the extension filter, but
+# these are not: yt-dlp downloads each stream fully, *then* merges, so
+# there's a window where an audio-only .mp4 sits there complete and
+# unchanging. Without this it would look "stable" and get uploaded.
+_INTERMEDIATE_STEM = re.compile(
+    r"\.(f\d{1,4}|temp|tmp|part|download|ytdl)$", re.IGNORECASE)
+
+
+def is_intermediate_download(path: str) -> bool:
+    """True for a downloader's in-progress / pre-merge artefact."""
+    stem = os.path.splitext(os.path.basename(path))[0]
+    return bool(_INTERMEDIATE_STEM.search(stem))
 
 
 class _NewVideoHandler(FileSystemEventHandler):
@@ -33,6 +54,8 @@ class _NewVideoHandler(FileSystemEventHandler):
 
     def _maybe_watch(self, path: str) -> None:
         if os.path.splitext(path)[1].lower() not in self.supported_formats:
+            return
+        if is_intermediate_download(path):
             return
         with self._lock:
             if path in self._pending:

@@ -52,19 +52,72 @@ def extract_date_from_filename(filename: str) -> Optional[datetime]:
 # "\"Back from the dead\" 05/08/26 ..." (double).
 _QUOTE_PAIRS = (("'", "'"), ('"', '"'), ("‘", "’"), ("“", "”"))
 
+# yt-dlp's default output templates end in the video ID, e.g.
+# "Stackswopo - LOL  NO -YdH8jO6Vjs.mp4" or "Some Title [dQw4w9WgXcQ].mp4".
+# YouTube IDs are 11 chars from [A-Za-z0-9_-]; the range is widened
+# slightly because other extractors use similar-but-not-identical lengths.
+_YTDLP_ID_SUFFIX = re.compile(r"[\s._-]+[\[(]?([A-Za-z0-9_-]{10,12})[\])]?$")
 
-def extract_title_from_filename(filename: str) -> Optional[str]:
-    """Best-effort stream-title extraction for backlog files, so batch
-    processing doesn't have to stop and ask for every single one:
+
+def _looks_like_video_id(token: str) -> bool:
+    """Guard against eating a real trailing word like 'Stream' or 'Gameplay'.
+
+    Real IDs are effectively random, so they mix character classes; English
+    words of this length almost never do.
+    """
+    return any(c.isdigit() for c in token) or (
+        any(c.isupper() for c in token) and any(c.islower() for c in token)
+        and sum(c.isupper() for c in token) > 1
+    )
+
+
+def strip_ytdlp_suffix(stem: str) -> str:
+    """Remove a trailing yt-dlp video ID, if there is one."""
+    match = _YTDLP_ID_SUFFIX.search(stem)
+    if not match:
+        return stem
+    token = match.group(1)
+    if not _looks_like_video_id(token):
+        return stem
+    remainder = stem[: match.start()].strip()
+    # Never strip away everything - a bare ID is better than nothing.
+    return remainder if len(remainder) >= 3 else stem
+
+
+def strip_channel_prefix(stem: str, prefixes) -> str:
+    """Drop a leading "<channel> - " that yt-dlp's %(uploader)s adds.
+
+    Only the exact configured channel names are stripped, and only the
+    first segment: a title that genuinely contains " - " ("Part 1 - the
+    finale") keeps everything after the channel name.
+    """
+    for prefix in prefixes or ():
+        prefix = (prefix or "").strip()
+        if not prefix:
+            continue
+        for separator in (" - ", " – ", " — ", "-"):
+            candidate = prefix + separator
+            if stem.lower().startswith(candidate.lower()):
+                remainder = stem[len(candidate):].strip()
+                if remainder:
+                    return remainder
+    return stem
+
+
+def extract_title_from_filename(filename: str, channel_prefixes=()) -> Optional[str]:
+    """Best-effort stream-title extraction, so unattended runs don't have to
+    stop and ask for every file:
 
     - Quoted filenames use the quoted text: "'!howl' 3-20-26 Stackswopo
       Kick Stream.mp4" -> "!howl".
     - Unquoted filenames use whatever's before the date:
       "!howl 2026-03-19_21_23.mp4" -> "!howl".
+    - yt-dlp downloads drop the trailing video ID and the leading channel
+      name: "Stackswopo - LOL  NO -YdH8jO6Vjs.mp4" -> "LOL NO".
 
-    Returns None (caller should fall back to asking, same as today) if
-    neither approach finds anything usable - better to ask once than to
-    silently title a video with something wrong.
+    Returns None (caller falls back to asking, or to the default title) if
+    nothing usable is found - better to ask than to silently title a video
+    with something wrong.
     """
     name = os.path.splitext(filename)[0]
 
@@ -80,9 +133,23 @@ def extract_title_from_filename(filename: str) -> Optional[str]:
         if match:
             candidate = name[: match.start()].strip(" _-'\"")
             if candidate:
-                return candidate
+                return _collapse_spaces(candidate)
+
+    # yt-dlp: only treated as such when a trailing video ID is actually
+    # present, so ordinary filenames fall through untouched.
+    without_id = strip_ytdlp_suffix(name)
+    if without_id != name:
+        candidate = strip_channel_prefix(without_id, channel_prefixes)
+        candidate = _collapse_spaces(candidate.strip(" _-'\""))
+        if candidate:
+            return candidate
 
     return None
+
+
+def _collapse_spaces(text: str) -> str:
+    """yt-dlp preserves double spaces from YouTube titles ("LOL  NO")."""
+    return re.sub(r"\s{2,}", " ", text).strip()
 
 
 def format_date(dt: datetime, date_style: str) -> str:

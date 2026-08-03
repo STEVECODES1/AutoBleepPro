@@ -45,6 +45,8 @@
     "date_style": "M/D/YY",
     "max_retries": 3,
     "retry_delays": [60, 300, 900],
+    "_title_comment": "filename_channel_prefixes strips a leading \"<channel> - \" from yt-dlp downloads, so \"Stackswopo - LOL NO -YdH8jO6Vjs.mp4\" becomes the title \"LOL NO\". --watch never prompts (nobody's at the keyboard); it falls back to default_title, or use a .txt sidecar.",
+    "filename_channel_prefixes": ["Stackswopo", "StacksWopo", "StackswopoGames", "BinScripts"],
     "ask_for_title": true,
     "default_title": "Gaming Stream",
     "supported_formats": [".mp4", ".mov", ".avi", ".mkv", ".flv", ".wmv", ".ts"],

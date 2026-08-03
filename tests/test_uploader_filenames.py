@@ -1,0 +1,146 @@
+"""
+Filename rules for the auto-uploader.
+
+These decide what gets uploaded unattended, so they're the rules most
+likely to cause real damage if they silently regress: a bad title on a
+public video, or uploading half a download. No network, no config file.
+"""
+
+from __future__ import annotations
+
+import os
+import sys
+
+import pytest
+
+_UPLOADER = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "auto_uploader")
+sys.path.insert(0, _UPLOADER)
+
+from utils.file_watcher import is_intermediate_download  # noqa: E402
+from utils.templating import (  # noqa: E402
+    extract_date_from_filename,
+    extract_title_from_filename,
+    strip_channel_prefix,
+    strip_ytdlp_suffix,
+)
+
+PREFIXES = ("Stackswopo", "StacksWopo", "StackswopoGames", "BinScripts")
+
+
+# ── yt-dlp downloads ─────────────────────────────────────────────────────────
+
+def test_ytdlp_name_yields_a_clean_title():
+    assert extract_title_from_filename(
+        "Stackswopo - LOL  NO -YdH8jO6Vjs.mp4", PREFIXES) == "LOL NO"
+
+
+def test_ytdlp_bracketed_id_form():
+    assert extract_title_from_filename(
+        "Some Title [dQw4w9WgXcQ].mp4", PREFIXES) == "Some Title"
+
+
+def test_only_the_channel_segment_is_stripped():
+    # A title that genuinely contains " - " keeps everything after the
+    # channel name.
+    assert extract_title_from_filename(
+        "Stackswopo - Part 1 - the finale-dQw4w9WgXcQ.mp4",
+        PREFIXES) == "Part 1 - the finale"
+
+
+def test_double_spaces_from_youtube_titles_collapse():
+    assert "  " not in extract_title_from_filename(
+        "Stackswopo - LOL  NO -YdH8jO6Vjs.mp4", PREFIXES)
+
+
+def test_unknown_channel_prefix_is_left_alone():
+    assert extract_title_from_filename(
+        "SomeoneElse - My Video-dQw4w9WgXcQ.mp4",
+        PREFIXES) == "SomeoneElse - My Video"
+
+
+def test_strip_ytdlp_suffix_is_a_noop_without_an_id():
+    for stem in ("My Awesome Gameplay Stream", "vacation footage", "clip"):
+        assert strip_ytdlp_suffix(stem) == stem
+
+
+def test_strip_ytdlp_suffix_keeps_something():
+    # A filename that is *only* an ID must not become empty.
+    assert strip_ytdlp_suffix("dQw4w9WgXcQ") == "dQw4w9WgXcQ"
+
+
+def test_strip_channel_prefix_needs_a_separator():
+    assert strip_channel_prefix("StackswopoVODs", PREFIXES) == "StackswopoVODs"
+
+
+@pytest.mark.parametrize("name", [
+    "My Awesome Gameplay Stream.mp4",
+    "vacation footage.mp4",
+    "StackswopoVODs_10.ts",
+])
+def test_ordinary_names_are_not_mistaken_for_ytdlp(name):
+    # Falling through to None is correct: better to ask (or use the default)
+    # than to silently chop a real word off the end of a title.
+    assert extract_title_from_filename(name, PREFIXES) is None
+
+
+# ── Existing naming conventions must keep working ────────────────────────────
+
+def test_quoted_title_still_wins():
+    assert extract_title_from_filename(
+        "'do yall forgive me' 8-2-26 Stackswopo Stream.ts", PREFIXES) \
+        == "do yall forgive me"
+
+
+def test_text_before_the_date_still_works():
+    assert extract_title_from_filename("!howl 2026-03-19_21_23.mp4", PREFIXES) == "!howl"
+
+
+def test_date_extraction_is_unaffected():
+    assert extract_date_from_filename(
+        "'do yall forgive me' 8-2-26 Stackswopo Stream.ts").date().isoformat() \
+        == "2026-08-02"
+
+
+def test_prefixes_default_to_empty():
+    # Called without the config list, nothing is stripped but the ID still is.
+    assert extract_title_from_filename("Stackswopo - LOL  NO -YdH8jO6Vjs.mp4") \
+        == "Stackswopo - LOL NO"
+
+
+# ── Pre-merge / in-progress downloads ────────────────────────────────────────
+
+@pytest.mark.parametrize("name", [
+    "Stackswopo - LOL  NO -YdH8jO6Vjs.f140.mp4",   # audio-only, pre-merge
+    "Stackswopo - LOL  NO -YdH8jO6Vjs.f299.mp4",   # video-only, pre-merge
+    "clip.f1.mp4",
+    "Stream.temp.mp4",
+    "Stream.tmp.mkv",
+    "Stream.part.mp4",
+    "Stream.download.mp4",
+    "Stream.ytdl.mp4",
+])
+def test_pre_merge_fragments_are_rejected(name):
+    """yt-dlp downloads each stream in full, THEN muxes.
+
+    So an audio-only .mp4 sits there complete and unchanging for a while -
+    it has a real extension and passes a stability check, and would be
+    uploaded without this guard.
+    """
+    assert is_intermediate_download(name) is True
+
+
+@pytest.mark.parametrize("name", [
+    "Stackswopo - LOL  NO -YdH8jO6Vjs.mp4",
+    "'do yall forgive me' 8-2-26 Stackswopo Stream.ts",
+    "My.Movie.2026.mp4",
+    "S01.E04.mkv",
+    "finished.mp4",
+])
+def test_finished_videos_are_accepted(name):
+    assert is_intermediate_download(name) is False
+
+
+def test_intermediate_check_ignores_directories_in_the_path():
+    assert is_intermediate_download("/tmp/f140/finished.mp4") is False
+    assert is_intermediate_download("/tmp/videos/clip.f140.mp4") is True

@@ -100,6 +100,30 @@ you've just dropped in a couple of finished VODs. With no path after it,
 `--batch` uses `general.watch_folder` from `config.json`
 (`./watch_folder`, i.e. `auto_uploader\watch_folder`).
 
+### Fully hands-off: auto-upload finished downloads
+
+Point `general.watch_folder` at wherever your recorder/downloader writes,
+then leave `python main.py --watch` running. New videos upload themselves.
+
+`--watch` is built to run unattended, which means two things:
+
+- **It never prompts.** The title prompt would block forever in the
+  watcher's background thread with nobody at the keyboard. Titles come
+  from the filename, or a `.txt` sidecar, or `default_title` — never
+  `input()`. (`--batch` and `--file` still prompt as before.)
+- **It ignores half-finished downloads.** `.part` / `.ytdl` files are
+  skipped, and so are yt-dlp's pre-merge stream fragments
+  (`Video.f140.mp4` = audio only, `Video.f299.mp4` = video only). yt-dlp
+  downloads each stream *in full* and merges afterwards, so those sit
+  there complete and unchanging for a while — without that guard the
+  stability check would fire and upload an audio-only file.
+
+**yt-dlp titles work automatically.** A download named
+`Stackswopo - LOL  NO -YdH8jO6Vjs.mp4` becomes the title `LOL NO`: the
+trailing video ID is dropped, and a leading channel name listed in
+`general.filename_channel_prefixes` is stripped. Names that don't end in a
+video ID are left completely alone.
+
 Drop a finished recording into `watch_folder/`, and (unless you disable
 `ask_for_title` in `config.json`) it'll ask you for the stream title in
 the terminal, then upload to both platforms with:
