@@ -221,9 +221,67 @@ class RumbleUploader:
         return ", ".join(described) or "(none found)"
 
     def _select_categories(self, page) -> None:
-        """Pick the primary (and secondary, if present) category. Required
-        by Rumble - the submit button stays inert until primary is set."""
-        selects = page.locator("select").all()
+        """Pick the primary (and secondary) category. REQUIRED by Rumble -
+        the form refuses to submit ("Please select at least one category")
+        until primary is set.
+
+        Rumble uses custom dropdown widgets, not native <select> elements,
+        so this tries the native path first and falls back to driving the
+        widget the way a user would: click it open, then click the option.
+        """
+        native = page.locator("select").all()
+        if native:
+            self._select_native(native)
+            return
+
+        for placeholder, desired in (
+            ("Primary", self.primary_category),
+            ("Secondary", self.secondary_category),
+        ):
+            if desired:
+                self._select_custom_dropdown(page, placeholder, desired)
+
+    def _select_custom_dropdown(self, page, placeholder: str, desired: str) -> None:
+        """Open a custom (non-<select>) dropdown and pick a matching option."""
+        try:
+            # The closed control shows placeholder text like
+            # "- Primary category -"; click whatever element carries it.
+            control = page.get_by_text(re.compile(rf"-\s*{placeholder}\s+category\s*-", re.I)).first
+            if control.count() == 0:
+                print(f"[Rumble] WARNING: could not find the {placeholder} category dropdown.")
+                return
+            control.click(timeout=15_000)
+            page.wait_for_timeout(600)  # let the option list render
+
+            # Some of these widgets include a search box - typing narrows a
+            # long list (Rumble's game list is huge) so the option is
+            # actually rendered and clickable.
+            try:
+                search = page.locator("input[type='text']:visible, input[type='search']:visible").last
+                if search.count() > 0:
+                    search.fill(desired, timeout=5_000)
+                    page.wait_for_timeout(800)
+            except Exception:
+                pass
+
+            option = (
+                page.get_by_role("option", name=re.compile(re.escape(desired), re.I))
+                .or_(page.locator("li, [role='option'], .option, .dropdown-item")
+                     .filter(has_text=re.compile(re.escape(desired), re.I)))
+            )
+            if option.count() == 0:
+                print(f"[Rumble] WARNING: no option matching {desired!r} in the {placeholder} dropdown.")
+                page.keyboard.press("Escape")
+                return
+
+            option.first.click(timeout=15_000)
+            print(f"[Rumble] Category set: {desired} ({placeholder})")
+            page.wait_for_timeout(400)
+        except Exception as exc:
+            print(f"[Rumble] WARNING: could not set {placeholder} category {desired!r}: {exc}")
+
+    def _select_native(self, selects) -> None:
+        """Native <select> path (kept in case Rumble ever serves plain selects)."""
         wanted = [self.primary_category, self.secondary_category]
 
         for dropdown, desired in zip(selects, wanted):
@@ -357,6 +415,17 @@ class RumbleUploader:
         # (Previously this raced the upload and burned ~60 futile click
         # retries against a still-uploading form.)
         self._wait_for_upload_complete(page, progress_callback)
+
+        # Rumble shows "Please select at least one category" inline when
+        # the required category didn't take. Catch that here with a clear
+        # message rather than letting the submit click fail opaquely.
+        try:
+            if page.get_by_text(re.compile(r"select at least one category", re.I)).count() > 0:
+                print("[Rumble] Category still unset - retrying category selection before submit.")
+                self._select_categories(page)
+                page.wait_for_timeout(800)
+        except Exception:
+            pass
 
         submit_button = (
             page.get_by_role("button", name="Submit")
