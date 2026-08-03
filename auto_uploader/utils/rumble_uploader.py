@@ -329,33 +329,37 @@ class RumbleUploader:
         which page-level locators don't pierce.
         """
         # The category section can also render a beat LATER than the rest
-        # of the form (a real run found the checkboxes but not the
-        # dropdowns, which were visibly on screen moments later) - so poll
-        # for up to 30s for either a native <select> or the placeholder
-        # text to exist anywhere before concluding they're absent.
-        found_custom = False
+        # of the form - so poll for up to 30s for Rumble's search-select
+        # widget (identified from a saved page dump of the real form) or a
+        # native <select> to exist in any frame before concluding absent.
+        widget_frame = None
         deadline = time.time() + 30
-        while time.time() < deadline and not found_custom:
+        while time.time() < deadline and widget_frame is None:
             for frame in page.frames:
                 try:
+                    if frame.locator("input.select-search-input").count() > 0:
+                        widget_frame = frame
+                        break
                     if frame.locator("select").count() > 0:
                         self._select_native(frame.locator("select").all())
                         return
-                    if frame.get_by_text(re.compile(r"-\s*Primary\s+category\s*-", re.I)).count() > 0:
-                        found_custom = True
-                        break
                 except Exception:
                     continue
-            if not found_custom:
+            if widget_frame is None:
                 page.wait_for_timeout(1500)
 
         all_ok = True
-        for placeholder, desired in (
-            ("Primary", self.primary_category),
-            ("Secondary", self.secondary_category),
-        ):
-            if desired and not self._select_custom_dropdown(page, placeholder, desired):
-                all_ok = False
+        if widget_frame is not None:
+            for which, desired in (("primary", self.primary_category),
+                                   ("secondary", self.secondary_category)):
+                if desired and not self._select_searchselect(widget_frame, which, desired):
+                    all_ok = False
+        else:
+            # Unknown markup - fall back to the older text-based guesses.
+            for placeholder, desired in (("Primary", self.primary_category),
+                                         ("Secondary", self.secondary_category)):
+                if desired and not self._select_custom_dropdown(page, placeholder, desired):
+                    all_ok = False
 
         if not all_ok:
             # Selector inference has failed enough times - capture the real
@@ -367,6 +371,100 @@ class RumbleUploader:
                 "[Rumble] You can pick the categories manually in the browser window "
                 "right now; the upload will continue and submit normally."
             )
+
+    def _select_searchselect(self, frame, which: str, desired: str) -> bool:
+        """Drive Rumble's actual category widget. Markup, verbatim from a
+        saved dump of the real upload page:
+
+            <div class="select-container">
+              <input id="category_primary" class="select-search-value" hidden>
+              <input class="select-search-input" name="primary-category"
+                     placeholder="- Primary category -">
+              <div class="select-options-container" role="listbox">
+                <div class="select-option" data-value="4" data-label="Gaming"
+                     role="option">
+
+        The placeholder lives in an ATTRIBUTE, not text content - which is
+        why every earlier get_by_text-based attempt found nothing. The
+        hidden select-search-value input holds the chosen option's
+        data-value ("0" = nothing selected), so success is verifiable.
+        `which` is "primary" or "secondary".
+        """
+        container = frame.locator(f"div.select-container:has(input[name='{which}-category'])")
+        if container.count() == 0:
+            print(f"[Rumble] WARNING: could not find the {which} category widget.")
+            return False
+        container = container.first
+
+        pairs = container.locator("div.select-option").evaluate_all(
+            "els => els.map(e => [e.dataset.value, e.dataset.label])"
+        )
+        want = desired.strip().lower()
+        value = label = None
+        # Exact label first, then "<desired> (" prefix, then substring -
+        # in that order because "Grand Theft Auto V" is a PREFIX of
+        # "Grand Theft Auto Vice City", so a bare substring pass could
+        # land on the wrong game.
+        for v, l in pairs:
+            if (l or "").strip().lower() == want:
+                value, label = v, l
+                break
+        if value is None:
+            for v, l in pairs:
+                if (l or "").strip().lower().startswith(want + " ("):
+                    value, label = v, l
+                    break
+        if value is None:
+            for v, l in pairs:
+                if want in (l or "").strip().lower():
+                    value, label = v, l
+                    break
+        if value is None:
+            print(f"[Rumble] WARNING: no {which} category option matches {desired!r}.")
+            return False
+
+        # Real-user path: focus the search box, type to filter, click the
+        # option. If the option isn't clickable (list closed/virtualized),
+        # dispatch the click in JS - that still runs the widget's own
+        # handler, which is what fills the hidden value input.
+        try:
+            search = container.locator("input.select-search-input").first
+            search.click(timeout=8_000)
+            search.fill(label)
+            frame.wait_for_timeout(400)
+            container.locator(f"div.select-option[data-value='{value}']").first.click(timeout=8_000)
+        except Exception:
+            container.evaluate(
+                "(c, v) => { const o = c.querySelector(`div.select-option[data-value='${v}']`); if (o) o.click(); }",
+                value,
+            )
+
+        chosen = container.locator("input.select-search-value").input_value()
+        if not chosen or chosen == "0":
+            # Last resort: set the hidden value + visible text directly and
+            # fire the events the widget would have fired itself.
+            container.evaluate(
+                """(c, args) => {
+                     const [v, l] = args;
+                     for (const [sel, val] of [['input.select-search-value', v],
+                                               ['input.select-search-input', l]]) {
+                       const el = c.querySelector(sel);
+                       if (el) {
+                         el.value = val;
+                         el.dispatchEvent(new Event('input', {bubbles: true}));
+                         el.dispatchEvent(new Event('change', {bubbles: true}));
+                       }
+                     }
+                   }""",
+                [value, label],
+            )
+            chosen = container.locator("input.select-search-value").input_value()
+
+        if chosen and chosen != "0":
+            print(f"[Rumble] Category set: {label} ({which})")
+            return True
+        print(f"[Rumble] WARNING: could not set {which} category {desired!r}.")
+        return False
 
     def _select_custom_dropdown(self, page, placeholder: str, desired: str) -> bool:
         """Open a custom (non-<select>) dropdown and pick a matching option.
