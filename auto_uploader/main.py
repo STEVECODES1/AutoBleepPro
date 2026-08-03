@@ -18,6 +18,11 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from datetime import datetime
 
+# Bump when shipping user-visible changes, so --test-config can prove
+# which build is actually running (stale extracts have silently caused
+# several confusing "the fix did nothing" runs).
+BUILD = "2026-08-03.1 per-platform-censoring"
+
 from utils.censor import censor_video
 from utils.config import load_config, validate_config
 from utils.duplicate_checker import DuplicateChecker, hash_file
@@ -290,6 +295,13 @@ def main(argv=None) -> int:
     cfg = load_config(os.path.join(config_dir, "config.json"), os.path.join(config_dir, ".env"))
 
     if args.test_config:
+        print(f"Build: {BUILD}")
+        print(f"  Censor before upload : {cfg.general.censor_before_upload} "
+              f"(method: {cfg.general.censor_bleep_method})")
+        print(f"  YouTube censored     : {cfg.youtube.censor_uploads}")
+        print(f"  Rumble  censored     : {cfg.rumble.censor_uploads}")
+        print(f"  Rumble  categories   : {cfg.rumble.primary_category} / {cfg.rumble.secondary_category}")
+        print(f"  Watch folder         : {cfg.general.watch_folder}")
         problems = validate_config(cfg)
         if problems:
             print("Config problems found:")
