@@ -280,13 +280,51 @@ class RumbleUploader:
                     print(f"[Rumble] Leaving optional checkbox unticked: {label_text.strip()[:70]!r}")
                     continue
 
-                # force=True for the same reason as the visibility radio:
-                # these are visually-hidden inputs behind styled labels, so a
-                # normal click waits forever on "element is not visible".
-                checkbox.check(force=True, timeout=10_000)
-                print(f"[Rumble] Accepted: {label_text.strip()[:70]!r}")
+                self._tick_checkbox(checkbox, label_text)
             except Exception:
                 continue  # a stray/detached checkbox shouldn't abort the upload
+
+    def _tick_checkbox(self, checkbox, label_text: str) -> None:
+        """Tick a required checkbox, loudly.
+
+        Rumble's real markup (from the saved page dump) is a plain
+        <input type=checkbox id=crights|cterms> hidden behind a styled
+        <label><span>. check(force=True) still performs a physical click,
+        which fails outright on a zero-size input - and the old code
+        swallowed that failure silently, which is why a real run showed
+        NOTHING about these checkboxes and the form then refused to
+        submit ("You must agree..."). Fall back to a JS click on the
+        input itself (native checkbox toggle + change event, works on
+        hidden elements - and unlike clicking the label, can't
+        accidentally hit the terms-of-service LINK inside cterms'
+        label), then to setting .checked directly with proper events.
+        """
+        short = label_text.strip()[:70]
+        try:
+            checkbox.check(force=True, timeout=8_000)
+        except Exception:
+            try:
+                checkbox.evaluate("el => el.click()")
+            except Exception:
+                pass
+            try:
+                if not checkbox.is_checked():
+                    checkbox.evaluate(
+                        "el => { el.checked = true;"
+                        " el.dispatchEvent(new Event('input', {bubbles: true}));"
+                        " el.dispatchEvent(new Event('change', {bubbles: true})); }"
+                    )
+            except Exception:
+                pass
+
+        try:
+            if checkbox.is_checked():
+                print(f"[Rumble] Accepted: {short!r}")
+            else:
+                print(f"[Rumble] WARNING: could not tick required checkbox: {short!r} "
+                      "- tick it manually in the browser window before submitting.")
+        except Exception:
+            print(f"[Rumble] WARNING: could not verify checkbox state: {short!r}")
 
     def _dump_page(self, page) -> str:
         """Save the live page HTML next to this module for inspection."""

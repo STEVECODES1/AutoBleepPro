@@ -21,7 +21,7 @@ from datetime import datetime
 # Bump when shipping user-visible changes, so --test-config can prove
 # which build is actually running (stale extracts have silently caused
 # several confusing "the fix did nothing" runs).
-BUILD = "2026-08-03.5 health-social-optimizer"
+BUILD = "2026-08-03.6 terms-checkbox-fix-discord-on"
 
 from utils.censor import censor_video
 from utils.config import load_config, validate_config
