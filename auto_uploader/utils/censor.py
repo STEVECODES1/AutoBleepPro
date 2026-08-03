@@ -47,12 +47,18 @@ def censor_video(
     basename = os.path.splitext(os.path.basename(source_path))[0]
     raw_audio_path = os.path.join(work_dir, f"_{basename}_audio.wav")
     clean_audio_path = os.path.join(work_dir, f"_{basename}_audio_clean.wav")
-    output_video_path = os.path.join(work_dir, f"{basename}_CENSORED.mp4")
+    # The censoring settings are part of the cache key: a copy made with
+    # bleep_method="beep" must NOT be silently reused after switching to
+    # "silence" (nor a "tiny"-model pass reused after switching to "base").
+    # Without this, changing the config appears to do nothing on any file
+    # that was already processed.
+    cache_key = f"{bleep_method}-{model_name}"
+    output_video_path = os.path.join(work_dir, f"{basename}_CENSORED_{cache_key}.mp4")
 
     if os.path.exists(output_video_path):
-        # Already censored on a previous attempt (e.g. an earlier run got
-        # this far, then failed on the actual upload) - re-transcribing
-        # with Whisper is expensive, so reuse it instead of redoing it.
+        # Already censored on a previous attempt with these exact settings
+        # (e.g. an earlier run got this far, then failed on the actual
+        # upload) - re-transcribing with Whisper is expensive, so reuse it.
         return CensorResult(output_path=output_video_path, was_censored=True, violation_count=-1, censored_words=[])
 
     video = VideoFileClip(source_path)

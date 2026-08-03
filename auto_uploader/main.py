@@ -149,10 +149,11 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
         if censor_result.violation_count == -1:
             print("[Censor] Reusing a censored copy from a previous attempt.")
         elif censor_result.was_censored:
-            print(f"[Censor] Bleeped {censor_result.violation_count} word(s): {', '.join(censor_result.censored_words)}")
+            verb = "Silenced" if cfg.general.censor_bleep_method == "silence" else "Bleeped"
+            print(f"[Censor] {verb} {censor_result.violation_count} word(s): {', '.join(censor_result.censored_words)}")
             notify(
                 "Video censored before upload",
-                f"{filename}: {censor_result.violation_count} word(s) bleeped",
+                f"{filename}: {censor_result.violation_count} word(s) censored",
                 cfg.general.enable_desktop_notifications,
             )
         else:

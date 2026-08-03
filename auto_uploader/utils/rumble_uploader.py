@@ -191,6 +191,88 @@ class RumbleUploader:
             # touch this control shouldn't sink an otherwise-fine upload.
             print(f"[Rumble] WARNING: could not set visibility to {wanted!r} ({exc}); using Rumble's default.")
 
+    # Only checkboxes whose label matches this are safe to tick automatically.
+    # Blanket-checking every checkbox on Rumble's form would also enable
+    # "Feature video on the top of your profile" and "Send mobile push
+    # notification to followers" - the latter spams every follower, once per
+    # uploaded video. Opt in explicitly, never by default.
+    _TERMS_PATTERN = re.compile(
+        r"\b(terms|conditions|agree|rights|licen[cs]e|authori[sz]ed|own|policy)\b", re.I
+    )
+
+    def _submit(self, page) -> None:
+        """Click through Rumble's submit step(s).
+
+        Rumble's upload page has TWO forms: the video-details form, then a
+        rights/terms form with its own final submit. Clicking only the
+        first leaves the video sitting unpublished, so this clicks each
+        submit control in turn (re-accepting terms in between, since the
+        second form's checkboxes only exist once it's shown).
+        """
+        submit_locator = (
+            page.get_by_role("button", name=re.compile(r"^(submit|publish|upload)$", re.I))
+            .or_(page.locator("input[type='submit']"))
+        )
+
+        clicked_any = False
+        for step in range(2):  # details form, then rights/terms form
+            candidates = [c for c in submit_locator.all() if self._is_clickable(c)]
+            if not candidates:
+                break
+
+            candidates[0].click(timeout=120_000)
+            clicked_any = True
+            print(f"[Rumble] Submit step {step + 1} clicked.")
+            page.wait_for_timeout(3000)
+
+            # The rights/terms checkboxes usually only render on the second
+            # form, so accept them after the first click rather than before.
+            self._accept_terms(page)
+
+        if not clicked_any:
+            raise RuntimeError("No enabled submit/publish button found on the page.")
+
+    @staticmethod
+    def _is_clickable(locator) -> bool:
+        try:
+            return locator.is_visible() and locator.is_enabled()
+        except Exception:
+            return False
+
+    def _accept_terms(self, page) -> None:
+        """Tick only the rights/terms-agreement checkboxes Rumble requires."""
+        for checkbox in page.locator("input[type='checkbox']").all():
+            try:
+                if checkbox.is_checked():
+                    continue
+
+                label_text = ""
+                element_id = checkbox.get_attribute("id")
+                if element_id:
+                    label = page.locator(f"label[for='{element_id}']")
+                    if label.count() > 0:
+                        label_text = label.first.inner_text() or ""
+                if not label_text:
+                    # Fall back to the checkbox's own enclosing-label text.
+                    try:
+                        label_text = checkbox.evaluate(
+                            "el => (el.closest('label')?.innerText) || el.parentElement?.innerText || ''"
+                        ) or ""
+                    except Exception:
+                        label_text = ""
+
+                if not self._TERMS_PATTERN.search(label_text):
+                    print(f"[Rumble] Leaving optional checkbox unticked: {label_text.strip()[:70]!r}")
+                    continue
+
+                # force=True for the same reason as the visibility radio:
+                # these are visually-hidden inputs behind styled labels, so a
+                # normal click waits forever on "element is not visible".
+                checkbox.check(force=True, timeout=10_000)
+                print(f"[Rumble] Accepted: {label_text.strip()[:70]!r}")
+            except Exception:
+                continue  # a stray/detached checkbox shouldn't abort the upload
+
     def _dump_page(self, page) -> str:
         """Save the live page HTML next to this module for inspection."""
         path = os.path.join(
@@ -396,18 +478,7 @@ class RumbleUploader:
         # the primary/secondary category <select> dropdowns.
         self._select_categories(page)
 
-        # Rumble's upload form has a required "I agree to terms" checkbox
-        # (sometimes two) before the submit button will actually do
-        # anything - check any that are present and unchecked.
-        for checkbox in page.locator("input[type='checkbox']").all():
-            try:
-                if not checkbox.is_checked():
-                    # force=True for the same reason as the visibility radio:
-                    # these are visually-hidden inputs behind styled labels,
-                    # so a normal click waits forever on "not visible".
-                    checkbox.check(force=True, timeout=10_000)
-            except Exception:
-                continue  # a stray/detached checkbox shouldn't abort the whole upload
+        self._accept_terms(page)
 
         # Wait for the file transfer itself to finish BEFORE trying to
         # submit - Rumble shows a "N% (x MB/s)" indicator during upload and
@@ -427,13 +498,8 @@ class RumbleUploader:
         except Exception:
             pass
 
-        submit_button = (
-            page.get_by_role("button", name="Submit")
-            .or_(page.get_by_role("button", name="Publish"))
-            .or_(page.get_by_role("button", name="Upload"))
-        )
         try:
-            submit_button.first.click(timeout=120_000)
+            self._submit(page)
         except Exception as exc:
             # Dump the live page so the actual submit-button markup can be
             # inspected instead of guessed at - blind selector guessing has
