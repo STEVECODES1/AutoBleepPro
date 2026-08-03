@@ -22,7 +22,7 @@ from datetime import datetime
 # Bump when shipping user-visible changes, so --test-config can prove
 # which build is actually running (stale extracts have silently caused
 # several confusing "the fix did nothing" runs).
-BUILD = "2026-08-03.10 unattended-watch"
+BUILD = "2026-08-03.11 build-banner"
 
 from utils.censor import censor_video
 from utils.config import load_config, validate_config
@@ -369,6 +369,11 @@ def main(argv=None) -> int:
     parser.add_argument("--health", action="store_true", help="Run disk/CPU/network health checks + temp cleanup, then exit.")
     args = parser.parse_args(argv)
 
+    # Printed on EVERY run, not just --test-config: a stale extract running
+    # old code has silently caused several confusing "the fix did nothing"
+    # sessions, and the build stamp settles it in one line.
+    print(f"AutoBleep auto-uploader | Build: {BUILD}")
+
     config_dir = os.path.dirname(os.path.abspath(__file__))
     cfg = load_config(os.path.join(config_dir, "config.json"), os.path.join(config_dir, ".env"))
 
@@ -377,13 +382,12 @@ def main(argv=None) -> int:
         return 0 if ok else 1
 
     if args.test_config:
-        print(f"Build: {BUILD}")
         print(f"  Censor before upload : {cfg.general.censor_before_upload} "
               f"(method: {cfg.general.censor_bleep_method})")
         print(f"  YouTube censored     : {cfg.youtube.censor_uploads}")
         print(f"  Rumble  censored     : {cfg.rumble.censor_uploads}")
         print(f"  Rumble  categories   : {cfg.rumble.primary_category} / {cfg.rumble.secondary_category}")
-        print(f"  Watch folder         : {cfg.general.watch_folder}")
+        print(f"  Watch folder         : {os.path.abspath(cfg.general.watch_folder)}")
         problems = validate_config(cfg)
         if problems:
             print("Config problems found:")
@@ -467,9 +471,32 @@ def main(argv=None) -> int:
         return 0
 
     if args.watch or dry_run:
-        print(f"Watching {cfg.general.watch_folder} for new videos... (Ctrl+C to stop)")
+        print(f"Watching {os.path.abspath(cfg.general.watch_folder)} "
+              f"for new videos... (Ctrl+C to stop)")
         if dry_run:
             print("[DRY RUN MODE] Nothing will actually be uploaded.")
+
+        # --watch only reacts to files ARRIVING. Anything already sitting
+        # in the folder would otherwise wait here forever with no hint
+        # that it's being ignored.
+        try:
+            already = [
+                f for f in sorted(os.listdir(cfg.general.watch_folder))
+                if os.path.isfile(os.path.join(cfg.general.watch_folder, f))
+                and os.path.splitext(f)[1].lower() in cfg.general.supported_formats
+                and not is_intermediate_download(f)
+            ]
+        except OSError:
+            already = []
+        if already:
+            print(f"\n[NOTE] {len(already)} video(s) are ALREADY in this folder. "
+                  f"--watch only picks up files that arrive from now on.")
+            for f in already[:5]:
+                print(f"         - {f}")
+            if len(already) > 5:
+                print(f"         ... and {len(already) - 5} more")
+            print("       Run `python main.py --batch` (in another window, or "
+                  "stop this first) to upload those.\n")
 
         def on_ready(path):
             # allow_prompt=False: this runs in the watcher's background
