@@ -140,6 +140,57 @@ class RumbleUploader:
             page.get_by_role("button", name="Verify").or_(page.get_by_role("button", name="Submit")).click()
             page.wait_for_timeout(3000)
 
+    def _set_visibility(self, page, privacy: str) -> None:
+        """Select the visibility radio (Public/Unlisted/Private).
+
+        Rumble renders these as real <input type="radio"> elements that are
+        visually hidden behind custom-styled labels, so a plain .click()
+        blocks forever on "element is not visible" - and since Public is
+        already `checked` by default, that wait was for a no-op. Check the
+        current state first, and use check(force=True) (which sets the
+        underlying input directly) rather than clicking pixels.
+        """
+        wanted = (privacy or "public").strip().lower()
+        radio = page.locator(f"input[type='radio'][name='visibility'][value='{wanted}']")
+
+        try:
+            if radio.count() == 0:
+                print(f"[Rumble] No visibility radio found for {wanted!r}; leaving Rumble's default.")
+                return
+            if radio.first.is_checked():
+                print(f"[Rumble] Visibility already set to {wanted}.")
+                return
+
+            try:
+                radio.first.check(force=True, timeout=15_000)
+            except Exception:
+                # force=True still performs a click, which fails outright on
+                # a zero-size/offscreen input. Click the <label> that points
+                # at it instead (what a real user actually clicks), and fall
+                # back to setting the input directly if there's no label.
+                element_id = radio.first.get_attribute("id")
+                clicked = False
+                if element_id:
+                    label = page.locator(f"label[for='{element_id}']")
+                    if label.count() > 0:
+                        label.first.click(timeout=15_000)
+                        clicked = True
+                if not clicked:
+                    radio.first.evaluate(
+                        "el => { el.checked = true;"
+                        " el.dispatchEvent(new Event('input', {bubbles:true}));"
+                        " el.dispatchEvent(new Event('change', {bubbles:true})); }"
+                    )
+
+            if radio.first.is_checked():
+                print(f"[Rumble] Visibility set to {wanted}.")
+            else:
+                print(f"[Rumble] WARNING: visibility {wanted!r} did not take; using Rumble's default.")
+        except Exception as exc:
+            # Never fatal: Public is Rumble's default anyway, so failing to
+            # touch this control shouldn't sink an otherwise-fine upload.
+            print(f"[Rumble] WARNING: could not set visibility to {wanted!r} ({exc}); using Rumble's default.")
+
     def _dump_page(self, page) -> str:
         """Save the live page HTML next to this module for inspection."""
         path = os.path.join(
@@ -274,11 +325,7 @@ class RumbleUploader:
         if tags_field.count() > 0:
             tags_field.fill(", ".join(t.lstrip("#") for t in tags))
 
-        # Visibility: Public / Unlisted / Private radio buttons.
-        if privacy.lower() == "public":
-            visibility_option = page.get_by_label("Public").or_(page.get_by_text("Public", exact=True))
-            if visibility_option.count() > 0:
-                visibility_option.first.click()
+        self._set_visibility(page, privacy)
 
         if thumbnail_path and os.path.exists(thumbnail_path):
             thumb_input = page.locator("input[type='file'][accept*='image']")
@@ -296,8 +343,11 @@ class RumbleUploader:
         # anything - check any that are present and unchecked.
         for checkbox in page.locator("input[type='checkbox']").all():
             try:
-                if checkbox.is_visible() and not checkbox.is_checked():
-                    checkbox.check()
+                if not checkbox.is_checked():
+                    # force=True for the same reason as the visibility radio:
+                    # these are visually-hidden inputs behind styled labels,
+                    # so a normal click waits forever on "not visible".
+                    checkbox.check(force=True, timeout=10_000)
             except Exception:
                 continue  # a stray/detached checkbox shouldn't abort the whole upload
 
