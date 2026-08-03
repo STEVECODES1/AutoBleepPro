@@ -45,6 +45,46 @@ Or double-click **`START_AUTOBLEEP.bat`**.
 
 ---
 
+## ⌨️ CLI
+
+`cli.py` runs the same engine with no GUI, for servers, scheduled jobs and
+scripting. Progress goes to stderr and output paths to stdout, so you can
+pipe the results. Exit code is 0 on success, non-zero on failure.
+
+```bash
+# One video, censored copy next to a transcript and captions
+python cli.py stream.mp4 -o clean/ --srt --txt
+
+# A whole folder, muting instead of beeping (the default)
+python cli.py raw_footage/ -o clean/ --batch --method silence
+
+# Looser detection + your own brand words + a custom beep sample
+python cli.py stream.mp4 --sensitivity 30 --custom-words "brand1,brand2" \
+    --method beep --beep-wav ./beep.wav
+```
+
+`python cli.py -h` lists every flag (or double-click **`START_CLI_HELP.bat`**).
+
+**Sensitivity** (`--sensitivity`, or the slider on the Single Video tab) is
+a rule gate from 0–100, not a confidence score. Default is **70**.
+
+| Range | What fires |
+|---|---|
+| **0–30** | Real profanity, leet (`sh1t`, `f@ck`), masked words (`f**k`), and your `--custom-words`. Nothing else. |
+| **31–70** | Adds minced oaths (`fudge`, `shoot`), likely mishears (`duck`, `shirt`), and context-only words when the phrase points at them (`son of a` + `beach`). |
+| **71–100** | Also accepts context-only words on any nearby profanity, and widens the context window. |
+
+A context-only word on its own — "we went to the *beach*" — is never
+flagged, at any setting.
+
+**Transcripts.** `--txt` writes a timestamped plain-text transcript and
+`--srt` writes standard subtitles, both named after the output video
+(`stream_CLEAN.srt`). Add `--no-bleep-export` to produce only those and
+skip re-encoding the video entirely. The GUI has the same thing: *Save
+transcript / Save captions* after analysis, plus *Also export SRT on bleep*.
+
+---
+
 ## 🎬 How to Use
 
 ### Single Video Mode

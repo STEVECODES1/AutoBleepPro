@@ -8,11 +8,14 @@ the detection half needs nothing but `better_profanity`.
 
 Public API
 ----------
-Detection : find_profanity_v2, check_word
-Device    : detect_device, configure_threads
-Models    : load_model_speed, ModelCache, ModelBundle, transcribe_words
-Audio     : extract_audio_fast, make_beep, apply_bleeps
-Paths     : build_output_path, is_generated_output, safe_remove
+Detection  : find_profanity_v2, check_word, sensitivity_band
+Device     : detect_device, configure_threads
+Models     : load_model_speed, ModelCache, ModelBundle, transcribe_words
+Audio      : extract_audio_fast, make_beep, make_bleep_segment, apply_bleeps
+Transcript : words_to_srt, words_to_txt, bleeps_to_srt, group_into_cues
+Video I/O  : extract_audio, render_video
+Pipeline   : ProcessOptions, ProcessResult, process_video
+Paths      : build_output_path, is_generated_output, safe_remove, list_videos
 """
 
 from __future__ import annotations
@@ -22,9 +25,11 @@ import itertools
 import os
 import re
 import subprocess
+import tempfile
 import unicodedata
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import lru_cache
+from pathlib import Path
 from typing import Any, Callable, Iterable, Sequence
 
 from better_profanity import profanity
@@ -64,7 +69,62 @@ VIDEO_EXTS: frozenset[str] = frozenset(
     {".mp4", ".avi", ".mov", ".mkv", ".flv", ".wmv", ".m4v", ".webm", ".ts"}
 )
 
+__version__ = "2.3.0"
+
 OUTPUT_SUFFIX = "_CLEAN"
+
+# ── Detection sensitivity ────────────────────────────────────────────────────
+# A plain rule gate, not a score: the number picks which families of rules
+# are allowed to fire. Nothing here is probabilistic.
+#
+#   0-30    LOW     strong direct profanity, leet decodes, symbol bypasses
+#                   and custom words only. No minced oaths, no Whisper
+#                   mishears, no context inference.
+#   31-70   NORMAL  the above, plus minced oaths ("fudge"), Whisper mishears
+#                   ("duck"), and context-only candidates when a trigger
+#                   phrase points at that word's own target
+#                   ("son of a" + "beach").
+#   71-100  HIGH    the above, plus context-only candidates on *any* nearby
+#                   profanity signal rather than a matching trigger, and a
+#                   wider trigger window.
+SENSITIVITY_LOW_MAX = 30
+SENSITIVITY_NORMAL_MAX = 70
+DEFAULT_SENSITIVITY = 70
+
+BAND_LOW = "low"
+BAND_NORMAL = "normal"
+BAND_HIGH = "high"
+
+# ── Censoring ────────────────────────────────────────────────────────────────
+METHOD_BEEP = "beep"
+METHOD_SILENCE = "silence"
+# Muting is the default: it's the less intrusive edit, and it's what most
+# uploads actually want.
+DEFAULT_METHOD = METHOD_SILENCE
+DEFAULT_BEEP_FREQ = 1000
+
+MODEL_CHOICES = ("tiny", "base", "small", "medium", "turbo")
+COMPUTE_CHOICES = ("auto", "int8", "float16", "float32")
+ENCODE_CHOICES = ("ultrafast", "fast", "medium", "slow")
+
+
+def clamp_sensitivity(value: int | float | None) -> int:
+    """Coerce anything user-supplied into 0-100."""
+    if value is None:
+        return DEFAULT_SENSITIVITY
+    try:
+        return max(0, min(100, int(round(float(value)))))
+    except (TypeError, ValueError):
+        return DEFAULT_SENSITIVITY
+
+
+def sensitivity_band(value: int | float | None) -> str:
+    value = clamp_sensitivity(value)
+    if value <= SENSITIVITY_LOW_MAX:
+        return BAND_LOW
+    if value <= SENSITIVITY_NORMAL_MAX:
+        return BAND_NORMAL
+    return BAND_HIGH
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -276,24 +336,51 @@ def _profane(candidate: str) -> bool:
     return bool(candidate) and profanity.contains_profanity(candidate)
 
 
+def _has_weak_context(clean_word: str, context_words: Sequence[str],
+                      ctx_str: str) -> bool:
+    """Any signal at all that the surrounding speech is profane.
+
+    Used only at high sensitivity, where a context-only candidate is
+    allowed to fire on a nearby trigger phrase / profanity / minced oath
+    rather than on a trigger that points specifically at its own target.
+    """
+    for trigger, _target in CONTEXT_TRIGGERS:
+        if trigger in ctx_str:
+            return True
+    return any(
+        cw and cw != clean_word
+        and (_profane(cw) or cw in HOMOPHONES or cw in WHISPER_MISHEARDS)
+        for cw in context_words
+    )
+
+
 def check_word(
     raw_word: str,
     context_words: Sequence[str],
     custom_words: Sequence[str],
     fuzzy: bool = True,
+    sensitivity: int = DEFAULT_SENSITIVITY,
 ) -> tuple[bool, str]:
     """Decide whether a single transcribed token should be bleeped.
 
     `context_words` are the preceding tokens (already lowercased, letters
-    only). `fuzzy` enables the minced-oath / mishear heuristics; turn it
-    off to flag only real profanity, symbol bypasses and custom words.
+    only). `sensitivity` (0-100) selects how many rule families run - see
+    `sensitivity_band` for the exact bands.
+
+    `fuzzy=False` is retained for backwards compatibility and simply
+    clamps `sensitivity` into the low band.
 
     Returns (should_bleep, human-readable reason).
     """
+    if not fuzzy:
+        sensitivity = min(sensitivity, SENSITIVITY_LOW_MAX)
+    band = sensitivity_band(sensitivity)
+
     raw_word = (raw_word or "").strip()
     if not raw_word:
         return False, ""
 
+    # ── Always on, at every sensitivity ──────────────────────────────────
     if _is_bypass(raw_word):
         return True, "Symbol bypass (f**k style)"
 
@@ -320,32 +407,10 @@ def check_word(
         if _profane(candidate):
             return True, "Profanity detected"
 
-    ctx_str = " ".join(context_words)
-
-    if fuzzy and clean_word in HOMOPHONES:
-        if clean_word not in CONTEXT_ONLY:
-            return True, f"Likely profanity substitute ('{clean_word}')"
-        # Context-only: require a trigger phrase that actually points at
-        # the same underlying word ("son of a" -> bitch, for "beach").
-        targets = HOMOPHONES[clean_word]
-        for trigger, target in CONTEXT_TRIGGERS:
-            if target in targets and trigger in ctx_str:
-                return True, f"Context homophone ('{clean_word}')"
-
-    if fuzzy and clean_word in WHISPER_MISHEARDS:
-        if clean_word not in MISHEARD_CONTEXT_ONLY:
-            return True, f"Whisper mishear of '{WHISPER_MISHEARDS[clean_word]}'"
-        if any(_profane(cw) or cw in HOMOPHONES for cw in context_words):
-            return True, f"Whisper mishear (context) of '{WHISPER_MISHEARDS[clean_word]}'"
-
-    recent = " ".join(context_words[-4:])
-    for trigger, target in CONTEXT_TRIGGERS:
-        if clean_word == target and trigger in recent:
-            return True, f"Context trigger ('{trigger} {target}')"
-
-    # Custom words. Multi-word entries ("rival brand") can never match a
-    # single token, so they're tested against the trailing context plus
-    # this word - which is what the GUI's own placeholder text promises.
+    # Custom words are an explicit user instruction, so they are honoured
+    # even in the low band. Multi-word entries ("rival brand") can never
+    # match a single token, so they're tested against the trailing context
+    # plus this word - which is what the GUI's placeholder text promises.
     if custom_words:
         phrase = " ".join([*context_words[-6:], clean_word]).strip()
         for cw in custom_words:
@@ -356,6 +421,40 @@ def check_word(
                     return True, "Custom phrase"
             elif cw in norm or cw in stripped:
                 return True, "Custom word"
+
+    if band == BAND_LOW:
+        return False, ""
+
+    # ── Normal band and above: minced oaths, mishears, context ───────────
+    ctx_str = " ".join(context_words)
+    aggressive = band == BAND_HIGH
+
+    if clean_word in HOMOPHONES:
+        if clean_word not in CONTEXT_ONLY:
+            return True, f"Likely profanity substitute ('{clean_word}')"
+        # Context-only: normally require a trigger phrase that points at
+        # the same underlying word ("son of a" -> bitch, for "beach").
+        targets = HOMOPHONES[clean_word]
+        for trigger, target in CONTEXT_TRIGGERS:
+            if target in targets and trigger in ctx_str:
+                return True, f"Context homophone ('{clean_word}')"
+        if aggressive and _has_weak_context(clean_word, context_words, ctx_str):
+            return True, f"Context homophone, weak context ('{clean_word}')"
+
+    if clean_word in WHISPER_MISHEARDS:
+        heard = WHISPER_MISHEARDS[clean_word]
+        if clean_word not in MISHEARD_CONTEXT_ONLY:
+            return True, f"Whisper mishear of '{heard}'"
+        if any(_profane(cw) or cw in HOMOPHONES for cw in context_words):
+            return True, f"Whisper mishear (context) of '{heard}'"
+        if aggressive and _has_weak_context(clean_word, context_words, ctx_str):
+            return True, f"Whisper mishear, weak context ('{heard}')"
+
+    # The trigger window widens in the aggressive band.
+    recent = " ".join(context_words[-(5 if aggressive else 4):])
+    for trigger, target in CONTEXT_TRIGGERS:
+        if clean_word == target and trigger in recent:
+            return True, f"Context trigger ('{trigger} {target}')"
 
     return False, ""
 
@@ -374,12 +473,16 @@ def find_profanity_v2(
     result: Any,
     custom_words: Sequence[str],
     fuzzy: bool = True,
+    sensitivity: int = DEFAULT_SENSITIVITY,
 ) -> list[dict]:
     """Scan a transcription result and return the words to bleep.
 
     Each hit is {"word", "start", "end", "reason"}. Hits are deduplicated
     by start timestamp (rounded to the millisecond) so a token that trips
     two different rules is only bleeped once.
+
+    `sensitivity` is 0-100; see the module-level table. `fuzzy=False` is
+    kept for backwards compatibility and clamps into the low band.
     """
     all_words = _flatten_words(result)
     found: list[dict] = []
@@ -398,7 +501,8 @@ def find_profanity_v2(
             for i in range(max(0, idx - 5), idx)
         ]
 
-        is_bad, reason = check_word(raw, context, custom_words, fuzzy=fuzzy)
+        is_bad, reason = check_word(raw, context, custom_words,
+                                    fuzzy=fuzzy, sensitivity=sensitivity)
         if not is_bad:
             continue
 
@@ -588,6 +692,69 @@ def make_beep(duration_ms: int, freq_hz: int):
     return (base * (duration_ms // len(base) + 1))[:duration_ms]
 
 
+@lru_cache(maxsize=8)
+def _load_custom_beep_cached(path: str, mtime: float, size: int):
+    """Cache key includes mtime+size so editing the WAV takes effect."""
+    return AudioSegment.from_file(path)
+
+
+def load_custom_beep(path: str | os.PathLike[str] | None):
+    """Load a user-supplied beep sample, or None if it can't be used.
+
+    Never raises: a bad path is a settings mistake, not a crash - callers
+    fall back to the generated tone.
+    """
+    if not path or AudioSegment is None:
+        return None
+    try:
+        p = os.fspath(path)
+        stat = os.stat(p)
+        seg = _load_custom_beep_cached(p, stat.st_mtime, stat.st_size)
+        return seg if len(seg) > 0 else None
+    except Exception:
+        return None
+
+
+def validate_beep_wav(path: str | os.PathLike[str] | None) -> tuple[bool, str]:
+    """(usable, human-readable reason). For one-time UI/CLI warnings."""
+    if not path:
+        return False, "No custom beep selected."
+    p = os.fspath(path)
+    if not os.path.exists(p):
+        return False, f"Custom beep file not found: {p}"
+    if AudioSegment is None:  # pragma: no cover
+        return False, "pydub is not installed."
+    seg = load_custom_beep(p)
+    if seg is None:
+        return False, (f"Could not read {os.path.basename(p)} as audio "
+                       "(is it a valid .wav?)")
+    return True, f"Using custom beep: {os.path.basename(p)} ({len(seg)} ms)"
+
+
+def make_bleep_segment(
+    duration_ms: int,
+    freq_hz: int | None = None,
+    custom_wav: str | os.PathLike[str] | None = None,
+):
+    """The audio used to cover one censored word, exactly `duration_ms` long.
+
+    With `custom_wav`, the sample is looped if it's too short and trimmed
+    if it's too long. Falls back to a `freq_hz` sine when the file is
+    missing or unreadable, so a broken path degrades to the old behaviour
+    instead of failing the export.
+    """
+    if AudioSegment is None:  # pragma: no cover
+        raise RuntimeError("pydub is required for audio processing")
+    duration_ms = max(1, int(duration_ms))
+
+    sample = load_custom_beep(custom_wav)
+    if sample is not None:
+        looped = sample * (duration_ms // len(sample) + 1)
+        return looped[:duration_ms]
+
+    return make_beep(duration_ms, int(freq_hz or DEFAULT_BEEP_FREQ))
+
+
 def _match_params(seg, ref):
     """Coerce `seg` to `ref`'s frame rate / channels / sample width."""
     if seg.frame_rate != ref.frame_rate:
@@ -641,10 +808,11 @@ def merge_spans(
 def apply_bleeps(
     audio_seg,
     words: Sequence[dict],
-    method: str = "beep",
-    freq_hz: int = 1000,
+    method: str = DEFAULT_METHOD,
+    freq_hz: int = DEFAULT_BEEP_FREQ,
     min_ms: int = 50,
     progress: Callable[[int, int], None] | None = None,
+    custom_wav: str | os.PathLike[str] | None = None,
 ):
     """Return `audio_seg` with every span in `words` replaced by a beep or silence.
 
@@ -685,10 +853,11 @@ def apply_bleeps(
             pieces.append(raw[cursor:b_start])
 
         span_ms = e_ms - s_ms
-        if method == "silence":
+        if method == METHOD_SILENCE:
+            # True digital silence for the censored region - no tone.
             filler = AudioSegment.silent(duration=span_ms, frame_rate=frame_rate)
         else:
-            filler = make_beep(span_ms, freq_hz)
+            filler = make_bleep_segment(span_ms, freq_hz, custom_wav)
         data = _match_params(filler, audio_seg).raw_data
 
         want = b_end - b_start
@@ -706,6 +875,164 @@ def apply_bleeps(
         pieces.append(raw[cursor:])
 
     return audio_seg._spawn(b"".join(pieces))
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# TRANSCRIPT EXPORT
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _as_word_list(source: Any) -> list[dict]:
+    """Accept either a transcribe_words() result or an already-flat list.
+
+    Both `transcribe_words()` output ({"segments": [...]}) and the hit list
+    from `find_profanity_v2()` (a plain list of word dicts) are valid
+    inputs to the writers below.
+    """
+    if source is None:
+        return []
+    if isinstance(source, dict):
+        return _flatten_words(source)
+    if isinstance(source, (list, tuple)):
+        return [w for w in source if isinstance(w, dict)]
+    return []
+
+
+def _srt_timestamp(seconds: float) -> str:
+    """SRT wants HH:MM:SS,mmm with a comma before the milliseconds."""
+    ms = max(0, int(round(float(seconds) * 1000)))
+    hours, ms = divmod(ms, 3_600_000)
+    minutes, ms = divmod(ms, 60_000)
+    secs, ms = divmod(ms, 1000)
+    return f"{hours:02d}:{minutes:02d}:{secs:02d},{ms:03d}"
+
+
+def _short_timestamp(seconds: float) -> str:
+    total = max(0, int(float(seconds)))
+    hours, rem = divmod(total, 3600)
+    minutes, secs = divmod(rem, 60)
+    return (f"{hours:d}:{minutes:02d}:{secs:02d}" if hours
+            else f"{minutes:02d}:{secs:02d}")
+
+
+def group_into_cues(
+    words: Sequence[dict],
+    max_words: int = 8,
+    max_duration: float = 5.0,
+    max_gap: float = 1.2,
+) -> list[dict]:
+    """Group word timings into readable caption cues.
+
+    A cue is closed when it reaches `max_words`, spans `max_duration`
+    seconds, or the silence before the next word exceeds `max_gap`.
+    """
+    cues: list[dict] = []
+    current: list[dict] = []
+
+    def flush() -> None:
+        if not current:
+            return
+        text = " ".join(str(w.get("word", "")).strip() for w in current).strip()
+        text = re.sub(r"\s+([,.!?;:])", r"\1", text)
+        if text:
+            cues.append({
+                "start": float(current[0].get("start", 0.0) or 0.0),
+                "end": float(current[-1].get("end", 0.0) or 0.0),
+                "text": text,
+            })
+        current.clear()
+
+    for word in words:
+        if not str(word.get("word", "")).strip():
+            continue
+        if current:
+            start = float(word.get("start", 0.0) or 0.0)
+            span = start - float(current[0].get("start", 0.0) or 0.0)
+            gap = start - float(current[-1].get("end", 0.0) or 0.0)
+            if len(current) >= max_words or span >= max_duration or gap > max_gap:
+                flush()
+        current.append(word)
+    flush()
+
+    # A zero-length cue is invalid in most players; give it a floor.
+    for cue in cues:
+        if cue["end"] <= cue["start"]:
+            cue["end"] = cue["start"] + 0.5
+    return cues
+
+
+def words_to_srt(
+    segments_or_word_list: Any,
+    path: str | Path,
+    max_words: int = 8,
+) -> Path:
+    """Write a standard SRT subtitle file. Returns the path written."""
+    words = _as_word_list(segments_or_word_list)
+    cues = group_into_cues(words, max_words=max_words)
+
+    out = Path(path)
+    if out.parent and str(out.parent):
+        out.parent.mkdir(parents=True, exist_ok=True)
+
+    lines: list[str] = []
+    for index, cue in enumerate(cues, 1):
+        lines.append(str(index))
+        lines.append(f"{_srt_timestamp(cue['start'])} --> {_srt_timestamp(cue['end'])}")
+        lines.append(cue["text"])
+        lines.append("")
+
+    out.write_text("\n".join(lines), encoding="utf-8")
+    return out
+
+
+def words_to_txt(
+    segments_or_word_list: Any,
+    path: str | Path,
+    max_words: int = 12,
+) -> Path:
+    """Write a plain timestamped transcript: "[MM:SS] word word ..."."""
+    words = _as_word_list(segments_or_word_list)
+    cues = group_into_cues(words, max_words=max_words, max_duration=8.0)
+
+    out = Path(path)
+    if out.parent and str(out.parent):
+        out.parent.mkdir(parents=True, exist_ok=True)
+
+    lines = [f"[{_short_timestamp(cue['start'])}] {cue['text']}" for cue in cues]
+    out.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
+    return out
+
+
+def bleeps_to_srt(hits: Sequence[dict], path: str | Path) -> Path:
+    """A 'bleeps only' SRT: one cue per censored word, with its reason.
+
+    Useful for eyeballing what the detector did without scrubbing the
+    whole video.
+    """
+    out = Path(path)
+    if out.parent and str(out.parent):
+        out.parent.mkdir(parents=True, exist_ok=True)
+
+    lines: list[str] = []
+    for index, hit in enumerate(hits, 1):
+        start = float(hit.get("start", 0.0) or 0.0)
+        end = float(hit.get("end", 0.0) or 0.0)
+        if end <= start:
+            end = start + 0.5
+        word = str(hit.get("word", "")).strip()
+        reason = str(hit.get("reason", "")).strip()
+        lines.append(str(index))
+        lines.append(f"{_srt_timestamp(start)} --> {_srt_timestamp(end)}")
+        lines.append(f"{word}  [{reason}]" if reason else word)
+        lines.append("")
+
+    out.write_text("\n".join(lines), encoding="utf-8")
+    return out
+
+
+def sidecar_path(video_path: str | Path, suffix: str) -> Path:
+    """`/x/y/clip_CLEAN.mp4` + '.srt' -> `/x/y/clip_CLEAN.srt`."""
+    p = Path(video_path)
+    return p.with_suffix(suffix if suffix.startswith(".") else f".{suffix}")
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -751,3 +1078,192 @@ def safe_remove(*paths: str | None) -> None:
             os.remove(p)
         except (FileNotFoundError, PermissionError, IsADirectoryError, OSError):
             pass
+
+
+def new_temp_wav() -> str:
+    """A unique temp .wav path, safe for concurrent/batch use."""
+    fd, path = tempfile.mkstemp(prefix="autobleep_", suffix=".wav")
+    os.close(fd)
+    return path
+
+
+def list_videos(folder: str | Path) -> list[str]:
+    """Video files in `folder`, skipping this tool's own `_CLEAN` output."""
+    folder = str(folder)
+    return [
+        os.path.join(folder, name)
+        for name in sorted(os.listdir(folder))
+        if os.path.splitext(name)[1].lower() in VIDEO_EXTS
+        and not is_generated_output(name)
+    ]
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# VIDEO I/O
+# ═════════════════════════════════════════════════════════════════════════════
+
+def extract_audio(video_path: str, wav_path: str) -> None:
+    """ffmpeg first, moviepy as fallback. Raises with a readable message.
+
+    Lives here rather than in the GUI so the CLI gets the same behaviour
+    without importing customtkinter.
+    """
+    if extract_audio_fast(video_path, wav_path):
+        return
+
+    try:
+        from moviepy import VideoFileClip
+    except ImportError as exc:  # pragma: no cover
+        raise RuntimeError(
+            "ffmpeg failed and moviepy is not installed - install ffmpeg "
+            "and put it on PATH, or `pip install moviepy`.") from exc
+
+    clip = None
+    try:
+        clip = VideoFileClip(video_path)
+        if clip.audio is None:
+            raise RuntimeError(
+                f"{os.path.basename(video_path)} has no audio track - "
+                "nothing to bleep.")
+        clip.audio.write_audiofile(wav_path, logger=None)
+    finally:
+        if clip is not None:
+            try:
+                clip.close()
+            except Exception:
+                pass
+
+
+def render_video(video_path: str, audio_path: str, out_path: str,
+                 encode_preset: str = "fast", threads: int | None = None) -> None:
+    """Mux `audio_path` onto `video_path`. Always closes its clips."""
+    from moviepy import AudioFileClip, VideoFileClip
+
+    video = audio = final = None
+    try:
+        video = VideoFileClip(video_path)
+        audio = AudioFileClip(audio_path)
+        final = video.with_audio(audio)
+        final.write_videofile(
+            out_path, codec="libx264", audio_codec="aac",
+            preset=encode_preset, threads=threads or os.cpu_count() or 4,
+            logger=None)
+    finally:
+        for clip in (final, audio, video):
+            if clip is not None:
+                try:
+                    clip.close()
+                except Exception:
+                    pass
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# ONE-FILE PIPELINE (shared by the GUI's batch tab and the CLI)
+# ═════════════════════════════════════════════════════════════════════════════
+
+@dataclass(frozen=True)
+class ProcessOptions:
+    """Everything needed to censor one video, with no UI types involved."""
+    model_name: str = "base"
+    compute_pref: str = "auto"
+    encode_preset: str = "fast"
+    method: str = DEFAULT_METHOD
+    beep_freq: int = DEFAULT_BEEP_FREQ
+    custom_beep_wav: str | None = None
+    sensitivity: int = DEFAULT_SENSITIVITY
+    custom_words: tuple[str, ...] = field(default=())
+    output_dir: str | None = None
+    write_video: bool = True
+    write_srt: bool = False
+    write_txt: bool = False
+
+
+@dataclass
+class ProcessResult:
+    video_path: str
+    hits: list[dict] = field(default_factory=list)
+    output_path: str | None = None
+    srt_path: str | None = None
+    txt_path: str | None = None
+    error: str | None = None
+
+    @property
+    def ok(self) -> bool:
+        return self.error is None
+
+
+def process_video(
+    video_path: str,
+    options: ProcessOptions,
+    bundle: ModelBundle,
+    log: Callable[[str], None] | None = None,
+    progress: Callable[[int, int], None] | None = None,
+) -> ProcessResult:
+    """Transcribe -> detect -> censor -> render, for a single file.
+
+    Never raises: failures land in `ProcessResult.error` so a batch run
+    keeps going. Temp files are always cleaned up.
+    """
+    def say(msg: str) -> None:
+        if log is not None:
+            log(msg)
+
+    result = ProcessResult(video_path=video_path)
+    audio_path = new_temp_wav()
+    cleaned_path: str | None = None
+
+    try:
+        say("Extracting audio…")
+        extract_audio(video_path, audio_path)
+
+        say("Transcribing…")
+        transcript = transcribe_words(bundle, audio_path)
+
+        # Sidecars are named after the *output* video when one is being
+        # written, so `clip_CLEAN.mp4` sits next to `clip_CLEAN.srt`.
+        base_for_sidecars = build_output_path(video_path, options.output_dir) \
+            if options.write_video else \
+            os.path.join(options.output_dir or os.path.dirname(video_path),
+                         os.path.basename(video_path))
+
+        if options.write_txt:
+            result.txt_path = str(words_to_txt(
+                transcript, sidecar_path(base_for_sidecars, ".txt")))
+            say(f"Transcript -> {os.path.basename(result.txt_path)}")
+        if options.write_srt:
+            result.srt_path = str(words_to_srt(
+                transcript, sidecar_path(base_for_sidecars, ".srt")))
+            say(f"Captions  -> {os.path.basename(result.srt_path)}")
+
+        hits = find_profanity_v2(transcript, options.custom_words,
+                                 sensitivity=options.sensitivity)
+        result.hits = hits
+        say(f"{len(hits)} word(s) to censor.")
+
+        if not options.write_video:
+            return result
+        if not hits:
+            say("Clean - no video written.")
+            return result
+
+        if AudioSegment is None:  # pragma: no cover
+            raise RuntimeError("pydub is required to censor audio")
+
+        cleaned_path = new_temp_wav()
+        censored = apply_bleeps(
+            AudioSegment.from_wav(audio_path), hits,
+            method=options.method, freq_hz=options.beep_freq,
+            custom_wav=options.custom_beep_wav, progress=progress)
+        censored.export(cleaned_path, format="wav")
+
+        out_path = build_output_path(video_path, options.output_dir)
+        say(f"Encoding [{options.encode_preset}]…")
+        render_video(video_path, cleaned_path, out_path, options.encode_preset)
+        result.output_path = out_path
+        say(f"Saved {os.path.basename(out_path)}")
+    except Exception as exc:
+        result.error = str(exc) or exc.__class__.__name__
+    finally:
+        safe_remove(audio_path, cleaned_path)
+
+    return result

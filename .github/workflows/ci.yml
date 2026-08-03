@@ -23,13 +23,14 @@ jobs:
           cache: pip
 
       - name: Install test dependencies
-        # bleep_engine imports torch / whisper / pydub / moviepy defensively,
-        # so the detection tests need none of the ML or video stack. Keeping
-        # this list minimal is what makes the job finish in well under a
-        # minute on a GitHub-hosted runner with no CUDA.
+        # bleep_engine imports torch / whisper / moviepy defensively, so the
+        # tests need none of the ML or video stack. pydub is pure Python and
+        # its Sine/silent generators need no ffmpeg, which is what lets the
+        # audio tests run here. Keeping this list minimal is what makes the
+        # job finish in well under a minute on a runner with no CUDA.
         run: |
           python -m pip install --upgrade pip
-          pip install pytest better-profanity
+          pip install pytest better-profanity pydub
 
       - name: Install full requirements (best effort)
         # The pinned stack includes GPU-oriented and platform-specific wheels
@@ -42,11 +43,12 @@ jobs:
       - name: Show resolved environment
         run: |
           python -c "import sys; print(sys.version)"
-          python -c "import bleep_engine as e; print('SPEED_MODE =', e.SPEED_MODE)"
+          python -c "import bleep_engine as e; print('engine', e.__version__, 'SPEED_MODE =', e.SPEED_MODE)"
+          python cli.py --help > /dev/null && echo "cli.py --help OK"
           pip list
 
-      - name: Run detection tests
-        run: pytest tests/test_detection.py -q
+      - name: Run unit tests
+        run: pytest tests/test_detection.py tests/test_export.py -q
 
   lint:
     name: Byte-compile
@@ -59,4 +61,4 @@ jobs:
       - name: Compile every module
         # Catches syntax errors in the GUI without needing a display or the
         # heavy imports that actually running it would pull in.
-        run: python -m compileall -q bleep_engine.py autobleep_pro.py autoreel_gui.py autoreel auto_uploader tests
+        run: python -m compileall -q bleep_engine.py autobleep_pro.py cli.py autoreel_gui.py autoreel auto_uploader tests

@@ -7,6 +7,64 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.3.0] - 2026-08-03
+
+### Added
+- **Command-line interface** (`cli.py`) — the whole pipeline without the
+  GUI, for servers, cron jobs and batch scripts. Progress on stderr,
+  output paths on stdout, exit 0/non-zero. It imports `bleep_engine` only;
+  customtkinter is never loaded. `START_CLI_HELP.bat` prints its usage.
+- **SRT + transcript export.** `words_to_srt()` and `words_to_txt()` in the
+  engine, plus `bleeps_to_srt()` for a "censored words only" subtitle track
+  that shows each detection's reason. All three accept either a
+  `transcribe_words()` result or a flat word list. In the GUI: *Save
+  transcript (.txt)* / *Save captions (.srt)* buttons after analysis
+  (available even when nothing was flagged), an *Also export SRT on bleep*
+  checkbox that writes `*_CLEAN.srt` beside the video, and *Export SRT in
+  batch*. On the CLI: `--srt` / `--txt`, and `--no-bleep-export` to produce
+  transcripts without re-encoding video.
+- **Detection sensitivity, 0-100** (`--sensitivity`, or the slider on the
+  Single Video tab; default 70). A plain rule gate, not a score — the
+  number selects which families of rules may fire:
+  - **0-30** real profanity, leet decodes, symbol bypasses and custom words
+    only. No minced oaths, no mishears, no context inference.
+  - **31-70** adds minced oaths ("fudge"), Whisper mishears ("duck"), and
+    context-only candidates when a trigger points at that word's own target
+    ("son of a" + "beach").
+  - **71-100** additionally accepts context-only candidates on *any* nearby
+    profanity signal, and widens the trigger window.
+  A bare context-only word ("beach", "truck") with no surrounding signal
+  stays clean at every setting — aggressive is not indiscriminate.
+- **Custom beep sample.** Browse for a `.wav` in the GUI or pass
+  `--beep-wav`; the sample is looped or trimmed to each word's exact
+  length. A missing or unreadable file falls back to the generated tone
+  with a single warning rather than failing the export.
+- **Drag and drop** (optional). Drop a video onto the window to load it, or
+  a folder to set up a batch run. Needs `tkinterdnd2`, which is deliberately
+  not a hard requirement — without it Browse works as before and the window
+  says `pip install tkinterdnd2 for drag-and-drop`.
+- `engine.process_video()` / `ProcessOptions` / `ProcessResult` — the
+  one-file pipeline now lives in the engine, so the GUI's batch tab and the
+  CLI run identical code instead of two parallel implementations.
+- 85 more tests (176 total): sensitivity gating and its band boundaries,
+  SRT/TXT structure, and censored-audio length sanity.
+
+### Changed
+- **Muting is now the default censoring method**, not the beep. Both
+  options are still on the radio group, and the silence path writes true
+  digital silence (`AudioSegment.silent`) over the region — no tone. The
+  batch tab shows which one is active: *"Uses same Method as Single Video
+  tab (currently: Silence)."*
+- `extract_audio()` (with its moviepy fallback) and `render_video()` moved
+  from the GUI into the engine so the CLI can reuse them.
+- The Single Video tab scrolls, now that it carries more settings.
+
+### Removed
+- The *Fuzzy matching* checkbox added in 2.2.1. Sensitivity ≤30 is the same
+  escape hatch and is finer-grained, so keeping both would have been two
+  controls for one decision. `check_word(..., fuzzy=False)` still works and
+  simply clamps into the low band.
+
 ## [2.2.1] - 2026-08-03
 
 Maintenance release. No new user-facing features beyond one opt-out
@@ -178,7 +236,8 @@ usable on long videos and in batch mode.
 - Medium Whisper model.
 - Pinned dependency versions and MIT license.
 
-[Unreleased]: https://github.com/STEVECODES1/AutoBleepPro/compare/v2.2.1...HEAD
+[Unreleased]: https://github.com/STEVECODES1/AutoBleepPro/compare/v2.3.0...HEAD
+[2.3.0]: https://github.com/STEVECODES1/AutoBleepPro/compare/v2.2.1...v2.3.0
 [2.2.1]: https://github.com/STEVECODES1/AutoBleepPro/compare/v2.2.0...v2.2.1
 [2.2.0]: https://github.com/STEVECODES1/AutoBleepPro/compare/v2.1.0...v2.2.0
 [2.1.0]: https://github.com/STEVECODES1/AutoBleepPro/compare/v2.0.0...v2.1.0

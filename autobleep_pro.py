@@ -1,19 +1,19 @@
 """
-AutoBleep Pro v2.2.1 - Automatic Video Profanity Bleeper (GUI)
+AutoBleep Pro v2.3.0 - Automatic Video Profanity Bleeper (GUI)
 ==============================================================
-All detection/audio/model logic lives in `bleep_engine.py`. This module is
-the customtkinter GUI and its worker threads - nothing else.
+All detection/audio/model/pipeline logic lives in `bleep_engine.py`. This
+module is the customtkinter GUI and its worker threads - nothing else.
+The CLI (`cli.py`) drives the same engine functions.
 
 Threading contract
 ------------------
 Tk is not thread-safe. Two rules, enforced throughout:
 
 1. Worker threads never read a Tk variable. Every setting is snapshotted
-   into an immutable `Settings` on the main thread before the thread
-   starts (v2.2 called `self.bleep_method.get()` etc. from inside the
-   worker loops).
+   into an immutable `engine.ProcessOptions` on the main thread before the
+   thread starts.
 2. Worker threads never touch a widget directly - they go through
-   `self._on_main(...)`, which marshals onto the Tk event loop.
+   `self._on_main(...)`, which queues onto the Tk event loop.
 
 Run with:  python autobleep_pro.py
 """
@@ -22,33 +22,73 @@ from __future__ import annotations
 
 import os
 import queue
-import tempfile
 import threading
-from dataclasses import dataclass, field
 
 import customtkinter as ctk
 from tkinter import filedialog, messagebox
 
 from pydub import AudioSegment
-from moviepy import VideoFileClip, AudioFileClip
 
 import bleep_engine as engine
 from bleep_engine import (
+    DEFAULT_SENSITIVITY,
+    METHOD_BEEP,
+    METHOD_SILENCE,
     SPEED_MODE,
     ModelCache,
+    ProcessOptions,
     apply_bleeps,
     build_output_path,
     configure_threads,
-    extract_audio_fast,
+    extract_audio,
     find_profanity_v2,
-    is_generated_output,
+    new_temp_wav,
+    process_video,
+    render_video,
     safe_remove,
+    sensitivity_band,
+    sidecar_path,
     transcribe_words,
+    validate_beep_wav,
+    words_to_srt,
+    words_to_txt,
 )
 
-APP_VERSION = "2.2.1"
+APP_VERSION = "2.3.0"
 
 configure_threads()
+
+# ── Optional drag-and-drop support ───────────────────────────────────────────
+# tkinterdnd2 is deliberately NOT a hard requirement: without it the Browse
+# button still works and the UI just says so.
+try:
+    from tkinterdnd2 import DND_FILES, TkinterDnD
+    _DND_IMPORTED = True
+except Exception:  # ImportError, or a broken tkdnd install
+    DND_FILES = None
+    TkinterDnD = None
+    _DND_IMPORTED = False
+
+
+def _make_root() -> tuple[ctk.CTk, bool]:
+    """Return (root window, drag-and-drop-enabled).
+
+    tkinterdnd2 needs its own Tk subclass, so it's mixed into CTk. The Tcl
+    `tkdnd` package can be missing even when the Python module imports, so
+    this falls back to a plain CTk on any failure.
+    """
+    if _DND_IMPORTED:
+        try:
+            class _DndRoot(ctk.CTk, TkinterDnD.DnDWrapper):  # type: ignore[misc]
+                def __init__(self, *args, **kwargs):
+                    super().__init__(*args, **kwargs)
+                    self.TkdndVersion = TkinterDnD._require(self)
+
+            return _DndRoot(), True
+        except Exception as exc:  # pragma: no cover - environment dependent
+            print(f"[AutoBleep] drag-and-drop unavailable ({exc}); using Browse only.")
+    return ctk.CTk(), False
+
 
 # ── Picker options ───────────────────────────────────────────────────────────
 
@@ -81,35 +121,18 @@ BEEP_PRESETS = {
     "Air Horn (600 Hz)": 600,
 }
 
+METHOD_LABELS = {METHOD_SILENCE: "Silence", METHOD_BEEP: "Beep"}
+
+BAND_BLURB = {
+    engine.BAND_LOW: "Low — only real profanity, leet & masked words, custom words",
+    engine.BAND_NORMAL: "Normal — adds minced oaths, mishears & matching context",
+    engine.BAND_HIGH: "High — also fires on weaker surrounding context",
+}
+
 VIDEO_FILETYPES = [
     ("Video Files", "*.mp4 *.avi *.mov *.mkv *.flv *.wmv *.m4v *.webm *.ts"),
     ("All Files", "*.*"),
 ]
-
-
-@dataclass(frozen=True)
-class Settings:
-    """An immutable snapshot of the control panel, taken on the main thread."""
-    model_name: str
-    compute_pref: str
-    encode_preset: str
-    bleep_method: str
-    beep_freq: int
-    fuzzy: bool
-    output_dir: str | None
-    custom_words: tuple[str, ...] = field(default=())
-
-
-def _new_temp_wav() -> str:
-    """A unique temp .wav path.
-
-    v2.2 used `video_path + "__temp_audio.wav"`, which collides whenever
-    two videos share a stem, breaks on read-only input folders, and leaves
-    debris next to the user's footage.
-    """
-    fd, path = tempfile.mkstemp(prefix="autobleep_", suffix=".wav")
-    os.close(fd)
-    return path
 
 
 class AutoBleepPro:
@@ -117,9 +140,9 @@ class AutoBleepPro:
     _UI_POLL_MS = 40
 
     def __init__(self):
-        self.window = ctk.CTk()
-        self.window.title(f"AutoBleep Pro v{APP_VERSION} — Smart Detection ⚡")
-        self.window.geometry("1080x960")
+        self.window, self.dnd_enabled = _make_root()
+        self.window.title(f"AutoBleep Pro v{APP_VERSION} ⚡")
+        self.window.geometry("1080x1000")
         self.window.minsize(800, 700)
         ctk.set_appearance_mode("dark")
         ctk.set_default_color_theme("blue")
@@ -130,13 +153,13 @@ class AutoBleepPro:
         self.word_vars: list[ctk.BooleanVar] = []
         self.device_info: str = "unknown"
 
-        # v2.2 assigned these mid-run and read them elsewhere, so any error
-        # before the assignment raised AttributeError instead of the real
-        # problem.
         self._audio_path_for_export: str | None = None
         self._video_path_for_export: str | None = None
+        self._transcript: dict | None = None      # for the .srt / .txt buttons
         self._batch_input_dir: str | None = None
         self._batch_output_dir: str | None = None
+        self._custom_beep_path: str | None = None
+        self._warned_beep_paths: set[str] = set()
         self._busy = False
         self._temp_files: set[str] = set()
 
@@ -147,6 +170,7 @@ class AutoBleepPro:
         self._poll_id: str | None = None
 
         self._setup_ui()
+        self._enable_drag_and_drop()
         self.window.protocol("WM_DELETE_WINDOW", self._on_close)
         self._drain_ui_queue()   # starts the main-thread poll loop
 
@@ -157,14 +181,9 @@ class AutoBleepPro:
 
         Deliberately NOT `window.after(0, ...)`: `after()` is itself a Tcl
         call that registers a command on the interpreter, so calling it
-        from a worker is unsafe and raises outright
-        ("RuntimeError: main thread is not in main loop") whenever the main
-        thread isn't sitting inside mainloop() - during shutdown, during a
-        modal dialog, or under a test harness driving update(). v2.2 used
-        that pattern everywhere, so those updates were silently lost.
-
-        `queue.Queue.put` touches no Tcl at all; `_drain_ui_queue` runs the
-        callbacks on the main thread.
+        from a worker raises outright ("RuntimeError: main thread is not in
+        main loop") whenever the main thread isn't inside mainloop().
+        `queue.Queue.put` touches no Tcl at all.
         """
         self._ui_queue.put((fn, args, kwargs))
 
@@ -198,7 +217,8 @@ class AutoBleepPro:
     def _show_error(self, title: str, message: str) -> None:
         self._on_main(messagebox.showerror, title, message)
 
-    def _set_buttons(self, *, process=None, confirm=None, batch=None) -> None:
+    def _set_buttons(self, *, process=None, confirm=None, batch=None,
+                     transcript=None) -> None:
         def _apply():
             if process is not None:
                 self.process_btn.configure(state="normal" if process else "disabled")
@@ -206,6 +226,10 @@ class AutoBleepPro:
                 self.confirm_btn.configure(state="normal" if confirm else "disabled")
             if batch is not None:
                 self.batch_btn.configure(state="normal" if batch else "disabled")
+            if transcript is not None:
+                state = "normal" if transcript else "disabled"
+                self.save_txt_btn.configure(state=state)
+                self.save_srt_btn.configure(state=state)
         self._on_main(_apply)
 
     # ── UI construction ──────────────────────────────────────────────────────
@@ -216,14 +240,14 @@ class AutoBleepPro:
         ctk.CTkLabel(hdr, text="🔇 AutoBleep Pro",
                      font=("Arial", 36, "bold")).pack()
         speed_label = (
-            f"⚡ v{APP_VERSION} — Smart Detection  •  faster-whisper + stable-ts"
+            f"⚡ v{APP_VERSION}  •  faster-whisper + stable-ts"
             if SPEED_MODE else
-            f"v{APP_VERSION} — Smart Detection  •  openai-whisper "
+            f"v{APP_VERSION}  •  openai-whisper "
             "(install stable-ts[fw] for 4x speed)")
         ctk.CTkLabel(hdr, text=speed_label, font=("Arial", 13),
                      text_color="#4f98a3" if SPEED_MODE else "gray").pack(pady=2)
 
-        self.tabs = ctk.CTkTabview(self.window, height=580)
+        self.tabs = ctk.CTkTabview(self.window, height=600)
         self.tabs.pack(pady=6, padx=20, fill="both", expand=True)
         self.tabs.add("Single Video")
         self.tabs.add("Batch Folder")
@@ -240,7 +264,10 @@ class AutoBleepPro:
         self.status_label.pack(pady=(0, 8))
 
     def _build_single_tab(self, parent):
-        s1 = ctk.CTkFrame(parent)
+        scroll = ctk.CTkScrollableFrame(parent, fg_color="transparent")
+        scroll.pack(fill="both", expand=True)
+
+        s1 = ctk.CTkFrame(scroll)
         s1.pack(pady=8, padx=10, fill="x")
         ctk.CTkLabel(s1, text="📹 Step 1: Select Video",
                      font=("Arial", 15, "bold")).pack(anchor="w", padx=14, pady=8)
@@ -251,8 +278,15 @@ class AutoBleepPro:
         self.file_label.pack(side="left", fill="x", expand=True, padx=6)
         ctk.CTkButton(row, text="Browse Video", command=self._pick_single_video,
                       width=150, height=34).pack(side="right", padx=6)
+        self.dnd_hint = ctk.CTkLabel(
+            s1,
+            text=("🖱️  …or drag a video file onto this window"
+                  if self.dnd_enabled else
+                  "💡 pip install tkinterdnd2 for drag-and-drop"),
+            font=("Arial", 11), text_color="gray", anchor="w")
+        self.dnd_hint.pack(anchor="w", padx=20, pady=(0, 8))
 
-        s2 = ctk.CTkFrame(parent)
+        s2 = ctk.CTkFrame(scroll)
         s2.pack(pady=8, padx=10, fill="x")
         ctk.CTkLabel(s2, text="⚙️ Step 2: Settings",
                      font=("Arial", 15, "bold")).pack(anchor="w", padx=14, pady=8)
@@ -261,19 +295,34 @@ class AutoBleepPro:
 
         ctk.CTkLabel(inner, text="Censoring Method:",
                      font=("Arial", 12)).pack(anchor="w", pady=(4, 2))
-        self.bleep_method = ctk.StringVar(value="beep")
+        self.bleep_method = ctk.StringVar(value=engine.DEFAULT_METHOD)
+        self.bleep_method.trace_add("write", self._on_method_changed)
         mf = ctk.CTkFrame(inner, fg_color="transparent")
         mf.pack(anchor="w")
-        ctk.CTkRadioButton(mf, text="🔊 Beep Sound",
-                           variable=self.bleep_method, value="beep").pack(side="left", padx=8)
-        ctk.CTkRadioButton(mf, text="🔇 Silence (Mute)",
-                           variable=self.bleep_method, value="silence").pack(side="left", padx=8)
+        ctk.CTkRadioButton(mf, text="🔇 Silence (Mute)", variable=self.bleep_method,
+                           value=METHOD_SILENCE).pack(side="left", padx=8)
+        ctk.CTkRadioButton(mf, text="🔊 Beep Sound", variable=self.bleep_method,
+                           value=METHOD_BEEP).pack(side="left", padx=8)
 
-        ctk.CTkLabel(inner, text="Beep Sound Preset:",
+        ctk.CTkLabel(inner, text="Beep Sound Preset (used when method = Beep):",
                      font=("Arial", 12)).pack(anchor="w", pady=(12, 2))
         self.beep_preset = ctk.StringVar(value=list(BEEP_PRESETS.keys())[0])
         ctk.CTkOptionMenu(inner, values=list(BEEP_PRESETS.keys()),
                           variable=self.beep_preset, width=280).pack(anchor="w")
+
+        ctk.CTkLabel(inner, text="Custom beep file (.wav, optional):",
+                     font=("Arial", 12)).pack(anchor="w", pady=(12, 2))
+        beep_row = ctk.CTkFrame(inner, fg_color="transparent")
+        beep_row.pack(anchor="w", fill="x")
+        self.beep_file_label = ctk.CTkLabel(beep_row, text="Using preset tone",
+                                            font=("Arial", 11), text_color="gray",
+                                            anchor="w")
+        self.beep_file_label.pack(side="left", fill="x", expand=True)
+        ctk.CTkButton(beep_row, text="Clear", command=self._clear_custom_beep,
+                      width=70, height=30, fg_color="gray30",
+                      hover_color="gray20").pack(side="right", padx=4)
+        ctk.CTkButton(beep_row, text="Browse .wav", command=self._pick_custom_beep,
+                      width=120, height=30).pack(side="right", padx=4)
 
         ctk.CTkLabel(inner, text="AI Transcription Model:",
                      font=("Arial", 12)).pack(anchor="w", pady=(12, 2))
@@ -293,15 +342,24 @@ class AutoBleepPro:
         ctk.CTkOptionMenu(inner, values=list(ENCODE_PRESETS.keys()),
                           variable=self.encode_var, width=320).pack(anchor="w")
 
-        # Default ON = v2.2 behaviour. The escape hatch matters most in
-        # batch mode, which has no review step to untick false positives.
-        self.fuzzy_var = ctk.BooleanVar(value=True)
-        ctk.CTkCheckBox(
-            inner,
-            text="Fuzzy matching — also flag minced oaths (fudge, shoot, dang) "
-                 "and likely mishears (duck, shirt)",
-            variable=self.fuzzy_var, font=("Arial", 11),
-        ).pack(anchor="w", pady=(14, 2))
+        # ── Sensitivity ──────────────────────────────────────────────────
+        ctk.CTkLabel(inner, text="🎚️ Detection sensitivity:",
+                     font=("Arial", 12)).pack(anchor="w", pady=(14, 2))
+        self.sensitivity_var = ctk.IntVar(value=DEFAULT_SENSITIVITY)
+        slider_row = ctk.CTkFrame(inner, fg_color="transparent")
+        slider_row.pack(anchor="w", fill="x")
+        self.sensitivity_slider = ctk.CTkSlider(
+            slider_row, from_=0, to=100, number_of_steps=100,
+            variable=self.sensitivity_var, width=320,
+            command=lambda _v: self._refresh_sensitivity_label())
+        self.sensitivity_slider.pack(side="left", padx=(0, 10))
+        self.sensitivity_value = ctk.CTkLabel(slider_row, text=str(DEFAULT_SENSITIVITY),
+                                              font=("Consolas", 13, "bold"), width=36)
+        self.sensitivity_value.pack(side="left")
+        self.sensitivity_hint = ctk.CTkLabel(
+            inner, text="", font=("Arial", 11), text_color="gray", anchor="w")
+        self.sensitivity_hint.pack(anchor="w", pady=(2, 0))
+        self._refresh_sensitivity_label()
 
         ctk.CTkLabel(inner, text="Extra words to bleep (comma-separated, optional):",
                      font=("Arial", 12)).pack(anchor="w", pady=(12, 2))
@@ -309,17 +367,22 @@ class AutoBleepPro:
         ctk.CTkEntry(inner, textvariable=self.custom_words_var, width=420,
                      placeholder_text="e.g., rival brand, competitor name").pack(anchor="w")
 
+        self.export_srt_var = ctk.BooleanVar(value=False)
+        ctk.CTkCheckBox(inner, text="Also export SRT on bleep (writes *_CLEAN.srt)",
+                        variable=self.export_srt_var,
+                        font=("Arial", 11)).pack(anchor="w", pady=(12, 2))
+
         ctk.CTkLabel(inner, text="Output Folder (optional):",
                      font=("Arial", 12)).pack(anchor="w", pady=(12, 2))
         out_row = ctk.CTkFrame(inner, fg_color="transparent")
-        out_row.pack(anchor="w", fill="x")
+        out_row.pack(anchor="w", fill="x", pady=(0, 6))
         self.out_label = ctk.CTkLabel(out_row, text="Same folder as input",
                                       font=("Arial", 11), text_color="gray", anchor="w")
         self.out_label.pack(side="left", fill="x", expand=True)
         ctk.CTkButton(out_row, text="Choose Folder", command=self._pick_output_dir,
                       width=140, height=30).pack(side="right", padx=4)
 
-        s3 = ctk.CTkFrame(parent)
+        s3 = ctk.CTkFrame(scroll)
         s3.pack(pady=8, padx=10, fill="x")
         ctk.CTkLabel(s3, text="🚀 Step 3: Process",
                      font=("Arial", 15, "bold")).pack(anchor="w", padx=14, pady=8)
@@ -329,15 +392,29 @@ class AutoBleepPro:
             fg_color="#2B7A0B", hover_color="#1F5A08", state="disabled")
         self.process_btn.pack(pady=10, padx=24, fill="x")
 
-        wr = ctk.CTkFrame(parent)
+        wr = ctk.CTkFrame(scroll)
         wr.pack(pady=8, padx=10, fill="both", expand=True)
         ctk.CTkLabel(wr, text="🔍 Word Review — uncheck words you DON'T want bleeped:",
                      font=("Arial", 13, "bold")).pack(anchor="w", padx=14, pady=(8, 4))
-        self.review_scroll = ctk.CTkScrollableFrame(wr, height=130)
+        self.review_scroll = ctk.CTkScrollableFrame(wr, height=150)
         self.review_scroll.pack(fill="both", expand=True, padx=14, pady=(0, 8))
         ctk.CTkLabel(self.review_scroll,
                      text="Detected words will appear here after analysis.",
                      font=("Arial", 11), text_color="gray").pack(padx=8, pady=8)
+
+        save_row = ctk.CTkFrame(wr, fg_color="transparent")
+        save_row.pack(fill="x", padx=24, pady=(0, 6))
+        self.save_txt_btn = ctk.CTkButton(
+            save_row, text="💾 Save transcript (.txt)", command=self._save_transcript_txt,
+            height=34, font=("Arial", 12), fg_color="gray30", hover_color="gray20",
+            state="disabled")
+        self.save_txt_btn.pack(side="left", expand=True, fill="x", padx=(0, 4))
+        self.save_srt_btn = ctk.CTkButton(
+            save_row, text="💾 Save captions (.srt)", command=self._save_transcript_srt,
+            height=34, font=("Arial", 12), fg_color="gray30", hover_color="gray20",
+            state="disabled")
+        self.save_srt_btn.pack(side="left", expand=True, fill="x", padx=(4, 0))
+
         self.confirm_btn = ctk.CTkButton(
             wr, text="✅ Confirm & Export Clean Video", command=self._confirm_and_export,
             height=40, font=("Arial", 13, "bold"),
@@ -375,9 +452,18 @@ class AutoBleepPro:
         bs.pack(pady=8, padx=10, fill="x")
         ctk.CTkLabel(bs, text="⚙️ Batch Settings",
                      font=("Arial", 14, "bold")).pack(anchor="w", padx=14, pady=8)
-        ctk.CTkLabel(bs, text="Uses same Method / Model / Compute / Encode / Beep / Fuzzy / "
-                             "Custom Words as the Single Video tab.",
-                     font=("Arial", 11), text_color="gray").pack(anchor="w", padx=28, pady=(0, 10))
+        self.batch_method_note = ctk.CTkLabel(
+            bs, text="", font=("Arial", 11), text_color="gray", anchor="w")
+        self.batch_method_note.pack(anchor="w", padx=28, pady=(0, 2))
+        ctk.CTkLabel(bs, text="Model / Compute / Encode / Beep / Sensitivity / Custom Words "
+                             "also come from the Single Video tab.",
+                     font=("Arial", 11), text_color="gray").pack(anchor="w", padx=28,
+                                                                 pady=(0, 6))
+        self.batch_srt_var = ctk.BooleanVar(value=False)
+        ctk.CTkCheckBox(bs, text="Export SRT in batch (full transcript beside each video)",
+                        variable=self.batch_srt_var,
+                        font=("Arial", 11)).pack(anchor="w", padx=28, pady=(0, 10))
+        self._refresh_batch_method_note()
 
         self.batch_btn = ctk.CTkButton(
             parent, text="⚡ Process All Videos in Folder", command=self._start_batch,
@@ -389,16 +475,71 @@ class AutoBleepPro:
         self.batch_log.pack(pady=4, padx=14, fill="both", expand=True)
         self.batch_log.insert("1.0", "Batch log will appear here...\n")
 
+    # ── Small UI callbacks (main thread) ─────────────────────────────────────
+
+    def _on_method_changed(self, *_args) -> None:
+        self._refresh_batch_method_note()
+
+    def _refresh_batch_method_note(self) -> None:
+        label = METHOD_LABELS.get(self.bleep_method.get(), self.bleep_method.get())
+        self.batch_method_note.configure(
+            text=f"Uses same Method as Single Video tab (currently: {label}).")
+
+    def _refresh_sensitivity_label(self) -> None:
+        value = engine.clamp_sensitivity(self.sensitivity_var.get())
+        self.sensitivity_value.configure(text=str(value))
+        self.sensitivity_hint.configure(text=BAND_BLURB[sensitivity_band(value)])
+
+    def _enable_drag_and_drop(self) -> None:
+        if not self.dnd_enabled:
+            return
+        try:
+            self.window.drop_target_register(DND_FILES)
+            self.window.dnd_bind("<<Drop>>", self._on_drop)
+        except Exception as exc:  # pragma: no cover - environment dependent
+            self.dnd_enabled = False
+            print(f"[AutoBleep] could not register drop target ({exc}).")
+
+    def _on_drop(self, event):
+        """Accept a dropped file (single video) or folder (batch input)."""
+        try:
+            paths = [p for p in self.window.tk.splitlist(event.data) if p]
+        except Exception:
+            paths = [event.data] if event.data else []
+        if not paths:
+            return
+
+        first = paths[0]
+        if os.path.isdir(first):
+            self._set_batch_folder(first)
+            self.tabs.set("Batch Folder")
+            self._update_status(f"Batch folder set from drop: {os.path.basename(first)}")
+            return
+
+        videos = [p for p in paths
+                  if os.path.splitext(p)[1].lower() in engine.VIDEO_EXTS]
+        if not videos:
+            self._update_status("Dropped file isn't a supported video format.")
+            return
+        self._set_single_video(videos[0])
+        if len(videos) > 1:
+            self._update_status(
+                f"Loaded {os.path.basename(videos[0])} "
+                f"({len(videos) - 1} other file(s) ignored — use the Batch tab).")
+
     # ── File pickers (main thread only) ──────────────────────────────────────
+
+    def _set_single_video(self, path: str) -> None:
+        self.video_paths = [path]
+        self.file_label.configure(text=f"✅ {os.path.basename(path)}")
+        self.process_btn.configure(state="normal")
+        self._update_status("Video loaded — click Analyze & Bleep to start.")
 
     def _pick_single_video(self):
         path = filedialog.askopenfilename(title="Select Video File",
                                           filetypes=VIDEO_FILETYPES)
         if path:
-            self.video_paths = [path]
-            self.file_label.configure(text=f"✅ {os.path.basename(path)}")
-            self.process_btn.configure(state="normal")
-            self._update_status("Video loaded — click Analyze & Bleep to start.")
+            self._set_single_video(path)
 
     def _pick_output_dir(self):
         d = filedialog.askdirectory(title="Choose Output Folder")
@@ -406,12 +547,35 @@ class AutoBleepPro:
             self.output_dir = d
             self.out_label.configure(text=d, text_color="white")
 
+    def _pick_custom_beep(self):
+        path = filedialog.askopenfilename(
+            title="Select Beep Sound",
+            filetypes=[("WAV audio", "*.wav"), ("All Files", "*.*")])
+        if not path:
+            return
+        usable, reason = validate_beep_wav(path)
+        if not usable:
+            messagebox.showerror("Unusable beep file", reason)
+            return
+        self._custom_beep_path = path
+        self.beep_file_label.configure(text=os.path.basename(path), text_color="white")
+        self.bleep_method.set(METHOD_BEEP)   # a custom sample implies beep mode
+        self._update_status(reason)
+
+    def _clear_custom_beep(self):
+        self._custom_beep_path = None
+        self.beep_file_label.configure(text="Using preset tone", text_color="gray")
+        self._update_status("Custom beep cleared — using the preset tone.")
+
+    def _set_batch_folder(self, path: str) -> None:
+        self._batch_input_dir = path
+        self.batch_dir_label.configure(text=path, text_color="white")
+        self.batch_btn.configure(state="normal")
+
     def _pick_batch_folder(self):
         d = filedialog.askdirectory(title="Select Folder of Videos")
         if d:
-            self._batch_input_dir = d
-            self.batch_dir_label.configure(text=d, text_color="white")
-            self.batch_btn.configure(state="normal")
+            self._set_batch_folder(d)
 
     def _pick_batch_output(self):
         d = filedialog.askdirectory(title="Select Batch Output Folder")
@@ -421,21 +585,36 @@ class AutoBleepPro:
 
     # ── Settings snapshot ────────────────────────────────────────────────────
 
-    def _snapshot_settings(self) -> Settings:
+    def _snapshot_options(self, *, output_dir_override: str | None = None,
+                          write_srt: bool = False) -> ProcessOptions:
         """Read every Tk variable ONCE, on the main thread."""
         raw = self.custom_words_var.get()
-        return Settings(
+
+        beep_path = self._custom_beep_path
+        if beep_path:
+            usable, reason = validate_beep_wav(beep_path)
+            if not usable:
+                # One warning per bad path, then fall back to the tone.
+                if beep_path not in self._warned_beep_paths:
+                    self._warned_beep_paths.add(beep_path)
+                    self._update_status(f"⚠️ {reason} Falling back to the preset tone.")
+                beep_path = None
+
+        return ProcessOptions(
             model_name=MODEL_MAP[self.model_var.get()],
             compute_pref=COMPUTE_MAP[self.compute_var.get()],
             encode_preset=ENCODE_PRESETS[self.encode_var.get()],
-            bleep_method=self.bleep_method.get(),
+            method=self.bleep_method.get(),
             beep_freq=BEEP_PRESETS[self.beep_preset.get()],
-            fuzzy=bool(self.fuzzy_var.get()),
-            output_dir=self.output_dir,
+            custom_beep_wav=beep_path,
+            sensitivity=engine.clamp_sensitivity(self.sensitivity_var.get()),
             custom_words=tuple(w.strip().lower() for w in raw.split(",") if w.strip()),
+            output_dir=output_dir_override if output_dir_override is not None
+            else self.output_dir,
+            write_srt=write_srt,
         )
 
-    # ── Shared worker helpers ────────────────────────────────────────────────
+    # ── Temp-file bookkeeping ────────────────────────────────────────────────
 
     def _track_temp(self, path: str) -> str:
         self._temp_files.add(path)
@@ -446,69 +625,33 @@ class AutoBleepPro:
         for p in paths:
             self._temp_files.discard(p)
 
-    def _extract_audio(self, video_path: str, wav_path: str) -> None:
-        """ffmpeg first, moviepy as fallback. Raises with a readable message."""
-        if extract_audio_fast(video_path, wav_path):
-            return
-        clip = None
-        try:
-            clip = VideoFileClip(video_path)
-            if clip.audio is None:
-                raise RuntimeError(
-                    f"{os.path.basename(video_path)} has no audio track — "
-                    "nothing to bleep.")
-            clip.audio.write_audiofile(wav_path, logger=None)
-        finally:
-            if clip is not None:
-                try:
-                    clip.close()
-                except Exception:
-                    pass
-
-    def _render(self, video_path: str, cleaned_audio_path: str,
-                out_path: str, encode_preset: str) -> None:
-        """Mux the cleaned audio back onto the video. Always closes its clips."""
-        video = audio = final = None
-        try:
-            video = VideoFileClip(video_path)
-            audio = AudioFileClip(cleaned_audio_path)
-            final = video.with_audio(audio)
-            final.write_videofile(out_path, codec="libx264", audio_codec="aac",
-                                  preset=encode_preset, threads=os.cpu_count() or 4,
-                                  logger=None)
-        finally:
-            for clip in (final, audio, video):
-                if clip is not None:
-                    try:
-                        clip.close()
-                    except Exception:
-                        pass
-
     # ── Single video: analyze ────────────────────────────────────────────────
 
     def _start_single(self):
         if self._busy or not self.video_paths:
             return
         self._busy = True
-        settings = self._snapshot_settings()          # main thread
-        self._set_buttons(process=False, confirm=False)
+        options = self._snapshot_options()          # main thread
+        self._set_buttons(process=False, confirm=False, transcript=False)
         threading.Thread(target=self._analyze_video,
-                         args=(self.video_paths[0], settings), daemon=True).start()
+                         args=(self.video_paths[0], options), daemon=True).start()
 
-    def _analyze_video(self, video_path: str, settings: Settings):
-        audio_path = self._track_temp(_new_temp_wav())
+    def _analyze_video(self, video_path: str, options: ProcessOptions):
+        audio_path = self._track_temp(new_temp_wav())
         try:
             self._update_status("[1/3] Loading AI model…", 0.08)
-            bundle = self._model_cache.get(settings.model_name, settings.compute_pref)
+            bundle = self._model_cache.get(options.model_name, options.compute_pref)
             self.device_info = bundle.label
 
             self._update_status(f"[2/3] Extracting audio ({bundle.label})…", 0.22)
-            self._extract_audio(video_path, audio_path)
+            extract_audio(video_path, audio_path)
 
             self._update_status("[3/3] AI transcription + smart word detection…", 0.42)
-            result = transcribe_words(bundle, audio_path)
-            found = find_profanity_v2(result, settings.custom_words, fuzzy=settings.fuzzy)
+            transcript = transcribe_words(bundle, audio_path)
+            found = find_profanity_v2(transcript, options.custom_words,
+                                      sensitivity=options.sensitivity)
 
+            self._transcript = transcript
             self.profane_words = found
             self._audio_path_for_export = audio_path
             self._video_path_for_export = video_path
@@ -528,11 +671,15 @@ class AutoBleepPro:
             w.destroy()
         self.word_vars = []
 
+        # The transcript exists regardless of whether anything was flagged.
+        self.save_txt_btn.configure(state="normal")
+        self.save_srt_btn.configure(state="normal")
+
         if not self.profane_words:
             ctk.CTkLabel(self.review_scroll,
                          text="✅ No profanity detected — your video is clean!",
                          font=("Arial", 13), text_color="#6daa45").pack(pady=10)
-            self._update_status("No profanity found.", 1.0)
+            self._update_status("No profanity found. Transcript is still available.", 1.0)
             self._drop_temp(self._audio_path_for_export)
             self._audio_path_for_export = None
             self._busy = False
@@ -555,6 +702,42 @@ class AutoBleepPro:
         self._update_status(
             f"Found {len(self.profane_words)} word(s). Review & confirm below.", 0.65)
 
+    # ── Transcript export buttons ────────────────────────────────────────────
+
+    def _default_sidecar_dir(self) -> str:
+        if self.output_dir:
+            return self.output_dir
+        if self._video_path_for_export:
+            return os.path.dirname(self._video_path_for_export)
+        return os.getcwd()
+
+    def _save_transcript(self, extension: str, writer, what: str) -> None:
+        if not self._transcript:
+            messagebox.showinfo("Nothing to save", "Run an analysis first.")
+            return
+        stem = os.path.splitext(os.path.basename(
+            self._video_path_for_export or "transcript"))[0]
+        path = filedialog.asksaveasfilename(
+            title=f"Save {what}",
+            defaultextension=extension,
+            initialfile=stem + extension,
+            initialdir=self._default_sidecar_dir(),
+            filetypes=[(what, f"*{extension}"), ("All Files", "*.*")])
+        if not path:
+            return
+        try:
+            writer(self._transcript, path)
+        except Exception as exc:
+            messagebox.showerror("Save failed", str(exc))
+            return
+        self._update_status(f"✅ {what} saved to {os.path.basename(path)}")
+
+    def _save_transcript_txt(self):
+        self._save_transcript(".txt", words_to_txt, "Transcript")
+
+    def _save_transcript_srt(self):
+        self._save_transcript(".srt", words_to_srt, "Captions")
+
     # ── Single video: export ─────────────────────────────────────────────────
 
     def _confirm_and_export(self):
@@ -567,8 +750,7 @@ class AutoBleepPro:
                 "match. Re-run the analysis before exporting.")
             return
         if not self._audio_path_for_export or not self._video_path_for_export:
-            messagebox.showerror("Nothing to export",
-                                 "Run an analysis first.")
+            messagebox.showerror("Nothing to export", "Run an analysis first.")
             return
 
         selected = [wd for wd, var in zip(self.profane_words, self.word_vars) if var.get()]
@@ -582,38 +764,45 @@ class AutoBleepPro:
                                 "All words were unchecked. No changes made.")
             return
 
-        settings = self._snapshot_settings()          # main thread
+        options = self._snapshot_options(write_srt=bool(self.export_srt_var.get()))
         self.confirm_btn.configure(state="disabled")
         threading.Thread(
             target=self._export_video,
             args=(self._video_path_for_export, self._audio_path_for_export,
-                  selected, settings),
+                  selected, options, self._transcript),
             daemon=True).start()
 
     def _export_video(self, video_path: str, audio_path: str,
-                      words_to_bleep: list[dict], settings: Settings):
-        cleaned_audio_path = self._track_temp(_new_temp_wav())
+                      words_to_bleep: list[dict], options: ProcessOptions,
+                      transcript: dict | None):
+        cleaned_audio_path = self._track_temp(new_temp_wav())
         try:
             n = len(words_to_bleep)
-            self._update_status(f"Bleeping {n} word(s)…", 0.70)
+            self._update_status(f"Censoring {n} word(s)…", 0.70)
 
             audio_seg = AudioSegment.from_wav(audio_path)
             cleaned = apply_bleeps(
                 audio_seg, words_to_bleep,
-                method=settings.bleep_method, freq_hz=settings.beep_freq,
+                method=options.method, freq_hz=options.beep_freq,
+                custom_wav=options.custom_beep_wav,
                 progress=lambda done, total: self._update_status(
-                    f"Bleeping {done}/{total}…", 0.70 + 0.20 * done / max(total, 1)),
+                    f"Censoring {done}/{total}…", 0.70 + 0.20 * done / max(total, 1)),
             )
             cleaned.export(cleaned_audio_path, format="wav")
 
             self._update_status(
-                f"Creating final video [preset={settings.encode_preset}]…", 0.92)
-            out_path = build_output_path(video_path, settings.output_dir)
-            self._render(video_path, cleaned_audio_path, out_path, settings.encode_preset)
+                f"Creating final video [preset={options.encode_preset}]…", 0.92)
+            out_path = build_output_path(video_path, options.output_dir)
+            render_video(video_path, cleaned_audio_path, out_path, options.encode_preset)
+
+            extra = ""
+            if options.write_srt and transcript:
+                srt_path = words_to_srt(transcript, sidecar_path(out_path, ".srt"))
+                extra = f"\nCaptions: {os.path.basename(str(srt_path))}"
 
             self._update_status("✅ Done! Video saved.", 1.0)
             self._on_main(messagebox.showinfo, "Success! ✅",
-                          f"Bleeped {n} word(s)\n\nSaved to:\n{out_path}")
+                          f"Censored {n} word(s)\n\nSaved to:\n{out_path}{extra}")
             self._set_buttons(process=True)
         except Exception as exc:
             err_msg = str(exc) or exc.__class__.__name__
@@ -631,29 +820,28 @@ class AutoBleepPro:
         if self._busy or not self._batch_input_dir:
             return
         self._busy = True
-        settings = self._snapshot_settings()          # main thread
-        in_dir, out_dir = self._batch_input_dir, self._batch_output_dir
+        options = self._snapshot_options(          # main thread
+            output_dir_override=self._batch_output_dir,
+            write_srt=bool(self.batch_srt_var.get()))
+        in_dir = self._batch_input_dir
         self.batch_btn.configure(state="disabled")
         self.batch_log.delete("1.0", "end")
         threading.Thread(target=self._run_batch,
-                         args=(in_dir, out_dir, settings), daemon=True).start()
+                         args=(in_dir, options), daemon=True).start()
 
     def _finish_batch(self, message: str, progress: float | None = None):
         self._update_status(message, progress)
         self._set_buttons(batch=True)
         self._busy = False
 
-    def _run_batch(self, in_dir: str, out_dir: str | None, settings: Settings):
+    def _run_batch(self, in_dir: str, options: ProcessOptions):
         try:
-            names = sorted(os.listdir(in_dir))
+            files = engine.list_videos(in_dir)
         except OSError as exc:
             self._batch_log_write(f"❌ Cannot read folder: {exc}")
             self._finish_batch("❌ Batch failed.", 0)
             return
 
-        files = [f for f in names
-                 if os.path.splitext(f)[1].lower() in engine.VIDEO_EXTS
-                 and not is_generated_output(f)]
         if not files:
             self._batch_log_write("No video files found (already-cleaned "
                                   "'_CLEAN' files are skipped).")
@@ -662,48 +850,33 @@ class AutoBleepPro:
 
         self._batch_log_write(f"Found {len(files)} video(s).\n{'─' * 50}")
         try:
-            bundle = self._model_cache.get(settings.model_name, settings.compute_pref)
+            bundle = self._model_cache.get(options.model_name, options.compute_pref)
         except Exception as exc:
             self._batch_log_write(f"❌ Failed to load AI model: {exc}")
             self._finish_batch("❌ Batch failed.", 0)
             return
-        self._batch_log_write(f"Loaded: {bundle.label}\n{'─' * 50}")
+        self._batch_log_write(
+            f"Loaded: {bundle.label}\n"
+            f"Method: {METHOD_LABELS.get(options.method, options.method)}  |  "
+            f"Sensitivity: {options.sensitivity} "
+            f"({sensitivity_band(options.sensitivity)})\n{'─' * 50}")
 
         ok = failed = 0
-        for idx, fname in enumerate(files, 1):
-            video_path = os.path.join(in_dir, fname)
-            self._batch_log_write(f"\n[{idx}/{len(files)}] {fname}")
-            self._update_status(f"Batch: {fname} ({idx}/{len(files)})…",
+        for idx, video_path in enumerate(files, 1):
+            name = os.path.basename(video_path)
+            self._batch_log_write(f"\n[{idx}/{len(files)}] {name}")
+            self._update_status(f"Batch: {name} ({idx}/{len(files)})…",
                                 (idx - 1) / len(files))
 
-            audio_path = self._track_temp(_new_temp_wav())
-            cleaned_audio_path = self._track_temp(_new_temp_wav())
-            try:
-                self._extract_audio(video_path, audio_path)
-                result = transcribe_words(bundle, audio_path)
-                found = find_profanity_v2(result, settings.custom_words,
-                                          fuzzy=settings.fuzzy)
-                if not found:
-                    self._batch_log_write("  → Clean.")
-                    ok += 1
-                    continue
+            result = process_video(
+                video_path, options, bundle,
+                log=lambda msg: self._batch_log_write(f"  → {msg}"))
 
-                self._batch_log_write(f"  → {len(found)} word(s). Bleeping...")
-                cleaned = apply_bleeps(
-                    AudioSegment.from_wav(audio_path), found,
-                    method=settings.bleep_method, freq_hz=settings.beep_freq)
-                cleaned.export(cleaned_audio_path, format="wav")
-
-                out_path = build_output_path(video_path, out_dir)
-                self._render(video_path, cleaned_audio_path, out_path,
-                             settings.encode_preset)
-                self._batch_log_write(f"  → Saved: {os.path.basename(out_path)}")
+            if result.ok:
                 ok += 1
-            except Exception as exc:
+            else:
                 failed += 1
-                self._batch_log_write(f"  ❌ Error: {exc}")
-            finally:
-                self._drop_temp(audio_path, cleaned_audio_path)
+                self._batch_log_write(f"  ❌ Error: {result.error}")
 
         self._batch_log_write(f"\n{'─' * 50}\n✅ Done — {ok} succeeded, {failed} failed.")
         self._finish_batch("✅ Batch complete!", 1.0)
@@ -739,9 +912,10 @@ class AutoBleepPro:
 
 def main() -> None:
     print("=" * 60)
-    print(f"  AutoBleep Pro v{APP_VERSION} — Smart Detection ⚡")
+    print(f"  AutoBleep Pro v{APP_VERSION} ⚡")
     print(f"  Speed mode: "
           f"{'faster-whisper + stable-ts' if SPEED_MODE else 'openai-whisper (fallback)'}")
+    print(f"  Default method: {METHOD_LABELS[engine.DEFAULT_METHOD]}")
     print("=" * 60)
     AutoBleepPro().run()
 

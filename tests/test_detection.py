@@ -16,17 +16,25 @@ import pytest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from bleep_engine import (  # noqa: E402
+    BAND_HIGH,
+    BAND_LOW,
+    BAND_NORMAL,
+    DEFAULT_SENSITIVITY,
     build_output_path,
     check_word,
+    clamp_sensitivity,
     find_profanity_v2,
     is_generated_output,
     merge_spans,
+    sensitivity_band,
 )
 
 
 def flagged(word: str, context: list[str] | None = None,
-            custom: list[str] | None = None, fuzzy: bool = True) -> bool:
-    is_bad, _ = check_word(word, context or [], custom or [], fuzzy=fuzzy)
+            custom: list[str] | None = None, fuzzy: bool = True,
+            sensitivity: int = DEFAULT_SENSITIVITY) -> bool:
+    is_bad, _ = check_word(word, context or [], custom or [],
+                           fuzzy=fuzzy, sensitivity=sensitivity)
     return is_bad
 
 
@@ -296,3 +304,121 @@ def test_build_output_path_can_overwrite_when_asked(tmp_path):
 ])
 def test_is_generated_output(name, expected):
     assert is_generated_output(name) is expected
+
+
+# ── Sensitivity gating ───────────────────────────────────────────────────────
+
+@pytest.mark.parametrize("value,band", [
+    (0, BAND_LOW), (15, BAND_LOW), (30, BAND_LOW),
+    (31, BAND_NORMAL), (50, BAND_NORMAL), (70, BAND_NORMAL),
+    (71, BAND_HIGH), (100, BAND_HIGH),
+])
+def test_sensitivity_bands(value, band):
+    assert sensitivity_band(value) == band
+
+
+@pytest.mark.parametrize("value,expected", [
+    (-10, 0), (0, 0), (100, 100), (250, 100),
+    (None, DEFAULT_SENSITIVITY), ("nonsense", DEFAULT_SENSITIVITY), (70.4, 70),
+])
+def test_clamp_sensitivity(value, expected):
+    assert clamp_sensitivity(value) == expected
+
+
+def test_default_sensitivity_is_the_normal_band():
+    assert sensitivity_band(DEFAULT_SENSITIVITY) == BAND_NORMAL
+
+
+# Low band: real profanity only.
+@pytest.mark.parametrize("word", ["fuck", "shit", "bitch"])
+def test_low_band_still_flags_real_profanity(word):
+    assert flagged(word, sensitivity=10)
+
+
+@pytest.mark.parametrize("word", ["sh1t", "f@ck", "f*ck"])
+def test_low_band_still_flags_leet(word):
+    assert flagged(word, sensitivity=10)
+
+
+@pytest.mark.parametrize("word", ["f**k", "s**t", "b***h"])
+def test_low_band_still_flags_symbol_bypass(word):
+    assert flagged(word, sensitivity=10)
+
+
+def test_low_band_still_honours_custom_words():
+    # An explicit user instruction must not be gated away by sensitivity.
+    assert flagged("pepsi", custom=["pepsi"], sensitivity=0)
+
+
+@pytest.mark.parametrize("word", ["fudge", "shoot", "dang", "heck", "frick"])
+def test_low_band_ignores_minced_oaths(word):
+    assert not flagged(word, sensitivity=10)
+    assert flagged(word, sensitivity=DEFAULT_SENSITIVITY)
+
+
+@pytest.mark.parametrize("word", ["duck", "shirt", "batch"])
+def test_low_band_ignores_whisper_mishears(word):
+    assert not flagged(word, sensitivity=10)
+    assert flagged(word, sensitivity=DEFAULT_SENSITIVITY)
+
+
+def test_low_band_ignores_context_matches():
+    assert not flagged("beach", ["son", "of", "a"], sensitivity=10)
+    assert flagged("beach", ["son", "of", "a"], sensitivity=DEFAULT_SENSITIVITY)
+
+
+# High band: context-only candidates fire on weaker context.
+def test_high_band_accepts_weak_context_for_homophones():
+    # "what the" points at hell, not bitch: normal band rejects, high accepts.
+    assert not flagged("beach", ["what", "the"], sensitivity=DEFAULT_SENSITIVITY)
+    assert flagged("beach", ["what", "the"], sensitivity=90)
+
+
+def test_high_band_accepts_profane_neighbour_for_homophones():
+    assert not flagged("beach", ["fucking"], sensitivity=DEFAULT_SENSITIVITY)
+    assert flagged("beach", ["fucking"], sensitivity=90)
+
+
+def test_high_band_accepts_weak_context_for_mishears():
+    assert not flagged("truck", ["what", "the"], sensitivity=DEFAULT_SENSITIVITY)
+    assert flagged("truck", ["what", "the"], sensitivity=90)
+
+
+def test_high_band_still_needs_some_context():
+    # Aggressive is not indiscriminate: a bare context-only word stays clean
+    # at every sensitivity, otherwise every "truck" in the video is censored.
+    for value in (0, 50, 100):
+        assert not flagged("beach", sensitivity=value)
+        assert not flagged("truck", sensitivity=value)
+
+
+@pytest.mark.parametrize("word", ["hello", "computer", "keyboard"])
+def test_clean_words_stay_clean_at_max_sensitivity(word):
+    assert not flagged(word, sensitivity=100)
+
+
+def test_fuzzy_false_still_clamps_into_the_low_band():
+    # Back-compat: the old fuzzy flag maps onto the low band.
+    assert not flagged("fudge", fuzzy=False, sensitivity=100)
+    assert flagged("fuck", fuzzy=False, sensitivity=100)
+
+
+def test_find_profanity_threads_sensitivity_through():
+    result = make_result(("fudge", 0.0, 0.4))
+    assert find_profanity_v2(result, [], sensitivity=10) == []
+    assert len(find_profanity_v2(result, [], sensitivity=50)) == 1
+    assert len(find_profanity_v2(result, [], sensitivity=90)) == 1
+
+
+def test_sensitivity_is_monotonic_over_a_realistic_line():
+    """More sensitivity must never flag strictly fewer words."""
+    result = make_result(
+        ("what", 0.0, 0.2), ("the", 0.3, 0.4), ("beach", 0.5, 0.9),
+        ("this", 1.0, 1.2), ("is", 1.3, 1.4), ("fudge", 1.5, 1.9),
+        ("shit", 2.0, 2.4), ("truck", 2.5, 2.9),
+    )
+    counts = [len(find_profanity_v2(result, [], sensitivity=s))
+              for s in (0, 50, 100)]
+    assert counts == sorted(counts), counts
+    assert counts[0] == 1        # only "shit"
+    assert counts[-1] > counts[0]
