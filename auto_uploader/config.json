@@ -37,7 +37,8 @@
   },
 
   "general": {
-    "watch_folder": "D:/videos stizz",
+    "_watch_folder_comment": "Relative paths resolve next to this config file, so './watch_folder' = D:/AutoBleepPro-main/auto_uploader/watch_folder and keeps working if you re-extract the ZIP somewhere else. Set an absolute path (e.g. 'D:/videos stizz') to watch a different folder instead.",
+    "watch_folder": "./watch_folder",
     "uploaded_folder": "./uploaded",
     "logs_folder": "./logs",
     "duplicate_store_path": "./uploaded_hashes.json",

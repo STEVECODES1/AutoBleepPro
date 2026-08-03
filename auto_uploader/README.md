@@ -87,9 +87,18 @@ python main.py --watch
 # Upload one specific file right now
 python main.py --file "D:\videos\stream.mp4" --title "Le Bandit slots session"
 
-# Process every video already sitting in a folder
-python main.py --batch ./watch_folder
+# Process everything sitting in watch_folder/ right now, then exit
+python main.py --batch
+
+# ...or point it at some other folder, just for this run
+python main.py --batch "D:\videos stizz"
 ```
+
+`--watch` stays running and picks up files as you drop them in. `--batch`
+processes whatever's already there and exits — that's the one to use when
+you've just dropped in a couple of finished VODs. With no path after it,
+`--batch` uses `general.watch_folder` from `config.json`
+(`./watch_folder`, i.e. `auto_uploader\watch_folder`).
 
 Drop a finished recording into `watch_folder/`, and (unless you disable
 `ask_for_title` in `config.json`) it'll ask you for the stream title in

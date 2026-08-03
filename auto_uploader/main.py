@@ -5,7 +5,8 @@ Usage:
     python main.py --watch                       # watch watch_folder/, upload new videos as they arrive
     python main.py --dry-run                      # same as --watch but previews only, uploads nothing
     python main.py --file "video.mp4" --title "My Stream"   # upload one specific file now
-    python main.py --batch ./watch_folder          # process every video already sitting in a folder
+    python main.py --batch                         # process every video already sitting in watch_folder/
+    python main.py --batch "D:\videos stizz"      # ...or in some other folder, just this once
     python main.py --test-config                   # validate config.json/.env without uploading anything
 """
 
@@ -21,7 +22,7 @@ from datetime import datetime
 # Bump when shipping user-visible changes, so --test-config can prove
 # which build is actually running (stale extracts have silently caused
 # several confusing "the fix did nothing" runs).
-BUILD = "2026-08-03.8 real-video-urls"
+BUILD = "2026-08-03.9 batch-defaults-to-watch-folder"
 
 from utils.censor import censor_video
 from utils.config import load_config, validate_config
@@ -335,7 +336,12 @@ def main(argv=None) -> int:
     parser.add_argument("--dry-run", action="store_true", help="Preview titles/descriptions; upload nothing.")
     parser.add_argument("--file", help="Upload one specific video file now.")
     parser.add_argument("--title", help="Stream title to use with --file (skips the interactive prompt).")
-    parser.add_argument("--batch", help="Process every supported video already in the given folder.")
+    # Optional value: bare `--batch` processes the configured watch_folder,
+    # which is the common case (drop files in, run it once). Pass a path to
+    # point it somewhere else for a one-off, e.g. --batch "D:\videos stizz".
+    parser.add_argument("--batch", nargs="?", const="",
+                        help="Process every supported video already in a folder "
+                             "(defaults to general.watch_folder from config.json).")
     parser.add_argument("--test-config", action="store_true", help="Validate config.json/.env, then exit.")
     parser.add_argument("--health", action="store_true", help="Run disk/CPU/network health checks + temp cleanup, then exit.")
     args = parser.parse_args(argv)
@@ -366,6 +372,16 @@ def main(argv=None) -> int:
 
     validate_config(cfg)  # ensures folders exist even outside --test-config
     dry_run = args.dry_run or cfg.general.dry_run_mode
+
+    # None = flag not passed at all; "" = bare `--batch` (use the config's
+    # watch folder); anything else = an explicit folder for this run only.
+    batch_folder = None
+    if args.batch is not None:
+        batch_folder = args.batch or cfg.general.watch_folder
+        if not os.path.isdir(batch_folder):
+            print(f"[ERROR] --batch folder does not exist: {batch_folder}")
+            return 1
+        print(f"Batch folder: {batch_folder}")
 
     yt_logger = setup_logger("youtube", cfg.general.logs_folder)
     rb_logger = setup_logger("rumble", cfg.general.logs_folder)
@@ -406,7 +422,7 @@ def main(argv=None) -> int:
             # manually outside the tool.
             print(f"[WARN] Rumble RSS dedup check unavailable ({exc}); relying on local history only.")
 
-    if args.batch and existing_videos_fetch_failed and not dry_run:
+    if batch_folder and existing_videos_fetch_failed and not dry_run:
         print(
             "[ABORTED] Refusing to run --batch without the existing-video dedup check working "
             "(it would risk re-uploading videos already on the channel). Fix the YouTube auth "
@@ -419,9 +435,9 @@ def main(argv=None) -> int:
                      existing_youtube_videos, existing_rumble_videos)
         return 0
 
-    if args.batch:
-        for fname in sorted(os.listdir(args.batch)):
-            path = os.path.join(args.batch, fname)
+    if batch_folder:
+        for fname in sorted(os.listdir(batch_folder)):
+            path = os.path.join(batch_folder, fname)
             if os.path.isfile(path):
                 process_file(path, cfg, None, dup_checker, yt_logger, rb_logger, dry_run,
                              existing_youtube_videos, existing_rumble_videos)
