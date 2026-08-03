@@ -21,7 +21,7 @@ from datetime import datetime
 # Bump when shipping user-visible changes, so --test-config can prove
 # which build is actually running (stale extracts have silently caused
 # several confusing "the fix did nothing" runs).
-BUILD = "2026-08-03.6 terms-checkbox-fix-discord-on"
+BUILD = "2026-08-03.7 fix-batch-nameerror"
 
 from utils.censor import censor_video
 from utils.config import load_config, validate_config
@@ -394,6 +394,18 @@ def main(argv=None) -> int:
     # Only blocks real runs - a dry run uploads nothing, so it's safe (and
     # useful) to let it proceed and preview titles/dates even when the
     # dedup check is unavailable.
+    existing_rumble_videos = []
+    if not dry_run and cfg.rumble.skip_if_exists:
+        try:
+            existing_rumble_videos = fetch_rumble_videos(cfg.rumble.rss_url, cfg.rumble.cdp_url)
+            print(f"[Rumble] Found {len(existing_rumble_videos)} existing video(s) via RSS for dedup checks.")
+        except Exception as exc:
+            # Non-fatal, unlike the YouTube fetch for --batch: the local
+            # hash/title history still prevents this tool re-uploading its
+            # own work; the RSS only adds protection for videos uploaded
+            # manually outside the tool.
+            print(f"[WARN] Rumble RSS dedup check unavailable ({exc}); relying on local history only.")
+
     if args.batch and existing_videos_fetch_failed and not dry_run:
         print(
             "[ABORTED] Refusing to run --batch without the existing-video dedup check working "
