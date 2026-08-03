@@ -215,6 +215,8 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
             rb = RumbleUploader(
                 cfg.rumble.username, cfg.rumble.password, cfg.rumble.login_url, cfg.rumble.upload_url,
                 cdp_url=cfg.rumble.cdp_url,
+                primary_category=cfg.rumble.primary_category,
+                secondary_category=cfg.rumble.secondary_category,
             )
 
             def rb_progress(pct):

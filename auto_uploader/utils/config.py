@@ -40,6 +40,8 @@ class RumbleConfig:
     login_url: str
     upload_url: str
     cdp_url: Optional[str]
+    primary_category: str
+    secondary_category: str
 
 
 @dataclass
@@ -122,6 +124,8 @@ def load_config(config_path: str = "config.json", env_path: str = ".env") -> App
         login_url=rb.get("login_url", "https://rumble.com/login.php"),
         upload_url=rb.get("upload_url", "https://rumble.com/upload.php"),
         cdp_url=os.environ.get("RUMBLE_CDP_URL") or rb.get("cdp_url") or None,
+        primary_category=rb.get("primary_category", "Gaming"),
+        secondary_category=rb.get("secondary_category", ""),
     )
 
     general = GeneralConfig(

@@ -29,6 +29,7 @@ Two ways to authenticate:
 """
 
 import os
+import re
 import time
 from typing import Callable, Optional
 
@@ -44,11 +45,15 @@ class RumbleUploader:
         upload_url: str,
         headless: bool = False,
         cdp_url: Optional[str] = None,
+        primary_category: str = "Gaming",
+        secondary_category: str = "",
     ):
         self.username = username
         self.password = password
         self.login_url = login_url
         self.upload_url = upload_url
+        self.primary_category = primary_category
+        self.secondary_category = secondary_category
         # Headless=False by default so you can see what's happening (and
         # solve 2FA/captchas manually) the first few times you run this.
         self.headless = headless
@@ -135,6 +140,71 @@ class RumbleUploader:
             page.get_by_role("button", name="Verify").or_(page.get_by_role("button", name="Submit")).click()
             page.wait_for_timeout(3000)
 
+    def _select_categories(self, page) -> None:
+        """Pick the primary (and secondary, if present) category. Required
+        by Rumble - the submit button stays inert until primary is set."""
+        selects = page.locator("select").all()
+        wanted = [self.primary_category, self.secondary_category]
+
+        for dropdown, desired in zip(selects, wanted):
+            if not desired:
+                continue
+            try:
+                # select_option matches on the visible label, which is what
+                # the config holds (e.g. "Gaming") - Rumble's underlying
+                # option values are opaque numeric ids.
+                dropdown.select_option(label=desired, timeout=10_000)
+            except Exception:
+                # Fall back to a case-insensitive match against whatever
+                # options this particular dropdown actually offers, so a
+                # slightly-off config string doesn't block the upload.
+                try:
+                    options = dropdown.locator("option").all_text_contents()
+                    match = next((o for o in options if o.strip().lower() == desired.strip().lower()), None)
+                    if match:
+                        dropdown.select_option(label=match, timeout=10_000)
+                except Exception:
+                    continue
+
+    def _wait_for_upload_complete(self, page, progress_callback, timeout_seconds: int = 60 * 90) -> None:
+        """Block until Rumble's own progress readout reaches 100%.
+
+        Rumble renders progress as page text ("3%", "(1.3MB/s - 27s)")
+        rather than a standard aria-valuenow progressbar, so this scrapes
+        the percentage out of the page text instead of reading an
+        attribute. Returns (rather than raising) on timeout so the caller
+        can still attempt the submit - a stalled readout isn't proof the
+        upload failed.
+        """
+        deadline = time.time() + timeout_seconds
+        last_reported = -1
+
+        while time.time() < deadline:
+            percent = None
+            try:
+                body_text = page.locator("body").inner_text(timeout=5_000)
+                match = re.search(r"(\d{1,3})\s*%", body_text)
+                if match:
+                    percent = int(match.group(1))
+            except Exception:
+                pass
+
+            if percent is not None and percent != last_reported:
+                last_reported = percent
+                if progress_callback:
+                    progress_callback(percent)
+
+            if percent is not None and percent >= 100:
+                return
+
+            # Rumble swaps the progress readout out for the finished state
+            # once the transfer completes; treat "no percentage on the page
+            # anymore, but we saw one earlier" as done too.
+            if percent is None and last_reported > 0:
+                return
+
+            page.wait_for_timeout(3000)
+
     def _upload_video(
         self, page, video_path, title, description, tags, privacy, thumbnail_path, progress_callback
     ) -> str:
@@ -171,6 +241,12 @@ class RumbleUploader:
             if thumb_input.count() > 0:
                 thumb_input.first.set_input_files(thumbnail_path)
 
+        # CATEGORIES is a REQUIRED field on Rumble's upload form (marked
+        # with a red asterisk) - without it the submit button never becomes
+        # active, and the click loop below spins forever. Select it from
+        # the primary/secondary category <select> dropdowns.
+        self._select_categories(page)
+
         # Rumble's upload form has a required "I agree to terms" checkbox
         # (sometimes two) before the submit button will actually do
         # anything - check any that are present and unchecked.
@@ -181,31 +257,26 @@ class RumbleUploader:
             except Exception:
                 continue  # a stray/detached checkbox shouldn't abort the whole upload
 
-        # Poll Rumble's own upload-progress indicator if present, so we can
-        # report percentage back the same way the YouTube uploader does.
-        progress_bar = page.locator("[role='progressbar'], .progress-bar, .upload-progress")
-        deadline = time.time() + 60 * 60  # generous ceiling for very large files
-        last_reported = -1
-        while time.time() < deadline:
-            if progress_bar.count() > 0:
-                value = progress_bar.first.get_attribute("aria-valuenow")
-                if value and value.isdigit() and int(value) != last_reported:
-                    last_reported = int(value)
-                    if progress_callback:
-                        progress_callback(last_reported)
-                    if last_reported >= 100:
-                        break
+        # Wait for the file transfer itself to finish BEFORE trying to
+        # submit - Rumble shows a "N% (x MB/s)" indicator during upload and
+        # the submit button isn't meaningfully clickable until it's done.
+        # (Previously this raced the upload and burned ~60 futile click
+        # retries against a still-uploading form.)
+        self._wait_for_upload_complete(page, progress_callback)
 
-            submit_button = (
-                page.get_by_role("button", name="Submit")
-                .or_(page.get_by_role("button", name="Publish"))
-                .or_(page.get_by_role("button", name="Upload"))
-            )
-            if submit_button.count() > 0 and submit_button.first.is_enabled():
-                submit_button.first.click()
-                break
-
-            page.wait_for_timeout(2000)
+        submit_button = (
+            page.get_by_role("button", name="Submit")
+            .or_(page.get_by_role("button", name="Publish"))
+            .or_(page.get_by_role("button", name="Upload"))
+        )
+        try:
+            submit_button.first.click(timeout=120_000)
+        except PlaywrightTimeoutError as exc:
+            raise RuntimeError(
+                "Rumble upload form never became submittable - a required field is probably "
+                "unset or the page layout changed. The browser window is still open so you can "
+                "finish/inspect it manually."
+            ) from exc
 
         # After submit, Rumble usually redirects to the video's own page.
         try:
