@@ -25,6 +25,7 @@ class YouTubeConfig:
     thumbnail_path: str
     client_secrets_path: str
     token_path: str
+    censor_uploads: bool
 
 
 @dataclass
@@ -42,6 +43,7 @@ class RumbleConfig:
     cdp_url: Optional[str]
     primary_category: str
     secondary_category: str
+    censor_uploads: bool
 
 
 @dataclass
@@ -110,6 +112,7 @@ def load_config(config_path: str = "config.json", env_path: str = ".env") -> App
             os.path.join(project_root, "client_secrets.json"),
         ),
         token_path=os.path.join(project_root, "youtube_token.json"),
+        censor_uploads=bool(yt.get("censor_uploads", True)),
     )
 
     rumble = RumbleConfig(
@@ -126,6 +129,7 @@ def load_config(config_path: str = "config.json", env_path: str = ".env") -> App
         cdp_url=os.environ.get("RUMBLE_CDP_URL") or rb.get("cdp_url") or None,
         primary_category=rb.get("primary_category", "Gaming"),
         secondary_category=rb.get("secondary_category", ""),
+        censor_uploads=bool(rb.get("censor_uploads", False)),
     )
 
     general = GeneralConfig(

@@ -123,6 +123,26 @@ ever manually uploaded to YouTube in the past:
 - Run one or two files first with `--file` before pointing `--batch` at
   a big folder, to make sure the results look right.
 
+## Censoring: per-platform
+
+Profanity censoring is configured **per platform**, because the two have
+different rules:
+
+| Platform | `censor_uploads` | Why |
+|---|---|---|
+| YouTube | `true` | YouTube age-restricts / demonetizes over spoken profanity |
+| Rumble | `false` | Uploads the original, uncensored audio |
+
+Flip either flag in `config.json`. `general.censor_before_upload` is the
+master switch - set it to `false` to disable censoring everywhere.
+
+`general.censor_bleep_method` controls *how* words are censored:
+`"silence"` (mutes them) or `"beep"` (overlays a tone).
+
+Censoring runs **lazily**: if YouTube is skipped as already-uploaded and
+Rumble isn't censoring, transcription never runs at all - which saves
+many minutes per stream on a backlog run.
+
 ## 5. Skip the title prompt
 
 Set `"ask_for_title": false` in `config.json`'s `general` section, and

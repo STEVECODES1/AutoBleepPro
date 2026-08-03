@@ -9,6 +9,8 @@
     "title_format": "\"{title}\" {date} Stackswopo Stream",
     "description_template": "This stream first aired on [DATE] with the title \"[STREAM TITLE]\" on the Stackswopo channel.\n\n📌 Also on Rumble (BinScripts): https://rumble.com/user/BinScripts\n🎮 Main channel: https://www.youtube.com/@stackswopo_\n📺 Twitch: https://www.twitch.tv/stackswopo\n\nThis is a replay of one of my own past streams, archived here so it stays available.\n\nThe stream contains live reactions, jokes, and real-life conversations in my usual unfiltered style.\n\n🔥 Missed the original broadcast? Enjoy the full replay with every moment, from the funny bits to the wild reactions.\n🎥 Want more? Check the channel for additional past streams, full VODs, and highlights.\n\n👍 If you enjoy these replays, consider subscribing!\n\nTags: #StacksWopo #StreamReplay #FullVOD #GamingHighlights #FunnyMoments #GTA5 #GTAOnline #Roleplay #StreamerMoments #UncutReplay #Entertainment",
     "tags": ["StacksWopo", "StreamReplay", "FullVOD", "GamingHighlights", "FunnyMoments", "GTA5", "GTAOnline", "Roleplay", "StreamerMoments", "UncutReplay", "Entertainment"],
+    "_censor_comment": "true = upload the profanity-censored copy (YouTube age-restricts/demonetizes over spoken language).",
+    "censor_uploads": true,
     "playlist_id": "",
     "thumbnail_path": "./thumbnails/default.jpg"
   },
@@ -26,7 +28,9 @@
     "title_format": "\"{title}\" {date} Stackswopo Stream",
     "description_template": "My YouTube Channel: https://www.youtube.com/@StackswopoGames\nInstagram: https://www.instagram.com/stackswopomanz/\nMonkeyAPP Content: https://www.youtube.com/@BinScript\nStack's Channel: https://www.youtube.com/@stackswopo_\nStack's Twitch Channel: https://www.twitch.tv/stackswopo\nOnlyThaGuys Channel: https://www.youtube.com/@OnlyThaGuys26\n\nThis stream first aired on [DATE] with the title \"[STREAM TITLE]\" on the Stackswopo channel.\n\nThis is a replay of one of my own past streams, archived here so it stays available.\n\nThe stream contains live reactions, jokes, and real-life conversations in my usual unfiltered style.\n\n🔥 Missed the original broadcast? Enjoy the full replay with every moment, from the funny bits to the wild reactions.\n🎥 Want more? Check the channel for additional past streams, full VODs, and highlights.\n\n👍 If you enjoy these replays, consider subscribing!\n\nTags: #StacksWopo #StreamReplay #FullVOD #GamingHighlights #FunnyMoments #GTA5 #GTAOnline #Roleplay #StreamerMoments #UncutReplay #Entertainment",
     "tags": ["StacksWopo", "StreamReplay", "FullVOD", "GamingHighlights", "FunnyMoments", "GTA5", "GTAOnline", "Roleplay", "StreamerMoments", "UncutReplay", "Entertainment"],
-    "thumbnail_path": "./thumbnails/default.jpg"
+    "thumbnail_path": "./thumbnails/default.jpg",
+    "_censor_comment": "false = upload the ORIGINAL uncensored audio to Rumble.",
+    "censor_uploads": false
   },
 
   "general": {
