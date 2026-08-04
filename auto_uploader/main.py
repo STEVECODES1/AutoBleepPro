@@ -23,7 +23,7 @@ from datetime import datetime
 # Bump when shipping user-visible changes, so --test-config can prove
 # which build is actually running (stale extracts have silently caused
 # several confusing "the fix did nothing" runs).
-BUILD = "2026-08-03.14 title-aware-dedup"
+BUILD = "2026-08-03.15 file-path-guard"
 
 from utils.censor import censor_video
 from utils.config import load_config, validate_config
@@ -48,6 +48,30 @@ from utils.youtube_checker import (
     find_same_date_videos,
 )
 from utils.youtube_uploader import YouTubeUploader
+
+
+def _suggest_paths(cfg, basename: str, limit: int = 5) -> list:
+    """Where a missing file actually is, if it's somewhere we know about.
+
+    "File not found" on its own isn't actionable when the tool itself
+    moves files between watch_folder and uploaded/ as part of normal
+    operation - this says where it went.
+    """
+    if not basename:
+        return []
+    seen, found = set(), []
+    for folder in (cfg.general.watch_folder, cfg.general.uploaded_folder,
+                   cfg.general.censored_folder, os.getcwd()):
+        folder = os.path.abspath(folder or "")
+        if not folder or folder in seen or not os.path.isdir(folder):
+            continue
+        seen.add(folder)
+        candidate = os.path.join(folder, basename)
+        if os.path.isfile(candidate):
+            found.append(candidate)
+        if len(found) >= limit:
+            break
+    return found
 
 
 def get_stream_title(video_path: str, cli_title: str, cfg, allow_prompt: bool = True) -> str:
@@ -405,6 +429,8 @@ def main(argv=None) -> int:
     if args.forget:
         if not os.path.isfile(args.forget):
             print(f"[ERROR] File not found: {args.forget}")
+            for path in _suggest_paths(cfg, os.path.basename(args.forget)):
+                print(f"        Did you mean: {path}")
             return 1
         checker = DuplicateChecker(cfg.general.duplicate_store_path)
         target = hash_file(args.forget)
@@ -448,6 +474,18 @@ def main(argv=None) -> int:
         if not os.path.isdir(watch_folder):
             print(f"[ERROR] --watch folder does not exist: {watch_folder}")
             return 1
+
+    # Checked here, before the channel fetches below: without it a typo'd
+    # or moved path surfaced as a raw FileNotFoundError traceback out of
+    # hash_file() - and only after a pointless round-trip to YouTube.
+    if args.file and not os.path.isfile(args.file):
+        print(f"[ERROR] File not found: {args.file}")
+        hints = _suggest_paths(cfg, os.path.basename(args.file))
+        if hints:
+            print("        Did you mean:")
+            for path in hints:
+                print(f"          {path}")
+        return 1
 
     batch_folder = None
     if args.batch is not None:
