@@ -23,7 +23,7 @@ from datetime import datetime
 # Bump when shipping user-visible changes, so --test-config can prove
 # which build is actually running (stale extracts have silently caused
 # several confusing "the fix did nothing" runs).
-BUILD = "2026-08-03.15 file-path-guard"
+BUILD = "2026-08-03.16 fast-forget"
 
 from utils.censor import censor_video
 from utils.config import load_config, validate_config
@@ -433,13 +433,23 @@ def main(argv=None) -> int:
                 print(f"        Did you mean: {path}")
             return 1
         checker = DuplicateChecker(cfg.general.duplicate_store_path)
-        target = hash_file(args.forget)
-        if checker.forget(target, args.forget_platform):
-            scope = args.forget_platform or "both platforms"
+
+        # Filename lookup first: hashing a multi-GB video off an external
+        # drive takes minutes, and the store already records the filename.
+        targets = checker.find_hashes_by_filename(args.forget)
+        if not targets:
+            size_gb = os.path.getsize(args.forget) / (1024 ** 3)
+            print(f"No record under that filename; identifying by content "
+                  f"instead ({size_gb:.1f} GB to read, this can take a minute)...")
+            targets = [hash_file(args.forget)]
+
+        scope = args.forget_platform or "both platforms"
+        if any(checker.forget(t, args.forget_platform) for t in targets):
             print(f"Forgot {os.path.basename(args.forget)} ({scope}). "
                   f"Run --file on it to upload again.")
             return 0
-        print(f"No upload history recorded for {os.path.basename(args.forget)}.")
+        print(f"No upload history recorded for {os.path.basename(args.forget)} "
+              f"({scope}) - nothing to clear. You can run --file on it directly.")
         return 0
 
     if args.health:

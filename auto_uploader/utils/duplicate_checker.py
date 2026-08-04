@@ -86,6 +86,19 @@ class DuplicateChecker:
                 return record["results"][platform]
         return None
 
+    def find_hashes_by_filename(self, filename: str) -> list:
+        """Recorded hashes whose stored filename matches `filename`.
+
+        Lets callers look a record up without re-reading (and hashing) the
+        video itself, which on an external drive is minutes of I/O for a
+        multi-GB file.
+        """
+        target = os.path.basename(filename or "").lower()
+        if not target:
+            return []
+        return [h for h, rec in self._seen.items()
+                if os.path.basename(rec.get("filename", "")).lower() == target]
+
     def forget(self, file_hash: str, platform: str = None) -> bool:
         """Drop a recorded result so the file can be retried.
 
