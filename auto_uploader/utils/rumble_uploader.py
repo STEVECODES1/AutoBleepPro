@@ -89,22 +89,46 @@ class RumbleUploader:
         progress_callback: Optional[Callable[[int], None]] = None,
     ) -> str:
         with sync_playwright() as p:
+            browser = page = None
+            should_close_browser = True
+            attached = False
+
+            # Attach to the user's own logged-in Chrome when it's there.
             if self.cdp_url:
-                browser = p.chromium.connect_over_cdp(self.cdp_url)
-                context = browser.contexts[0] if browser.contexts else browser.new_context()
-                page = context.new_page()
-                should_close_browser = False  # it's the user's own Chrome window - don't close it
-            else:
+                try:
+                    browser = p.chromium.connect_over_cdp(self.cdp_url)
+                    context = browser.contexts[0] if browser.contexts else browser.new_context()
+                    page = context.new_page()
+                    should_close_browser = False  # the user's window - don't close it
+                    attached = True
+                    print(f"[Rumble] Attached to Chrome at {self.cdp_url}.")
+                except Exception as exc:
+                    # Chrome isn't running with --remote-debugging-port. Falling
+                    # back beats failing the upload: cdp_url is configured for
+                    # the good path, not as a hard requirement.
+                    print(f"[Rumble] Could not attach to Chrome at {self.cdp_url} ({exc}).")
+                    if self.username and self.password:
+                        print("[Rumble] Falling back to username/password login. "
+                              "For the reliable path, launch Chrome with "
+                              "--remote-debugging-port=9222 and log into Rumble there.")
+                    browser = page = None
+
+            if page is None:
                 if not self.username or not self.password:
                     raise RuntimeError(
-                        "Neither rumble.cdp_url (config.json) nor RUMBLE_USERNAME/RUMBLE_PASSWORD (.env) are set."
+                        "Could not attach to Chrome at "
+                        f"{self.cdp_url or '(unset)'}, and RUMBLE_USERNAME/"
+                        "RUMBLE_PASSWORD are not set in .env either - so there "
+                        "is no way to reach Rumble. Either launch Chrome with "
+                        "--remote-debugging-port=9222 and log in, or fill in "
+                        "the .env credentials."
                     )
                 browser = p.chromium.launch(headless=self.headless)
                 page = browser.new_page()
                 should_close_browser = True
 
             try:
-                if not self.cdp_url:
+                if not attached:
                     self._login(page)
                 video_url = self._upload_video(
                     page, video_path, title, description, tags, privacy, thumbnail_path, progress_callback

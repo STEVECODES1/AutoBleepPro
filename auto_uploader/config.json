@@ -3,7 +3,8 @@
 
   "youtube": {
     "channel": "@StackswopoGames",
-    "privacy": "public",
+    "_privacy_comment": "private = uploads land unlisted-to-the-public so you can review the censor risk report before publishing. Set to \"public\" to publish immediately.",
+    "privacy": "private",
     "category_id": "20",
     "made_for_kids": false,
     "title_format": "\"{title}\" {date} Stackswopo Stream",
@@ -23,7 +24,7 @@
     "login_url": "https://rumble.com/login.php",
     "upload_url": "https://rumble.com/upload.php",
     "_cdp_comment": "Recommended: set cdp_url to attach to a Chrome window you're already logged into (e.g. 'http://localhost:9222') instead of storing your password and automating login - see README.md for the launch command. Leave null to fall back to RUMBLE_USERNAME/RUMBLE_PASSWORD in .env.",
-    "cdp_url": null,
+    "cdp_url": "http://localhost:9222",
     "_category_comment": "Rumble REQUIRES a primary category - the submit button stays disabled without one. Must match the dropdown label exactly (e.g. Gaming, Entertainment).",
     "primary_category": "Gaming",
     "secondary_category": "Grand Theft Auto V",
@@ -86,7 +87,7 @@
       "page_dumps": true,
       "trim_logs_mb": 5,
       "source_video": "move",
-      "keep_uploaded_videos": 0
+      "keep_uploaded_videos": 3
     }
   },
 

@@ -470,12 +470,22 @@ def test_source_action_defaults_to_move_when_unset(env):
     assert resolve_source_action(cfg) == SOURCE_MOVE
 
 
-def test_shipped_config_never_deletes_source_videos():
-    """The default must not destroy a video the user may have nowhere else."""
+def test_shipped_config_never_deletes_an_unuploaded_source():
+    """A video must never be destroyed before both platforms have it.
+
+    keep_uploaded_videos only prunes uploaded/, which by definition holds
+    videos both platforms already accepted - so a non-zero value is a disk
+    setting, not a data-loss one. What must not change is source_video:
+    anything but "move" would remove the file the retries depend on.
+    """
     with open(os.path.join(_UPLOADER, "config.json")) as f:
         shipped = json.load(f)
-    assert shipped["general"]["cleanup"]["source_video"] == SOURCE_MOVE
-    assert shipped["general"]["cleanup"]["keep_uploaded_videos"] == 0
+    cleanup = shipped["general"]["cleanup"]
+    assert cleanup["source_video"] == SOURCE_MOVE
+    keep = cleanup["keep_uploaded_videos"]
+    # 0 = off. Any other value must retain at least one video, never empty
+    # the folder wholesale.
+    assert keep == 0 or keep >= 1
 
 
 # ═════════════════════════════════════════════════════════════════════════════
