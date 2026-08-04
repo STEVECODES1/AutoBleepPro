@@ -168,6 +168,49 @@ ever manually uploaded to YouTube in the past:
 - Run one or two files first with `--file` before pointing `--batch` at
   a big folder, to make sure the results look right.
 
+## Disk cleanup
+
+Each processed video leaves working files behind, in very different size
+classes - worth knowing which is which before deciding what to delete:
+
+| File | Size | Default |
+|---|---|---|
+| Censored copy (`censored/*_CENSORED_*.mp4`) | **~ the whole video** - it's a full re-encode | deleted after upload |
+| Source video | ~ the whole video again | **moved** to `uploaded/` and kept |
+| Transcript cache | a few hundred KB | deleted after upload |
+| Rumble page dumps | a few MB, only written on failure | deleted after a clean run |
+| `logs/*.log` | kilobytes | trimmed to the last 5 MB, never deleted |
+
+Logs are trimmed rather than deleted on purpose: they're how a failed
+upload gets diagnosed, and they aren't what fills a disk. The censored
+re-encode is.
+
+Configure it under `general.cleanup` in `config.json`:
+
+```json
+"cleanup": {
+  "enabled": true,
+  "censored_copy": true,
+  "transcript_cache": true,
+  "page_dumps": true,
+  "trim_logs_mb": 5,
+  "source_video": "move",
+  "keep_uploaded_videos": 0
+}
+```
+
+**If you're short on space**, `uploaded/` is usually the real culprit -
+every source video lands there at full size and stays. Two options:
+
+- `"keep_uploaded_videos": 3` — keep only the 3 most recent, delete older ones.
+- `"source_video": "delete"` — don't keep the source at all. It's removed
+  only after **both** platforms have succeeded, but the local copy is then
+  gone for good, so only use this when the video exists elsewhere (e.g.
+  it's a yt-dlp download of your own YouTube VOD).
+
+Files from a **partially** failed upload are never cleaned up - they're
+the inputs for the retry.
+
 ## Censoring: per-platform
 
 Profanity censoring is configured **per platform**, because the two have

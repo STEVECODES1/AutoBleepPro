@@ -60,7 +60,18 @@
     "censor_bleep_method": "silence",
     "censor_device": null,
     "censor_custom_words": [],
-    "censored_folder": "./censored"
+    "censored_folder": "./censored",
+
+    "_cleanup_comment": "Frees disk after each successful upload. The censored copy is a full re-encode (roughly the size of the source video) - that's what actually costs gigabytes; logs are kilobytes, so they're trimmed rather than deleted so failures stay diagnosable. source_video: 'move' keeps the original in uploaded/ (default), 'delete' frees it once BOTH platforms succeeded (the original is gone - only use this if the video exists elsewhere), 'keep' leaves it where it was. keep_uploaded_videos: 0 = off; set e.g. 3 to keep only the 3 newest in uploaded/.",
+    "cleanup": {
+      "enabled": true,
+      "censored_copy": true,
+      "transcript_cache": true,
+      "page_dumps": true,
+      "trim_logs_mb": 5,
+      "source_video": "move",
+      "keep_uploaded_videos": 0
+    }
   },
 
   "features": {

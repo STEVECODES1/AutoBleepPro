@@ -23,9 +23,16 @@ from datetime import datetime
 # Bump when shipping user-visible changes, so --test-config can prove
 # which build is actually running (stale extracts have silently caused
 # several confusing "the fix did nothing" runs).
-BUILD = "2026-08-03.16 fast-forget"
+BUILD = "2026-08-03.17 disk-cleanup"
 
 from utils.censor import censor_video
+from utils.cleanup import (
+    SOURCE_DELETE,
+    SOURCE_KEEP,
+    cleanup_after_upload,
+    prune_uploaded_folder,
+    resolve_source_action,
+)
 from utils.config import load_config, validate_config
 from utils.duplicate_checker import DuplicateChecker, hash_file
 from utils.file_watcher import FolderWatcher, is_intermediate_download
@@ -350,16 +357,29 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
         finally:
             dup_checker.record_platform_result(file_hash, filename, "rumble", results.get("rumble", "FAILED: interrupted"), title=rb_title)
 
-    if dup_checker.is_fully_uploaded(file_hash):
-        dest = os.path.join(cfg.general.uploaded_folder, filename)
-        os.makedirs(cfg.general.uploaded_folder, exist_ok=True)
-        try:
-            shutil.move(video_path, dest)
-        except Exception as exc:
-            print(f"[WARN] Could not move {filename} to uploaded/: {exc}")
-        censored_copy = _censored.get("path")
-        if censored_copy and censored_copy != video_path and os.path.exists(censored_copy):
-            os.remove(censored_copy)  # temp censored copy, no longer needed once fully uploaded
+    fully_uploaded = dup_checker.is_fully_uploaded(file_hash)
+    if fully_uploaded:
+        action = resolve_source_action(cfg)
+        if action == SOURCE_DELETE:
+            # Only reachable when BOTH platforms already succeeded - the
+            # video is published, and the user has opted into losing the
+            # local copy.
+            size_mb = os.path.getsize(video_path) / (1024 ** 2)
+            try:
+                os.remove(video_path)
+                print(f"[Cleanup] Deleted source video ({size_mb:.0f} MB) - "
+                      f"cleanup.source_video is 'delete'.")
+            except OSError as exc:
+                print(f"[WARN] Could not delete {filename}: {exc}")
+        elif action == SOURCE_KEEP:
+            print(f"[INFO] {filename} left in place (cleanup.source_video is 'keep').")
+        else:
+            dest = os.path.join(cfg.general.uploaded_folder, filename)
+            os.makedirs(cfg.general.uploaded_folder, exist_ok=True)
+            try:
+                shutil.move(video_path, dest)
+            except Exception as exc:
+                print(f"[WARN] Could not move {filename} to uploaded/: {exc}")
     else:
         print(f"[INFO] {filename} left in place (not every platform succeeded yet) - "
               f"rerun --file or --batch on it later to retry just what's still missing.")
@@ -387,6 +407,19 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
                     print(f"[Optimize] SEO/chapters report written -> {report}")
         except Exception as exc:
             print(f"[Optimize] WARNING: report failed: {exc}")
+
+    # Disk cleanup LAST: the optimizer above reads the cached transcript,
+    # so removing it any earlier would break the report.
+    try:
+        freed = cleanup_after_upload(cfg, video_path, _censored.get("path"),
+                                     fully_uploaded=fully_uploaded)
+        keep = int((cfg.general.cleanup or {}).get("keep_uploaded_videos", 0) or 0)
+        if keep > 0:
+            freed += prune_uploaded_folder(cfg, keep)
+        if freed >= 1:
+            print(f"[Cleanup] Freed {freed:.0f} MB of working files.")
+    except Exception as exc:
+        print(f"[Cleanup] WARNING: cleanup failed: {exc}")
 
     return results
 
