@@ -85,6 +85,7 @@ class AppConfig:
     general: GeneralConfig
     project_root: str
     features: dict = field(default_factory=dict)
+    posting: dict = field(default_factory=dict)
 
 
 def _resolve_path(project_root: str, path: str) -> str:

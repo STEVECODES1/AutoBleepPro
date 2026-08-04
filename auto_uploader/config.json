@@ -91,6 +91,22 @@
     }
   },
 
+  "_posting_comment": "Short-form clip publishing. Everything ships DISABLED - turn on one platform at a time. daily_cap is a ROLLING 24h window, not a calendar day. Caps sit well under the API ceilings (Instagram allows 25/day) because the binding limit is how the account looks to spam classifiers, not the quota. reddit and facebook_group are manual-approval only and cannot be automated from config - Reddit enforces anti-spam by ban, and Facebook group publishing has no approved API route. Create the kill_switch_file to halt ALL posting immediately, including a running --watch.",
+  "posting": {
+    "enabled": false,
+    "kill_switch_file": "./STOP_POSTING",
+    "state_path": "./posting_state.json",
+    "queue_path": "./clip_jobs.json",
+    "platforms": {
+      "instagram":      { "enabled": false, "daily_cap": 5, "min_minutes_between": 45 },
+      "facebook":       { "enabled": false, "daily_cap": 5, "min_minutes_between": 45 },
+      "x":              { "enabled": false, "daily_cap": 3, "min_minutes_between": 90 },
+      "reddit":         { "enabled": false, "daily_cap": 1, "min_minutes_between": 720, "manual_approval_only": true },
+      "facebook_group": { "enabled": false, "daily_cap": 1, "manual_approval_only": true }
+    },
+    "circuit_breaker": { "consecutive_failures": 3 }
+  },
+
   "features": {
     "_comment": "Optional extras. self_healing: python main.py --health. social_promoter posts AFTER a successful new upload (Discord needs DISCORD_WEBHOOK_URL in .env; twitter/reddit need their API keys + pip install tweepy/praw). content_optimizer writes an SEO/chapters report next to each uploaded video, reusing the censor pass's transcript.",
     "self_healing": { "enabled": true, "min_free_gb": 10, "cleanup_age_days": 7 },
