@@ -148,6 +148,17 @@ Successfully processed files get moved to `uploaded/`. Already-uploaded
 files (matched by content hash, not filename — so renaming a file won't
 fool it) are skipped automatically.
 
+### Uploading to one platform only
+
+```bash
+python main.py --file "D:\Videos\clip.mp4" --only youtube
+python main.py --batch --only rumble
+```
+
+The other platform is skipped entirely - not attempted, not recorded - and
+"already uploaded" then means *for that platform*. Useful when one side
+already succeeded and only the other needs a retry.
+
 ### Backfilling an old folder of VODs
 
 `--batch` also works great for a folder of old recordings that were only

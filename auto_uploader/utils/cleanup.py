@@ -124,7 +124,8 @@ def censoring_platforms(cfg) -> set:
     return out
 
 
-def platforms_needing_retry(results: Optional[dict]) -> set:
+def platforms_needing_retry(results: Optional[dict],
+                            active_platforms: Iterable[str] = ALL_PLATFORMS) -> set:
     """Platforms that did NOT finish successfully and will be retried.
 
     A missing key counts as pending: the run may have been interrupted
@@ -133,14 +134,15 @@ def platforms_needing_retry(results: Optional[dict]) -> set:
     if results is None:
         return set()
     pending = set()
-    for platform in ALL_PLATFORMS:
+    for platform in (active_platforms or ALL_PLATFORMS):
         outcome = results.get(platform)
         if not outcome or str(outcome).startswith("FAILED:"):
             pending.add(platform)
     return pending
 
 
-def censored_copy_is_safe_to_delete(cfg, results: Optional[dict]) -> bool:
+def censored_copy_is_safe_to_delete(cfg, results: Optional[dict],
+                                    active_platforms: Iterable[str] = ALL_PLATFORMS) -> bool:
     """True when no pending retry needs the censored re-encode.
 
     This is deliberately NOT "everything succeeded". If YouTube is the only
@@ -150,7 +152,8 @@ def censored_copy_is_safe_to_delete(cfg, results: Optional[dict]) -> bool:
     """
     if results is None:
         return True
-    return not (platforms_needing_retry(results) & censoring_platforms(cfg))
+    return not (platforms_needing_retry(results, active_platforms)
+                & censoring_platforms(cfg))
 
 
 def trim_log(path: str, max_mb: float) -> float:
@@ -235,6 +238,7 @@ def cleanup_after_upload(
     censored_path: Optional[str] = None,
     results: Optional[dict] = None,
     since_ts: Optional[float] = None,
+    active_platforms: Iterable[str] = ALL_PLATFORMS,
 ) -> CleanupReport:
     """Free this video's working files, per the contract at the top.
 
@@ -253,12 +257,13 @@ def cleanup_after_upload(
     # the censored path resolves to when censoring was skipped (it's then
     # the source itself).
     protected = {video_path}
-    pending = platforms_needing_retry(results)
+    active_platforms = tuple(active_platforms or ALL_PLATFORMS)
+    pending = platforms_needing_retry(results, active_platforms)
 
     # 1. Censored re-encode - the gigabytes.
     if not settings.get("censored_copy", True):
         report.keep("censored copy", "cleanup.censored_copy is false")
-    elif not censored_copy_is_safe_to_delete(cfg, results):
+    elif not censored_copy_is_safe_to_delete(cfg, results, active_platforms):
         blocked = sorted(pending & censoring_platforms(cfg))
         report.keep("censored copy",
                     f"still needed to retry {', '.join(blocked)}")
@@ -273,7 +278,7 @@ def cleanup_after_upload(
     #    cheap, and the optimizer report has already been written by now.
     if not settings.get("transcript_cache", True):
         report.keep("transcript cache", "cleanup.transcript_cache is false")
-    elif not censored_copy_is_safe_to_delete(cfg, results):
+    elif not censored_copy_is_safe_to_delete(cfg, results, active_platforms):
         report.keep("transcript cache", "still needed to retry censoring")
     else:
         _remove(transcript_cache_path(cfg.general.censored_folder, basename),

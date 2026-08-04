@@ -24,7 +24,7 @@ from datetime import datetime
 # Bump when shipping user-visible changes, so --test-config can prove
 # which build is actually running (stale extracts have silently caused
 # several confusing "the fix did nothing" runs).
-BUILD = "2026-08-03.19 fast-render"
+BUILD = "2026-08-03.20 only-platform"
 
 from utils.censor import censor_video
 from utils.ffmpeg_tools import StageTimer
@@ -123,7 +123,8 @@ def get_stream_title(video_path: str, cli_title: str, cfg, allow_prompt: bool = 
 
 def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChecker,
                   yt_logger, rb_logger, dry_run: bool, existing_youtube_videos: list = None,
-                  existing_rumble_videos: list = None, allow_prompt: bool = True) -> dict:
+                  existing_rumble_videos: list = None, allow_prompt: bool = True,
+                  only_platform: str = None) -> dict:
     filename = os.path.basename(video_path)
 
     # Cheap checks first. Hashing reads the whole file, so doing it before
@@ -143,8 +144,13 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
 
     file_hash = hash_file(video_path)
 
-    if dup_checker.is_fully_uploaded(file_hash):
-        print(f"[SKIP] {filename} already uploaded to both platforms previously (matched by content hash).")
+    # With --only, "done" means done for that platform alone; the other's
+    # history is neither required nor written.
+    active_platforms = (only_platform,) if only_platform else ("youtube", "rumble")
+
+    if dup_checker.is_fully_uploaded(file_hash, platforms=active_platforms):
+        where = only_platform or "both platforms"
+        print(f"[SKIP] {filename} already uploaded to {where} previously (matched by content hash).")
         return {"skipped": "duplicate"}
 
     stream_title = get_stream_title(video_path, cli_title, cfg, allow_prompt)
@@ -281,7 +287,9 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
     # --- YouTube ---
     # existing_yt was already determined (and, if it came from
     # find_existing_video, already persisted) above the dry-run check.
-    if existing_yt:
+    if "youtube" not in active_platforms:
+        print("[YouTube] Skipped - --only rumble.")
+    elif existing_yt:
         results["youtube"] = existing_yt  # already announced above
     else:
         try:
@@ -326,7 +334,9 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
     # --- Rumble ---
     # existing_rb was already determined (hash -> stored title -> RSS feed)
     # above the dry-run check, and announced there.
-    if existing_rb:
+    if "rumble" not in active_platforms:
+        print("[Rumble] Skipped - --only youtube.")
+    elif existing_rb:
         results["rumble"] = existing_rb
     else:
         try:
@@ -364,7 +374,7 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
         finally:
             dup_checker.record_platform_result(file_hash, filename, "rumble", results.get("rumble", "FAILED: interrupted"), title=rb_title)
 
-    fully_uploaded = dup_checker.is_fully_uploaded(file_hash)
+    fully_uploaded = dup_checker.is_fully_uploaded(file_hash, platforms=active_platforms)
     if fully_uploaded:
         action = resolve_source_action(cfg)
         if action == SOURCE_DELETE:
@@ -425,7 +435,8 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
     try:
         report = cleanup_after_upload(
             cfg, video_path, _censored.get("path"),
-            results=results, since_ts=run_started_at)
+            results=results, since_ts=run_started_at,
+            active_platforms=active_platforms)
         freed = report.freed_mb
         keep = int((cfg.general.cleanup or {}).get("keep_uploaded_videos", 0) or 0)
         if keep > 0:
@@ -465,6 +476,10 @@ def main(argv=None) -> int:
                         help="Process every supported video already in a folder "
                              "(defaults to general.watch_folder from config.json).")
     parser.add_argument("--test-config", action="store_true", help="Validate config.json/.env, then exit.")
+    parser.add_argument("--only", choices=("youtube", "rumble"), metavar="PLATFORM",
+                        help="Upload to just one platform (youtube|rumble). The "
+                             "other is skipped entirely, and 'done' means done "
+                             "for the selected platform only.")
     parser.add_argument("--forget", metavar="FILE",
                         help="Erase this file's upload history so it can be "
                              "retried (use --forget-platform to target one).")
@@ -609,7 +624,8 @@ def main(argv=None) -> int:
 
     if args.file:
         process_file(args.file, cfg, args.title, dup_checker, yt_logger, rb_logger, dry_run,
-                     existing_youtube_videos, existing_rumble_videos)
+                     existing_youtube_videos, existing_rumble_videos,
+                     only_platform=args.only)
         return 0
 
     if batch_folder:
@@ -617,7 +633,8 @@ def main(argv=None) -> int:
             path = os.path.join(batch_folder, fname)
             if os.path.isfile(path):
                 process_file(path, cfg, None, dup_checker, yt_logger, rb_logger, dry_run,
-                             existing_youtube_videos, existing_rumble_videos)
+                             existing_youtube_videos, existing_rumble_videos,
+                             only_platform=args.only)
         return 0
 
     if args.watch is not None or dry_run:
@@ -654,7 +671,7 @@ def main(argv=None) -> int:
             # thread with nobody at the keyboard.
             process_file(path, cfg, None, dup_checker, yt_logger, rb_logger, dry_run,
                          existing_youtube_videos, existing_rumble_videos,
-                         allow_prompt=False)
+                         allow_prompt=False, only_platform=args.only)
 
         watcher = FolderWatcher(
             watch_folder, cfg.general.supported_formats,

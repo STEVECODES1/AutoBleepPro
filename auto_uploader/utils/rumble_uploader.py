@@ -41,6 +41,19 @@ from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeo
 # must still treat it as done and not re-upload it on the next run.
 UPLOADED_NO_URL = "uploaded (Rumble did not show a link - check your dashboard)"
 
+# A published Rumble video is /v<id>-<slug>.html. Matching a bare "/v"
+# prefix also matches the site's own /videos browse page, which is a link
+# present on every upload page - that got recorded as the "video URL" and
+# posted to Discord. The id must contain a digit and be followed by the
+# slug separator, which no navigation path is.
+_VIDEO_URL = re.compile(r"^https://rumble\.com/v(?=[a-z0-9]*\d)[a-z0-9]{3,}[-.]", re.I)
+
+
+def _is_video_url(candidate: str) -> bool:
+    if not candidate or "/upload" in candidate:
+        return False
+    return bool(_VIDEO_URL.match(candidate.strip()))
+
 
 class RumbleUploader:
     def __init__(
@@ -784,6 +797,6 @@ class RumbleUploader:
 
         for candidate in candidates:
             candidate = candidate.rstrip('\'"')
-            if "/upload" not in candidate and re.search(r"rumble\.com/v", candidate):
+            if _is_video_url(candidate):
                 return candidate
         return None
