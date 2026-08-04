@@ -15,6 +15,7 @@ import argparse
 import os
 import shutil
 import sys
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -23,7 +24,7 @@ from datetime import datetime
 # Bump when shipping user-visible changes, so --test-config can prove
 # which build is actually running (stale extracts have silently caused
 # several confusing "the fix did nothing" runs).
-BUILD = "2026-08-03.17 disk-cleanup"
+BUILD = "2026-08-03.18 retry-safe-cleanup"
 
 from utils.censor import censor_video
 from utils.cleanup import (
@@ -267,6 +268,7 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
                 print("[Censor] No profanity/mature language detected - uploading original audio.")
         return _censored["path"]
 
+    run_started_at = time.time()
     results = {}
     newly_uploaded = {}
 
@@ -411,13 +413,17 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
     # Disk cleanup LAST: the optimizer above reads the cached transcript,
     # so removing it any earlier would break the report.
     try:
-        freed = cleanup_after_upload(cfg, video_path, _censored.get("path"),
-                                     fully_uploaded=fully_uploaded)
+        report = cleanup_after_upload(
+            cfg, video_path, _censored.get("path"),
+            results=results, since_ts=run_started_at)
+        freed = report.freed_mb
         keep = int((cfg.general.cleanup or {}).get("keep_uploaded_videos", 0) or 0)
         if keep > 0:
             freed += prune_uploaded_folder(cfg, keep)
         if freed >= 1:
             print(f"[Cleanup] Freed {freed:.0f} MB of working files.")
+        for what, reason in report.kept:
+            print(f"[Cleanup] Kept {what}: {reason}.")
     except Exception as exc:
         print(f"[Cleanup] WARNING: cleanup failed: {exc}")
 
