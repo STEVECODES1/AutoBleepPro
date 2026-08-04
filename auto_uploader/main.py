@@ -23,7 +23,7 @@ from datetime import datetime
 # Bump when shipping user-visible changes, so --test-config can prove
 # which build is actually running (stale extracts have silently caused
 # several confusing "the fix did nothing" runs).
-BUILD = "2026-08-03.13 honest-rumble-url"
+BUILD = "2026-08-03.14 title-aware-dedup"
 
 from utils.censor import censor_video
 from utils.config import load_config, validate_config
@@ -42,7 +42,11 @@ from utils.templating import (
     extract_title_from_filename,
     format_date,
 )
-from utils.youtube_checker import fetch_existing_videos, find_existing_video
+from utils.youtube_checker import (
+    fetch_existing_videos,
+    find_existing_video,
+    find_same_date_videos,
+)
 from utils.youtube_uploader import YouTubeUploader
 
 
@@ -145,9 +149,18 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
         # channel's title style has changed over the years but always
         # includes the date. Rumble is NOT skipped in this case - these
         # old VODs were typically only ever uploaded to YouTube manually.
-        existing_yt_match = find_existing_video(existing_youtube_videos, now)
+        existing_yt_match = find_existing_video(existing_youtube_videos, now, stream_title)
         if existing_yt_match:
             existing_yt = existing_yt_match.url
+        else:
+            # Same date, different stream. Say so rather than skipping: two
+            # streams on one day is normal, and a silent skip here means the
+            # video simply never gets uploaded.
+            same_day = find_same_date_videos(existing_youtube_videos, now)
+            if same_day:
+                print(f"[YouTube] {len(same_day)} video(s) already dated {date_str} "
+                      f"(e.g. {same_day[0].title!r}), but none titled "
+                      f"{stream_title!r} - uploading this one.")
 
     if existing_yt:
         note = " (would skip on a real run, still would try Rumble)" if dry_run else " (skipping, still trying Rumble)"
@@ -162,7 +175,7 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
     if not existing_rb and cfg.rumble.skip_if_exists:
         existing_rb = dup_checker.find_platform_title("rumble", rb_title)
         if not existing_rb and existing_rumble_videos:
-            rb_match = find_existing_video(existing_rumble_videos, now)
+            rb_match = find_existing_video(existing_rumble_videos, now, stream_title)
             if rb_match:
                 existing_rb = existing_rb_match_url = rb_match.url
     if existing_rb:
@@ -373,6 +386,11 @@ def main(argv=None) -> int:
                         help="Process every supported video already in a folder "
                              "(defaults to general.watch_folder from config.json).")
     parser.add_argument("--test-config", action="store_true", help="Validate config.json/.env, then exit.")
+    parser.add_argument("--forget", metavar="FILE",
+                        help="Erase this file's upload history so it can be "
+                             "retried (use --forget-platform to target one).")
+    parser.add_argument("--forget-platform", choices=("youtube", "rumble"),
+                        help="With --forget, only clear this platform.")
     parser.add_argument("--health", action="store_true", help="Run disk/CPU/network health checks + temp cleanup, then exit.")
     args = parser.parse_args(argv)
 
@@ -383,6 +401,20 @@ def main(argv=None) -> int:
 
     config_dir = os.path.dirname(os.path.abspath(__file__))
     cfg = load_config(os.path.join(config_dir, "config.json"), os.path.join(config_dir, ".env"))
+
+    if args.forget:
+        if not os.path.isfile(args.forget):
+            print(f"[ERROR] File not found: {args.forget}")
+            return 1
+        checker = DuplicateChecker(cfg.general.duplicate_store_path)
+        target = hash_file(args.forget)
+        if checker.forget(target, args.forget_platform):
+            scope = args.forget_platform or "both platforms"
+            print(f"Forgot {os.path.basename(args.forget)} ({scope}). "
+                  f"Run --file on it to upload again.")
+            return 0
+        print(f"No upload history recorded for {os.path.basename(args.forget)}.")
+        return 0
 
     if args.health:
         ok = run_health_check(cfg, cfg.features.get("self_healing", {}))

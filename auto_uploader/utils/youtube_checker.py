@@ -9,6 +9,7 @@ locally - cheap even against a channel with hundreds of videos, and safe
 to call once per --batch run rather than once per file.
 """
 
+import re
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional
@@ -61,15 +62,51 @@ def _date_variants(dt: datetime) -> list:
     ]
 
 
-def find_existing_video(existing_videos: list, target_date: datetime) -> Optional[ExistingVideo]:
-    """Returns the first existing video whose title contains `target_date`
-    in any known format, or None. Matching by date rather than by title
-    text on purpose - this channel's title style has changed over time
-    (old: '*Title* - 05/08/26 - Stackswopo FULL YT Stream', new: '"Title"
-    5/8/26 Stackswopo Stream'), but every era has included the date.
-    """
+def _normalize(text: str) -> str:
+    """Lowercase, letters+digits only, so punctuation and title-style
+    differences ('*!howl*' vs '"!howl"') don't defeat the comparison."""
+    return re.sub(r"[^a-z0-9]", "", (text or "").lower())
+
+
+# Below this, a title fragment is too generic to trust as an identity
+# match ("no", "gg"), and a false match silently cancels an upload.
+_MIN_TITLE_KEY = 3
+
+
+def find_same_date_videos(existing_videos: list, target_date: datetime) -> list:
+    """Every existing video whose title carries `target_date`."""
     variants = _date_variants(target_date)
-    for video in existing_videos:
-        if any(variant in video.title for variant in variants):
+    return [v for v in existing_videos
+            if any(variant in v.title for variant in variants)]
+
+
+def find_existing_video(existing_videos: list, target_date: datetime,
+                        stream_title: Optional[str] = None) -> Optional[ExistingVideo]:
+    """The existing upload of this same stream, or None.
+
+    Date alone is not enough. It was originally, because backfilling an
+    archive means one stream per date and this channel's title style has
+    changed over the years (old: '*Title* - 05/08/26 - Stackswopo FULL YT
+    Stream', new: '"Title" 5/8/26 Stackswopo Stream') while the date was
+    always present. But the moment two streams go up on the SAME date, a
+    date-only match makes the second one look like the first and it gets
+    silently skipped - the upload never happens and the log points at the
+    wrong video.
+
+    So when `stream_title` is known, the title has to match as well. The
+    comparison is loose (normalised substring) so it still spans both
+    title eras: '!howl' matches '*!howl* - 03/20/26 - ...'.
+    """
+    same_date = find_same_date_videos(existing_videos, target_date)
+    if not same_date:
+        return None
+
+    # No title to compare (callers that only know the date) - old behaviour.
+    key = _normalize(stream_title) if stream_title else ""
+    if not key or len(key) < _MIN_TITLE_KEY:
+        return same_date[0] if stream_title is None else None
+
+    for video in same_date:
+        if key in _normalize(video.title):
             return video
     return None

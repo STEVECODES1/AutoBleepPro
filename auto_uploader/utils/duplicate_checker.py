@@ -86,6 +86,26 @@ class DuplicateChecker:
                 return record["results"][platform]
         return None
 
+    def forget(self, file_hash: str, platform: str = None) -> bool:
+        """Drop a recorded result so the file can be retried.
+
+        Needed when a result was recorded wrongly - e.g. a duplicate check
+        matched the wrong video and marked an upload "done" that never
+        happened. Returns True if anything was removed.
+        """
+        record = self._seen.get(file_hash)
+        if not record:
+            return False
+        if platform is None:
+            del self._seen[file_hash]
+        else:
+            if platform not in record.get("results", {}):
+                return False
+            record["results"].pop(platform, None)
+            record.get("titles", {}).pop(platform, None)
+        self._save()
+        return True
+
     def is_fully_uploaded(self, file_hash: str, platforms: tuple = ("youtube", "rumble")) -> bool:
         """True only if every platform in `platforms` already has a
         successful (non-FAILED) result recorded for this file content."""
