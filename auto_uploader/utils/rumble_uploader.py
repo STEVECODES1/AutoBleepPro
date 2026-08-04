@@ -36,6 +36,12 @@ from typing import Callable, Optional
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
 
 
+# Recorded instead of a URL when the upload succeeded but Rumble never
+# showed a link. Deliberately not "FAILED:" - the video IS up, so dedup
+# must still treat it as done and not re-upload it on the next run.
+UPLOADED_NO_URL = "uploaded (Rumble did not show a link - check your dashboard)"
+
+
 class RumbleUploader:
     def __init__(
         self,
@@ -725,23 +731,59 @@ class RumbleUploader:
         if progress_callback:
             progress_callback(100)
 
-        return direct_url or page.url
+        if direct_url:
+            return direct_url
+
+        # The upload succeeded - never report the upload page itself as the
+        # video URL. That string gets written into the dedup history and
+        # posted to Discord, so a wrong-but-plausible link is worse than an
+        # honest "couldn't read it": it looks like a working link and isn't.
+        print("[Rumble] Upload finished, but Rumble didn't show a video link on the "
+              "page (it sometimes only appears once processing completes). "
+              "Check your Rumble dashboard for the published URL.")
+        return UPLOADED_NO_URL
 
     def _find_video_url(self, page):
-        """The published video's URL from the success page: the Direct Link
-        input's value first, then any rumble.com/v... link in the HTML."""
+        """The published video's URL from the success page.
+
+        Tried in order: the Direct Link input/textarea value, any anchor
+        pointing at a video, then any rumble.com/v... link anywhere in the
+        HTML. Anything under /upload is rejected - that's this page.
+        """
+        candidates: list[str] = []
+
         try:
-            values = page.evaluate(
-                "() => Array.from(document.querySelectorAll('input,textarea')).map(e => e.value || '')"
-            )
+            candidates += [
+                v for v in page.evaluate(
+                    "() => Array.from(document.querySelectorAll('input,textarea'))"
+                    "        .map(e => e.value || '')")
+                if isinstance(v, str) and v.startswith("https://rumble.com/")
+            ]
         except Exception:
-            values = []
-        candidates = [v for v in values if isinstance(v, str) and v.startswith("https://rumble.com/")]
+            pass
+
+        # Anchors, including root-relative hrefs ("/v6abc12-title.html").
+        try:
+            for href in page.evaluate(
+                "() => Array.from(document.querySelectorAll('a[href]'))"
+                "        .map(a => a.getAttribute('href') || '')"
+            ):
+                if not isinstance(href, str):
+                    continue
+                if href.startswith("/v"):
+                    candidates.append("https://rumble.com" + href)
+                elif href.startswith("https://rumble.com/v"):
+                    candidates.append(href)
+        except Exception:
+            pass
+
         try:
             candidates += re.findall(r"https://rumble\.com/v[A-Za-z0-9._-]+", page.content())
         except Exception:
             pass
+
         for candidate in candidates:
-            if "/upload" not in candidate:
-                return candidate.rstrip('\'"')
+            candidate = candidate.rstrip('\'"')
+            if "/upload" not in candidate and re.search(r"rumble\.com/v", candidate):
+                return candidate
         return None
