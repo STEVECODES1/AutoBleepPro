@@ -168,6 +168,43 @@ ever manually uploaded to YouTube in the past:
 - Run one or two files first with `--file` before pointing `--batch` at
   a big folder, to make sure the results look right.
 
+## Speed
+
+The censor pass only ever changes **audio**, but the old render decoded and
+re-encoded every video frame to apply it. It now muxes the new audio onto
+the untouched video stream instead. Measured on a 60s 720p30 clip:
+
+| Path | Time | Output |
+|---|---|---|
+| moviepy re-encode (old) | 24.4s | re-encoded, quality lost |
+| ffmpeg `-c:v copy` (now) | **1.8s** | original picture, bit-for-bit |
+
+The margin grows with resolution and length - on a 2-hour 1080p60 stream
+this is the difference between most of an hour and a couple of minutes.
+
+Also: the Whisper model stays loaded across a batch instead of reloading
+per file; a valid transcript cache skips transcription entirely on a
+re-censor; an existing censored copy skips the render entirely; and every
+stage prints its wall time so you can see where the minutes go.
+
+```
+[Timing] clip.mp4: audio extract took 0.2s
+[Timing] clip.mp4: transcribe took 41.3s
+[Timing] clip.mp4: render [copy] took 1.8s
+[Timing] clip.mp4: total wall time 51.7s
+```
+
+Settings live under `general.speed`. Defaults are safe: stream copy is on
+(it's faster *and* lossless), `hardware_encode: "auto"` only applies to
+the fallback re-encode and probes NVENC before trusting it, falling back
+to libx264 if it isn't genuinely available.
+
+`youtube.upload_chunk_mb` (default 8) sizes the resumable upload chunks -
+raise it to 32-64 on a fast, stable connection for fewer round-trips.
+
+Not covered here: yt-dlp download speed, which is your `record-all.bat`,
+not this tool. Add `--concurrent-fragments 8` there.
+
 ## Disk cleanup
 
 Each processed video leaves working files behind, in very different size

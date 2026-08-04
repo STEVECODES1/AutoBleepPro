@@ -26,6 +26,7 @@ class YouTubeConfig:
     client_secrets_path: str
     token_path: str
     censor_uploads: bool
+    upload_chunk_mb: float = 8
 
 
 @dataclass
@@ -72,6 +73,7 @@ class GeneralConfig:
     # Optional; defaulted so older config.json files keep loading.
     filename_channel_prefixes: tuple = ()
     cleanup: dict = None
+    speed: dict = None
 
 
 @dataclass
@@ -119,6 +121,7 @@ def load_config(config_path: str = "config.json", env_path: str = ".env") -> App
         ),
         token_path=os.path.join(project_root, "youtube_token.json"),
         censor_uploads=bool(yt.get("censor_uploads", True)),
+        upload_chunk_mb=float(yt.get("upload_chunk_mb", 8) or 8),
     )
 
     rumble = RumbleConfig(
@@ -150,6 +153,7 @@ def load_config(config_path: str = "config.json", env_path: str = ".env") -> App
         ask_for_title=bool(gen.get("ask_for_title", True)),
         filename_channel_prefixes=tuple(gen.get("filename_channel_prefixes", []) or []),
         cleanup=dict(gen.get("cleanup", {}) or {}),
+        speed=dict(gen.get("speed", {}) or {}),
         default_title=gen.get("default_title", "Gaming Stream"),
         supported_formats=tuple(
             e.lower() for e in gen.get("supported_formats", [".mp4", ".mov", ".avi", ".mkv", ".flv", ".wmv", ".ts"])

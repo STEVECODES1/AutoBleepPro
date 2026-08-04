@@ -11,6 +11,8 @@
     "tags": ["StacksWopo", "StreamReplay", "FullVOD", "GamingHighlights", "FunnyMoments", "GTA5", "GTAOnline", "Roleplay", "StreamerMoments", "UncutReplay", "Entertainment"],
     "_censor_comment": "true = upload the profanity-censored copy (YouTube age-restricts/demonetizes over spoken language).",
     "censor_uploads": true,
+    "_chunk_comment": "Resumable-upload chunk size in MB. Bigger = fewer HTTP round-trips on a fast connection; smaller = less re-sent data after a dropped connection. 8 is conservative; 32-64 is reasonable on a solid line.",
+    "upload_chunk_mb": 8,
     "playlist_id": "",
     "thumbnail_path": "./thumbnails/default.jpg"
   },
@@ -61,6 +63,16 @@
     "censor_device": null,
     "censor_custom_words": [],
     "censored_folder": "./censored",
+
+    "_speed_comment": "stream_copy_video: the censor pass only changes AUDIO, so the video stream is copied instead of re-encoded - much faster and lossless. Set false to force a re-encode. hardware_encode ('auto'|'nvenc'|'cpu') only applies to that fallback re-encode; 'auto' uses NVIDIA NVENC when it genuinely works. reuse_model keeps the Whisper model loaded across files in a batch. stage_timings prints how long each stage took.",
+    "speed": {
+      "stream_copy_video": true,
+      "hardware_encode": "auto",
+      "encode_preset": "fast",
+      "reuse_model": true,
+      "reuse_transcript": true,
+      "stage_timings": true
+    },
 
     "_cleanup_comment": "Frees disk after each successful upload. The censored copy is a full re-encode (roughly the size of the source video) - that's what actually costs gigabytes; logs are kilobytes, so they're trimmed rather than deleted so failures stay diagnosable. source_video: 'move' keeps the original in uploaded/ (default), 'delete' frees it once BOTH platforms succeeded (the original is gone - only use this if the video exists elsewhere), 'keep' leaves it where it was. keep_uploaded_videos: 0 = off; set e.g. 3 to keep only the 3 newest in uploaded/.",
     "cleanup": {

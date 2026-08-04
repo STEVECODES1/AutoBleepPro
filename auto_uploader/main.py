@@ -24,9 +24,10 @@ from datetime import datetime
 # Bump when shipping user-visible changes, so --test-config can prove
 # which build is actually running (stale extracts have silently caused
 # several confusing "the fix did nothing" runs).
-BUILD = "2026-08-03.18 retry-safe-cleanup"
+BUILD = "2026-08-03.19 fast-render"
 
 from utils.censor import censor_video
+from utils.ffmpeg_tools import StageTimer
 from utils.cleanup import (
     SOURCE_DELETE,
     SOURCE_KEEP,
@@ -252,6 +253,7 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
                 bleep_method=cfg.general.censor_bleep_method,
                 custom_words=cfg.general.censor_custom_words,
                 device=cfg.general.censor_device,
+                speed=cfg.general.speed,
             )
             _censored["path"] = censor_result.output_path
             if censor_result.violation_count == -1:
@@ -269,6 +271,8 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
         return _censored["path"]
 
     run_started_at = time.time()
+    stage_timer = StageTimer(filename,
+                             enabled=bool((cfg.general.speed or {}).get('stage_timings', True)))
     results = {}
     newly_uploaded = {}
 
@@ -292,6 +296,7 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
             url = retry_with_backoff(
                 lambda: yt.upload(
                     upload_path_for(cfg.youtube.censor_uploads), yt_title, yt_description, cfg.youtube.tags,
+                    chunk_mb=float(getattr(cfg.youtube, 'upload_chunk_mb', 8) or 8),
                     privacy=cfg.youtube.privacy, category_id=cfg.youtube.category_id,
                     made_for_kids=cfg.youtube.made_for_kids,
                     thumbnail_path=cfg.youtube.thumbnail_path or None,
@@ -389,6 +394,8 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
     # Post-upload extras - strictly best-effort, only for uploads that
     # actually happened THIS run (never for pre-existing skips), and never
     # in a dry run. A failure here must not mark the upload as failed.
+    stage_timer.mark("upload")
+
     if newly_uploaded:
         try:
             from utils.social_promoter import announce_upload
@@ -410,6 +417,9 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
         except Exception as exc:
             print(f"[Optimize] WARNING: report failed: {exc}")
 
+    if newly_uploaded:
+        stage_timer.mark("metadata/optimizer")
+
     # Disk cleanup LAST: the optimizer above reads the cached transcript,
     # so removing it any earlier would break the report.
     try:
@@ -426,6 +436,12 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
             print(f"[Cleanup] Kept {what}: {reason}.")
     except Exception as exc:
         print(f"[Cleanup] WARNING: cleanup failed: {exc}")
+
+    stage_timer.mark("cleanup")
+    if stage_timer.enabled:
+        print(f"[Timing] {stage_timer.summary()}")
+        print(f"[Timing] {filename}: total wall time "
+              f"{time.time() - run_started_at:.1f}s")
 
     return results
 

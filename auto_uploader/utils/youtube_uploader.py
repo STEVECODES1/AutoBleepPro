@@ -75,6 +75,7 @@ class YouTubeUploader:
         category_id: str = "20",
         made_for_kids: bool = False,
         thumbnail_path: Optional[str] = None,
+        chunk_mb: float = 8,
         playlist_id: Optional[str] = None,
         progress_callback: Optional[Callable[[int], None]] = None,
     ) -> str:
@@ -94,7 +95,11 @@ class YouTubeUploader:
             },
         }
 
-        media = MediaFileUpload(video_path, chunksize=8 * 1024 * 1024, resumable=True)
+        # Resumable with an explicit chunk size. Bigger chunks mean fewer
+        # HTTP round-trips on a fast line; smaller ones resume with less
+        # lost work after a drop. 8 MB is the conservative default.
+        chunk_bytes = max(256 * 1024, int(chunk_mb * 1024 * 1024))
+        media = MediaFileUpload(video_path, chunksize=chunk_bytes, resumable=True)
         request = service.videos().insert(part="snippet,status", body=body, media_body=media)
 
         response = None

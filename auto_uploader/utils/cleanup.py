@@ -50,7 +50,7 @@ import os
 from dataclasses import dataclass, field
 from typing import Iterable, Optional
 
-from utils.censor import transcript_cache_path
+from utils.censor import transcript_cache_path, words_cache_path
 
 # What `cleanup.source_video` may be set to.
 SOURCE_MOVE = "move"      # default: keep it, in uploaded/
@@ -277,6 +277,8 @@ def cleanup_after_upload(
         report.keep("transcript cache", "still needed to retry censoring")
     else:
         _remove(transcript_cache_path(cfg.general.censored_folder, basename),
+                report, protected)
+        _remove(words_cache_path(cfg.general.censored_folder, basename),
                 report, protected)
 
     # 3. Extracted audio. censor_video removes these itself; this only
