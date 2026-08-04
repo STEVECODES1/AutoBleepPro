@@ -64,6 +64,10 @@
     "censor_custom_words": [],
     "censored_folder": "./censored",
 
+    "_hate_speech_comment": "censor_padding_ms widens every mute by this many ms on each side - Whisper's word timings are 100-300ms out, so muting the exact span leaves the first syllable audible, which for a slur defeats the point. censor_mute_whole_segment mutes the ENTIRE sentence containing a slur rather than the single word, because YouTube's hate speech policy acts on context, not just the audible word. Raise padding to 400+ to be blunter.",
+    "censor_padding_ms": 250,
+    "censor_mute_whole_segment": true,
+
     "_speed_comment": "stream_copy_video: the censor pass only changes AUDIO, so the video stream is copied instead of re-encoded - much faster and lossless. Set false to force a re-encode. hardware_encode ('auto'|'nvenc'|'cpu') only applies to that fallback re-encode; 'auto' uses NVIDIA NVENC when it genuinely works. reuse_model keeps the Whisper model loaded across files in a batch. stage_timings prints how long each stage took.",
     "speed": {
       "stream_copy_video": true,

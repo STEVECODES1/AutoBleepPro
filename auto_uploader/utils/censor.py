@@ -143,6 +143,34 @@ def _render(source_path: str, clean_audio_path: str, output_video_path: str,
     return "moviepy"
 
 
+def _report_risk(violations) -> None:
+    """Print what was flagged, worst category first.
+
+    A muted slur is still worth seeing before publishing: YouTube acts on
+    the surrounding context, which no audio filter can remove.
+    """
+    from autoreel.compliance import HIGH_SEVERITY_CATEGORIES
+
+    if not violations:
+        return
+    by_category: dict = {}
+    for v in violations:
+        by_category.setdefault(v.category, []).append(v)
+
+    for category in sorted(by_category, key=lambda c: (c not in HIGH_SEVERITY_CATEGORIES, c)):
+        hits = by_category[category]
+        marker = "!! HIGH RISK" if category in HIGH_SEVERITY_CATEGORIES else "  "
+        print(f"[Censor] {marker} {category}: {len(hits)} hit(s)")
+        if category in HIGH_SEVERITY_CATEGORIES:
+            for v in hits[:10]:
+                stamp = f"{int(v.start // 60):02d}:{int(v.start % 60):02d}"
+                print(f"[Censor]      {stamp}  {v.word.strip()!r}  (whole sentence muted)")
+            if len(hits) > 10:
+                print(f"[Censor]      ... and {len(hits) - 10} more")
+            print("[Censor]      Muting the audio does NOT make the video policy-safe - "
+                  "YouTube judges context. Review these timestamps before publishing.")
+
+
 def censor_video(
     source_path: str,
     work_dir: str,
@@ -151,6 +179,8 @@ def censor_video(
     custom_words: tuple = (),
     device: Optional[str] = None,
     speed: Optional[dict] = None,
+    padding_ms: int = 250,
+    mute_whole_segment: bool = True,
 ) -> CensorResult:
     """Transcribe `source_path`, bleep any flagged words, and return the
     path that should actually be uploaded (a censored copy, or the
@@ -219,7 +249,9 @@ def censor_video(
         except Exception:
             pass  # a failed cache write must never fail the censor pass
 
-        engine = ComplianceEngine(custom_words=custom_words)
+        engine = ComplianceEngine(custom_words=custom_words,
+                                  padding_ms=padding_ms,
+                                  mute_whole_segment=mute_whole_segment)
         violations = engine.scan_segments(result["segments"])
 
         if not violations:
@@ -230,6 +262,8 @@ def censor_video(
         if not os.path.exists(raw_audio_path):
             _extract_audio(source_path, raw_audio_path)   # cache hit skipped it
             timer.mark("audio extract")
+        _report_risk(violations)
+
         audio_segment = AudioSegment.from_wav(raw_audio_path)
         censored_audio = engine.censor_audio(audio_segment, violations, method=bleep_method)
         censored_audio.export(clean_audio_path, format="wav")

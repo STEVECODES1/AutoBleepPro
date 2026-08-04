@@ -70,6 +70,8 @@ class GeneralConfig:
     censor_device: Optional[str]
     censor_custom_words: tuple
     censored_folder: str
+    censor_padding_ms: int = 250
+    censor_mute_whole_segment: bool = True
     # Optional; defaulted so older config.json files keep loading.
     filename_channel_prefixes: tuple = ()
     cleanup: dict = None
@@ -168,6 +170,8 @@ def load_config(config_path: str = "config.json", env_path: str = ".env") -> App
         censor_device=os.environ.get("CENSOR_DEVICE") or gen.get("censor_device") or None,
         censor_custom_words=tuple(gen.get("censor_custom_words", [])),
         censored_folder=_resolve_path(project_root, gen.get("censored_folder", "./censored")),
+        censor_padding_ms=int(gen.get("censor_padding_ms", 250)),
+        censor_mute_whole_segment=bool(gen.get("censor_mute_whole_segment", True)),
     )
 
     return AppConfig(youtube=youtube, rumble=rumble, general=general, project_root=project_root,

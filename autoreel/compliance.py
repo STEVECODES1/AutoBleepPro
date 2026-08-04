@@ -41,7 +41,28 @@ DEFAULT_CATEGORIES: dict[str, list[str]] = {
     "sexual_content": [
         "nsfw", "explicit content", "onlyfans",
     ],
+    # Slurs and hate-speech terms. better_profanity catches the common
+    # spellings; these are the variants and plurals it misses, and being
+    # their own category is what lets them be treated as high severity.
+    # This is a MUTE list for the uploader's own recordings, not a
+    # judgement about the speech - YouTube removes videos over these under
+    # its hate speech policy regardless of intent or who is speaking.
+    "hate_speech": [
+        "nigger", "niggers", "nigga", "niggas", "niggah", "nigguh",
+        "faggot", "faggots", "fag", "fags", "faggy",
+        "tranny", "trannies", "shemale",
+        "retard", "retards", "retarded", "tard",
+        "kike", "kikes", "spic", "spics", "wetback", "wetbacks",
+        "chink", "chinks", "gook", "gooks", "coon", "coons",
+        "beaner", "beaners", "raghead", "ragheads", "towelhead",
+        "dyke", "dykes", "queer bait", "white trash",
+    ],
 }
+
+# Categories serious enough that muting the single word isn't enough - the
+# sentence around it usually carries the same meaning, so the whole
+# segment goes. YouTube acts on context, not just the audible word.
+HIGH_SEVERITY_CATEGORIES: frozenset = frozenset({"hate_speech"})
 
 
 @dataclass
@@ -50,6 +71,15 @@ class Violation:
     start: float
     end: float
     category: str
+    # Bounds of the transcript segment this word sat in, so high-severity
+    # hits can be muted sentence-wide without censor_audio needing the
+    # transcript passed to it separately.
+    segment_start: Optional[float] = None
+    segment_end: Optional[float] = None
+
+    @property
+    def is_high_severity(self) -> bool:
+        return self.category in HIGH_SEVERITY_CATEGORIES
 
 
 @dataclass
@@ -59,6 +89,12 @@ class ComplianceEngine:
     custom_words: tuple[str, ...] = ()
     extra_categories: Optional[dict[str, list[str]]] = None
     use_profanity_filter: bool = True
+    # Whisper's word timestamps are approximate - typically 100-300ms out.
+    # Muting exactly the reported span leaves the first syllable audible,
+    # which for a slur is the whole problem. Pad both edges.
+    padding_ms: int = 250
+    # Mute the entire segment around a high-severity hit, not just the word.
+    mute_whole_segment: bool = True
 
     def __post_init__(self) -> None:
         self.categories: dict[str, list[str]] = {
@@ -81,19 +117,32 @@ class ComplianceEngine:
         core = re.sub(r"'(s|ll|d|m|re|ve|t)$", "", normalized)
 
         for candidate in (normalized, core):
-            if self.use_profanity_filter and HAS_BETTER_PROFANITY and _profanity.contains_profanity(candidate):
-                return "profanity"
+            # High-severity categories are checked FIRST. better_profanity
+            # knows most slurs, so consulting it first classified them as
+            # plain "profanity" and they never reached this list - which
+            # silently disabled whole-segment muting for exactly the words
+            # it exists to catch.
+            for category in HIGH_SEVERITY_CATEGORIES:
+                if any(phrase in candidate for phrase in self.categories.get(category, ())):
+                    return category
 
             if any(custom and custom in candidate for custom in self.custom_words):
                 return "custom_word"
 
             for category, phrases in self.categories.items():
+                if category in HIGH_SEVERITY_CATEGORIES:
+                    continue
                 if any(phrase in candidate for phrase in phrases):
                     return category
 
+            if self.use_profanity_filter and HAS_BETTER_PROFANITY and _profanity.contains_profanity(candidate):
+                return "profanity"
+
         return None
 
-    def scan_words(self, words: Iterable[dict]) -> list[Violation]:
+    def scan_words(self, words: Iterable[dict],
+                   segment_start: Optional[float] = None,
+                   segment_end: Optional[float] = None) -> list[Violation]:
         """Scan word-level transcript entries (dicts with word/start/end)."""
         violations: list[Violation] = []
         for word_info in words:
@@ -105,6 +154,8 @@ class ComplianceEngine:
                         start=word_info["start"],
                         end=word_info["end"],
                         category=reason,
+                        segment_start=segment_start,
+                        segment_end=segment_end,
                     )
                 )
         return violations
@@ -113,38 +164,96 @@ class ComplianceEngine:
         """Scan Whisper-style segments (each with a 'words' list)."""
         violations: list[Violation] = []
         for segment in segments:
-            violations.extend(self.scan_words(segment.get("words", [])))
+            violations.extend(self.scan_words(
+                segment.get("words", []),
+                segment_start=segment.get("start"),
+                segment_end=segment.get("end"),
+            ))
         return violations
 
     def is_kid_friendly(self, violations: Iterable[Violation]) -> bool:
         return not any(True for _ in violations)
 
+    def mute_spans(self, violations: Iterable[Violation], total_ms: int) -> list:
+        """Violations -> merged, clamped (start_ms, end_ms) spans to mute.
+
+        Three things happen here that muting each word in isolation misses:
+
+        1. Padding. Whisper's timings are approximate, so the exact span
+           leaves the leading syllable audible - for a slur that defeats
+           the point.
+        2. High-severity hits expand to their whole segment. Muting one
+           word out of the sentence leaves the meaning intact, and YouTube
+           acts on context.
+        3. Overlaps are merged, so the rebuild below stays correct and the
+           track length is preserved exactly.
+        """
+        spans: list = []
+        for violation in violations:
+            start = violation.start
+            end = violation.end
+            if (self.mute_whole_segment and violation.is_high_severity
+                    and violation.segment_start is not None
+                    and violation.segment_end is not None):
+                start = min(start, violation.segment_start)
+                end = max(end, violation.segment_end)
+
+            start_ms = int(start * 1000) - self.padding_ms
+            end_ms = int(end * 1000) + self.padding_ms
+            start_ms = max(0, min(start_ms, total_ms))
+            end_ms = max(0, min(end_ms, total_ms))
+            if end_ms > start_ms:
+                spans.append((start_ms, end_ms))
+
+        spans.sort()
+        merged: list = []
+        for start_ms, end_ms in spans:
+            if merged and start_ms <= merged[-1][1]:
+                merged[-1] = (merged[-1][0], max(merged[-1][1], end_ms))
+            else:
+                merged.append((start_ms, end_ms))
+        return merged
+
     def censor_audio(self, audio_segment, violations: Iterable[Violation], method: str = "beep"):
-        """Return a copy of `audio_segment` with each violation span censored.
+        """Return a copy of `audio_segment` with each violation censored.
 
         `audio_segment` is a pydub AudioSegment; kept as a duck-typed
         parameter so this module has no hard import-time dependency on
         pydub and stays importable/testable without it installed.
+
+        Built in a single pass. The old version did
+        `censored = censored[:s] + replacement + censored[e:]` per
+        violation, which is O(n^2) - on a stream with hundreds of flagged
+        words that is minutes of pure copying.
         """
+        from pydub import AudioSegment
         from pydub.generators import Sine
 
+        total_ms = len(audio_segment)
+        spans = self.mute_spans(violations, total_ms)
+        if not spans:
+            return audio_segment
+
         beep_tone = Sine(1000).to_audio_segment(duration=100)
-
-        censored = audio_segment
-        for violation in sorted(violations, key=lambda v: v.start):
-            start_ms = int(violation.start * 1000)
-            end_ms = int(violation.end * 1000)
-            duration_ms = max(0, end_ms - start_ms)
-            if duration_ms == 0:
-                continue
-
+        pieces: list = []
+        cursor = 0
+        for start_ms, end_ms in spans:
+            if start_ms > cursor:
+                pieces.append(audio_segment[cursor:start_ms])
+            duration_ms = end_ms - start_ms
             if method == "beep":
                 replacement = (beep_tone * (duration_ms // 100 + 1))[:duration_ms]
             else:
-                from pydub import AudioSegment
+                replacement = AudioSegment.silent(
+                    duration=duration_ms, frame_rate=audio_segment.frame_rate)
+            pieces.append(replacement.set_channels(audio_segment.channels)
+                          .set_frame_rate(audio_segment.frame_rate)
+                          .set_sample_width(audio_segment.sample_width))
+            cursor = end_ms
+        if cursor < total_ms:
+            pieces.append(audio_segment[cursor:])
 
-                replacement = AudioSegment.silent(duration=duration_ms)
-
-            censored = censored[:start_ms] + replacement + censored[end_ms:]
-
-        return censored
+        censored = pieces[0]
+        for piece in pieces[1:]:
+            censored += piece
+        return censored[:total_ms]

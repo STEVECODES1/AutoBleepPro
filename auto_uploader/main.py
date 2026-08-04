@@ -24,7 +24,7 @@ from datetime import datetime
 # Bump when shipping user-visible changes, so --test-config can prove
 # which build is actually running (stale extracts have silently caused
 # several confusing "the fix did nothing" runs).
-BUILD = "2026-08-03.21 stop-overclicking-submit"
+BUILD = "2026-08-04.1 aggressive-censor"
 
 from utils.censor import censor_video
 from utils.ffmpeg_tools import StageTimer
@@ -260,6 +260,8 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
                 custom_words=cfg.general.censor_custom_words,
                 device=cfg.general.censor_device,
                 speed=cfg.general.speed,
+                padding_ms=cfg.general.censor_padding_ms,
+                mute_whole_segment=cfg.general.censor_mute_whole_segment,
             )
             _censored["path"] = censor_result.output_path
             if censor_result.violation_count == -1:
