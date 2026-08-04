@@ -164,20 +164,24 @@ class RumbleUploader:
 
         Rumble renders these as real <input type="radio"> elements that are
         visually hidden behind custom-styled labels, so a plain .click()
-        blocks forever on "element is not visible" - and since Public is
-        already `checked` by default, that wait was for a no-op. Check the
-        current state first, and use check(force=True) (which sets the
-        underlying input directly) rather than clicking pixels.
+        blocks forever on "element is not visible". check(force=True) sets
+        the underlying input instead of clicking pixels.
+
+        This deliberately does NOT skip when the radio already reads as
+        checked. It used to, on the assumption that Public is Rumble's
+        default - but real uploads landed `visibility: private` while the
+        log said "already set to public", so that assumption is wrong and
+        the short-circuit was hiding it. Setting an already-correct radio
+        costs nothing; not setting it cost a private upload.
         """
         wanted = (privacy or "public").strip().lower()
         radio = page.locator(f"input[type='radio'][name='visibility'][value='{wanted}']")
 
+        self._describe_visibility(page)
+
         try:
             if radio.count() == 0:
                 print(f"[Rumble] No visibility radio found for {wanted!r}; leaving Rumble's default.")
-                return
-            if radio.first.is_checked():
-                print(f"[Rumble] Visibility already set to {wanted}.")
                 return
 
             try:
@@ -205,6 +209,7 @@ class RumbleUploader:
                 print(f"[Rumble] Visibility set to {wanted}.")
             else:
                 print(f"[Rumble] WARNING: visibility {wanted!r} did not take; using Rumble's default.")
+                self._describe_visibility(page)
         except Exception as exc:
             # Never fatal: Public is Rumble's default anyway, so failing to
             # touch this control shouldn't sink an otherwise-fine upload.
@@ -223,14 +228,22 @@ class RumbleUploader:
         re.I,
     )
 
-    def _submit(self, page) -> None:
-        """Click through Rumble's submit step(s).
+    def _submit(self, page) -> Optional[str]:
+        """Click through Rumble's submit step(s). Returns the video URL if
+        Rumble reveals one, else None.
 
         Rumble's upload page has TWO forms: the video-details form, then a
         rights/terms form with its own final submit. Clicking only the
         first leaves the video sitting unpublished, so this clicks each
         submit control in turn (re-accepting terms in between, since the
         second form's checkboxes only exist once it's shown).
+
+        Critically it STOPS as soon as the published link appears. It used
+        to run a fixed three iterations, so after the real publish landed
+        on click two, a third click hit whatever submit-ish control was
+        left on the success page. One upload ended on rumble.com/videos -
+        a navigation link, not a video - and that video never appeared on
+        the channel at all.
         """
         submit_locator = (
             page.get_by_role("button", name=re.compile(r"^(submit|publish|upload)$", re.I))
@@ -247,6 +260,13 @@ class RumbleUploader:
             clicked_any = True
             print(f"[Rumble] Submit step {step + 1} clicked.")
             page.wait_for_timeout(3000)
+
+            # Publication confirmed - stop here. Clicking again from the
+            # success page is what navigated away in earlier runs.
+            published = self._find_video_url(page)
+            if published:
+                print(f"[Rumble] Published: {published}")
+                return published
 
             # If Rumble rejected the submit over the missing required
             # category, fix it and let the loop click submit again.
@@ -265,6 +285,7 @@ class RumbleUploader:
 
         if not clicked_any:
             raise RuntimeError("No enabled submit/publish button found on the page.")
+        return self._find_video_url(page)
 
     @staticmethod
     def _is_clickable(locator) -> bool:
@@ -373,6 +394,30 @@ class RumbleUploader:
         except Exception:
             pass
         return ", ".join(described) or "(none found)"
+
+    def _describe_visibility(self, page) -> None:
+        """Log every visibility control on the page and its current state.
+
+        Uploads have come out private while the log claimed public, which
+        means the control being read is not the one that governs. Printing
+        the real set of radios (name, value, checked) on each run is what
+        will identify the right one, rather than another guess.
+        """
+        try:
+            found = page.evaluate(
+                "() => Array.from(document.querySelectorAll('input[type=radio]'))"
+                "  .map(el => ({name: el.name, value: el.value, checked: el.checked}))"
+                "  .filter(r => /visib|privac|public|private|unlisted|draft|publish/i"
+                "               .test((r.name || '') + ' ' + (r.value || '')))"
+            )
+        except Exception:
+            return
+        if not found:
+            print("[Rumble] (no visibility-like radios on this step)")
+            return
+        for r in found:
+            state = "CHECKED" if r.get("checked") else "unchecked"
+            print(f"[Rumble]   radio name={r.get('name')!r} value={r.get('value')!r} {state}")
 
     def _select_categories(self, page) -> None:
         """Pick the primary (and secondary) category. REQUIRED by Rumble -
@@ -715,7 +760,7 @@ class RumbleUploader:
             pass
 
         try:
-            self._submit(page)
+            submitted_url = self._submit(page)
         except Exception as exc:
             # Dump the live page so the actual submit-button markup can be
             # inspected instead of guessed at - blind selector guessing has
@@ -734,7 +779,7 @@ class RumbleUploader:
         # box on the same upload.php page (observed in a real run, where
         # waiting for a redirect burned 120s per file and then recorded
         # upload.php as the "video URL"). Scrape the real link instead.
-        direct_url = None
+        direct_url = submitted_url
         deadline = time.time() + 45
         while time.time() < deadline and not direct_url:
             direct_url = self._find_video_url(page)
@@ -751,9 +796,16 @@ class RumbleUploader:
         # video URL. That string gets written into the dedup history and
         # posted to Discord, so a wrong-but-plausible link is worse than an
         # honest "couldn't read it": it looks like a working link and isn't.
-        print("[Rumble] Upload finished, but Rumble didn't show a video link on the "
-              "page (it sometimes only appears once processing completes). "
-              "Check your Rumble dashboard for the published URL.")
+        # Not always fatal - runs have ended here with the video still
+        # published fine. But one run navigated away to rumble.com/videos
+        # and the video never appeared at all, so this is worth checking
+        # rather than reporting as a clean success.
+        print("[Rumble] WARNING: Rumble never showed a video link. The upload has "
+              "usually still landed, but one run ended here with no video "
+              "created at all.")
+        print("[Rumble]          Verify at https://rumble.com/account/content "
+              "before assuming it published.")
+        self._dump_page(page)
         return UPLOADED_NO_URL
 
     def _find_video_url(self, page):
@@ -790,8 +842,14 @@ class RumbleUploader:
         except Exception:
             pass
 
+        # Last resort: visible text only. Scraping raw page.content() also
+        # matched URLs sitting inside <script> blocks, which is a false
+        # positive with real consequences now that _submit stops as soon as
+        # a link appears - it would stop before the video was published.
         try:
-            candidates += re.findall(r"https://rumble\.com/v[A-Za-z0-9._-]+", page.content())
+            candidates += re.findall(
+                r"https://rumble\.com/v[A-Za-z0-9._-]+",
+                page.evaluate("() => document.body ? document.body.innerText : ''"))
         except Exception:
             pass
 
