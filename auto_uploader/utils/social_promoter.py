@@ -11,6 +11,7 @@ mark an upload as failed.
 
 import json
 import os
+import time
 import urllib.request
 
 
@@ -119,6 +120,63 @@ def primary_link(new_uploads: dict) -> str:
     return new_uploads.get("youtube") or new_uploads.get("rumble") or ""
 
 
+def manual_post_text(platform: str, title: str, new_uploads: dict) -> str:
+    """The exact text to paste, for a platform we deliberately don't automate.
+
+    Composed the same way an automated post would be, because the point is
+    that posting by hand should cost a paste rather than a rewrite.
+    """
+    link = primary_link(new_uploads)
+    if platform == "x":
+        # 280 characters, and the link costs a fixed 23 whatever its
+        # length, so the title is what has to give.
+        budget = 280 - 23 - len("🎬 New upload: ") - 2
+        headline = title if len(title) <= budget else title[:budget - 1] + "…"
+        return f"🎬 New upload: {headline}\n{link}"
+    return build_message(title, new_uploads)
+
+
+def queue_manual_post(platform: str, title: str, new_uploads: dict,
+                      queue_path: str = "", notify_discord: bool = True) -> str:
+    """Park an announcement for a human to post. Returns the text.
+
+    Platforms end up here for two different reasons and the handling is
+    the same either way: either there is no compliant automated route
+    (Facebook Groups), or automating it is not worth what it costs or
+    risks (X's paid API, an account we would rather not get flagged).
+
+    Not automating something should not mean losing it. The text is
+    written where it can be found and pinged to Discord, so posting by
+    hand is a paste rather than a rewrite from memory.
+    """
+    text = manual_post_text(platform, title, new_uploads)
+
+    if queue_path:
+        try:
+            os.makedirs(os.path.dirname(os.path.abspath(queue_path)), exist_ok=True)
+            stamp = time.strftime("%Y-%m-%d %H:%M")
+            with open(queue_path, "a", encoding="utf-8") as f:
+                f.write(f"\n--- {platform} | {stamp} ---\n{text}\n")
+        except OSError as exc:
+            print(f"[Social] could not write the manual queue: {exc}")
+
+    if notify_discord:
+        webhook = os.environ.get("DISCORD_WEBHOOK_URL", "")
+        if webhook:
+            try:
+                _post_discord(
+                    webhook,
+                    f"📋 **Post this to {platform} by hand** "
+                    f"(not automated on purpose):\n```\n{text}\n```")
+            except Exception as exc:
+                print(f"[Social] could not ping Discord: {exc}")
+
+    print(f"[Social] {platform}: parked for manual posting -")
+    for line in text.splitlines():
+        print(f"           {line}")
+    return text
+
+
 def _publisher_for(platform: str, config: dict):
     """The publisher object for a guarded platform, or None if untyped."""
     if platform == "facebook":
@@ -156,10 +214,23 @@ def announce_to_platforms(posting: dict, title: str, new_uploads: dict,
     message = build_message(title, new_uploads)
     posted = []
 
-    for platform in ("facebook", "instagram", "x"):
+    queue_path = posting.get("manual_queue_path", "")
+    platforms = list((posting.get("platforms") or {}).keys()) or [
+        "facebook", "instagram", "x"]
+
+    for platform in platforms:
+        if platform == "facebook_group":
+            continue   # no route at all, and nothing useful to hand a human
+
         decision = guard.check(platform)
         if not decision:
-            print(f"[Social] {platform}: skipped - {decision.reason}")
+            # A platform held back on purpose still has an announcement
+            # worth making - it just gets made by a person. Anything else
+            # blocked (capped, breakered, off) is genuinely skipped.
+            if guard.is_manual_only(platform):
+                queue_manual_post(platform, title, new_uploads, queue_path)
+            else:
+                print(f"[Social] {platform}: skipped - {decision.reason}")
             continue
 
         publisher = _publisher_for(platform, config)

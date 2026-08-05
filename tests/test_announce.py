@@ -314,3 +314,94 @@ def test_legacy_twitter_flag_still_works_without_posting_config(tmp_path, no_x):
     announce_upload({"enabled": True, "discord": False, "twitter": True},
                     "DAMN", UPLOADS)
     assert len(no_x) == 1
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Manual-approval platforms: parked, not lost
+# ═════════════════════════════════════════════════════════════════════════════
+
+def test_a_manual_platform_gets_its_text_composed(tmp_path, publishers, no_x):
+    """Not automating something must not mean losing the announcement."""
+    queue = tmp_path / "manual_posts.txt"
+    posting = make_posting(tmp_path, x={
+        "enabled": False, "daily_cap": 3, "manual_approval_only": True})
+    posting["manual_queue_path"] = str(queue)
+
+    announce_to_platforms(posting, "DAMN", UPLOADS)
+    written = queue.read_text()
+    assert "x" in written and UPLOADS["youtube"] in written
+    assert "DAMN" in written
+
+
+def test_a_manual_platform_is_never_actually_posted_to(tmp_path, publishers, no_x):
+    posting = make_posting(tmp_path, x={
+        "enabled": True, "daily_cap": 3, "manual_approval_only": True})
+    posted = announce_to_platforms(posting, "DAMN", UPLOADS)
+    assert "x" not in posted
+    assert no_x == [], "manual-approval means a human posts, not the bot"
+
+
+def test_parking_does_not_consume_the_cap(tmp_path, publishers, no_x):
+    from publish_guard import PublishGuard
+
+    posting = make_posting(tmp_path, x={
+        "enabled": True, "daily_cap": 3, "manual_approval_only": True})
+    announce_to_platforms(posting, "DAMN", UPLOADS)
+    guard = PublishGuard(posting, posting["state_path"])
+    assert guard.posts_in_window("x") == 0
+    assert guard.consecutive_failures("x") == 0
+
+
+def test_a_capped_platform_is_skipped_not_parked(tmp_path, publishers, no_x):
+    """Being out of quota is temporary; it is not a request for a human."""
+    queue = tmp_path / "manual_posts.txt"
+    posting = make_posting(tmp_path, facebook={
+        "enabled": True, "daily_cap": 1, "min_minutes_between": 0})
+    posting["manual_queue_path"] = str(queue)
+
+    announce_to_platforms(posting, "one", UPLOADS)     # uses the cap
+    announce_to_platforms(posting, "two", UPLOADS)     # blocked by it
+    assert not queue.exists() or "facebook" not in queue.read_text()
+
+
+def test_x_text_fits_in_a_tweet(tmp_path):
+    from utils.social_promoter import manual_post_text
+
+    long_title = "OH MY GOD " * 40
+    text = manual_post_text("x", long_title, UPLOADS)
+    # The link counts as a fixed 23 characters however long it really is.
+    body = text.split("\n")[0]
+    assert len(body) + 1 + 23 <= 280
+
+
+def test_x_text_keeps_a_short_title_intact(tmp_path):
+    from utils.social_promoter import manual_post_text
+
+    text = manual_post_text("x", '"DAMN" 8/5/26 Stackswopo Stream', UPLOADS)
+    assert '"DAMN" 8/5/26 Stackswopo Stream' in text
+    assert UPLOADS["youtube"] in text
+
+
+def test_facebook_group_is_not_parked(tmp_path, publishers, no_x):
+    """There is no approved route AND nothing useful to hand a person -
+    group posting was withdrawn, so a queued text would just be noise."""
+    queue = tmp_path / "manual_posts.txt"
+    posting = make_posting(tmp_path)
+    posting["platforms"]["facebook_group"] = {
+        "enabled": False, "manual_approval_only": True}
+    posting["manual_queue_path"] = str(queue)
+
+    announce_to_platforms(posting, "DAMN", UPLOADS)
+    assert not queue.exists() or "facebook_group" not in queue.read_text()
+
+
+def test_the_shipped_config_parks_x_rather_than_paying_for_it():
+    import json
+
+    with open(os.path.join(_UPLOADER, "config.json")) as f:
+        shipped = json.load(f)
+    x = shipped["posting"]["platforms"]["x"]
+    assert x["manual_approval_only"] is True
+    assert x["enabled"] is False
+    assert shipped["posting"].get("manual_queue_path"), \
+        "parked posts need somewhere to land"

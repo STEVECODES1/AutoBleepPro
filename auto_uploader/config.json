@@ -97,10 +97,11 @@
     "kill_switch_file": "./STOP_POSTING",
     "state_path": "./posting_state.json",
     "queue_path": "./clip_jobs.json",
+    "manual_queue_path": "./logs/manual_posts.txt",
     "platforms": {
       "instagram":      { "enabled": true,  "daily_cap": 5, "min_minutes_between": 45 },
       "facebook":       { "enabled": true,  "daily_cap": 5, "min_minutes_between": 45 },
-      "x":              { "enabled": false, "daily_cap": 3, "min_minutes_between": 90, "_note": "Fix 401: developer.twitter.com → app → Read+Write → regenerate tokens → update .env → set enabled:true" },
+      "x":              { "enabled": false, "daily_cap": 3, "min_minutes_between": 90, "manual_approval_only": true, "_note": "X charges per post via its API and automating x.com in a browser instead breaks their ToS - a suspension costs more than the fee saves. So X is manual: the announcement text is composed for you and pinged to Discord, and you paste it. Set manual_approval_only:false and enabled:true if you ever add API credits." },
       "reddit":         { "enabled": false, "daily_cap": 1, "min_minutes_between": 720, "manual_approval_only": true },
       "facebook_group": { "enabled": false, "daily_cap": 1, "manual_approval_only": true }
     },
