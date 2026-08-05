@@ -34,26 +34,34 @@ def is_intermediate_download(path: str) -> bool:
     return bool(_INTERMEDIATE_STEM.search(stem))
 
 
-# Files that live in a watch folder by design and were never meant to be
-# videos: git's folder placeholder, the .txt title sidecars this tool
-# reads, its own caches, and the junk Windows/macOS scatter around. They
-# are skipped like any other non-video, just silently - a [SKIP] line per
-# run for each of these is noise that hides the skips that matter.
-_SIDECAR_NAMES = frozenset({
-    ".gitkeep", ".gitignore", "thumbs.db", "desktop.ini", ".ds_store",
+# Extensions that are plausibly a video someone MEANT to upload, but that
+# this config does not list as supported. These are the only ones worth a
+# [SKIP] line, because they are the only ones where the answer might be
+# "add it to supported_formats" rather than "that is not a video".
+#
+# Listing what to WARN about, rather than what to ignore, is the right way
+# round: pointing --batch at a folder that also holds code produced a
+# [SKIP] line for every .py and .bat in it, which buries the skips that
+# actually mean something. Anything not named here is skipped silently.
+_MAYBE_VIDEO_EXTENSIONS = frozenset({
+    ".webm", ".m4v", ".mpg", ".mpeg", ".m2ts", ".mts", ".vob", ".ogv",
+    ".3gp", ".rm", ".rmvb", ".asf", ".divx", ".f4v", ".mxf", ".dv",
 })
-_SIDECAR_EXTENSIONS = frozenset({
-    ".txt", ".json", ".md", ".log", ".srt", ".vtt", ".jpg", ".jpeg",
-    ".png", ".webp", ".ini", ".db", ".lnk", ".url", ".part", ".ytdl",
-})
+
+
+def looks_like_a_video_attempt(path: str) -> bool:
+    """True if skipping this file is worth mentioning."""
+    return os.path.splitext(os.path.basename(path))[1].lower() in _MAYBE_VIDEO_EXTENSIONS
 
 
 def is_sidecar_file(path: str) -> bool:
-    """True for a companion/system file that is not a failed video."""
-    name = os.path.basename(path).lower()
-    if name in _SIDECAR_NAMES or name.startswith("."):
-        return True
-    return os.path.splitext(name)[1] in _SIDECAR_EXTENSIONS
+    """True for a file whose skip is not worth reporting.
+
+    Kept as the inverse of the above so existing callers read the same
+    way: everything that is not a plausible video attempt is a sidecar as
+    far as the log is concerned.
+    """
+    return not looks_like_a_video_attempt(path)
 
 
 class _NewVideoHandler(FileSystemEventHandler):

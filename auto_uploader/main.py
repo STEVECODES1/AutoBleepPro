@@ -664,12 +664,42 @@ def main(argv=None) -> int:
         return 0
 
     if batch_folder:
+        # Count the videos BEFORE processing. A batch that finds nothing
+        # used to look exactly like one that worked - it printed skip
+        # lines for the non-videos and then simply ended, with no way to
+        # tell "uploaded everything" from "there was nothing here".
+        candidates = [
+            f for f in sorted(os.listdir(batch_folder))
+            if os.path.isfile(os.path.join(batch_folder, f))
+            and os.path.splitext(f)[1].lower() in cfg.general.supported_formats
+            and not is_intermediate_download(f)
+        ]
+        if not candidates:
+            print(f"\n[Batch] No videos found in {batch_folder}")
+            print(f"        Looked for: {', '.join(cfg.general.supported_formats)}")
+            print(f"        Watch folder is {cfg.general.watch_folder} - try "
+                  "`--batch` with no folder to use that instead.")
+            return 0
+
+        print(f"\n[Batch] {len(candidates)} video(s) to process:")
+        for name in candidates:
+            print(f"          - {name}")
+
+        outcomes = []
         for fname in sorted(os.listdir(batch_folder)):
             path = os.path.join(batch_folder, fname)
             if os.path.isfile(path):
-                process_file(path, cfg, None, dup_checker, yt_logger, rb_logger, dry_run,
-                             existing_youtube_videos, existing_rumble_videos,
-                             only_platform=args.only)
+                result = process_file(path, cfg, None, dup_checker, yt_logger, rb_logger,
+                                      dry_run, existing_youtube_videos,
+                                      existing_rumble_videos, only_platform=args.only)
+                if fname in candidates:
+                    outcomes.append((fname, (result or {}).get("skipped")))
+
+        uploaded = [n for n, skipped in outcomes if not skipped]
+        skipped = [(n, why) for n, why in outcomes if why]
+        print(f"\n[Batch] Done: {len(uploaded)} processed, {len(skipped)} skipped.")
+        for name, why in skipped:
+            print(f"          skipped {name} ({why})")
         return 0
 
     if args.watch is not None or dry_run:

@@ -144,3 +144,34 @@ def test_finished_videos_are_accepted(name):
 def test_intermediate_check_ignores_directories_in_the_path():
     assert is_intermediate_download("/tmp/f140/finished.mp4") is False
     assert is_intermediate_download("/tmp/videos/clip.f140.mp4") is True
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Which skips are worth printing
+# ═════════════════════════════════════════════════════════════════════════════
+
+def test_code_and_project_files_skip_silently():
+    """--batch pointed at a folder that also holds code printed a [SKIP]
+    line for every .py and .bat in it, burying the skips that matter."""
+    from utils.file_watcher import is_sidecar_file
+
+    for name in ("main.py", "INSTALL.bat", "LICENSE", "README.md",
+                 "config.json", ".gitkeep", "Thumbs.db", "notes.txt"):
+        assert is_sidecar_file(name), f"{name} should skip silently"
+
+
+def test_a_plausible_video_is_worth_reporting():
+    """These are the ones where the fix might be 'add it to
+    supported_formats' rather than 'that is not a video'."""
+    from utils.file_watcher import is_sidecar_file, looks_like_a_video_attempt
+
+    for name in ("stream.webm", "clip.m4v", "old.mpg", "cam.mts"):
+        assert looks_like_a_video_attempt(name), f"{name} should be reported"
+        assert not is_sidecar_file(name)
+
+
+def test_the_two_helpers_stay_opposites():
+    from utils.file_watcher import is_sidecar_file, looks_like_a_video_attempt
+
+    for name in ("a.py", "b.webm", "LICENSE", "c.mpg"):
+        assert is_sidecar_file(name) is not looks_like_a_video_attempt(name)
