@@ -114,9 +114,113 @@ def build_message(title: str, new_uploads: dict) -> str:
     return "\n".join(lines)
 
 
-def announce_upload(features: dict, title: str, new_uploads: dict) -> list:
+def primary_link(new_uploads: dict) -> str:
+    """The one URL an announcement points at. YouTube wins when both ran."""
+    return new_uploads.get("youtube") or new_uploads.get("rumble") or ""
+
+
+def _publisher_for(platform: str, config: dict):
+    """The publisher object for a guarded platform, or None if untyped."""
+    if platform == "facebook":
+        from publishers.facebook import FacebookPublisher
+        return FacebookPublisher(config)
+    if platform == "instagram":
+        from publishers.instagram import InstagramPublisher
+        return InstagramPublisher(config)
+    return None
+
+
+def announce_to_platforms(posting: dict, title: str, new_uploads: dict,
+                          config: dict = None, dry_run: bool = False) -> list:
+    """Announce to the guarded public platforms. Returns those that posted.
+
+    Every platform here goes through PublishGuard first - kill switch,
+    per-platform enable, rolling cap, spacing, circuit breaker - because
+    the guard is the only component allowed to authorise a post. A
+    platform that is off, capped or breakered is skipped with the guard's
+    own reason rather than silently.
+
+    Announcements are LINK posts: they point at the YouTube/Rumble URL
+    that already exists, so nothing needs hosting. A platform that cannot
+    carry a link post says so and is skipped without consuming its cap.
+    """
+    posting = posting or {}
+    config = config or {}
+    link = primary_link(new_uploads)
+    if not posting or not link:
+        return []
+
+    from publish_guard import PublishGuard
+
+    guard = PublishGuard(posting, posting.get("state_path"))
+    message = build_message(title, new_uploads)
+    posted = []
+
+    for platform in ("facebook", "instagram", "x"):
+        decision = guard.check(platform)
+        if not decision:
+            print(f"[Social] {platform}: skipped - {decision.reason}")
+            continue
+
+        publisher = _publisher_for(platform, config)
+        if publisher is not None and not getattr(publisher, "supports_link_posts", True):
+            # Not a failure and not the guard's business: the platform has
+            # no link-post endpoint at all, so recording it either way
+            # would corrupt the cap history with a post that cannot happen.
+            print(f"[Social] {platform}: skipped - no link-post endpoint "
+                  "exists on this platform; needs a rendered clip and public "
+                  "hosting to post at all")
+            continue
+
+        if dry_run:
+            print(f"[Social] {platform}: WOULD POST -> {link}")
+            posted.append(platform)
+            continue
+
+        try:
+            if platform == "x":
+                _post_twitter(message)
+                ok = True
+            else:
+                ok = publisher.post_link(message, link)
+        except ImportError:
+            print(f"[Social] {platform}: skipped - required library not "
+                  "installed (pip install tweepy)")
+            continue
+        except Exception as exc:
+            ok = False
+            print(f"[Social] {platform}: post raised {exc}")
+
+        if ok:
+            # Recorded immediately: an unrecorded post is one the cap does
+            # not know about, which is what permits a burst.
+            guard.record_post(platform)
+            posted.append(platform)
+            print(f"[Social] Posted announcement to {platform}.")
+        else:
+            failures = guard.record_failure(platform)
+            print(f"[Social] {platform}: post failed "
+                  f"({failures} consecutive - see the log above for why)")
+
+    return posted
+
+
+def announce_upload(features: dict, title: str, new_uploads: dict,
+                    posting: dict = None, config: dict = None,
+                    dry_run: bool = False) -> list:
     """Announce `new_uploads` ({platform: url}, only things uploaded THIS
-    run - never pre-existing skips). Returns the channels that posted."""
+    run - never pre-existing skips). Returns the channels that posted.
+
+    Two groups, deliberately handled differently:
+
+    - Discord and Reddit are configured under features.social_promoter and
+      keep their existing behaviour. Discord is a webhook into the user's
+      own server, not a public account, so there is nothing for the guard
+      to protect against.
+    - Facebook, Instagram and X are public accounts and go through
+      PublishGuard, configured under `posting`. Passing `posting` is what
+      turns them on; without it this behaves exactly as it did before.
+    """
     if not features.get("enabled") or not new_uploads:
         return []
 
@@ -135,7 +239,10 @@ def announce_upload(features: dict, title: str, new_uploads: dict) -> list:
             except Exception as exc:
                 print(f"[Social] WARNING: Discord post failed: {exc}")
 
-    if features.get("twitter", False):
+    # The legacy, unguarded X path. Skipped entirely when `posting` is
+    # configured, because X is a platform there too and running both would
+    # post the same announcement twice - once outside the cap.
+    if features.get("twitter", False) and not posting:
         try:
             _post_twitter(message)
             posted.append("twitter")
@@ -166,5 +273,9 @@ def announce_upload(features: dict, title: str, new_uploads: dict) -> list:
                 print(f"[Social] Reddit enabled but {exc} not set in .env - skipping.")
             except Exception as exc:
                 print(f"[Social] WARNING: Reddit post failed: {exc}")
+
+    if posting:
+        posted.extend(announce_to_platforms(posting, title, new_uploads,
+                                            config, dry_run))
 
     return posted

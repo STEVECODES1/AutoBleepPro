@@ -417,7 +417,12 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
     if newly_uploaded:
         try:
             from utils.social_promoter import announce_upload
-            announce_upload(cfg.features.get("social_promoter", {}), yt_title, newly_uploaded)
+            # cfg.posting carries the guarded public platforms (Facebook,
+            # Instagram, X); without it this announces to Discord/Reddit
+            # only, exactly as before.
+            announce_upload(cfg.features.get("social_promoter", {}), yt_title,
+                            newly_uploaded, posting=cfg.posting,
+                            config={"features": cfg.features})
         except Exception as exc:
             print(f"[Social] WARNING: announce failed: {exc}")
         try:

@@ -40,6 +40,10 @@ _POLL_TIMEOUT  = 180
 
 
 class FacebookPublisher:
+    # A Page can publish a plain link post, so an announcement needs no
+    # hosting for the video itself.
+    supports_link_posts = True
+
     def __init__(self, cfg: Dict[str, Any]) -> None:
         self._cfg = cfg
         self._token = os.getenv("FB_PAGE_TOKEN", "")
@@ -62,6 +66,47 @@ class FacebookPublisher:
                 "before posting can be enabled."
             )
             return False
+        return True
+
+    def post_link(self, message: str, link: str) -> bool:
+        """Publish a link post to the Page. Returns True on success.
+
+        /{page_id}/feed with a `link` is the announcement path: Facebook
+        fetches the preview card itself, so nothing has to be hosted
+        first. Same `pages_manage_posts` scope the video path needs.
+        """
+        if not self._ready():
+            return False
+        if not link:
+            log.error("Facebook: refusing to post an announcement with no link")
+            return False
+
+        url = f"{GRAPH_API}/{self._page_id}/feed"
+        params = {
+            "message": message,
+            "link": link,
+            "access_token": self._token,
+        }
+        try:
+            r = requests.post(url, data=params, timeout=30)
+            r.raise_for_status()
+            post_id = r.json().get("id")
+        except Exception as exc:
+            # Graph puts the real reason in the body, not the status line.
+            detail = ""
+            response = getattr(exc, "response", None)
+            if response is not None:
+                try:
+                    detail = response.json().get("error", {}).get("message", "")
+                except Exception:
+                    detail = ""
+            log.error("Facebook: link post failed: %s", detail or exc)
+            return False
+
+        if not post_id:
+            log.error("Facebook: link post returned no id")
+            return False
+        log.info("Facebook: posted link, id=%s", post_id)
         return True
 
     def post_reel(

@@ -40,6 +40,18 @@ _PUBLISH_TIMEOUT      = 120  # give up after 2 minutes
 
 
 class InstagramPublisher:
+    # Instagram has NO text or link post. Every Content Publishing call
+    # builds a media container - IMAGE, VIDEO, REELS, CAROUSEL, STORIES -
+    # and each needs a publicly reachable image_url/video_url that Meta
+    # fetches server-side. There is no endpoint that takes a URL and
+    # renders a preview card the way a Facebook Page post does.
+    #
+    # So Instagram cannot carry a link announcement, and this flag is what
+    # stops the announcer quietly reporting a post that never happened.
+    # It becomes reachable once clips are rendered AND hosted somewhere
+    # public - at which point post_reel() below is already written.
+    supports_link_posts = False
+
     def __init__(self, cfg: Dict[str, Any]) -> None:
         self._cfg = cfg
         self._token = os.getenv("IG_PAGE_TOKEN", "")
