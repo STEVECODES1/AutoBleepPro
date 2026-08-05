@@ -90,6 +90,13 @@ def _get_transcriber(model_name: str, device: Optional[str], reuse: bool = True)
 
 def release_models() -> None:
     """Drop cached models (frees GPU/RAM between long-running modes)."""
+    for transcriber in _MODEL_CACHE.values():
+        # Clearing the dict alone only drops the wrapper; the weights are
+        # held by the Transcriber, which is what actually costs the RAM.
+        try:
+            transcriber.release()
+        except Exception:
+            pass
     _MODEL_CACHE.clear()
 
 

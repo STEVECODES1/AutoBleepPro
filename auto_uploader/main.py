@@ -37,7 +37,7 @@ from utils.cleanup import (
 )
 from utils.config import load_config, validate_config
 from utils.duplicate_checker import DuplicateChecker, hash_file
-from utils.file_watcher import FolderWatcher, is_intermediate_download
+from utils.file_watcher import FolderWatcher, is_intermediate_download, is_sidecar_file
 from utils.logging_setup import setup_logger
 from utils.notifier import notify
 from utils.retry import retry_with_backoff
@@ -132,7 +132,13 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
     # (multi-GB *.part files) got read end-to-end off the drive purely to
     # throw the result away - and those files are still being written to.
     if os.path.splitext(video_path)[1].lower() not in cfg.general.supported_formats:
-        print(f"[SKIP] {filename} is not a supported video format.")
+        # Only worth saying out loud for files that might plausibly have
+        # been meant as videos. A watch folder always contains .gitkeep,
+        # sidecar .txt titles and OS junk; announcing each one every run
+        # trains you to ignore [SKIP] lines, which is when a real one gets
+        # missed.
+        if not is_sidecar_file(filename):
+            print(f"[SKIP] {filename} is not a supported video format.")
         return {"skipped": "unsupported_format"}
 
     # e.g. "Stream.f140.mp4" - yt-dlp's audio-only half, downloaded in full
@@ -610,11 +616,17 @@ def main(argv=None) -> int:
             existing_rumble_videos = fetch_rumble_videos(cfg.rumble.rss_url, cfg.rumble.cdp_url)
             print(f"[Rumble] Found {len(existing_rumble_videos)} existing video(s) via RSS for dedup checks.")
         except Exception as exc:
-            # Non-fatal, unlike the YouTube fetch for --batch: the local
-            # hash/title history still prevents this tool re-uploading its
-            # own work; the RSS only adds protection for videos uploaded
-            # manually outside the tool.
-            print(f"[WARN] Rumble RSS dedup check unavailable ({exc}); relying on local history only.")
+            # Not a warning: the local hash/title history is the primary
+            # defence and it is working. The feed only adds cover for
+            # videos put on Rumble outside this tool, so losing it to a
+            # Cloudflare challenge degrades nothing that was already
+            # protected. Said once, plainly, with the way to restore it.
+            print(f"[Rumble] Channel feed unavailable ({exc}).")
+            print("         Dedup falls back to local upload history, which already "
+                  "covers everything this tool uploaded.")
+            if cfg.rumble.cdp_url:
+                print(f"         To use the feed too, leave Chrome open with "
+                      f"--remote-debugging-port on {cfg.rumble.cdp_url}.")
 
     if batch_folder and existing_videos_fetch_failed and not dry_run:
         print(

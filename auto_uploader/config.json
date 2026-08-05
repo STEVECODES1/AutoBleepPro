@@ -91,7 +91,7 @@
     }
   },
 
-  "_posting_comment": "Short-form clip publishing. Everything ships DISABLED - turn on one platform at a time. daily_cap is a ROLLING 24h window, not a calendar day. Caps sit well under the API ceilings (Instagram allows 25/day) because the binding limit is how the account looks to spam classifiers, not the quota. reddit and facebook_group are manual-approval only and cannot be automated from config - Reddit enforces anti-spam by ban, and Facebook group publishing has no approved API route. Create the kill_switch_file to halt ALL posting immediately, including a running --watch.",
+  "_posting_comment": "Short-form clip publishing. Everything ships DISABLED - turn on one platform at a time. daily_cap is a ROLLING 24h window, not a calendar day. Caps sit well under the API ceilings (Instagram allows 25/day) because the binding limit is how the account looks to spam classifiers, not the quota. facebook_group can NEVER be automated - Facebook withdrew group publishing from the Graph API, so the block is in code and this flag cannot turn it off. reddit ships manual_approval_only: true but is a real config choice: Reddit has a supported API, so set it to false once a healthy separate account is configured (features.social_promoter.reddit_account + the matching .env vars). It stays behind the same caps, spacing and circuit breaker either way. Create the kill_switch_file to halt ALL posting immediately, including a running --watch.",
   "posting": {
     "enabled": false,
     "kill_switch_file": "./STOP_POSTING",
@@ -107,10 +107,17 @@
     "circuit_breaker": { "consecutive_failures": 3 }
   },
 
+  "_clips_comment": "Short-form clip rendering. crop_strategy turns a 16:9 source into a 9:16 vertical clip: 'center' (default) takes a fixed centre crop - GTA puts the crosshair, HUD and action centre-screen, so it keeps all three and cannot drift. 'motion' follows a smoothed centroid of frame movement (costs an extra pass). 'face' uses the face tracker and is for FACE-CAM/IRL footage ONLY - on gameplay it locks onto NPC faces and the crop jitters around the scene. 'auto' = pick from content_kind. Leave this on center for gaming content.",
+  "clips": {
+    "crop_strategy": "center",
+    "content_kind": "gameplay"
+  },
+
   "features": {
     "_comment": "Optional extras. self_healing: python main.py --health. social_promoter posts AFTER a successful new upload (Discord needs DISCORD_WEBHOOK_URL in .env; twitter/reddit need their API keys + pip install tweepy/praw). content_optimizer writes an SEO/chapters report next to each uploaded video, reusing the censor pass's transcript.",
     "self_healing": { "enabled": true, "min_free_gb": 10, "cleanup_age_days": 7 },
-    "social_promoter": { "enabled": true, "discord": true, "twitter": false, "reddit": false, "reddit_subreddit": "" },
+    "_reddit_account_comment": "Which Reddit account to post as. '2' reads REDDIT_CLIENT_ID_2/REDDIT_USERNAME_2/... from .env, keeping this entirely separate from the plain REDDIT_* variables. Set it to '' to use those primary ones instead, or '3' etc. for a further account.",
+    "social_promoter": { "enabled": true, "discord": true, "twitter": false, "reddit": false, "reddit_account": "2", "reddit_subreddit": "" },
     "content_optimizer": { "enabled": true, "transcribe_if_missing": false }
   }
 }

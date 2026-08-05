@@ -1,199 +1,340 @@
 """
-publish_guard.py — Gate every outgoing post through this module.
+The only component allowed to authorise a post.
 
-Checks (in order):
-  1. Global kill switch (config flag OR STOP_POSTING file on disk)
-  2. Platform enabled flag
-  3. Rolling 24-hour cap  (NOT a calendar-day reset)
-  4. Minimum spacing between posts on that platform
-  5. Circuit breaker     (trips after N consecutive failures)
+Every publisher asks the guard first and does nothing unless it comes
+back allowed. That is the whole design: one place to say no, so a bug in
+a publisher cannot become a posting spree.
 
-If any check fails the post is deferred/blocked — it does NOT count
-against the retry budget stored in job_queue.
+WHY THE DEFAULTS ARE LOW
+------------------------
+The caps here sit well under what the APIs permit - 5 Instagram posts a
+day against a documented ceiling of 25. The binding constraint is not the
+rate limit, it's how the account looks to a spam classifier, and that
+threshold is invisible and unappealable. Room to raise the caps exists;
+starting there does not.
+
+WHAT THIS DELIBERATELY WILL NOT DO
+----------------------------------
+There is no mechanism to route around a cap - no proxy support, no
+alternate credentials to dodge a limit, no "just one more". Evading a
+documented limit turns a recoverable "you posted too much" into an
+unrecoverable "this account evaded enforcement".
+
+TWO CALLING CONVENTIONS
+-----------------------
+`check()` returns a Decision and takes an injectable `now`, which is what
+the tests and the queue use. `can_post()`/`record_result()` are the
+(allowed, reason) pair the publishers in publishers/ were written
+against. Both run the identical checks - there is one implementation, on
+purpose, because two guards means one of them is the hole.
 """
 
 from __future__ import annotations
 
 import json
-import logging
 import os
 import time
-from pathlib import Path
-from typing import Dict, Any
+from dataclasses import dataclass, field
+from typing import Any, Dict, Iterable, Optional
 
-log = logging.getLogger("publish_guard")
+# Platforms with no approved automated route at all, so config must not be
+# able to enable them.
+#
+# Facebook groups qualify because group publishing permissions were
+# withdrawn from the Graph API - there is no compliant way to automate it,
+# and that is a property of the platform, not of any one account. A config
+# flag cannot turn this off; that is the point of the list.
+#
+# Reddit is NOT here. Reddit has a supported API (PRAW) and a documented
+# way to post; the risk is per-account reputation, not the absence of a
+# route. That makes it a config decision - `manual_approval_only` - which
+# ships true and can be turned off once a healthy account is configured.
+# It stays behind the same caps, spacing and circuit breaker either way.
+ALWAYS_MANUAL: frozenset = frozenset({"facebook_group"})
 
-# ── internal helpers ───────────────────────────────────────────────────────────
+# Rolling window, not calendar day: Meta enforces "per 24 hours" from the
+# time of each post, so a midnight reset would allow a double burst.
+WINDOW_SECONDS = 24 * 60 * 60
 
-def _load_state(state_path: Path) -> Dict[str, Any]:
-    if state_path.exists():
-        try:
-            return json.loads(state_path.read_text())
-        except Exception:
-            pass
-    return {}
-
-
-def _save_state(state_path: Path, state: Dict[str, Any]) -> None:
-    tmp = state_path.with_suffix(".tmp")
-    tmp.write_text(json.dumps(state, indent=2))
-    tmp.replace(state_path)  # atomic on POSIX; best-effort on Windows
-
-
-def _platform_state(state: Dict, platform: str) -> Dict:
-    return state.setdefault(platform, {
-        "posts": [],          # list of epoch timestamps (rolling window)
-        "last_post_ts": 0,
-        "consecutive_failures": 0,
-        "circuit_open": False,
-        "circuit_open_since": 0,
-    })
+DEFAULT_KILL_SWITCH_FILE = "STOP_POSTING"
 
 
-# ── public API ─────────────────────────────────────────────────────────────────
+@dataclass
+class Decision:
+    """Whether a post may proceed, and why not if it may not."""
+    allowed: bool
+    reason: str
+    retry_after_s: Optional[float] = None   # None = not a timing problem
 
+    def __bool__(self) -> bool:
+        return self.allowed
+
+
+@dataclass
 class PublishGuard:
-    """
-    Usage:
-        guard = PublishGuard(cfg, state_path)
-        allowed, reason = guard.can_post("instagram")
-        if allowed:
-            ok = do_post()
-            guard.record_result("instagram", success=ok)
-    """
+    """Rate limits, kill switch, and circuit breaker for outbound posts."""
 
-    CIRCUIT_RESET_SECONDS = 3600  # auto-reset circuit breaker after 1 h
+    config: Dict[str, Any] = field(default_factory=dict)
+    state_path: str = "./posting_state.json"
+    _state: dict = field(default_factory=dict, init=False)
 
-    def __init__(self, cfg: Dict[str, Any], state_path: str | Path) -> None:
-        self._cfg = cfg
-        self._state_path = Path(state_path)
-        self._posting_cfg = cfg.get("posting", {})
-        self._platforms_cfg = self._posting_cfg.get("platforms", {})
-        self._kill_file = Path(
-            self._posting_cfg.get("kill_switch_file", "./STOP_POSTING")
-        )
-        self._circuit_threshold = (
-            self._posting_cfg
-            .get("circuit_breaker", {})
-            .get("consecutive_failures", 3)
-        )
+    def __init__(self, config: Optional[Dict[str, Any]] = None,
+                 state_path: Optional[str] = None) -> None:
+        # Positional (cfg, state_path) is how publishers/ construct this;
+        # keyword config=/state_path= is how the tests do. Accepting the
+        # whole app config OR just its "posting" block means callers don't
+        # have to remember which level they're holding.
+        config = config or {}
+        self.config = config.get("posting", config) if isinstance(config, dict) else {}
+        self.state_path = str(state_path or self.config.get(
+            "state_path", "./posting_state.json"))
+        self._state = {}
+        self._load()
 
-    # ── checks ────────────────────────────────────────────────────────────────
+    # ── State ────────────────────────────────────────────────────────────
 
-    def _global_enabled(self) -> tuple[bool, str]:
-        if not self._posting_cfg.get("enabled", False):
-            return False, "posting.enabled is false in config"
-        if self._kill_file.exists():
-            return False, f"kill switch file present: {self._kill_file}"
-        return True, ""
+    def _load(self) -> None:
+        try:
+            with open(self.state_path, "r", encoding="utf-8") as f:
+                loaded = json.load(f)
+        except (OSError, ValueError):
+            loaded = {}
+        self._state = loaded if isinstance(loaded, dict) else {}
+        self._migrate_legacy_state()
+        self._state.setdefault("posts", {})       # platform -> [timestamps]
+        self._state.setdefault("failures", {})    # platform -> consecutive count
 
-    def _platform_enabled(self, platform: str) -> tuple[bool, str]:
-        pcfg = self._platforms_cfg.get(platform, {})
-        if not pcfg.get("enabled", False):
-            return False, f"{platform} is disabled in config"
-        if pcfg.get("manual_approval_only", False):
-            return False, f"{platform} is manual-approval only — cannot be automated"
-        return True, ""
+    def _migrate_legacy_state(self) -> None:
+        """Absorb the older per-platform state layout.
 
-    def _cap_ok(self, platform: str, pstate: Dict) -> tuple[bool, str]:
-        pcfg = self._platforms_cfg.get(platform, {})
-        cap = pcfg.get("daily_cap", 5)
-        window = 86400  # 24 hours in seconds
-        now = time.time()
-        recent = [t for t in pstate["posts"] if now - t < window]
-        pstate["posts"] = recent  # prune old
-        if len(recent) >= cap:
-            oldest = min(recent)
-            resets_in = int(window - (now - oldest))
-            return False, (
-                f"{platform} 24h cap reached ({len(recent)}/{cap}); "
-                f"resets in {resets_in // 60} min"
-            )
-        return True, ""
+        An earlier version stored {"instagram": {"posts": [...],
+        "consecutive_failures": N}}. Dropping those records on upgrade
+        would reset the caps to zero, which is exactly the burst this
+        module exists to prevent - so they are folded in rather than
+        ignored.
+        """
+        legacy = {
+            name: value for name, value in self._state.items()
+            if name not in ("posts", "failures")
+            and isinstance(value, dict) and "posts" in value
+        }
+        if not legacy:
+            return
+        posts = self._state.setdefault("posts", {})
+        failures = self._state.setdefault("failures", {})
+        for name, value in legacy.items():
+            stamps = [t for t in (value.get("posts") or [])
+                      if isinstance(t, (int, float))]
+            posts[name] = sorted(set(posts.get(name, [])) | set(stamps))
+            failures[name] = max(int(failures.get(name, 0) or 0),
+                                 int(value.get("consecutive_failures", 0) or 0))
+            del self._state[name]
 
-    def _spacing_ok(self, platform: str, pstate: Dict) -> tuple[bool, str]:
-        pcfg = self._platforms_cfg.get(platform, {})
-        min_min = pcfg.get("min_minutes_between", 0)
-        min_sec = min_min * 60
-        if min_sec <= 0:
-            return True, ""
-        elapsed = time.time() - pstate.get("last_post_ts", 0)
-        if elapsed < min_sec:
-            wait = int(min_sec - elapsed)
-            return False, (
-                f"{platform} spacing: must wait {wait // 60} more min"
-            )
-        return True, ""
+    def _save(self) -> None:
+        """Atomic write - a crash mid-save must not lose the post history,
+        because losing it resets the caps and permits a burst."""
+        directory = os.path.dirname(os.path.abspath(self.state_path))
+        os.makedirs(directory, exist_ok=True)
+        tmp = f"{self.state_path}.{os.getpid()}.tmp"
+        try:
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(self._state, f, indent=2)
+            os.replace(tmp, self.state_path)   # atomic on POSIX and Windows
+        except OSError:
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
 
-    def _circuit_ok(self, platform: str, pstate: Dict) -> tuple[bool, str]:
-        if not pstate.get("circuit_open", False):
-            return True, ""
-        # auto-reset after CIRCUIT_RESET_SECONDS
-        age = time.time() - pstate.get("circuit_open_since", 0)
-        if age >= self.CIRCUIT_RESET_SECONDS:
-            pstate["circuit_open"] = False
-            pstate["consecutive_failures"] = 0
-            log.info("%s circuit breaker auto-reset after %ds", platform, int(age))
-            return True, ""
-        return False, (
-            f"{platform} circuit breaker open after "
-            f"{pstate['consecutive_failures']} consecutive failures; "
-            f"auto-resets in {int(self.CIRCUIT_RESET_SECONDS - age) // 60} min"
-        )
+    # ── Config accessors ─────────────────────────────────────────────────
 
-    # ── public methods ────────────────────────────────────────────────────────
+    def _platform_config(self, platform: str) -> dict:
+        platforms = (self.config.get("platforms") or {})
+        return platforms.get(platform) or {}
 
-    def can_post(self, platform: str) -> tuple[bool, str]:
-        """Return (allowed, reason_string). reason is empty string when allowed."""
-        ok, reason = self._global_enabled()
-        if not ok:
-            log.debug("[guard] blocked %s — %s", platform, reason)
-            return False, reason
+    def is_manual_only(self, platform: str) -> bool:
+        if platform in ALWAYS_MANUAL:
+            return True
+        return bool(self._platform_config(platform).get("manual_approval_only", False))
 
-        ok, reason = self._platform_enabled(platform)
-        if not ok:
-            log.debug("[guard] blocked %s — %s", platform, reason)
-            return False, reason
+    def kill_switch_engaged(self) -> tuple:
+        """(engaged, reason).
 
-        state = _load_state(self._state_path)
-        pstate = _platform_state(state, platform)
+        Two forms on purpose. The config flag is the deliberate one; the
+        file is the panic one - it stops a long-running --watch without
+        editing JSON or hunting for the process, and it works even if the
+        config is mid-edit.
+        """
+        if not self.config.get("enabled", False):
+            return True, "posting.enabled is false in config"
+        path = self.config.get("kill_switch_file") or DEFAULT_KILL_SWITCH_FILE
+        if os.path.exists(path):
+            return True, f"kill switch file present: {path}"
+        return False, ""
 
-        for check in (self._cap_ok, self._spacing_ok, self._circuit_ok):
-            ok, reason = check(platform, pstate)
-            if not ok:
-                _save_state(self._state_path, state)  # persist pruned cap list
-                log.info("[guard] blocked %s — %s", platform, reason)
-                return False, reason
+    # ── Rolling window ───────────────────────────────────────────────────
 
-        _save_state(self._state_path, state)
-        return True, ""
+    def _recent_posts(self, platform: str, now: Optional[float] = None) -> list:
+        now = time.time() if now is None else now
+        stamps = self._state["posts"].get(platform) or []
+        fresh = [t for t in stamps
+                 if isinstance(t, (int, float)) and now - t < WINDOW_SECONDS]
+        if len(fresh) != len(stamps):
+            self._state["posts"][platform] = fresh
+        return sorted(fresh)
+
+    def posts_in_window(self, platform: str, now: Optional[float] = None) -> int:
+        return len(self._recent_posts(platform, now))
+
+    def consecutive_failures(self, platform: str) -> int:
+        return int(self._state["failures"].get(platform, 0) or 0)
+
+    # ── The decision ─────────────────────────────────────────────────────
+
+    def check(self, platform: str, now: Optional[float] = None) -> Decision:
+        """May `platform` be posted to right now?
+
+        Checked cheapest-and-most-absolute first, so a kill switch beats
+        everything and no amount of per-platform config can override it.
+        """
+        now = time.time() if now is None else now
+
+        engaged, why = self.kill_switch_engaged()
+        if engaged:
+            return Decision(False, f"KILL SWITCH: {why}")
+
+        # Before the enabled check, so a manual-only platform says why it
+        # is parked rather than the less useful "disabled".
+        if self.is_manual_only(platform):
+            return Decision(
+                False,
+                f"{platform} is manual-approval only - queued for a human, "
+                "never auto-posted")
+
+        settings = self._platform_config(platform)
+        if not settings:
+            # Distinct from "disabled": a typo'd platform name would
+            # otherwise look like a deliberate off switch.
+            return Decision(False, f"{platform} is not configured under posting.platforms")
+        if not settings.get("enabled", False):
+            return Decision(False, f"{platform} is disabled in config")
+
+        breaker = int((self.config.get("circuit_breaker") or {}).get(
+            "consecutive_failures", 3))
+        failures = self.consecutive_failures(platform)
+        if breaker > 0 and failures >= breaker:
+            return Decision(
+                False,
+                f"circuit breaker open for {platform}: {failures} consecutive "
+                "failures. Something is wrong at the account or credential "
+                "level - fix it, then clear with reset_failures()")
+
+        recent = self._recent_posts(platform, now)
+        cap = int(settings.get("daily_cap", 0) or 0)
+        if cap > 0 and len(recent) >= cap:
+            oldest = recent[0]
+            wait = max(0.0, (oldest + WINDOW_SECONDS) - now)
+            return Decision(
+                False,
+                f"{platform} daily cap reached ({len(recent)}/{cap} in the last 24h)",
+                retry_after_s=wait)
+
+        spacing_min = float(settings.get("min_minutes_between", 0) or 0)
+        if spacing_min > 0 and recent:
+            since = now - recent[-1]
+            needed = spacing_min * 60
+            if since < needed:
+                return Decision(
+                    False,
+                    f"{platform} spacing: posted {since / 60:.0f} min ago, "
+                    f"minimum is {spacing_min:.0f} min",
+                    retry_after_s=needed - since)
+
+        remaining = "unlimited" if cap <= 0 else f"{cap - len(recent)} left today"
+        return Decision(True, f"{platform} OK ({remaining})")
+
+    # ── Recording outcomes ───────────────────────────────────────────────
+
+    def record_post(self, platform: str, now: Optional[float] = None) -> None:
+        """Call immediately AFTER a successful post.
+
+        Recorded even though the caller could crash next - an unrecorded
+        post is one the cap doesn't know about, which is the failure mode
+        that permits a burst.
+        """
+        now = time.time() if now is None else now
+        self._state["posts"].setdefault(platform, []).append(now)
+        self._state["failures"][platform] = 0    # success clears the breaker
+        self._save()
+
+    def record_failure(self, platform: str) -> int:
+        """Call after a failed post. Returns the new consecutive count."""
+        count = self.consecutive_failures(platform) + 1
+        self._state["failures"][platform] = count
+        self._save()
+        return count
+
+    def reset_failures(self, platform: Optional[str] = None) -> None:
+        """Clear the circuit breaker, deliberately and manually.
+
+        Not on a timer. A platform failing three times running is a signal
+        that something is wrong at the account or credential level, and an
+        auto-reset would just walk back into it every hour - which is
+        itself the behaviour that gets an account flagged.
+        """
+        if platform is None:
+            self._state["failures"] = {}
+        else:
+            self._state["failures"].pop(platform, None)
+        self._save()
+
+    # ── Publisher-facing API ─────────────────────────────────────────────
+
+    def can_post(self, platform: str) -> tuple:
+        """(allowed, reason). reason is "" when allowed.
+
+        Same checks as check(); this shape is what publishers/ expects.
+        """
+        decision = self.check(platform)
+        return decision.allowed, ("" if decision.allowed else decision.reason)
 
     def record_result(self, platform: str, success: bool) -> None:
-        """Call this after every post attempt (success or failure)."""
-        state = _load_state(self._state_path)
-        pstate = _platform_state(state, platform)
-        now = time.time()
-
+        """Call after every post attempt, success or failure."""
         if success:
-            pstate["posts"].append(now)
-            pstate["last_post_ts"] = now
-            pstate["consecutive_failures"] = 0
-            pstate["circuit_open"] = False
-            log.info("[guard] recorded success for %s (cap used: %d)",
-                     platform, len(pstate["posts"]))
+            self.record_post(platform)
         else:
-            pstate["consecutive_failures"] = pstate.get("consecutive_failures", 0) + 1
-            if pstate["consecutive_failures"] >= self._circuit_threshold:
-                pstate["circuit_open"] = True
-                pstate["circuit_open_since"] = now
-                log.warning(
-                    "[guard] %s circuit breaker OPEN after %d consecutive failures",
-                    platform, pstate["consecutive_failures"]
-                )
-            else:
-                log.warning(
-                    "[guard] %s failure %d/%d before circuit opens",
-                    platform, pstate["consecutive_failures"], self._circuit_threshold
-                )
+            self.record_failure(platform)
 
-        _save_state(self._state_path, state)
+    # ── Reporting ────────────────────────────────────────────────────────
+
+    def status(self, platforms: Optional[Iterable[str]] = None) -> list:
+        """(platform, allowed, reason) per platform, for `--posting-status`."""
+        names = list(platforms) if platforms else sorted(
+            (self.config.get("platforms") or {}).keys())
+        return [(name, d.allowed, d.reason)
+                for name, d in ((n, self.check(n)) for n in names)]
+
+
+def engage_kill_switch(config: dict, note: str = "") -> str:
+    """Create the kill-switch file. Returns the path written."""
+    config = config.get("posting", config)
+    path = config.get("kill_switch_file") or DEFAULT_KILL_SWITCH_FILE
+    directory = os.path.dirname(os.path.abspath(path))
+    os.makedirs(directory, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(f"Posting halted {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+        if note:
+            f.write(note + "\n")
+        f.write("Delete this file to allow posting again.\n")
+    return path
+
+
+def release_kill_switch(config: dict) -> bool:
+    """Remove the kill-switch file. True if one was there."""
+    config = config.get("posting", config)
+    path = config.get("kill_switch_file") or DEFAULT_KILL_SWITCH_FILE
+    try:
+        os.remove(path)
+        return True
+    except OSError:
+        return False

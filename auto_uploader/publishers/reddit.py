@@ -1,19 +1,25 @@
 """
-publishers/reddit.py — Post to Reddit using a SEPARATE account.
+publishers/reddit.py — Post to Reddit as a SEPARATE, named account.
 
-This uses _2 credentials (REDDIT_CLIENT_ID_2, etc.) so it is completely
-independent of any existing or locked Reddit account configured elsewhere
-in the project.  The original REDDIT_* env vars are never touched here.
+Credentials are resolved per account name (default "2"), so this never
+touches the primary REDDIT_* variables and is not affected by the state of
+any other Reddit account configured elsewhere in the project:
 
-Required credentials (in .env):
     REDDIT_CLIENT_ID_2      — from https://www.reddit.com/prefs/apps
     REDDIT_CLIENT_SECRET_2
     REDDIT_USERNAME_2
     REDDIT_PASSWORD_2
-    REDDIT_SUBREDDIT        — subreddit name without r/ prefix (e.g. stackswopo)
+    REDDIT_SUBREDDIT        — subreddit name without the r/ prefix
 
-Posting stays behind publish_guard (caps, kill switch, circuit breaker).
-Facebook Groups equivalent (r/private groups you don't mod) = manual only.
+Reddit expects one "script" app per account, so the alternate account
+needs its own app registered under that account - reusing the first
+account's client_id with a second username is what looks like credential
+sharing.
+
+Posting still goes through publish_guard (kill switch, rolling cap,
+spacing, circuit breaker). This class does not check the guard itself;
+the caller must, because the guard is the only component allowed to
+authorise a post.
 """
 
 from __future__ import annotations
@@ -24,90 +30,110 @@ from typing import Any, Dict, Optional
 
 log = logging.getLogger("publisher.reddit")
 
-try:
-    import praw
-    _PRAW_OK = True
-except ImportError:
-    _PRAW_OK = False
-    log.warning("reddit: 'praw' not installed — pip install praw")
+DEFAULT_ACCOUNT = "2"
+
+
+def _credential_helpers():
+    """Import the shared credential resolver from either import root.
+
+    main.py runs with auto_uploader/ on sys.path (`utils.x`); the tests
+    import `auto_uploader.publishers.x`. Same module either way.
+    """
+    try:
+        from ..utils.social_promoter import (  # type: ignore
+            reddit_credentials, reddit_credentials_missing)
+    except ImportError:  # pragma: no cover - depends on sys.path shape
+        from utils.social_promoter import (  # type: ignore
+            reddit_credentials, reddit_credentials_missing)
+    return reddit_credentials, reddit_credentials_missing
 
 
 class RedditPublisher:
-    def __init__(self, cfg: Dict[str, Any]) -> None:
+    def __init__(self, cfg: Optional[Dict[str, Any]] = None,
+                 account: Optional[str] = None) -> None:
+        cfg = cfg or {}
         self._cfg = cfg
-        self._client_id     = os.getenv("REDDIT_CLIENT_ID_2", "")
-        self._client_secret = os.getenv("REDDIT_CLIENT_SECRET_2", "")
-        self._username      = os.getenv("REDDIT_USERNAME_2", "")
-        self._password      = os.getenv("REDDIT_PASSWORD_2", "")
-        self._subreddit     = os.getenv("REDDIT_SUBREDDIT", "") or \
-            cfg.get("features", {}).get("social_promoter", {}).get("reddit_subreddit", "")
+        promoter = (cfg.get("features", {}) or {}).get("social_promoter", {}) or {}
+        self._account = (
+            account
+            if account is not None
+            else promoter.get("reddit_account", DEFAULT_ACCOUNT)
+        )
+        self._subreddit = (
+            os.getenv("REDDIT_SUBREDDIT", "").strip()
+            or promoter.get("reddit_subreddit", "")
+        )
         self._reddit: Optional[Any] = None
 
+    # ── Readiness ────────────────────────────────────────────────────────
+
+    def _missing_credentials(self) -> list:
+        _, missing_fn = _credential_helpers()
+        return missing_fn(self._account)
+
     def _ready(self) -> bool:
-        if not _PRAW_OK:
-            return False
-        missing = [k for k, v in {
-            "REDDIT_CLIENT_ID_2": self._client_id,
-            "REDDIT_CLIENT_SECRET_2": self._client_secret,
-            "REDDIT_USERNAME_2": self._username,
-            "REDDIT_PASSWORD_2": self._password,
-        }.items() if not v]
+        """True when this account's credentials and target are configured.
+
+        Deliberately does NOT check whether praw is importable. Those are
+        different problems with different fixes - "pip install praw" vs
+        "fill in your .env" - and folding them together produced a
+        publisher that reported missing credentials on a machine whose
+        credentials were fine.
+        """
+        missing = self._missing_credentials()
         if missing:
             log.error("Reddit: missing env vars: %s", ", ".join(missing))
             return False
         if not self._subreddit:
-            log.error("Reddit: REDDIT_SUBREDDIT not set")
+            log.error("Reddit: REDDIT_SUBREDDIT not set (and no "
+                      "features.social_promoter.reddit_subreddit in config)")
             return False
         return True
 
     def _get_reddit(self):
         if self._reddit is None:
+            import praw  # optional dependency; raises ImportError if absent
+
+            creds_fn, _ = _credential_helpers()
+            creds = creds_fn(self._account)
             self._reddit = praw.Reddit(
-                client_id=self._client_id,
-                client_secret=self._client_secret,
-                username=self._username,
-                password=self._password,
-                user_agent=f"AutoBleepPro/2.0 (by u/{self._username})",
+                client_id=creds["client_id"],
+                client_secret=creds["client_secret"],
+                username=creds["username"],
+                password=creds["password"],
+                # Reddit asks that the user agent identify the app and the
+                # account it acts for; a blank or shared one is itself a
+                # spam signal.
+                user_agent=f"AutoBleepPro/2.0 (by u/{creds['username']})",
             )
         return self._reddit
 
-    def post_link(
-        self,
-        title: str,
-        url: str,
-        flair: Optional[str] = None,
-    ) -> bool:
-        """Post a link post to REDDIT_SUBREDDIT. Returns True on success."""
+    # ── Posting ──────────────────────────────────────────────────────────
+
+    def _submit(self, what: str, **kwargs) -> bool:
         if not self._ready():
             return False
         try:
-            reddit = self._get_reddit()
-            sub = reddit.subreddit(self._subreddit)
-            submission = sub.submit(title=title, url=url, flair_id=flair)
-            log.info(
-                "Reddit: posted to r/%s — %s", self._subreddit, submission.shortlink
-            )
+            submission = self._get_reddit().subreddit(self._subreddit).submit(**kwargs)
+            log.info("Reddit: %s to r/%s — %s", what, self._subreddit,
+                     getattr(submission, "shortlink", ""))
             return True
+        except ImportError:
+            log.error("Reddit: 'praw' is not installed — pip install praw")
+            return False
         except Exception as exc:
-            log.error("Reddit: post failed: %s", exc)
+            log.error("Reddit: %s failed: %s", what, exc)
             return False
 
-    def post_text(
-        self,
-        title: str,
-        body: str,
-    ) -> bool:
-        """Post a self/text post. Returns True on success."""
-        if not self._ready():
-            return False
-        try:
-            reddit = self._get_reddit()
-            sub = reddit.subreddit(self._subreddit)
-            submission = sub.submit(title=title, selftext=body)
-            log.info(
-                "Reddit: text post to r/%s — %s", self._subreddit, submission.shortlink
-            )
-            return True
-        except Exception as exc:
-            log.error("Reddit: text post failed: %s", exc)
-            return False
+    def post_link(self, title: str, url: str, flair: Optional[str] = None) -> bool:
+        """Post a link post to the configured subreddit. True on success."""
+        kwargs = {"title": title, "url": url}
+        if flair:
+            # Passing flair_id=None is not the same as omitting it on some
+            # subreddits, so only send it when there is one.
+            kwargs["flair_id"] = flair
+        return self._submit("posted link", **kwargs)
+
+    def post_text(self, title: str, body: str) -> bool:
+        """Post a self/text post. True on success."""
+        return self._submit("posted text", title=title, selftext=body)

@@ -35,15 +35,72 @@ def _post_twitter(message: str) -> None:
     client.create_tweet(text=message[:280])
 
 
-def _post_reddit(subreddit: str, title: str, url: str) -> None:
+REDDIT_FIELDS = ("CLIENT_ID", "CLIENT_SECRET", "USERNAME", "PASSWORD")
+
+
+def reddit_env_names(field: str, account: str = "") -> list:
+    """Env var names to try for one credential field, in priority order.
+
+    Reddit posting is expected to run on a DIFFERENT account from the one
+    the rest of the project may have configured, so credentials are looked
+    up per named account rather than from one fixed set. `account="2"`
+    finds REDDIT_CLIENT_ID_2; `account="ALT"` finds either
+    REDDIT_CLIENT_ID_ALT or REDDIT_ALT_CLIENT_ID, because both layouts
+    read naturally and guessing wrong just means an auth failure later.
+
+    An empty account is the primary REDDIT_* set.
+    """
+    account = (account or "").strip().strip("_")
+    if not account:
+        return [f"REDDIT_{field}"]
+    return [f"REDDIT_{field}_{account}", f"REDDIT_{account}_{field}"]
+
+
+def reddit_credentials(account: str = "") -> dict:
+    """One Reddit account's credentials, read from the environment.
+
+    Raises KeyError naming the variable it looked for, so a half-filled
+    .env fails with something actionable instead of an auth error later.
+    """
+    creds = {}
+    for field in REDDIT_FIELDS:
+        names = reddit_env_names(field, account)
+        value = ""
+        for name in names:
+            value = os.environ.get(name, "").strip()
+            if value:
+                break
+        if not value:
+            who = f"the '{account}' account" if account else "Reddit"
+            raise KeyError(
+                f"{names[0]} is not set in .env - needed to post to {who}.")
+        creds[field.lower()] = value
+    return creds
+
+
+def reddit_credentials_missing(account: str = "") -> list:
+    """Which credential variables are absent. Empty list = ready."""
+    missing = []
+    for field in REDDIT_FIELDS:
+        names = reddit_env_names(field, account)
+        if not any(os.environ.get(n, "").strip() for n in names):
+            missing.append(names[0])
+    return missing
+
+
+def _post_reddit(subreddit: str, title: str, url: str,
+                 account: str = "") -> None:
     import praw  # optional dependency
 
+    creds = reddit_credentials(account)
     reddit = praw.Reddit(
-        client_id=os.environ["REDDIT_CLIENT_ID"],
-        client_secret=os.environ["REDDIT_CLIENT_SECRET"],
-        username=os.environ["REDDIT_USERNAME"],
-        password=os.environ["REDDIT_PASSWORD"],
-        user_agent="AutoUploader",
+        client_id=creds["client_id"],
+        client_secret=creds["client_secret"],
+        username=creds["username"],
+        password=creds["password"],
+        # Reddit asks that the user agent identify the app and the account
+        # it acts for; a shared/blank one is itself a spam signal.
+        user_agent=f"AutoUploader/1.0 (by u/{creds['username']})",
     )
     reddit.subreddit(subreddit).submit(title=title, url=url)
 
@@ -92,12 +149,15 @@ def announce_upload(features: dict, title: str, new_uploads: dict) -> list:
 
     if features.get("reddit", False):
         subreddit = features.get("reddit_subreddit", "")
+        # Which Reddit account to act as. Config-driven so a different
+        # account can be used without editing code - see reddit_env_names.
+        account = features.get("reddit_account", "")
         primary_url = new_uploads.get("youtube") or new_uploads.get("rumble", "")
         if not subreddit:
             print("[Social] Reddit enabled but reddit_subreddit not set in config - skipping.")
         else:
             try:
-                _post_reddit(subreddit, title, primary_url)
+                _post_reddit(subreddit, title, primary_url, account)
                 posted.append("reddit")
                 print(f"[Social] Posted to r/{subreddit}.")
             except ImportError:

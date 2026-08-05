@@ -21,6 +21,14 @@ python-dotenv==1.0.1
 # Pre-upload censoring (reuses ../autoreel/) - already installed if you've
 # run INSTALL.bat for the main AutoBleepPro project; listed here so this
 # folder's requirements.txt is complete on its own too.
+#
+# faster-whisper is the preferred transcription backend: it runs int8 on
+# CPU (several times faster than openai-whisper's fp32) and produces word
+# timestamps without torch's DTW pass - which is the code that tries to
+# JIT a Triton kernel and warns on every call when there's no CUDA
+# toolkit. openai-whisper stays listed as the fallback so existing
+# installs keep working.
+faster-whisper
 openai-whisper
 better-profanity
 pydub

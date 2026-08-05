@@ -34,6 +34,28 @@ def is_intermediate_download(path: str) -> bool:
     return bool(_INTERMEDIATE_STEM.search(stem))
 
 
+# Files that live in a watch folder by design and were never meant to be
+# videos: git's folder placeholder, the .txt title sidecars this tool
+# reads, its own caches, and the junk Windows/macOS scatter around. They
+# are skipped like any other non-video, just silently - a [SKIP] line per
+# run for each of these is noise that hides the skips that matter.
+_SIDECAR_NAMES = frozenset({
+    ".gitkeep", ".gitignore", "thumbs.db", "desktop.ini", ".ds_store",
+})
+_SIDECAR_EXTENSIONS = frozenset({
+    ".txt", ".json", ".md", ".log", ".srt", ".vtt", ".jpg", ".jpeg",
+    ".png", ".webp", ".ini", ".db", ".lnk", ".url", ".part", ".ytdl",
+})
+
+
+def is_sidecar_file(path: str) -> bool:
+    """True for a companion/system file that is not a failed video."""
+    name = os.path.basename(path).lower()
+    if name in _SIDECAR_NAMES or name.startswith("."):
+        return True
+    return os.path.splitext(name)[1] in _SIDECAR_EXTENSIONS
+
+
 class _NewVideoHandler(FileSystemEventHandler):
     def __init__(self, supported_formats: tuple, stability_seconds: int, on_ready: Callable[[str], None]):
         self.supported_formats = supported_formats
