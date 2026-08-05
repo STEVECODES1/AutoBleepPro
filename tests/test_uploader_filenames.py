@@ -175,3 +175,36 @@ def test_the_two_helpers_stay_opposites():
 
     for name in ("a.py", "b.webm", "LICENSE", "c.mpg"):
         assert is_sidecar_file(name) is not looks_like_a_video_attempt(name)
+
+
+def test_a_mistyped_flag_suggests_the_real_one():
+    """argparse's "unrecognized arguments" is accurate and useless."""
+    import argparse
+    import io
+    import contextlib
+
+    from main import _parse_args_helpfully
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--watch", nargs="?", const="")
+    parser.add_argument("--batch", nargs="?", const="")
+    parser.add_argument("--file")
+
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        try:
+            _parse_args_helpfully(parser, ["--watch_folder"])
+        except SystemExit:
+            pass
+    printed = out.getvalue()
+    assert "--watch" in printed and "Did you mean" in printed
+
+
+def test_a_valid_flag_still_parses():
+    import argparse
+
+    from main import _parse_args_helpfully
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--watch", nargs="?", const="")
+    assert _parse_args_helpfully(parser, ["--watch"]).watch == ""

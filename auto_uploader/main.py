@@ -24,7 +24,7 @@ from datetime import datetime
 # Bump when shipping user-visible changes, so --test-config can prove
 # which build is actually running (stale extracts have silently caused
 # several confusing "the fix did nothing" runs).
-BUILD = "2026-08-04.2 private-by-default"
+BUILD = "2026-08-05.1 batch-summary + manual-post queue"
 
 from utils.censor import censor_video
 from utils.ffmpeg_tools import StageTimer
@@ -119,6 +119,42 @@ def get_stream_title(video_path: str, cli_title: str, cfg, allow_prompt: bool = 
               f"using '{cfg.general.default_title}'. Drop a .txt file next to the "
               f"video (same name, title on line 1) to set it without prompting.")
     return cfg.general.default_title
+
+
+
+def _parse_args_helpfully(parser, argv):
+    """parse_args, but suggest the real flag when one is mistyped.
+
+    argparse answers an unknown flag with "unrecognized arguments" and
+    exits, which is accurate and useless - `--watch_folder` is an obvious
+    typo for `--watch`, and printing the nearest match saves a round trip.
+    """
+    import difflib
+
+    known = []
+    for action in parser._actions:
+        known.extend(action.option_strings)
+
+    argv = list(sys.argv[1:] if argv is None else argv)
+    for arg in argv:
+        if not arg.startswith("--") or arg in known:
+            continue
+        stem = arg.split("=", 1)[0]
+        if stem in known:
+            continue
+        # Match on the stem too, so --watch_folder finds --watch even
+        # though the whole string is not close to it.
+        close = difflib.get_close_matches(stem, known, n=3, cutoff=0.5)
+        close += [k for k in known
+                  if k not in close and k.lstrip("-")
+                  and stem.lstrip("-").startswith(k.lstrip("-"))]
+        if close:
+            print(f"[ERROR] No such option: {stem}")
+            print(f"        Did you mean: {', '.join(dict.fromkeys(close))}")
+            print("        Run `python main.py --help` for the full list.")
+            raise SystemExit(2)
+
+    return parser.parse_args(argv)
 
 
 def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChecker,
@@ -505,7 +541,7 @@ def main(argv=None) -> int:
     parser.add_argument("--verify", action="store_true",
                         help="With --posting-status, also ask each API who your token "
                              "belongs to. Read-only - creates and publishes nothing.")
-    args = parser.parse_args(argv)
+    args = _parse_args_helpfully(parser, argv)
 
     # Printed on EVERY run, not just --test-config: a stale extract running
     # old code has silently caused several confusing "the fix did nothing"
