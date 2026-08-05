@@ -131,10 +131,111 @@ def _check_facebook() -> Check:
                  identity=name)
 
 
+def x_credential_shape_problems() -> list:
+    """Malformed X credentials, spotted without a network call.
+
+    A 401 from X says only "authentication failed" - it never says which
+    of the four values is wrong. Most of the time it is one of these,
+    and all of them are visible locally.
+    """
+    problems = []
+    values = {name: os.environ.get(name, "") for name in REQUIRED_ENV["x"]}
+
+    for name, raw in values.items():
+        value = raw.strip()
+        if raw != value:
+            problems.append(f"{name} has leading/trailing whitespace")
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+            problems.append(
+                f"{name} is wrapped in quotes - .env values are literal, so "
+                "the quotes become part of the credential")
+        if value.lower().startswith(("your_", "paste", "<", "xxx")):
+            problems.append(f"{name} still looks like a placeholder")
+
+    # The access token is the one credential with a recognisable shape:
+    # X issues it as "<numeric user id>-<secret>". Nothing else in the set
+    # contains a hyphen, so a token without one is almost always the API
+    # key pasted into the wrong variable - which produces a 401 that looks
+    # identical to an expired token.
+    access = values["TWITTER_ACCESS_TOKEN"].strip()
+    if access and "-" not in access:
+        problems.append(
+            "TWITTER_ACCESS_TOKEN has no '-' in it. A real access token "
+            "looks like '1234567890-AbCd...'; this looks like the API key "
+            "pasted into the wrong variable")
+    if access and access == values["TWITTER_API_KEY"].strip():
+        problems.append("TWITTER_ACCESS_TOKEN and TWITTER_API_KEY are identical")
+    if (values["TWITTER_ACCESS_SECRET"].strip()
+            == values["TWITTER_API_SECRET"].strip()
+            and values["TWITTER_API_SECRET"].strip()):
+        problems.append("TWITTER_ACCESS_SECRET and TWITTER_API_SECRET are identical")
+    return problems
+
+
+def x_app_credentials_work() -> tuple:
+    """(ok, detail) for the API key/secret pair alone.
+
+    Asks X for an app-only bearer token, which uses ONLY the consumer
+    key and secret. That splits a 401 in half: if this succeeds the app
+    credentials are fine and the access token pair is the problem, which
+    is the difference between "recreate the app" and "regenerate the
+    tokens".
+    """
+    import base64
+
+    key = os.environ.get("TWITTER_API_KEY", "").strip()
+    secret = os.environ.get("TWITTER_API_SECRET", "").strip()
+    if not key or not secret:
+        return False, "API key/secret not set"
+
+    basic = base64.b64encode(
+        f"{urllib.parse.quote(key)}:{urllib.parse.quote(secret)}".encode()
+    ).decode()
+    request = urllib.request.Request(
+        "https://api.twitter.com/oauth2/token",
+        data=b"grant_type=client_credentials",
+        headers={
+            "Authorization": f"Basic {basic}",
+            "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=_TIMEOUT) as response:
+            body = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        return False, f"HTTP {exc.code}"
+    except Exception as exc:
+        return False, str(exc)
+    return bool(body.get("access_token")), ""
+
+
+def _x_401_guidance() -> str:
+    """What to actually do about a 401, narrowed as far as we can get."""
+    shape = x_credential_shape_problems()
+    if shape:
+        return "401 Unauthorized. " + "; ".join(shape)
+
+    app_ok, detail = x_app_credentials_work()
+    if app_ok:
+        return ("401 Unauthorized, but the API key/secret ARE valid - so the "
+                "problem is the ACCESS TOKEN pair. Changing an app's "
+                "permission does not update tokens that already exist: go to "
+                "developer.twitter.com -> your app -> Keys and tokens -> "
+                "Regenerate Access Token and Secret, then update .env. "
+                "Check 'User authentication settings' says Read and Write "
+                "BEFORE regenerating, or the new tokens are read-only too")
+    return ("401 Unauthorized, and the API key/secret are rejected too "
+            f"({detail}) - so it is not just the access tokens. Confirm .env "
+            "holds the API Key and Secret from the same app, and that the app "
+            "is attached to a Project (X API v2 rejects standalone apps)")
+
+
 def _check_x() -> Check:
     missing = missing_env("x")
     if missing:
         return Check("x", MISSING, ", ".join(missing))
+
+    shape = x_credential_shape_problems()
     try:
         import tweepy
     except ImportError:
@@ -142,14 +243,27 @@ def _check_x() -> Check:
                                   "installed - pip install tweepy")
     try:
         client = tweepy.Client(
-            consumer_key=os.environ["TWITTER_API_KEY"],
-            consumer_secret=os.environ["TWITTER_API_SECRET"],
-            access_token=os.environ["TWITTER_ACCESS_TOKEN"],
-            access_token_secret=os.environ["TWITTER_ACCESS_SECRET"],
+            consumer_key=os.environ["TWITTER_API_KEY"].strip(),
+            consumer_secret=os.environ["TWITTER_API_SECRET"].strip(),
+            access_token=os.environ["TWITTER_ACCESS_TOKEN"].strip(),
+            access_token_secret=os.environ["TWITTER_ACCESS_SECRET"].strip(),
         )
         me = client.get_me()
     except Exception as exc:
-        return Check("x", FAILED, str(exc))
+        text = str(exc)
+        if "401" in text or "Unauthorized" in text:
+            return Check("x", FAILED, _x_401_guidance())
+        if "403" in text or "Forbidden" in text:
+            return Check("x", FAILED,
+                         "403 Forbidden - the credentials authenticate but "
+                         "are not allowed to do this. Usually the app is "
+                         "Read-only, or it is not attached to a Project. Set "
+                         "Read and Write, then REGENERATE the access tokens")
+        if "429" in text:
+            return Check("x", FAILED, "429 rate limited - wait and retry; "
+                                      "this says nothing about the tokens")
+        return Check("x", FAILED, "; ".join(shape + [text]) if shape else text)
+
     username = getattr(getattr(me, "data", None), "username", "")
     if not username:
         return Check("x", FAILED, "get_me() returned no user - the tokens may "
