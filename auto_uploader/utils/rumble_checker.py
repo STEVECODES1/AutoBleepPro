@@ -51,10 +51,11 @@ def _looks_like_feed(raw: bytes) -> bool:
 def _parse_rss(raw: bytes) -> list:
     """Parse an RSS feed's <item> entries into ExistingVideo records.
 
-    Parsed from BYTES on purpose. Rumble's feed opens with an encoding
-    declaration, and ElementTree refuses to parse a `str` that carries
-    one ("Unicode strings with encoding declaration are not supported") -
-    so decoding first turned every successful fetch into a crash.
+    Parsed from BYTES so ElementTree honours the feed's own encoding
+    declaration. Decoding as UTF-8 first, as this used to, silently
+    mangled any feed that wasn't UTF-8 - an accented stream title came
+    back full of replacement characters and then failed to match the
+    local history, which reads as "not uploaded yet".
     """
     videos = []
     root = ET.fromstring(raw)
