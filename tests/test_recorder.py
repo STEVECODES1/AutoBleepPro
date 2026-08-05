@@ -231,3 +231,63 @@ def test_a_failed_join_keeps_the_segments(recorder, monkeypatch, tmp_path):
     monkeypatch.setattr(Recorder, "_ffmpeg", lambda self, args: False)
     assert recorder.finalise("show") is None
     assert os.path.exists(kept), "segments were deleted after a failed join"
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# The failures that look like "it just stopped"
+# ═════════════════════════════════════════════════════════════════════════════
+
+def test_keep_awake_is_a_no_op_off_windows():
+    """It must not crash the recorder on any other platform."""
+    from record_stream import KeepAwake
+
+    with KeepAwake() as awake:
+        assert awake.active in (True, False)
+
+
+def test_a_full_disk_is_warned_about_before_recording(tmp_path, monkeypatch):
+    """Running out of disk four hours in looks exactly like the stream
+    ending early, and loses the same amount of footage."""
+    import record_stream
+
+    monkeypatch.setattr(record_stream, "free_bytes", lambda p: 2_000_000_000)
+    warning = record_stream.disk_warning(str(tmp_path))
+    assert "GB free" in warning
+
+
+def test_plenty_of_disk_warns_about_nothing(tmp_path, monkeypatch):
+    import record_stream
+
+    monkeypatch.setattr(record_stream, "free_bytes", lambda p: 900_000_000_000)
+    assert record_stream.disk_warning(str(tmp_path)) == ""
+
+
+def test_yt_dlp_output_is_written_to_a_log(recorder, tmp_path, monkeypatch):
+    """Without this there is nothing to look at after a recording stops
+    early, which is why "it only got 3 of 5 hours" had no explanation."""
+    log_path = str(tmp_path / "rec" / "run.log")
+    script = ("import sys; print('[download] frag 1'); "
+              "print('ERROR: fragment 4210 not found'); sys.exit(1)")
+
+    monkeypatch.setattr(recorder, "download_args",
+                        lambda out, wait=True: [sys.executable, "-c", script])
+    code = recorder._run(recorder.download_args("x"), log_path)
+
+    assert code == 1
+    body = open(log_path, encoding="utf-8").read()
+    assert "fragment 4210 not found" in body
+
+
+def test_the_reason_it_stopped_is_printed(recorder, tmp_path, capsys):
+    """Reading a log file is a step; seeing the reason on screen is not."""
+    script = ("import sys; print('ERROR: HTTP Error 403: Forbidden'); "
+              "sys.exit(1)")
+    recorder._run([sys.executable, "-c", script],
+                  str(tmp_path / "rec" / "run.log"))
+    assert "403" in capsys.readouterr().out
+
+
+def test_a_clean_run_does_not_print_a_scary_tail(recorder, tmp_path, capsys):
+    recorder._run([sys.executable, "-c", "print('done')"],
+                  str(tmp_path / "rec" / "run.log"))
+    assert "Last thing yt-dlp said" not in capsys.readouterr().out

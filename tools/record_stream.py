@@ -51,6 +51,76 @@ MAX_RESUMES = 20
 
 SAFE_CHARS = " -_.,'!()[]"
 
+# A five-hour stream is roughly this much at 1080p. Checked before
+# starting, because running out of disk four hours in loses the lot.
+BYTES_PER_HOUR_1080P = 3_500_000_000
+MIN_FREE_HOURS = 6
+
+
+class KeepAwake:
+    """Stops Windows sleeping while a recording is running.
+
+    This is the failure that looks most like "it just stopped": the
+    machine suspends on its idle timer partway through a long stream, the
+    download dies with it, and on wake there is a partial file and no
+    explanation. A console window does not count as activity - Windows
+    only knows a program needs the machine awake if it says so.
+
+    SetThreadExecutionState with ES_SYSTEM_REQUIRED is that request. The
+    display is deliberately left alone; keeping the screen on all night
+    is not needed to keep downloading.
+    """
+
+    ES_CONTINUOUS = 0x80000000
+    ES_SYSTEM_REQUIRED = 0x00000001
+
+    def __init__(self) -> None:
+        self.active = False
+
+    def __enter__(self) -> "KeepAwake":
+        if sys.platform != "win32":
+            return self
+        try:
+            import ctypes
+
+            ctypes.windll.kernel32.SetThreadExecutionState(
+                self.ES_CONTINUOUS | self.ES_SYSTEM_REQUIRED)
+            self.active = True
+        except Exception:
+            pass
+        return self
+
+    def __exit__(self, *exc) -> None:
+        if not self.active:
+            return
+        try:
+            import ctypes
+
+            # Drop back to normal power behaviour, or the machine never
+            # sleeps again after this process exits.
+            ctypes.windll.kernel32.SetThreadExecutionState(self.ES_CONTINUOUS)
+        except Exception:
+            pass
+
+
+def free_bytes(path: str) -> int:
+    try:
+        return shutil.disk_usage(path).free
+    except OSError:
+        return 0
+
+
+def disk_warning(path: str, hours: int = MIN_FREE_HOURS) -> str:
+    """A warning if there is not obviously room, else ''."""
+    needed = BYTES_PER_HOUR_1080P * hours
+    free = free_bytes(path)
+    if free and free < needed:
+        return (f"only {free / 1e9:.0f} GB free where recordings are staged - "
+                f"a {hours}-hour 1080p stream needs roughly "
+                f"{needed / 1e9:.0f} GB. Recording will stop when the disk "
+                "fills, and that looks exactly like a stream ending early.")
+    return ""
+
 
 def safe_name(text: str, limit: int = 120) -> str:
     """A filename Windows will accept, keeping the title readable."""
@@ -149,15 +219,51 @@ class Recorder:
         args.append(self.url)
         return args
 
-    def _run(self, args: list) -> int:
+    def _run(self, args: list, log_path: str = "") -> int:
+        """Run yt-dlp, echoing its output and keeping a copy on disk.
+
+        The copy is the point. A recording that stops after three hours of
+        a five-hour stream leaves nothing to look at once the window is
+        closed, and "it just stopped" is not something anyone can fix. The
+        last few lines of this log name the reason.
+        """
         try:
-            return subprocess.call(args)
+            process = subprocess.Popen(
+                args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                bufsize=1, text=True, errors="replace")
         except FileNotFoundError:
             self.say("ERROR: yt-dlp is not on PATH. Install it: pip install -U yt-dlp")
             return 127
+
+        tail: list = []
+        log = None
+        try:
+            if log_path:
+                os.makedirs(os.path.dirname(os.path.abspath(log_path)), exist_ok=True)
+                log = open(log_path, "a", encoding="utf-8")
+                log.write(f"\n=== {time.strftime('%Y-%m-%d %H:%M:%S')} "
+                          f"{' '.join(args)}\n")
+            for line in process.stdout:
+                line = line.rstrip()
+                if line:
+                    print(line, flush=True)
+                    tail.append(line)
+                    del tail[:-40]
+                    if log:
+                        log.write(line + "\n")
+                        log.flush()
+            return process.wait()
         except KeyboardInterrupt:
+            process.terminate()
             self.say("Stopped by Ctrl+C.")
             return 130
+        finally:
+            if log:
+                log.close()
+            if tail and process.returncode not in (0, None):
+                self.say("Last thing yt-dlp said before stopping:")
+                for line in tail[-6:]:
+                    self.say(f"    {line}")
 
     # ── Assembling and delivering ────────────────────────────────────────
 
@@ -237,13 +343,24 @@ class Recorder:
         """Wait for the channel to go live, record it, deliver it."""
         os.makedirs(self.staging, exist_ok=True)
         base = f"{safe_name(self.name)} {time.strftime('%Y-%m-%d %H_%M')}"
+        log_path = os.path.join(self.staging, f"{base}.log")
+
+        warning = disk_warning(self.staging)
+        if warning:
+            self.say(f"WARNING: {warning}")
 
         self.say(f"Waiting for {self.name} to go live...")
         resumes = 0
         while True:
             target = segment_path(self.staging, base, resumes + 1)
             started = time.time()
-            code = self._run(self.download_args(target, wait=(resumes == 0)))
+            # Held only while actually downloading, so the machine can
+            # still sleep normally during the wait between streams.
+            with KeepAwake() as awake:
+                if resumes == 0 and awake.active:
+                    self.say("Holding the machine awake for the recording.")
+                code = self._run(self.download_args(target, wait=(resumes == 0)),
+                                 log_path)
             ended = time.time()
 
             if code in (127, 130):
@@ -261,6 +378,7 @@ class Recorder:
             self.say(f"Recording dropped after "
                      f"{(ended - started) / 60:.0f} min - reconnecting "
                      f"(resume {resumes}/{MAX_RESUMES})...")
+            self.say(f"Full yt-dlp output: {log_path}")
             time.sleep(3)
 
         return self.finalise(base)
