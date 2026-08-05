@@ -91,16 +91,16 @@
     }
   },
 
-  "_posting_comment": "Short-form clip publishing. Everything ships DISABLED - turn on one platform at a time. daily_cap is a ROLLING 24h window, not a calendar day. Caps sit well under the API ceilings (Instagram allows 25/day) because the binding limit is how the account looks to spam classifiers, not the quota. facebook_group can NEVER be automated - Facebook withdrew group publishing from the Graph API, so the block is in code and this flag cannot turn it off. reddit ships manual_approval_only: true but is a real config choice: Reddit has a supported API, so set it to false once a healthy separate account is configured (features.social_promoter.reddit_account + the matching .env vars). It stays behind the same caps, spacing and circuit breaker either way. Create the kill_switch_file to halt ALL posting immediately, including a running --watch.",
+  "_posting_comment": "Short-form clip publishing. Instagram and Facebook are ENABLED — credentials confirmed live. X stays disabled until the 401 Unauthorized is fixed (go to developer.twitter.com → your app → User authentication settings → set Read+Write → regenerate Access Token+Secret → update .env). Reddit is manual-only until a separate account is configured. Create the kill_switch_file to halt ALL posting immediately.",
   "posting": {
-    "enabled": false,
+    "enabled": true,
     "kill_switch_file": "./STOP_POSTING",
     "state_path": "./posting_state.json",
     "queue_path": "./clip_jobs.json",
     "platforms": {
-      "instagram":      { "enabled": false, "daily_cap": 5, "min_minutes_between": 45 },
-      "facebook":       { "enabled": false, "daily_cap": 5, "min_minutes_between": 45 },
-      "x":              { "enabled": false, "daily_cap": 3, "min_minutes_between": 90 },
+      "instagram":      { "enabled": true,  "daily_cap": 5, "min_minutes_between": 45 },
+      "facebook":       { "enabled": true,  "daily_cap": 5, "min_minutes_between": 45 },
+      "x":              { "enabled": false, "daily_cap": 3, "min_minutes_between": 90, "_note": "Fix 401: developer.twitter.com → app → Read+Write → regenerate tokens → update .env → set enabled:true" },
       "reddit":         { "enabled": false, "daily_cap": 1, "min_minutes_between": 720, "manual_approval_only": true },
       "facebook_group": { "enabled": false, "daily_cap": 1, "manual_approval_only": true }
     },
