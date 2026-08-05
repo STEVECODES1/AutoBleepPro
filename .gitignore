@@ -15,3 +15,8 @@ auto_uploader/uploaded/*
 !auto_uploader/uploaded/.gitkeep
 auto_uploader/censored/*
 !auto_uploader/censored/.gitkeep
+# In-progress stream recordings - large, and half of one is worthless
+auto_uploader/recording/*
+!auto_uploader/recording/.gitkeep
+auto_uploader/clips/*
+!auto_uploader/clips/.gitkeep
