@@ -172,21 +172,33 @@ def x_credential_shape_problems() -> list:
     return problems
 
 
-def x_app_credentials_work() -> tuple:
-    """(ok, detail) for the API key/secret pair alone.
+APP_KEYS_OK = "ok"
+APP_KEYS_BAD = "bad"
+APP_KEYS_UNKNOWN = "unknown"
 
-    Asks X for an app-only bearer token, which uses ONLY the consumer
-    key and secret. That splits a 401 in half: if this succeeds the app
-    credentials are fine and the access token pair is the problem, which
-    is the difference between "recreate the app" and "regenerate the
-    tokens".
+
+def x_app_credentials_work() -> tuple:
+    """(state, detail) for the API key/secret pair alone.
+
+    Asks X for an app-only bearer token, which uses ONLY the consumer key
+    and secret, to split a 401 in half. The response code matters more
+    than success/failure:
+
+    - 200 -> the app credentials are definitely fine, so a user-context
+      401 has to be the access token pair.
+    - 401 -> the consumer key/secret themselves are rejected.
+    - anything else, 403 especially -> INCONCLUSIVE. App-only auth is not
+      available on the Free tier, and an app outside a Project cannot mint
+      one either, so a 403 here says nothing about whether the key and
+      secret are correct. Reading it as "the keys are bad" sends people to
+      recreate an app that was never the problem.
     """
     import base64
 
     key = os.environ.get("TWITTER_API_KEY", "").strip()
     secret = os.environ.get("TWITTER_API_SECRET", "").strip()
     if not key or not secret:
-        return False, "API key/secret not set"
+        return APP_KEYS_BAD, "API key/secret not set"
 
     basic = base64.b64encode(
         f"{urllib.parse.quote(key)}:{urllib.parse.quote(secret)}".encode()
@@ -203,10 +215,19 @@ def x_app_credentials_work() -> tuple:
         with urllib.request.urlopen(request, timeout=_TIMEOUT) as response:
             body = json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        return False, f"HTTP {exc.code}"
+        if exc.code == 401:
+            return APP_KEYS_BAD, "the API key/secret were rejected (401)"
+        if exc.code == 403:
+            return APP_KEYS_UNKNOWN, (
+                "app-only auth is not available to this app (403) - normal on "
+                "the Free tier, and it proves nothing either way about the "
+                "key and secret")
+        return APP_KEYS_UNKNOWN, f"HTTP {exc.code}"
     except Exception as exc:
-        return False, str(exc)
-    return bool(body.get("access_token")), ""
+        return APP_KEYS_UNKNOWN, str(exc)
+    if body.get("access_token"):
+        return APP_KEYS_OK, ""
+    return APP_KEYS_UNKNOWN, "no token in the response"
 
 
 def _x_401_guidance() -> str:
@@ -215,19 +236,26 @@ def _x_401_guidance() -> str:
     if shape:
         return "401 Unauthorized. " + "; ".join(shape)
 
-    app_ok, detail = x_app_credentials_work()
-    if app_ok:
+    regenerate = (
+        "Fix: developer.twitter.com -> your app -> User authentication "
+        "settings -> set Read and Write and SAVE. Then Keys and tokens -> "
+        "Regenerate Access Token and Secret, and paste BOTH new values into "
+        ".env. The order matters: regenerating before the permission is saved "
+        "gives you fresh read-only tokens, which fail exactly like the old "
+        "ones. Also confirm the app is inside a Project - X API v2 rejects "
+        "standalone apps.")
+
+    state, detail = x_app_credentials_work()
+    if state == APP_KEYS_OK:
         return ("401 Unauthorized, but the API key/secret ARE valid - so the "
-                "problem is the ACCESS TOKEN pair. Changing an app's "
-                "permission does not update tokens that already exist: go to "
-                "developer.twitter.com -> your app -> Keys and tokens -> "
-                "Regenerate Access Token and Secret, then update .env. "
-                "Check 'User authentication settings' says Read and Write "
-                "BEFORE regenerating, or the new tokens are read-only too")
-    return ("401 Unauthorized, and the API key/secret are rejected too "
-            f"({detail}) - so it is not just the access tokens. Confirm .env "
-            "holds the API Key and Secret from the same app, and that the app "
-            "is attached to a Project (X API v2 rejects standalone apps)")
+                "problem is the ACCESS TOKEN pair. " + regenerate)
+    if state == APP_KEYS_BAD:
+        return (f"401 Unauthorized, and {detail} - so it is not only the "
+                "access tokens. Confirm .env holds the API Key and Secret "
+                "copied from the SAME app as the access tokens.")
+    return (f"401 Unauthorized. Could not test the API key/secret separately: "
+            f"{detail}. The likeliest cause is still the ACCESS TOKEN pair. "
+            + regenerate)
 
 
 def _check_x() -> Check:

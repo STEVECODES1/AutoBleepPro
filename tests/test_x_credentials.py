@@ -22,6 +22,9 @@ for _path in (_REPO, _UPLOADER):
         sys.path.insert(0, _path)
 
 from utils.posting_status import (  # noqa: E402
+    APP_KEYS_BAD,
+    APP_KEYS_OK,
+    APP_KEYS_UNKNOWN,
     REQUIRED_ENV,
     x_credential_shape_problems,
 )
@@ -120,7 +123,7 @@ def test_guidance_names_the_access_tokens_when_the_app_keys_are_valid(
 
     x_env()
     monkeypatch.setattr(posting_status, "x_app_credentials_work",
-                        lambda: (True, ""))
+                        lambda: (APP_KEYS_OK, ""))
     guidance = posting_status._x_401_guidance()
     assert "ACCESS TOKEN" in guidance
     assert "Regenerate" in guidance
@@ -130,11 +133,12 @@ def test_guidance_points_at_the_app_when_even_the_keys_fail(x_env, monkeypatch):
     from utils import posting_status
 
     x_env()
-    monkeypatch.setattr(posting_status, "x_app_credentials_work",
-                        lambda: (False, "HTTP 403"))
+    monkeypatch.setattr(
+        posting_status, "x_app_credentials_work",
+        lambda: (APP_KEYS_BAD, "the API key/secret were rejected (401)"))
     guidance = posting_status._x_401_guidance()
-    assert "not just the access tokens" in guidance
-    assert "Project" in guidance
+    assert "not only the access tokens" in guidance
+    assert "SAME app" in guidance
 
 
 def test_a_shape_problem_short_circuits_the_network_call(x_env, monkeypatch):
@@ -144,7 +148,7 @@ def test_a_shape_problem_short_circuits_the_network_call(x_env, monkeypatch):
     called = []
     x_env(TWITTER_API_KEY='"quoted"')
     monkeypatch.setattr(posting_status, "x_app_credentials_work",
-                        lambda: called.append(1) or (True, ""))
+                        lambda: called.append(1) or (APP_KEYS_OK, ""))
     guidance = posting_status._x_401_guidance()
     assert called == [], "made a network call despite a local diagnosis"
     assert "quotes" in guidance
@@ -157,5 +161,21 @@ def test_guidance_always_mentions_the_permission_ordering(x_env, monkeypatch):
 
     x_env()
     monkeypatch.setattr(posting_status, "x_app_credentials_work",
-                        lambda: (True, ""))
-    assert "BEFORE regenerating" in posting_status._x_401_guidance()
+                        lambda: (APP_KEYS_OK, ""))
+    assert "order matters" in posting_status._x_401_guidance()
+
+
+def test_a_403_from_app_only_auth_is_not_read_as_bad_keys(x_env, monkeypatch):
+    """App-only auth is unavailable on the Free tier, so a 403 there says
+    nothing about the key and secret. Reading it as "the keys are bad"
+    sends people to recreate an app that was never the problem."""
+    from utils import posting_status
+
+    x_env()
+    monkeypatch.setattr(
+        posting_status, "x_app_credentials_work",
+        lambda: (APP_KEYS_UNKNOWN, "app-only auth is not available (403)"))
+    guidance = posting_status._x_401_guidance()
+    assert "rejected" not in guidance
+    assert "likeliest cause is still the ACCESS TOKEN" in guidance
+    assert "Regenerate" in guidance
