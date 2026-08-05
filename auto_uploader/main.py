@@ -24,7 +24,7 @@ from datetime import datetime
 # Bump when shipping user-visible changes, so --test-config can prove
 # which build is actually running (stale extracts have silently caused
 # several confusing "the fix did nothing" runs).
-BUILD = "2026-08-05.1 batch-summary + manual-post queue"
+BUILD = "2026-08-05.2 recorder + --clips"
 
 from utils.censor import censor_video
 from utils.ffmpeg_tools import StageTimer
@@ -535,6 +535,11 @@ def main(argv=None) -> int:
     parser.add_argument("--forget-platform", choices=("youtube", "rumble"),
                         help="With --forget, only clear this platform.")
     parser.add_argument("--health", action="store_true", help="Run disk/CPU/network health checks + temp cleanup, then exit.")
+    parser.add_argument("--clips", metavar="FILE",
+                        help="Render vertical clips with burned-in captions from "
+                             "an already-uploaded video, ready to post by hand.")
+    parser.add_argument("--clip-count", type=int, default=None,
+                        help="How many clips to make with --clips (default 3).")
     parser.add_argument("--posting-status", action="store_true",
                         help="Show what social posting would do right now: kill switch, "
                              "per-platform caps, and which credentials are in .env. Posts nothing.")
@@ -580,6 +585,18 @@ def main(argv=None) -> int:
     if args.health:
         ok = run_health_check(cfg, cfg.features.get("self_healing", {}))
         return 0 if ok else 1
+
+    if args.clips:
+        from utils.clip_runner import make_clips, print_run
+
+        if not os.path.isfile(args.clips):
+            print(f"[ERROR] File not found: {args.clips}")
+            for path in _suggest_paths(cfg, os.path.basename(args.clips)):
+                print(f"        Did you mean: {path}")
+            return 1
+        title = get_stream_title(args.clips, args.title, cfg, allow_prompt=False)
+        print_run(make_clips(cfg, args.clips, title, count=args.clip_count))
+        return 0
 
     if args.posting_status:
         from publish_guard import PublishGuard

@@ -122,6 +122,65 @@ def disk_warning(path: str, hours: int = MIN_FREE_HOURS) -> str:
     return ""
 
 
+# Below this fraction of the stream, the recording is reported as short.
+# Not 1.0: joining segments loses a second or two at each seam, and a
+# recording that starts a moment after the stream does is normal.
+COVERAGE_OK = 0.98
+
+
+def probe_duration(path: str) -> Optional[float]:
+    """Seconds of media in a file, or None if it cannot be determined."""
+    try:
+        completed = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+             "-of", "csv=p=0", path],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=120)
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return None
+    try:
+        return float(completed.stdout.decode().strip())
+    except ValueError:
+        return None
+
+
+def expected_duration(url: str) -> Optional[float]:
+    """How long the stream actually was, according to the platform."""
+    try:
+        completed = subprocess.run(
+            ["yt-dlp", "--no-warnings", "--skip-download",
+             "--print", "duration", url],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=120)
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return None
+    try:
+        return float(completed.stdout.decode().strip().splitlines()[0])
+    except (ValueError, IndexError):
+        return None
+
+
+def coverage_report(recorded: Optional[float],
+                    expected: Optional[float]) -> str:
+    """One line on whether the whole stream was captured.
+
+    The point is to find out tonight rather than days later. A recording
+    that stops at three hours of a five-hour stream is currently only
+    noticed by watching it, and by then the stream is out of YouTube's
+    DVR window and the missing part is gone for good.
+    """
+    if not recorded:
+        return "could not measure the recording"
+    if not expected:
+        return f"recorded {recorded / 3600:.2f}h (stream length unknown)"
+
+    ratio = recorded / expected
+    if ratio >= COVERAGE_OK:
+        return f"recorded {recorded / 3600:.2f}h of {expected / 3600:.2f}h - complete"
+    missing = expected - recorded
+    return (f"SHORT: recorded {recorded / 3600:.2f}h of {expected / 3600:.2f}h "
+            f"- {missing / 60:.0f} min missing ({ratio:.0%}). Check the .log "
+            "beside the recording for what stopped it.")
+
+
 def safe_name(text: str, limit: int = 120) -> str:
     """A filename Windows will accept, keeping the title readable."""
     cleaned = "".join(c if c.isalnum() or c in SAFE_CHARS else "_"
@@ -302,9 +361,39 @@ class Recorder:
                 os.remove(path)
             except OSError:
                 pass
+
+        # Checked here, while the stream is still in YouTube's DVR window
+        # and a missing hour could still be re-fetched. Days later it is
+        # gone for good.
+        report = coverage_report(probe_duration(destination),
+                                 expected_duration(self.url))
+        self.say(report)
+        if report.startswith("SHORT"):
+            self._notify_short(report)
+
         self.say(f"Delivered -> {destination}")
         self.say("The uploader will pick it up (run: python main.py --watch)")
         return destination
+
+    def _notify_short(self, report: str) -> None:
+        """Ping Discord when a recording came up short, because nobody
+        watches the console for five hours."""
+        webhook = os.environ.get("DISCORD_WEBHOOK_URL", "")
+        if not webhook:
+            return
+        import json
+        import urllib.request
+
+        payload = json.dumps({
+            "content": f"⚠️ **Recording came up short** — {self.name}\n{report}"
+        }).encode("utf-8")
+        try:
+            urllib.request.urlopen(urllib.request.Request(
+                webhook, data=payload,
+                headers={"Content-Type": "application/json",
+                         "User-Agent": "AutoBleep"}), timeout=15)
+        except Exception:
+            pass
 
     def _remux(self, source: str, target: str) -> bool:
         """TS -> MP4 without re-encoding. Fast, lossless, and gives the

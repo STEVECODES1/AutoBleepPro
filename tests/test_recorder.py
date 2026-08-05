@@ -291,3 +291,53 @@ def test_a_clean_run_does_not_print_a_scary_tail(recorder, tmp_path, capsys):
     recorder._run([sys.executable, "-c", "print('done')"],
                   str(tmp_path / "rec" / "run.log"))
     assert "Last thing yt-dlp said" not in capsys.readouterr().out
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Did we actually get the whole stream?
+# ═════════════════════════════════════════════════════════════════════════════
+
+def test_a_complete_recording_reports_complete():
+    from record_stream import coverage_report
+
+    assert "complete" in coverage_report(5 * 3600, 5 * 3600)
+
+
+def test_a_short_recording_is_called_out_with_the_gap():
+    """The exact case that went unnoticed: five hours streamed, three
+    recorded, and no indication until someone watched it."""
+    from record_stream import coverage_report
+
+    report = coverage_report(3 * 3600, 5 * 3600)
+    assert report.startswith("SHORT")
+    assert "120 min missing" in report
+    assert "60%" in report
+
+
+def test_small_losses_at_the_seams_are_not_flagged():
+    """Joining segments drops a second or two each time; calling that a
+    failure would make the check noise."""
+    from record_stream import coverage_report
+
+    assert not coverage_report(3599, 3600).startswith("SHORT")
+
+
+def test_an_unknown_stream_length_still_reports_what_was_recorded():
+    from record_stream import coverage_report
+
+    assert "1.00h" in coverage_report(3600, None)
+
+
+def test_an_unmeasurable_recording_says_so():
+    from record_stream import coverage_report
+
+    assert "could not measure" in coverage_report(None, 3600)
+
+
+def test_probe_survives_a_missing_ffprobe(monkeypatch):
+    import record_stream
+
+    monkeypatch.setattr(record_stream.subprocess, "run",
+                        lambda *a, **k: (_ for _ in ()).throw(FileNotFoundError()))
+    assert record_stream.probe_duration("x.mp4") is None
+    assert record_stream.expected_duration("url") is None
