@@ -19,7 +19,12 @@ VERTICAL_HEIGHT = 1920
 @dataclass
 class ClipRenderer:
     output_dir: str
-    face_tracking: bool = True
+    # OFF by default. This class was written for talking-head footage;
+    # pointed at gameplay it locks onto whatever NPC face crosses the
+    # frame and the crop jitters around the scene while the action drifts
+    # out of shot. See crop_strategy.py - `face` is an opt-in mode for
+    # face-cam and IRL segments, not a better centre crop.
+    face_tracking: bool = False
 
     def _to_vertical(self, clip):
         """Center-crop/resize a clip to fill a 1080x1920 vertical frame."""

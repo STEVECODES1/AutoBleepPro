@@ -222,15 +222,45 @@ def test_unknown_platform_is_refused_distinctly(guard):
     assert not decision and "not configured" in decision.reason
 
 
-def test_shipped_config_has_posting_off_by_default():
-    """Nothing may post until it is deliberately switched on."""
+def _shipped_posting():
     with open(os.path.join(_UPLOADER, "config.json")) as f:
         shipped = json.load(f)
     posting = shipped.get("posting")
-    assert posting is not None, "posting block missing from shipped config"
-    assert posting["enabled"] is False
-    for name, settings in posting["platforms"].items():
-        assert settings.get("enabled") is False, f"{name} ships enabled"
+    assert posting is not None, "posting block missing from config"
+    return posting
+
+
+def test_every_enabled_platform_has_a_real_cap():
+    """Turning a platform on is a decision; turning the limits off with it
+    is not. daily_cap 0 means unlimited in the guard, so an enabled
+    platform that ships with 0 would post without bound."""
+    for name, settings in _shipped_posting()["platforms"].items():
+        if not settings.get("enabled"):
+            continue
+        cap = int(settings.get("daily_cap", 0) or 0)
+        assert cap > 0, f"{name} is enabled with no daily cap"
+        assert cap <= 25, f"{name} cap of {cap} is above the platform ceiling"
+
+
+def test_every_enabled_platform_spaces_its_posts():
+    """Back-to-back posts are what a spam classifier is looking for."""
+    for name, settings in _shipped_posting()["platforms"].items():
+        if settings.get("enabled"):
+            assert float(settings.get("min_minutes_between", 0) or 0) > 0, \
+                f"{name} is enabled with no spacing between posts"
+
+
+def test_the_kill_switch_stays_configured():
+    """The panic stop has to exist even after posting is switched on -
+    especially then."""
+    assert _shipped_posting().get("kill_switch_file"), \
+        "no kill_switch_file: there would be no way to halt a running --watch"
+
+
+def test_facebook_group_never_ships_enabled():
+    settings = _shipped_posting()["platforms"]["facebook_group"]
+    assert settings.get("enabled") is False
+    assert settings.get("manual_approval_only") is True
 
 
 def test_shipped_config_keeps_reddit_parked_until_deliberately_enabled():

@@ -1,0 +1,376 @@
+"""
+Clip rendering: the crop, the caption file, and the ffmpeg command.
+
+The parts worth testing without ffmpeg present are the ones that are
+easy to get silently wrong and expensive to notice: a filter string that
+crops to the wrong aspect, a Windows path that ffmpeg reports as "file
+not found" when the file is right there, and caption timings that are
+still relative to the whole VOD instead of the clip.
+
+Rendering itself is exercised against a real ffmpeg only when one is
+installed, so the suite still runs everywhere.
+"""
+
+from __future__ import annotations
+
+import os
+import shutil
+import subprocess
+import sys
+
+import pytest
+
+_REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _REPO not in sys.path:
+    sys.path.insert(0, _REPO)
+
+from autoreel.captions import (  # noqa: E402
+    Phrase,
+    build_ass,
+    caption_file_for_clip,
+    group_words,
+    words_in_range,
+)
+from autoreel.clip_maker import (  # noqa: E402
+    VERTICAL_HEIGHT,
+    VERTICAL_WIDTH,
+    ClipError,
+    ClipMaker,
+    ClipSpec,
+    build_filter,
+    clip_filename,
+    crop_filter,
+    escape_filter_path,
+    render_clip,
+    specs_from_segments,
+)
+from autoreel.crop_strategy import CROP_CENTER, CROP_FACE  # noqa: E402
+
+HAS_FFMPEG = shutil.which("ffmpeg") is not None
+# ffprobe ships with ffmpeg but is packaged separately often enough that
+# assuming one implies the other skips nothing and fails loudly instead.
+HAS_FFPROBE = shutil.which("ffprobe") is not None
+needs_ffmpeg = pytest.mark.skipif(not HAS_FFMPEG, reason="ffmpeg not installed")
+needs_ffprobe = pytest.mark.skipif(
+    not (HAS_FFMPEG and HAS_FFPROBE), reason="ffprobe not installed")
+
+
+def _words(*triples):
+    return [{"word": w, "start": s, "end": e} for w, s, e in triples]
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# The crop filter
+# ═════════════════════════════════════════════════════════════════════════════
+
+def test_center_crop_targets_vertical():
+    chain = crop_filter(CROP_CENTER)
+    assert f"scale={VERTICAL_WIDTH}:{VERTICAL_HEIGHT}" in chain
+    assert "crop=" in chain
+
+
+def test_crop_is_expressed_relative_to_the_input_size():
+    """Hardcoded pixel numbers would be wrong for anything but 1080p."""
+    chain = crop_filter(CROP_CENTER)
+    assert "iw" in chain and "ih" in chain
+    assert "1920:1080" not in chain
+
+
+def test_crop_cannot_exceed_the_source_dimensions():
+    """Cropping to a width larger than the input is an ffmpeg error, so a
+    tall source must clamp rather than ask for pixels that don't exist."""
+    chain = crop_filter(CROP_CENTER)
+    assert "min(iw," in chain and "min(ih," in chain
+
+
+def test_face_strategy_is_refused_by_the_static_renderer():
+    """Face tracking moves the window per frame; silently rendering a
+    centre crop instead would look like the tracker simply did nothing."""
+    with pytest.raises(ClipError):
+        crop_filter(CROP_FACE)
+
+
+def test_filter_without_captions_has_no_subtitles_stage():
+    assert "subtitles" not in build_filter(CROP_CENTER, None)
+
+
+def test_filter_with_captions_appends_subtitles_last():
+    chain = build_filter(CROP_CENTER, "/clips/a.ass")
+    assert chain.index("scale=") < chain.index("subtitles="), \
+        "captions must be drawn after the scale, or they scale with it"
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Path escaping - the classic Windows failure
+# ═════════════════════════════════════════════════════════════════════════════
+
+def test_windows_drive_colon_is_escaped():
+    """Unescaped, the colon reads as the start of the next filter option
+    and ffmpeg reports a missing file for a file that is right there."""
+    escaped = escape_filter_path(r"D:\clips\a.ass")
+    assert r"\:" in escaped
+    assert "\\c" not in escaped, "backslash separators must become forward slashes"
+
+
+def test_backslashes_become_forward_slashes():
+    assert "\\" not in escape_filter_path(r"D:\a\b\c.ass").replace(r"\:", "")
+
+
+def test_quotes_and_brackets_are_escaped():
+    escaped = escape_filter_path("/clips/it's [1].ass")
+    assert r"\'" in escaped and r"\[" in escaped
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Caption grouping
+# ═════════════════════════════════════════════════════════════════════════════
+
+def test_words_are_grouped_into_phrases_not_shown_one_at_a_time():
+    phrases = group_words(_words(
+        ("what", 0.0, 0.2), ("the", 0.2, 0.4), ("hell", 0.4, 0.7),
+        ("was", 0.7, 0.9)))
+    assert len(phrases) == 1
+    assert phrases[0].text == "what the hell was"
+
+
+def test_a_pause_starts_a_new_phrase():
+    phrases = group_words(_words(("yo", 0.0, 0.3), ("bro", 5.0, 5.3)))
+    assert len(phrases) == 2
+
+
+def test_a_phrase_never_outlives_its_words():
+    phrases = group_words(_words(("hey", 1.0, 1.4), ("man", 1.4, 1.8)))
+    assert phrases[0].start == 1.0 and phrases[0].end == 1.8
+
+
+def test_sentence_end_breaks_the_phrase():
+    phrases = group_words(_words(("go.", 0.0, 0.3), ("now", 0.4, 0.7)))
+    assert len(phrases) == 2
+
+
+def test_word_count_limit_is_respected():
+    phrases = group_words(_words(*[(f"w{i}", i * 0.2, i * 0.2 + 0.15)
+                                   for i in range(12)]), max_words=3)
+    assert all(len(p.text.split()) <= 3 for p in phrases)
+
+
+def test_words_with_broken_timings_are_dropped_not_crashed_on():
+    phrases = group_words([{"word": "ok", "start": None, "end": 1.0},
+                           {"word": "fine", "start": 1.0, "end": 1.4}])
+    assert len(phrases) == 1 and phrases[0].text == "fine"
+
+
+def test_empty_words_produce_no_phrases():
+    assert group_words([]) == []
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Caption timings are rebased to the clip
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _segments():
+    return [{"words": _words(
+        ("before", 5.0, 5.5),
+        ("inside", 32.0, 32.4), ("the", 32.4, 32.6), ("clip", 32.6, 33.0),
+        ("after", 90.0, 90.5))}]
+
+
+def test_only_words_inside_the_window_are_kept():
+    words = words_in_range(_segments(), 30.0, 40.0)
+    assert [w["word"] for w in words] == ["inside", "the", "clip"]
+
+
+def test_timings_are_rebased_so_the_clip_starts_at_zero():
+    """Left absolute, every caption would render long after the clip ended."""
+    words = words_in_range(_segments(), 30.0, 40.0)
+    assert words[0]["start"] == pytest.approx(2.0)
+    assert words[0]["end"] == pytest.approx(2.4)
+
+
+def test_a_word_straddling_the_cut_is_clamped_not_negative():
+    segments = [{"words": _words(("straddle", 29.5, 30.5))}]
+    words = words_in_range(segments, 30.0, 40.0)
+    assert words[0]["start"] == 0.0, "a negative start would be dropped"
+
+
+def test_no_captions_for_a_silent_window(tmp_path):
+    path = caption_file_for_clip(str(tmp_path / "c.ass"), _segments(), 50.0, 60.0)
+    assert path is None, "an empty caption file makes ffmpeg fail for no reason"
+
+
+def test_caption_file_is_written_for_a_talky_window(tmp_path):
+    path = caption_file_for_clip(str(tmp_path / "c.ass"), _segments(), 30.0, 40.0)
+    assert path and os.path.exists(path)
+    assert "inside the clip" in open(path, encoding="utf-8").read()
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# The ASS file itself
+# ═════════════════════════════════════════════════════════════════════════════
+
+def test_ass_declares_the_vertical_canvas():
+    body = build_ass([Phrase(0.0, 1.0, "hi")])
+    assert "PlayResX: 1080" in body and "PlayResY: 1920" in body
+
+
+def test_ass_timestamps_are_hmmsscc():
+    body = build_ass([Phrase(61.5, 62.25, "hi")])
+    assert "0:01:01.50" in body and "0:01:02.25" in body
+
+
+def test_ass_braces_are_escaped():
+    """A literal brace opens an override block and would eat the caption."""
+    body = build_ass([Phrase(0.0, 1.0, "what {the}")])
+    assert r"\{" in body and r"\}" in body
+
+
+def test_zero_length_phrases_are_dropped():
+    body = build_ass([Phrase(1.0, 1.0, "blink")])
+    assert "blink" not in body
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Choosing windows
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _talky_segments():
+    return [
+        {"start": 0.0, "end": 10.0, "text": "just walking around", "words": []},
+        {"start": 10.0, "end": 20.0,
+         "text": "OH MY GOD what the hell was that bro holy", "words": []},
+        {"start": 20.0, "end": 30.0, "text": "anyway", "words": []},
+        {"start": 30.0, "end": 40.0,
+         "text": "no way dude that was insane holy crap", "words": []},
+    ]
+
+
+def test_specs_are_numbered_from_one_and_in_time_order():
+    specs = specs_from_segments(_talky_segments(), count=2)
+    assert [s.index for s in specs] == list(range(1, len(specs) + 1))
+    assert specs == sorted(specs, key=lambda s: s.start)
+
+
+def test_specs_respect_the_requested_count():
+    assert len(specs_from_segments(_talky_segments(), count=1)) <= 1
+
+
+def test_a_transcript_with_nothing_interesting_yields_no_clips():
+    flat = [{"start": 0.0, "end": 10.0, "text": "and then i walked", "words": []}]
+    assert specs_from_segments(flat, count=3) == []
+
+
+def test_clip_filenames_are_filesystem_safe():
+    name = clip_filename('"DAMN" 8/3/26: stream', ClipSpec(0, 10, index=2))
+    assert not any(c in name for c in '"/:*?<>|')
+    assert name.endswith("_clip02.mp4")
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Rendering guards
+# ═════════════════════════════════════════════════════════════════════════════
+
+def test_a_zero_length_clip_is_refused(tmp_path):
+    with pytest.raises(ClipError):
+        render_clip("in.mp4", ClipSpec(10.0, 10.0), str(tmp_path / "o.mp4"))
+
+
+def test_clip_maker_defaults_to_center_for_gameplay(tmp_path):
+    assert ClipMaker(output_dir=str(tmp_path)).strategy == CROP_CENTER
+
+
+def test_clip_maker_refuses_face_strategy_with_a_useful_message(tmp_path):
+    maker = ClipMaker(output_dir=str(tmp_path),
+                      config={"clips": {"crop_strategy": "face"}})
+    with pytest.raises(ClipError) as excinfo:
+        maker.make("in.mp4", _talky_segments())
+    assert "ClipRenderer" in str(excinfo.value)
+
+
+def test_no_segments_means_no_clips_and_no_error(tmp_path):
+    assert ClipMaker(output_dir=str(tmp_path)).make("in.mp4", []) == []
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Against a real ffmpeg
+# ═════════════════════════════════════════════════════════════════════════════
+
+@pytest.fixture
+def source_video(tmp_path):
+    """8 seconds of 1280x720 colour bars with a tone."""
+    path = str(tmp_path / "source.mp4")
+    subprocess.run(
+        ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+         "-f", "lavfi", "-i", "testsrc=size=1280x720:rate=30:duration=8",
+         "-f", "lavfi", "-i", "sine=frequency=440:duration=8",
+         "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+         "-c:a", "aac", "-shortest", path],
+        check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return path
+
+
+def _dimensions(path):
+    out = subprocess.run(
+        ["ffprobe", "-v", "error", "-select_streams", "v:0",
+         "-show_entries", "stream=width,height", "-of", "csv=p=0:s=x", path],
+        capture_output=True, text=True, check=True).stdout.strip()
+    return tuple(int(n) for n in out.split("x"))
+
+
+@needs_ffprobe
+def test_rendered_clip_is_actually_vertical(tmp_path, source_video):
+    output = str(tmp_path / "out.mp4")
+    render_clip(source_video, ClipSpec(1.0, 4.0), output, CROP_CENTER,
+                preset="ultrafast")
+    assert _dimensions(output) == (VERTICAL_WIDTH, VERTICAL_HEIGHT)
+
+
+@needs_ffprobe
+def test_rendered_clip_has_the_requested_duration(tmp_path, source_video):
+    output = str(tmp_path / "out.mp4")
+    render_clip(source_video, ClipSpec(2.0, 5.0), output, CROP_CENTER,
+                preset="ultrafast")
+    duration = float(subprocess.run(
+        ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+         "-of", "csv=p=0", output],
+        capture_output=True, text=True, check=True).stdout.strip())
+    assert duration == pytest.approx(3.0, abs=0.4)
+
+
+@needs_ffprobe
+def test_captions_are_burned_in_without_breaking_the_render(tmp_path, source_video):
+    caption = caption_file_for_clip(
+        str(tmp_path / "c.ass"),
+        [{"words": _words(("hello", 1.2, 1.6), ("there", 1.6, 2.0))}],
+        1.0, 4.0)
+    output = str(tmp_path / "out.mp4")
+    render_clip(source_video, ClipSpec(1.0, 4.0), output, CROP_CENTER,
+                caption_path=caption, preset="ultrafast")
+    assert _dimensions(output) == (VERTICAL_WIDTH, VERTICAL_HEIGHT)
+
+
+@needs_ffmpeg
+def test_a_failed_render_leaves_no_partial_file(tmp_path):
+    """A truncated .mp4 sitting there looks exactly like a finished clip."""
+    output = str(tmp_path / "out.mp4")
+    with pytest.raises(ClipError):
+        render_clip(str(tmp_path / "does_not_exist.mp4"), ClipSpec(0.0, 2.0),
+                    output, CROP_CENTER)
+    assert not os.path.exists(output)
+    assert [p for p in os.listdir(tmp_path) if "partial" in p] == []
+
+
+@needs_ffmpeg
+def test_clip_maker_end_to_end(tmp_path, source_video):
+    maker = ClipMaker(output_dir=str(tmp_path / "clips"), count=1,
+                      min_seconds=2.0, max_seconds=5.0, preset="ultrafast")
+    segments = [
+        {"start": 0.0, "end": 2.0, "text": "walking", "words": []},
+        {"start": 2.0, "end": 6.0,
+         "text": "OH MY GOD what the hell holy crap bro", "words": []},
+    ]
+    results = maker.make(source_video, segments, basename="stream")
+    assert results, "a clearly clip-worthy segment produced nothing"
+    assert all(os.path.exists(r.path) for r in results)
+    assert all(r.strategy == CROP_CENTER for r in results)
+    # The .ass files are working files, not deliverables.
+    assert not [p for p in os.listdir(tmp_path / "clips") if p.endswith(".ass")]

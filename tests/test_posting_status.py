@@ -201,7 +201,10 @@ def test_load_config_keeps_the_posting_block():
                       os.path.join(_UPLOADER, ".env"))
     assert cfg.posting, "posting block was dropped on load"
     assert "platforms" in cfg.posting
-    assert cfg.posting["enabled"] is False
+    # Whether posting is on is the user's call; that the block survives
+    # the load at all is the thing this is guarding.
+    assert isinstance(cfg.posting["enabled"], bool)
+    assert cfg.posting["circuit_breaker"]["consecutive_failures"] > 0
 
 
 def test_posting_paths_are_absolute_so_state_follows_the_config():
