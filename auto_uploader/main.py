@@ -494,6 +494,12 @@ def main(argv=None) -> int:
     parser.add_argument("--forget-platform", choices=("youtube", "rumble"),
                         help="With --forget, only clear this platform.")
     parser.add_argument("--health", action="store_true", help="Run disk/CPU/network health checks + temp cleanup, then exit.")
+    parser.add_argument("--posting-status", action="store_true",
+                        help="Show what social posting would do right now: kill switch, "
+                             "per-platform caps, and which credentials are in .env. Posts nothing.")
+    parser.add_argument("--verify", action="store_true",
+                        help="With --posting-status, also ask each API who your token "
+                             "belongs to. Read-only - creates and publishes nothing.")
     args = parser.parse_args(argv)
 
     # Printed on EVERY run, not just --test-config: a stale extract running
@@ -533,6 +539,16 @@ def main(argv=None) -> int:
     if args.health:
         ok = run_health_check(cfg, cfg.features.get("self_healing", {}))
         return 0 if ok else 1
+
+    if args.posting_status:
+        from publish_guard import PublishGuard
+        from utils.posting_status import report
+
+        guard = PublishGuard(cfg.posting, cfg.posting.get("state_path"))
+        account = (cfg.features.get("social_promoter", {}) or {}).get(
+            "reddit_account", "")
+        report({"posting": cfg.posting}, guard, account, live=args.verify)
+        return 0
 
     if args.test_config:
         print(f"  Censor before upload : {cfg.general.censor_before_upload} "

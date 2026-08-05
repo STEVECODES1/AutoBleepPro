@@ -15,6 +15,11 @@ watchdog==4.0.2
 # Desktop notifications (Windows toast / macOS / Linux libnotify)
 plyer==2.1.0
 
+# Graph API calls for the Instagram/Facebook publishers. Usually present
+# already as a google-api-python-client dependency, but those publishers
+# import it directly, so it is declared rather than assumed.
+requests>=2.31.0
+
 # .env file support
 python-dotenv==1.0.1
 

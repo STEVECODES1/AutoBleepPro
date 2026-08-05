@@ -86,6 +86,7 @@ class AppConfig:
     project_root: str
     features: dict = field(default_factory=dict)
     posting: dict = field(default_factory=dict)
+    clips: dict = field(default_factory=dict)
 
 
 def _resolve_path(project_root: str, path: str) -> str:
@@ -94,7 +95,8 @@ def _resolve_path(project_root: str, path: str) -> str:
     component resets everything before it" behavior - this way a Windows
     drive path like "D:/videos stizz" for watch_folder is unambiguously
     left as-is instead of depending on join's platform-specific rules)."""
-    return path if os.path.isabs(path) else os.path.join(project_root, path)
+    resolved = path if os.path.isabs(path) else os.path.join(project_root, path)
+    return os.path.normpath(resolved)
 
 
 def load_config(config_path: str = "config.json", env_path: str = ".env") -> AppConfig:
@@ -175,8 +177,21 @@ def load_config(config_path: str = "config.json", env_path: str = ".env") -> App
         censor_mute_whole_segment=bool(gen.get("censor_mute_whole_segment", True)),
     )
 
-    return AppConfig(youtube=youtube, rumble=rumble, general=general, project_root=project_root,
-                     features=raw.get("features", {}))
+    # The posting block's paths are resolved against the config file, not
+    # the working directory. Left relative, running main.py from anywhere
+    # else would write a FRESH posting_state.json - and a cap that reads
+    # zero posts is a cap that permits a full day's burst on every run.
+    posting = dict(raw.get("posting", {}))
+    for key, default in (("state_path", "./posting_state.json"),
+                         ("queue_path", "./clip_jobs.json"),
+                         ("kill_switch_file", "./STOP_POSTING")):
+        posting[key] = _resolve_path(project_root, posting.get(key) or default)
+
+    return AppConfig(youtube=youtube, rumble=rumble, general=general,
+                     project_root=project_root,
+                     features=raw.get("features", {}),
+                     posting=posting,
+                     clips=raw.get("clips", {}))
 
 
 def validate_config(cfg: AppConfig) -> list:
