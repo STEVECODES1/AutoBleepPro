@@ -341,3 +341,74 @@ def test_probe_survives_a_missing_ffprobe(monkeypatch):
                         lambda *a, **k: (_ for _ in ()).throw(FileNotFoundError()))
     assert record_stream.probe_duration("x.mp4") is None
     assert record_stream.expected_duration("url") is None
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# yt-dlp's unmerged halves ARE the recording
+# ═════════════════════════════════════════════════════════════════════════════
+
+def test_format_fragments_are_recognised():
+    """yt-dlp names the video-only and audio-only halves .f299/.f140 while
+    it works; they are not finished segments."""
+    from record_stream import is_format_fragment
+
+    assert is_format_fragment("Stackswopo 2026-08-05 12_54.part01.ts.f299")
+    assert is_format_fragment("show.part01.ts.f140")
+    assert not is_format_fragment("show.part01.ts")
+
+
+def test_fragments_are_not_mistaken_for_finished_segments(tmp_path):
+    """Counting a video-only half as a segment would deliver a silent
+    video to the uploader."""
+    staging = tmp_path / "recording"
+    staging.mkdir()
+    (staging / "show.part01.ts.f299").write_bytes(b"video")
+    (staging / "show.part01.ts.f140").write_bytes(b"audio")
+    assert existing_segments(str(staging), "show") == []
+
+
+def test_leftover_halves_are_found_so_the_recording_is_not_lost(tmp_path):
+    """These hold the whole stream. Reporting "nothing was recorded"
+    because the merge did not run would throw away hours of footage."""
+    from record_stream import leftover_fragments
+
+    staging = tmp_path / "recording"
+    staging.mkdir()
+    (staging / "show.part01.ts.f299").write_bytes(b"video")
+    (staging / "show.part01.ts.f140").write_bytes(b"audio")
+    (staging / "show.part01.ts.f000").write_bytes(b"")      # empty, ignored
+    assert len(leftover_fragments(str(staging), "show")) == 2
+
+
+def test_a_recording_is_recovered_from_its_halves(recorder, monkeypatch):
+    """The exact case seen in the wild: two .ts.fNNN files and no .ts."""
+    os.makedirs(recorder.staging, exist_ok=True)
+    for suffix in (".ts.f299", ".ts.f140"):
+        with open(os.path.join(recorder.staging, f"show.part01{suffix}"), "wb") as f:
+            f.write(b"data")
+
+    merged = []
+
+    def fake_ffmpeg(self, args):
+        merged.append(args)
+        open(args[-1], "wb").write(b"joined")
+        return True
+
+    monkeypatch.setattr(Recorder, "_ffmpeg", fake_ffmpeg)
+    monkeypatch.setattr(Recorder, "_remux", lambda self, src, dst:
+                        (open(dst, "wb").write(b"mp4"), True)[1])
+    result = recorder.finalise("show")
+
+    assert result is not None, "the recording was declared lost"
+    assert merged, "ffmpeg was never asked to join the halves"
+
+
+def test_a_failed_recovery_keeps_the_halves(recorder, monkeypatch):
+    os.makedirs(recorder.staging, exist_ok=True)
+    kept = os.path.join(recorder.staging, "show.part01.ts.f299")
+    with open(kept, "wb") as f:
+        f.write(b"data")
+
+    monkeypatch.setattr(Recorder, "_ffmpeg", lambda self, args: False)
+    assert recorder.finalise("show") is None
+    assert os.path.exists(kept), "the only copy of the recording was deleted"

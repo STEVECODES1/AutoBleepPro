@@ -35,6 +35,7 @@ sees a complete file or no file - never one still being written.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -205,8 +206,35 @@ def existing_segments(staging: str, base: str) -> list:
         return []
     prefix = f"{base}.part"
     found = [os.path.join(staging, name) for name in sorted(os.listdir(staging))
-             if name.startswith(prefix) and name.endswith(".ts")]
+             if name.startswith(prefix) and name.endswith(".ts")
+             and not is_format_fragment(name)]
     return [p for p in found if os.path.getsize(p) > 0]
+
+
+# yt-dlp downloads video and audio as separate streams and merges them
+# afterwards, naming the halves "name.ts.f299" / "name.ts.f140" while it
+# works. Those are the recording - they just have not been joined yet.
+_FRAGMENT = re.compile(r"\.f\d+$")
+
+
+def is_format_fragment(name: str) -> bool:
+    """True for yt-dlp's pre-merge video-only/audio-only half."""
+    return bool(_FRAGMENT.search(name))
+
+
+def leftover_fragments(staging: str, base: str) -> list:
+    """Unmerged halves left behind when yt-dlp died before merging.
+
+    Finding these matters more than it sounds: they hold the entire
+    recording, so reporting "nothing was recorded" because the merge did
+    not run would throw away hours of stream that is sitting right there.
+    """
+    if not os.path.isdir(staging):
+        return []
+    return sorted(
+        os.path.join(staging, name) for name in os.listdir(staging)
+        if name.startswith(base) and is_format_fragment(name)
+        and os.path.getsize(os.path.join(staging, name)) > 0)
 
 
 def build_concat_list(segments: list, list_path: str) -> str:
@@ -330,6 +358,12 @@ class Recorder:
         """Join the segments and move the result into the watch folder."""
         segments = existing_segments(self.staging, base)
         if not segments:
+            # The merge may simply not have run. The halves still hold the
+            # whole stream, so recover them rather than declaring failure.
+            recovered = self._merge_fragments(base)
+            if recovered:
+                segments = [recovered]
+        if not segments:
             self.say("Nothing was recorded.")
             return None
 
@@ -394,6 +428,38 @@ class Recorder:
                          "User-Agent": "AutoBleep"}), timeout=15)
         except Exception:
             pass
+
+    def _merge_fragments(self, base: str) -> Optional[str]:
+        """Join yt-dlp's leftover video-only and audio-only halves.
+
+        yt-dlp normally does this itself; when it is killed mid-merge the
+        halves are all that survive, and they contain the full recording.
+        """
+        fragments = leftover_fragments(self.staging, base)
+        if not fragments:
+            return None
+
+        self.say(f"Found {len(fragments)} unmerged stream half/halves - "
+                 "yt-dlp did not finish joining them. Recovering...")
+        target = segment_path(self.staging, base, 1)
+        args = []
+        for path in fragments:
+            args += ["-i", path]
+        args += ["-c", "copy", target]
+
+        if not self._ffmpeg(args):
+            self.say("Could not join them automatically. They are still in "
+                     f"{self.staging} and hold the full recording - join them "
+                     "with: ffmpeg -i <video>.f<N> -i <audio>.f<N> -c copy out.mp4")
+            return None
+
+        for path in fragments:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+        self.say("Recovered.")
+        return target
 
     def _remux(self, source: str, target: str) -> bool:
         """TS -> MP4 without re-encoding. Fast, lossless, and gives the
