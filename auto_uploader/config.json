@@ -58,8 +58,9 @@
     "stability_check_seconds": 5,
 
     "_censor_comment": "Bleeps profanity before upload (reuses the AutoReel censoring engine) so YouTube doesn't age-restrict/demonetize over spoken language. censor_device: null = auto-detect GPU/CPU, or set 'cuda'/'cpu'. censor_bleep_method: 'silence' mutes flagged words, 'beep' overlays a tone.",
+    "_model_comment": "censor_model is THE thing that decides how much profanity slips through: a word the transcript never contains cannot be muted. 'base' is tiny and misses a lot of fast, noisy gameplay speech - that is why words got through. tiny < base < small < medium < large-v3, slower and far more accurate as you go right. 'medium' is the sensible default with faster-whisper. Use 'large-v3' for the cleanest result if you have an NVIDIA GPU or can leave it running overnight; drop to 'small' if a stream takes too long on CPU.",
     "censor_before_upload": true,
-    "censor_model": "base",
+    "censor_model": "medium",
     "censor_bleep_method": "silence",
     "censor_device": null,
     "censor_custom_words": [],

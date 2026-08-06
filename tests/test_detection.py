@@ -422,3 +422,44 @@ def test_sensitivity_is_monotonic_over_a_realistic_line():
     assert counts == sorted(counts), counts
     assert counts[0] == 1        # only "shit"
     assert counts[-1] > counts[0]
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Getting the words into the transcript at all
+# ═════════════════════════════════════════════════════════════════════════════
+
+def test_transcription_asks_for_verbatim_profanity():
+    """Whisper is trained on cleaned transcripts and sanitises swearing -
+    writing "f***" or softening a slur. A word the transcript never
+    contains cannot be muted, so it reaches the upload untouched. This is
+    the single biggest reason profanity slips through."""
+    from autoreel.transcription import VERBATIM_PROMPT
+
+    lowered = VERBATIM_PROMPT.lower()
+    assert "verbatim" in lowered
+    assert "no censoring" in lowered
+    # Explicit examples are what actually bias the decode; a polite
+    # request on its own does not.
+    assert any(word in lowered for word in ("fuck", "shit"))
+
+
+def test_the_prompt_is_short_enough_to_be_accepted():
+    """Whisper's conditioning window is 224 tokens; an over-long prompt is
+    truncated and the examples at the end - the part that matters - are
+    the first thing lost."""
+    from autoreel.transcription import VERBATIM_PROMPT
+
+    assert len(VERBATIM_PROMPT.split()) < 150
+
+
+def test_the_shipped_model_is_not_the_tiny_one():
+    """base misses a large share of fast, noisy gameplay speech."""
+    import json
+    import os
+
+    path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                        "auto_uploader", "config.json")
+    with open(path) as f:
+        model = json.load(f)["general"]["censor_model"]
+    assert model not in ("tiny", "base"), \
+        f"censor_model is {model!r}: too small to catch everything spoken"

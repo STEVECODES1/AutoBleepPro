@@ -37,6 +37,22 @@ from typing import Any, Optional
 BACKEND_FASTER = "faster-whisper"
 BACKEND_OPENAI = "openai-whisper"
 
+# Whisper is trained on cleaned-up transcripts and will quietly sanitise
+# swearing - writing "f***", softening a slur, or dropping it entirely.
+# For a censoring tool that is the whole ballgame: a word the transcript
+# never contains cannot be muted, and it reaches the upload untouched.
+#
+# initial_prompt is the documented lever. Whisper conditions the decode on
+# it, so a prompt written in the register of the audio biases the model
+# toward transcribing verbatim instead of tidying. It is not part of the
+# output - it only shapes how the audio is read.
+VERBATIM_PROMPT = (
+    "The following is an unedited, verbatim gaming stream transcript. "
+    "It contains explicit language, insults and swearing, transcribed "
+    "exactly as spoken with no censoring, no asterisks and no omissions. "
+    "Example: Oh shit, what the fuck was that, you damn idiot, holy crap."
+)
+
 
 def _has_faster_whisper() -> bool:
     try:
@@ -157,7 +173,17 @@ class Transcriber:
                 # The default (0) disables VAD; trimming silence is a
                 # straight speed win on stream VODs, which are mostly
                 # gameplay audio with long gaps between speech.
-                vad_filter=True)
+                vad_filter=True,
+                initial_prompt=VERBATIM_PROMPT,
+                # Whisper otherwise feeds each window its own previous
+                # output, and on hours of gameplay one bad window makes
+                # the next worse - it loops or drifts, and whole minutes
+                # come back as repeated filler with the real words gone.
+                condition_on_previous_text=False,
+                # A wider search costs time and finds words a greedy
+                # decode drops. Missing a slur is more expensive here
+                # than the extra minutes.
+                beam_size=5)
             return _normalise_faster_whisper(segments_iter, info)
 
         with warnings.catch_warnings():
@@ -168,4 +194,7 @@ class Transcriber:
                 "ignore", message=".*Triton kernels.*", category=UserWarning)
             warnings.filterwarnings(
                 "ignore", message=".*FP16 is not supported on CPU.*")
-            return model.transcribe(audio_path, word_timestamps=True)
+            return model.transcribe(
+                audio_path, word_timestamps=True,
+                initial_prompt=VERBATIM_PROMPT,
+                condition_on_previous_text=False)
