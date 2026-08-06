@@ -95,6 +95,15 @@ class RumbleUploader:
 
             # Attach to the user's own logged-in Chrome when it's there.
             if self.cdp_url:
+                # Start one on the port if nothing is listening, rather
+                # than dropping to the password path. That fallback opens
+                # a fresh, logged-out browser and types credentials into
+                # Rumble's login form - a worse route in every way, and it
+                # looks from outside like the tool ignored the setting.
+                from utils.chrome_cdp import ensure_chrome
+
+                ready, detail = ensure_chrome(self.cdp_url)
+                print(f"[Rumble] {detail}")
                 try:
                     browser = p.chromium.connect_over_cdp(self.cdp_url)
                     context = browser.contexts[0] if browser.contexts else browser.new_context()

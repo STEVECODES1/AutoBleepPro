@@ -24,7 +24,7 @@ from datetime import datetime
 # Bump when shipping user-visible changes, so --test-config can prove
 # which build is actually running (stale extracts have silently caused
 # several confusing "the fix did nothing" runs).
-BUILD = "2026-08-05.5 upload failures are visible"
+BUILD = "2026-08-05.6 auto-start Chrome for Rumble"
 
 from utils.censor import censor_video
 from utils.ffmpeg_tools import StageTimer
