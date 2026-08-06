@@ -405,3 +405,51 @@ def test_the_shipped_config_parks_x_rather_than_paying_for_it():
     assert x["enabled"] is False
     assert shipped["posting"].get("manual_queue_path"), \
         "parked posts need somewhere to land"
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# An upload that reported no URL
+# ═════════════════════════════════════════════════════════════════════════════
+
+NO_URL = "uploaded (Rumble did not show a link - check your dashboard)"
+
+
+def test_a_status_marker_is_not_a_link():
+    """Rumble sometimes finishes an upload without ever showing the URL
+    and records this sentence instead. Facebook was handed it as a link
+    and rejected it with "Invalid parameter" - correctly."""
+    from utils.social_promoter import is_url
+
+    assert is_url(NO_URL) is False
+    assert is_url("https://rumble.com/v7dtp66-x.html") is True
+    assert is_url("") is False
+    assert is_url(None) is False
+
+
+def test_primary_link_skips_the_marker():
+    assert primary_link({"rumble": NO_URL}) == ""
+
+
+def test_a_real_url_still_wins_over_a_marker():
+    assert primary_link({"rumble": NO_URL,
+                         "youtube": "https://youtu.be/x"}) == "https://youtu.be/x"
+
+
+def test_the_message_never_shows_a_marker_as_a_link():
+    body = build_message("Stackswopo 8/5/26", {"rumble": NO_URL})
+    assert NO_URL not in body
+    assert "uploaded (check the channel for the link)" in body
+
+
+def test_the_upload_is_still_mentioned():
+    """It did happen - saying nothing would be worse than saying it has
+    no link yet."""
+    assert "Rumble" in build_message("t", {"rumble": NO_URL})
+
+
+def test_nothing_is_announced_without_a_usable_link(tmp_path, publishers, no_x):
+    posted = announce_to_platforms(make_posting(tmp_path), "DAMN",
+                                   {"rumble": NO_URL})
+    assert posted == []
+    assert publishers["facebook"].calls == [], \
+        "a status message was posted to Facebook as a link"

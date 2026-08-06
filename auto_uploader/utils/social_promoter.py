@@ -106,18 +106,43 @@ def _post_reddit(subreddit: str, title: str, url: str,
     reddit.subreddit(subreddit).submit(title=title, url=url)
 
 
+def is_url(value: str) -> bool:
+    """A real link, not a status marker.
+
+    Rumble sometimes completes an upload without ever showing the video's
+    URL, and records a human-readable marker instead. That string was
+    being handed to Facebook as a link, which it rejected with "Invalid
+    parameter" - correctly, since it is a sentence.
+    """
+    return str(value or "").strip().lower().startswith(("http://", "https://"))
+
+
 def build_message(title: str, new_uploads: dict) -> str:
+    """The announcement text. Only real URLs are shown as links.
+
+    An upload that completed without reporting a URL still gets a line -
+    it did happen, and saying so is useful - but not one that reads like
+    a link when it is a status message.
+    """
     lines = [f"🎬 New upload: {title}"]
-    if new_uploads.get("youtube"):
-        lines.append(f"▶️ YouTube: {new_uploads['youtube']}")
-    if new_uploads.get("rumble"):
-        lines.append(f"🟢 Rumble: {new_uploads['rumble']}")
+    for platform, label in (("youtube", "▶️ YouTube"), ("rumble", "🟢 Rumble")):
+        value = new_uploads.get(platform)
+        if not value:
+            continue
+        if is_url(value):
+            lines.append(f"{label}: {value}")
+        else:
+            lines.append(f"{label}: uploaded (check the channel for the link)")
     return "\n".join(lines)
 
 
 def primary_link(new_uploads: dict) -> str:
     """The one URL an announcement points at. YouTube wins when both ran."""
-    return new_uploads.get("youtube") or new_uploads.get("rumble") or ""
+    for platform in ("youtube", "rumble"):
+        candidate = new_uploads.get(platform, "")
+        if is_url(candidate):
+            return candidate
+    return ""
 
 
 def manual_post_text(platform: str, title: str, new_uploads: dict) -> str:
@@ -205,7 +230,11 @@ def announce_to_platforms(posting: dict, title: str, new_uploads: dict,
     posting = posting or {}
     config = config or {}
     link = primary_link(new_uploads)
-    if not posting or not link:
+    if not posting:
+        return []
+    if not link:
+        print("[Social] No usable link for this upload yet - nothing announced. "
+              "(The platform completed the upload but did not report a URL.)")
         return []
 
     from publish_guard import PublishGuard
