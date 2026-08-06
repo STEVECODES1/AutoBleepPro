@@ -35,6 +35,13 @@ python-dotenv==1.0.1
 # installs keep working.
 faster-whisper
 openai-whisper
+
+# GPU acceleration for faster-whisper (NVIDIA only). Not installed by
+# default because they are large and useless without a card - install
+# them yourself, then run `python main.py --gpu-check` to confirm:
+#     pip install nvidia-cublas-cu12 nvidia-cudnn-cu12
+# On a GPU, large-v3 transcribes a multi-hour stream in a fraction of the
+# CPU time, which is what makes the most accurate model practical.
 better-profanity
 pydub
 moviepy

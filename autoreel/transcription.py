@@ -144,11 +144,28 @@ class Transcriber:
                     self.model_name, device=self._resolved_device,
                     compute_type=compute)
             except ValueError:
-                # Some builds refuse a compute type the CPU can't do
+                # Some builds refuse a compute type the hardware can't do
                 # (no AVX2 -> no int8). Fall back rather than fail.
                 self._model = WhisperModel(
                     self.model_name, device=self._resolved_device,
                     compute_type="default")
+            except Exception as exc:
+                # A GPU that cannot actually load the model - missing
+                # cuDNN, a driver too old, or not enough VRAM for
+                # large-v3 - must not end the run. Censoring on the CPU
+                # slowly beats uploading uncensored audio, which is what
+                # a crash here would leave: the caller falls back to the
+                # original file.
+                if self._resolved_device != "cuda":
+                    raise
+                print(f"[Transcribe] GPU unavailable for {self.model_name} "
+                      f"({exc}). Falling back to CPU - this is much slower. "
+                      "Install the CUDA runtime with: pip install "
+                      "nvidia-cublas-cu12 nvidia-cudnn-cu12")
+                self._resolved_device = "cpu"
+                self._model = WhisperModel(
+                    self.model_name, device="cpu",
+                    compute_type=default_compute_type("cpu"))
         else:
             import whisper
 

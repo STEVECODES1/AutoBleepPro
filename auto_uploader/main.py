@@ -24,7 +24,7 @@ from datetime import datetime
 # Bump when shipping user-visible changes, so --test-config can prove
 # which build is actually running (stale extracts have silently caused
 # several confusing "the fix did nothing" runs).
-BUILD = "2026-08-06.5 verbatim transcription + medium model"
+BUILD = "2026-08-06.6 GPU: large-v3 + --gpu-check"
 
 from utils.censor import censor_video
 from utils.ffmpeg_tools import StageTimer
@@ -565,6 +565,9 @@ def main(argv=None) -> int:
                              "an already-uploaded video, ready to post by hand.")
     parser.add_argument("--clip-count", type=int, default=None,
                         help="How many clips to make with --clips (default 3).")
+    parser.add_argument("--gpu-check", action="store_true",
+                        help="Report whether the censor pass will use the GPU, and "
+                             "load the configured model to prove it. No upload.")
     parser.add_argument("--posting-status", action="store_true",
                         help="Show what social posting would do right now: kill switch, "
                              "per-platform caps, and which credentials are in .env. Posts nothing.")
@@ -610,6 +613,41 @@ def main(argv=None) -> int:
     if args.health:
         ok = run_health_check(cfg, cfg.features.get("self_healing", {}))
         return 0 if ok else 1
+
+    if args.gpu_check:
+        import time as _t
+
+        from autoreel.transcription import Transcriber, detect_device
+
+        device, label = detect_device()
+        print(f"\nDetected      : {device.upper()} ({label})")
+        print(f"Configured    : censor_device={cfg.general.censor_device or 'auto'}, "
+              f"model={cfg.general.censor_model}")
+
+        wanted = cfg.general.censor_device or device
+        if wanted == "cuda" and device != "cuda":
+            print("\n[WARN] config asks for CUDA but no GPU was detected. Either "
+                  "torch is not installed (pip install torch) or the driver is "
+                  "not visible. The censor pass will fall back to CPU.")
+
+        print(f"\nLoading {cfg.general.censor_model} on {wanted}... "
+              "(first run downloads the model)")
+        started = _t.time()
+        transcriber = Transcriber(model_name=cfg.general.censor_model,
+                                  device=cfg.general.censor_device)
+        try:
+            transcriber._load()
+        except Exception as exc:
+            print(f"[FAIL] Could not load the model: {exc}")
+            return 1
+        print(f"[OK] Loaded on {transcriber._resolved_device.upper()} "
+              f"in {_t.time() - started:.0f}s using "
+              f"{transcriber.compute_type or 'the default'} precision.")
+        if transcriber._resolved_device != "cuda" and wanted == "cuda":
+            print("     It fell back to CPU - censoring will work but be slow.")
+            print("     Fix with: pip install nvidia-cublas-cu12 nvidia-cudnn-cu12")
+        transcriber.release()
+        return 0
 
     if args.clips:
         from utils.clip_runner import make_clips, print_run
