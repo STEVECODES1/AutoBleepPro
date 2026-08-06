@@ -9,6 +9,11 @@ auto_uploader/client_secrets.json
 auto_uploader/youtube_token.json
 auto_uploader/uploaded_hashes.json
 auto_uploader/logs/*.log
+# Runtime output, not source: the manual-post queue and posting state
+auto_uploader/logs/manual_posts.txt
+auto_uploader/posting_state.json
+auto_uploader/clip_jobs.json
+auto_uploader/STOP_POSTING
 auto_uploader/watch_folder/*
 !auto_uploader/watch_folder/.gitkeep
 auto_uploader/uploaded/*

@@ -40,7 +40,7 @@ import shutil
 import subprocess
 import sys
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
 
 # A stream that ends and restarts within this window is treated as one
@@ -300,12 +300,9 @@ class Recorder:
     name: str = "stream"
     poll_seconds: int = 60
     concurrent_fragments: int = 4
-    _log: list = field(default_factory=list, repr=False)
 
     def say(self, message: str) -> None:
-        line = f"[{time.strftime('%H:%M:%S')}] {message}"
-        self._log.append(line)
-        print(line, flush=True)
+        print(f"[{time.strftime('%H:%M:%S')}] {message}", flush=True)
 
     # ── The yt-dlp invocation ────────────────────────────────────────────
 
