@@ -453,3 +453,63 @@ def test_nothing_is_announced_without_a_usable_link(tmp_path, publishers, no_x):
     assert posted == []
     assert publishers["facebook"].calls == [], \
         "a status message was posted to Facebook as a link"
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# The post names everywhere the stream is, not just this run's upload
+# ═════════════════════════════════════════════════════════════════════════════
+
+def test_the_announcement_names_both_platforms(tmp_path, publishers, no_x):
+    """Rumble uploaded this run, YouTube went up earlier. Saying only
+    "it's on Rumble" sends people to the smaller audience."""
+    posted = announce_upload(
+        {"enabled": True, "discord": False}, "DAMN",
+        {"rumble": "https://rumble.com/v7dtp66-x.html"},
+        posting=make_posting(tmp_path),
+        all_uploads={"youtube": "https://youtu.be/abc123",
+                     "rumble": "https://rumble.com/v7dtp66-x.html"})
+
+    assert "facebook" in posted
+    message, _ = publishers["facebook"].calls[0]
+    assert "youtu.be/abc123" in message
+    assert "rumble.com/v7dtp66" in message
+
+
+def test_an_earlier_upload_alone_does_not_trigger_an_announcement(
+        tmp_path, publishers, no_x):
+    """Otherwise every re-run would re-announce the same video."""
+    posted = announce_upload(
+        {"enabled": True, "discord": False}, "DAMN", {},
+        posting=make_posting(tmp_path),
+        all_uploads={"youtube": "https://youtu.be/abc123"})
+    assert posted == []
+    assert publishers["facebook"].calls == []
+
+
+def test_this_runs_url_wins_over_a_stale_one(tmp_path, publishers, no_x):
+    announce_upload(
+        {"enabled": True, "discord": False}, "DAMN",
+        {"rumble": "https://rumble.com/NEW.html"},
+        posting=make_posting(tmp_path),
+        all_uploads={"rumble": "https://rumble.com/OLD.html"})
+    message, _ = publishers["facebook"].calls[0]
+    assert "NEW" in message and "OLD" not in message
+
+
+def test_a_failed_platform_is_not_named_as_a_link(tmp_path, publishers, no_x):
+    """results carries "FAILED: ..." strings too - those are not links."""
+    announce_upload(
+        {"enabled": True, "discord": False}, "DAMN",
+        {"youtube": "https://youtu.be/abc123"},
+        posting=make_posting(tmp_path),
+        all_uploads={"youtube": "https://youtu.be/abc123",
+                     "rumble": "FAILED: connection reset"})
+    message, _ = publishers["facebook"].calls[0]
+    assert "FAILED" not in message
+
+
+def test_the_old_call_shape_still_works(tmp_path, publishers, no_x):
+    """all_uploads is optional - nothing that worked before changes."""
+    posted = announce_upload({"enabled": True, "discord": False}, "DAMN",
+                             UPLOADS, posting=make_posting(tmp_path))
+    assert "facebook" in posted

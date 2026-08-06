@@ -307,7 +307,7 @@ def announce_to_platforms(posting: dict, title: str, new_uploads: dict,
 
 def announce_upload(features: dict, title: str, new_uploads: dict,
                     posting: dict = None, config: dict = None,
-                    dry_run: bool = False) -> list:
+                    dry_run: bool = False, all_uploads: dict = None) -> list:
     """Announce `new_uploads` ({platform: url}, only things uploaded THIS
     run - never pre-existing skips). Returns the channels that posted.
 
@@ -324,7 +324,17 @@ def announce_upload(features: dict, title: str, new_uploads: dict,
     if not features.get("enabled") or not new_uploads:
         return []
 
-    message = build_message(title, new_uploads)
+    # WHAT triggers an announcement and WHAT it says are different
+    # questions. Only a real upload this run should trigger one - that is
+    # what stops a re-run announcing the same video twice. But once it
+    # fires, the post should name every place the stream is watchable,
+    # including a platform that succeeded on an earlier run. Announcing
+    # "it's on Rumble" while saying nothing about the YouTube copy that
+    # already exists sends people to the smaller audience.
+    announced = dict(all_uploads or {})
+    announced.update(new_uploads)     # this run's URLs win on conflict
+
+    message = build_message(title, announced)
     posted = []
 
     if features.get("discord", True):
@@ -359,7 +369,7 @@ def announce_upload(features: dict, title: str, new_uploads: dict,
         # Which Reddit account to act as. Config-driven so a different
         # account can be used without editing code - see reddit_env_names.
         account = features.get("reddit_account", "")
-        primary_url = new_uploads.get("youtube") or new_uploads.get("rumble", "")
+        primary_url = primary_link(announced)
         if not subreddit:
             print("[Social] Reddit enabled but reddit_subreddit not set in config - skipping.")
         else:
@@ -375,7 +385,7 @@ def announce_upload(features: dict, title: str, new_uploads: dict,
                 print(f"[Social] WARNING: Reddit post failed: {exc}")
 
     if posting:
-        posted.extend(announce_to_platforms(posting, title, new_uploads,
+        posted.extend(announce_to_platforms(posting, title, announced,
                                             config, dry_run))
 
     return posted

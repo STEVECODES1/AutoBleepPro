@@ -24,7 +24,7 @@ from datetime import datetime
 # Bump when shipping user-visible changes, so --test-config can prove
 # which build is actually running (stale extracts have silently caused
 # several confusing "the fix did nothing" runs).
-BUILD = "2026-08-06.3 no status markers posted as links"
+BUILD = "2026-08-06.4 announce every platform the stream is on"
 
 from utils.censor import censor_video
 from utils.ffmpeg_tools import StageTimer
@@ -477,9 +477,13 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
             # cfg.posting carries the guarded public platforms (Facebook,
             # Instagram, X); without it this announces to Discord/Reddit
             # only, exactly as before.
+            # newly_uploaded decides WHETHER to announce; results carries
+            # every URL this video has, so the post names both platforms
+            # even when one of them succeeded on an earlier run.
             announce_upload(cfg.features.get("social_promoter", {}), yt_title,
                             newly_uploaded, posting=cfg.posting,
-                            config={"features": cfg.features})
+                            config={"features": cfg.features},
+                            all_uploads=results)
         except Exception as exc:
             print(f"[Social] WARNING: announce failed: {exc}")
         try:
