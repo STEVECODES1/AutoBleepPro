@@ -24,7 +24,7 @@ from datetime import datetime
 # Bump when shipping user-visible changes, so --test-config can prove
 # which build is actually running (stale extracts have silently caused
 # several confusing "the fix did nothing" runs).
-BUILD = "2026-08-05.6 auto-start Chrome for Rumble"
+BUILD = "2026-08-06.1 say when hashing a big file"
 
 from utils.censor import censor_video
 from utils.ffmpeg_tools import StageTimer
@@ -184,6 +184,15 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
         print(f"[SKIP] {filename} is a partial download (pre-merge), not a finished video.")
         return {"skipped": "intermediate_download"}
 
+    # Reading a multi-GB video off an external drive takes minutes, and
+    # the "Processing:" banner below only appears once it is done. Without
+    # this line the tool looks hung at exactly the point it is working
+    # hardest.
+    size_gb = os.path.getsize(video_path) / (1024 ** 3)
+    if size_gb >= 0.5:
+        print(f"[Check] Reading {filename} ({size_gb:.1f} GB) to see if it has "
+              "been uploaded before - this takes a minute on a big file...",
+              flush=True)
     file_hash = hash_file(video_path)
 
     # With --only, "done" means done for that platform alone; the other's
