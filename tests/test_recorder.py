@@ -412,3 +412,51 @@ def test_a_failed_recovery_keeps_the_halves(recorder, monkeypatch):
     monkeypatch.setattr(Recorder, "_ffmpeg", lambda self, args: False)
     assert recorder.finalise("show") is None
     assert os.path.exists(kept), "the only copy of the recording was deleted"
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# What a finished segment is actually called
+# ═════════════════════════════════════════════════════════════════════════════
+
+def test_the_real_filenames_from_a_live_run_are_handled():
+    """Taken verbatim from a real recording folder. `-o "...part01.ts"`
+    does not force the extension - yt-dlp appends the container it chose
+    when merging, so the finished file is "...part01.ts.mp4". Matching on
+    a .ts suffix missed the completed recording entirely."""
+    import tempfile
+
+    from record_stream import existing_segments
+
+    staging = tempfile.mkdtemp()
+    base = "Stackswopo 2026-08-05 12_54"
+    for name in (".gitkeep",
+                 base + ".part01.ts.f299.mp4.part-Frag13709.part",
+                 base + ".part01.ts.mp4"):
+        with open(os.path.join(staging, name), "wb") as f:
+            f.write(b"x" * 10)
+
+    found = [os.path.basename(p) for p in existing_segments(staging, base)]
+    assert found == [base + ".part01.ts.mp4"]
+
+
+def test_in_flight_downloads_are_never_delivered():
+    """A .part is still being written; handing it to the uploader would
+    publish a truncated stream."""
+    from record_stream import is_unfinished
+
+    assert is_unfinished("show.part01.ts.mp4.part")
+    assert is_unfinished("show.part01.ts.f299.mp4.part-Frag13709.part")
+    assert is_unfinished("show.part01.ts.ytdl")
+    assert not is_unfinished("show.part01.ts.mp4")
+
+
+def test_any_container_yt_dlp_picks_is_recognised(tmp_path):
+    """Which extension a finished segment ends up with is yt-dlp's
+    decision, not ours."""
+    from record_stream import existing_segments
+
+    staging = tmp_path / "recording"
+    staging.mkdir()
+    for ext in (".ts", ".mp4", ".mkv"):
+        (staging / f"show.part01{ext}").write_bytes(b"data")
+    assert len(existing_segments(str(staging), "show")) == 3

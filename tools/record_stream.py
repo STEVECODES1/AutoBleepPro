@@ -200,14 +200,41 @@ def segment_path(staging: str, base: str, index: int) -> str:
     return os.path.join(staging, f"{base}.part{index:02d}.ts")
 
 
+# What a finished segment can be called. `-o "...part01.ts"` does NOT
+# force the extension: yt-dlp treats ".ts" as part of the name, picks its
+# own container when it merges video and audio, and appends that - so the
+# finished file is "...part01.ts.mp4". Matching on a .ts suffix therefore
+# missed the completed recording sitting right next to the fragments.
+MEDIA_EXTENSIONS = (".ts", ".mp4", ".mkv", ".webm", ".mov", ".flv")
+
+# Downloads still in flight. yt-dlp appends .part while writing and
+# "-FragNNNNN.part" for the fragment it is on; either means unfinished.
+_UNFINISHED = (".part", ".ytdl", ".tmp")
+
+
+def is_unfinished(name: str) -> bool:
+    """True while yt-dlp is still writing this file."""
+    lowered = name.lower()
+    return lowered.endswith(_UNFINISHED) or ".part-frag" in lowered
+
+
 def existing_segments(staging: str, base: str) -> list:
-    """Every finished segment for this recording, in order."""
+    """Every finished segment for this recording, in order.
+
+    Matched on the prefix rather than one expected extension, because
+    which extension a finished segment ends up with is yt-dlp's decision,
+    not ours.
+    """
     if not os.path.isdir(staging):
         return []
     prefix = f"{base}.part"
-    found = [os.path.join(staging, name) for name in sorted(os.listdir(staging))
-             if name.startswith(prefix) and name.endswith(".ts")
-             and not is_format_fragment(name)]
+    found = [
+        os.path.join(staging, name) for name in sorted(os.listdir(staging))
+        if name.startswith(prefix)
+        and name.lower().endswith(MEDIA_EXTENSIONS)
+        and not is_format_fragment(name)
+        and not is_unfinished(name)
+    ]
     return [p for p in found if os.path.getsize(p) > 0]
 
 
