@@ -24,7 +24,7 @@ from datetime import datetime
 # Bump when shipping user-visible changes, so --test-config can prove
 # which build is actually running (stale extracts have silently caused
 # several confusing "the fix did nothing" runs).
-BUILD = "2026-08-06.1 say when hashing a big file"
+BUILD = "2026-08-06.2 Rumble uploads past the 50MB CDP limit"
 
 from utils.censor import censor_video
 from utils.ffmpeg_tools import StageTimer

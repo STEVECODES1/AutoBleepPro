@@ -55,6 +55,34 @@ def _is_video_url(candidate: str) -> bool:
     return bool(_VIDEO_URL.match(candidate.strip()))
 
 
+
+def _set_file_via_cdp(page, selector: str, file_path: str) -> bool:
+    """Hand Chrome a local path instead of streaming the bytes to it.
+
+    Playwright's set_input_files refuses anything over 50 MB when it is
+    attached over CDP: it cannot tell that the browser is on this machine,
+    so it assumes the file would have to cross a network. Stream recordings
+    are gigabytes, so that ceiling blocks every real upload.
+
+    DOM.setFileInputFiles is the CDP command underneath, and it takes a
+    PATH that the browser opens itself. Chrome is local, so there is no
+    transfer at all and no size limit.
+    """
+    try:
+        cdp = page.context.new_cdp_session(page)
+        document = cdp.send("DOM.getDocument", {"depth": -1, "pierce": True})
+        found = cdp.send("DOM.querySelector", {
+            "nodeId": document["root"]["nodeId"], "selector": selector})
+        node_id = found.get("nodeId")
+        if not node_id:
+            return False
+        cdp.send("DOM.setFileInputFiles", {
+            "files": [os.path.abspath(file_path)], "nodeId": node_id})
+        return True
+    except Exception:
+        return False
+
+
 class RumbleUploader:
     def __init__(
         self,
@@ -742,8 +770,12 @@ class RumbleUploader:
         # "Filedata" is Rumble's actual field id (confirmed via a
         # community open-source Rumble uploader); type-based fallback
         # first in case it's changed since, then this specific id.
-        file_input = page.locator("input[type='file']").or_(page.locator("#Filedata")).first
-        file_input.set_input_files(video_path)
+        # CDP first: a stream recording is far past Playwright's 50 MB
+        # ceiling for an attached browser, and that path fails outright.
+        if not _set_file_via_cdp(page, "input[type='file'], #Filedata", video_path):
+            file_input = page.locator("input[type='file']").or_(
+                page.locator("#Filedata")).first
+            file_input.set_input_files(video_path)
 
         # Rumble starts processing/uploading immediately after file select;
         # wait for the metadata form (title field) to become available.
@@ -764,7 +796,11 @@ class RumbleUploader:
         if thumbnail_path and os.path.exists(thumbnail_path):
             thumb_input = page.locator("input[type='file'][accept*='image']")
             if thumb_input.count() > 0:
-                thumb_input.first.set_input_files(thumbnail_path)
+                # Thumbnails are small, so the plain path is fine here -
+                # but go through CDP too when it works, for consistency.
+                if not _set_file_via_cdp(
+                        page, "input[type='file'][accept*='image']", thumbnail_path):
+                    thumb_input.first.set_input_files(thumbnail_path)
 
         # CATEGORIES is a REQUIRED field on Rumble's upload form (marked
         # with a red asterisk) - without it the submit button never becomes
