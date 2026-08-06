@@ -24,7 +24,7 @@ from datetime import datetime
 # Bump when shipping user-visible changes, so --test-config can prove
 # which build is actually running (stale extracts have silently caused
 # several confusing "the fix did nothing" runs).
-BUILD = "2026-08-05.4 find finished recordings whatever yt-dlp names them"
+BUILD = "2026-08-05.5 upload failures are visible"
 
 from utils.censor import censor_video
 from utils.ffmpeg_tools import StageTimer
@@ -364,6 +364,8 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
             newly_uploaded["youtube"] = url
         except Exception as exc:
             print()
+            print(f"[YouTube] UPLOAD FAILED: {exc}")
+            print(f"          Full details: {os.path.join(cfg.general.logs_folder, 'youtube.log')}")
             yt_logger.error(f"{filename}: FAILED: {exc}")
             notify("YouTube upload FAILED", f"{filename}: {exc}", cfg.general.enable_desktop_notifications)
             results["youtube"] = f"FAILED: {exc}"
@@ -381,6 +383,7 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
     if "rumble" not in active_platforms:
         print("[Rumble] Skipped - --only youtube.")
     elif existing_rb:
+        print(f"[Rumble] Already on the channel - skipping: {existing_rb}")
         results["rumble"] = existing_rb
     else:
         try:
@@ -412,6 +415,15 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
             newly_uploaded["rumble"] = url
         except Exception as exc:
             print()
+            # Printed, not just logged. This used to go to rumble.log and a
+            # desktop toast only, so a failed Rumble upload looked exactly
+            # like a successful one from the terminal: no output at all.
+            print(f"[Rumble] UPLOAD FAILED: {exc}")
+            if cfg.rumble.cdp_url:
+                print(f"         Rumble uploads through Chrome at {cfg.rumble.cdp_url}. "
+                      "If that is not running, start it with "
+                      "--remote-debugging-port=9222 and log into rumble.com there.")
+            print(f"         Full details: {os.path.join(cfg.general.logs_folder, 'rumble.log')}")
             rb_logger.error(f"{filename}: FAILED: {exc}")
             notify("Rumble upload FAILED", f"{filename}: {exc}", cfg.general.enable_desktop_notifications)
             results["rumble"] = f"FAILED: {exc}"
