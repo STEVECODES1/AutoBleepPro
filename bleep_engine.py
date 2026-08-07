@@ -103,7 +103,12 @@ METHOD_SILENCE = "silence"
 DEFAULT_METHOD = METHOD_SILENCE
 DEFAULT_BEEP_FREQ = 1000
 
-MODEL_CHOICES = ("tiny", "base", "small", "medium", "turbo")
+# large-v3 is the accuracy ceiling and the reason it is offered: a word
+# the transcript never contains cannot be muted, so the model is what
+# decides how much profanity gets through. It is slow on CPU and
+# comfortable on a GPU.
+MODEL_CHOICES = ("tiny", "base", "small", "medium", "turbo",
+                 "large-v2", "large-v3")
 COMPUTE_CHOICES = ("auto", "int8", "float16", "float32")
 ENCODE_CHOICES = ("ultrafast", "fast", "medium", "slow")
 
@@ -633,12 +638,53 @@ class ModelCache:
                 pass
 
 
+# Whisper is trained on cleaned-up transcripts and will quietly sanitise
+# swearing - writing "f***", softening a slur, or dropping it entirely.
+# For a censoring tool that is the whole ballgame: a word the transcript
+# never contains cannot be muted, so it reaches the export untouched.
+#
+# initial_prompt is the documented lever. Whisper conditions the decode on
+# it, so a prompt written in the register of the audio biases the model
+# toward transcribing verbatim instead of tidying. It never appears in the
+# output - it only shapes how the audio is read.
+VERBATIM_PROMPT = (
+    "The following is an unedited, verbatim gaming stream transcript. "
+    "It contains explicit language, insults and swearing, transcribed "
+    "exactly as spoken with no censoring, no asterisks and no omissions. "
+    "Example: Oh shit, what the fuck was that, you damn idiot, holy crap."
+)
+
+
+def transcribe_options(backend: str) -> dict:
+    """Decode settings that decide how much profanity is heard at all.
+
+    Kept in one place because the two backends take the same names and
+    getting them out of step is invisible - the run succeeds either way
+    and simply catches less.
+    """
+    options = {
+        "word_timestamps": True,
+        "initial_prompt": VERBATIM_PROMPT,
+        # Whisper otherwise feeds each window its own previous output, and
+        # over hours of gameplay one bad window makes the next worse - it
+        # loops or drifts, and whole minutes come back as repeated filler
+        # with the real words gone.
+        "condition_on_previous_text": False,
+    }
+    if backend != "openai-whisper":
+        # A wider search costs time and finds words a greedy decode drops.
+        # Missing a slur is more expensive here than the extra minutes.
+        options["beam_size"] = 5
+    return options
+
+
 def transcribe_words(bundle: ModelBundle, audio_path: str) -> dict:
     """Transcribe with word timestamps, normalised to whisper's dict shape."""
+    options = transcribe_options(bundle.backend)
     if bundle.backend == "openai-whisper":
-        return bundle.model.transcribe(audio_path, word_timestamps=True)
+        return bundle.model.transcribe(audio_path, **options)
 
-    result = bundle.model.transcribe(audio_path, word_timestamps=True)
+    result = bundle.model.transcribe(audio_path, **options)
     segments = []
     for seg in getattr(result, "segments", []) or []:
         words = []

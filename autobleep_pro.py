@@ -96,8 +96,9 @@ MODEL_MAP = {
     "tiny   — max speed (less accurate)": "tiny",
     "base   — recommended (balanced)": "base",
     "small  — more accurate (slower)": "small",
-    "medium — best accuracy": "medium",
+    "medium — accurate (slower)": "medium",
     "turbo  — fast large model (GPU recommended)": "turbo",
+    "large-v3 — cleanest result (GPU strongly recommended)": "large-v3",
 }
 
 COMPUTE_MAP = {

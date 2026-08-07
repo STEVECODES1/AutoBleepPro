@@ -463,3 +463,65 @@ def test_the_shipped_model_is_not_the_tiny_one():
         model = json.load(f)["general"]["censor_model"]
     assert model not in ("tiny", "base"), \
         f"censor_model is {model!r}: too small to catch everything spoken"
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Whisper sanitises profanity unless told not to
+#
+# This is upstream of every rule above: a word the transcript never
+# contains cannot be matched, scored or muted, and it reaches the export
+# untouched. Whisper is trained on cleaned-up transcripts and will write
+# "f***", soften a slur, or drop it entirely.
+# ═════════════════════════════════════════════════════════════════════════════
+
+def test_the_decode_is_biased_toward_verbatim():
+    from bleep_engine import VERBATIM_PROMPT, transcribe_options
+
+    assert transcribe_options("faster-whisper")["initial_prompt"] == VERBATIM_PROMPT
+    assert transcribe_options("openai-whisper")["initial_prompt"] == VERBATIM_PROMPT
+
+
+def test_the_prompt_actually_contains_the_words_it_is_biasing_toward():
+    """A politely-worded prompt asking for uncensored output does not
+    work - the bias comes from the register of the text itself."""
+    from bleep_engine import VERBATIM_PROMPT
+
+    lowered = VERBATIM_PROMPT.lower()
+    assert "fuck" in lowered and "shit" in lowered
+    assert "*" not in VERBATIM_PROMPT, "the prompt censors itself"
+
+
+def test_windows_are_not_conditioned_on_previous_output():
+    """Over hours of gameplay one bad window makes the next worse: it
+    loops or drifts, and whole minutes come back as repeated filler with
+    the real words gone."""
+    from bleep_engine import transcribe_options
+
+    for backend in ("faster-whisper", "openai-whisper"):
+        assert transcribe_options(backend)["condition_on_previous_text"] is False
+
+
+def test_word_timestamps_are_always_requested():
+    """Without them there is nothing to mute - only whole segments."""
+    from bleep_engine import transcribe_options
+
+    for backend in ("faster-whisper", "openai-whisper"):
+        assert transcribe_options(backend)["word_timestamps"] is True
+
+
+def test_beam_search_is_only_sent_to_the_backend_that_takes_it():
+    """openai-whisper's transcribe() rejects beam_size as an unexpected
+    keyword, which would turn a wider search into a crash."""
+    from bleep_engine import transcribe_options
+
+    assert transcribe_options("faster-whisper")["beam_size"] == 5
+    assert "beam_size" not in transcribe_options("openai-whisper")
+
+
+def test_the_most_accurate_model_can_be_chosen():
+    """The model is what decides how much profanity is heard at all, and
+    the list stopped at turbo - so the cleanest option was unreachable
+    from the GUI and the CLI."""
+    from bleep_engine import MODEL_CHOICES
+
+    assert "large-v3" in MODEL_CHOICES
