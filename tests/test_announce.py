@@ -513,3 +513,151 @@ def test_the_old_call_shape_still_works(tmp_path, publishers, no_x):
     posted = announce_upload({"enabled": True, "discord": False}, "DAMN",
                              UPLOADS, posting=make_posting(tmp_path))
     assert "facebook" in posted
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# One switch for every channel
+#
+# Announcing is configured in two places - features.social_promoter for
+# Discord/Reddit, `posting` for the guarded public accounts. That is right
+# for setting them up one at a time and wrong for "announce everywhere",
+# which is one decision and should be one call.
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _config():
+    return (
+        {"enabled": False, "discord": False, "reddit": False,
+         "reddit_subreddit": "gaming"},
+        {"enabled": False, "platforms": {
+            "facebook":       {"enabled": False, "daily_cap": 5},
+            "instagram":      {"enabled": True, "daily_cap": 5},
+            "x":              {"enabled": False, "manual_approval_only": True},
+            "reddit":         {"enabled": False, "manual_approval_only": True},
+            "facebook_group": {"enabled": False, "manual_approval_only": True},
+        }},
+    )
+
+
+def test_one_call_turns_on_everything_that_can_run():
+    from utils.social_promoter import enable_all_announcements
+
+    features, posting, _ = enable_all_announcements(*_config())
+    assert features["enabled"] and features["discord"] and features["reddit"]
+    assert posting["enabled"]
+    assert posting["platforms"]["facebook"]["enabled"]
+    assert not posting["platforms"]["facebook"]["manual_approval_only"]
+
+
+def test_platforms_that_cannot_be_automated_stay_manual():
+    """Forcing these on would only produce failed posts and trip the
+    circuit breaker - the blocker is not a setting."""
+    from utils.social_promoter import enable_all_announcements
+
+    _, posting, notes = enable_all_announcements(*_config())
+    for name in ("instagram", "x", "facebook_group"):
+        assert not posting["platforms"][name]["enabled"], name
+        assert posting["platforms"][name]["manual_approval_only"], name
+        assert any(name in note for note in notes), f"{name} was silently skipped"
+
+
+def test_the_switch_says_why_instagram_cannot_announce():
+    """A switch that silently leaves platforms off is worse than none:
+    the point of announcing is knowing where the post went."""
+    from utils.social_promoter import enable_all_announcements
+
+    _, _, notes = enable_all_announcements(*_config())
+    instagram = next(n for n in notes if n.startswith("instagram"))
+    assert "hosting" in instagram
+
+
+def test_reddit_needs_a_subreddit_before_it_can_be_turned_on():
+    """There is nowhere to post it otherwise, and praw would raise."""
+    from utils.social_promoter import enable_all_announcements
+
+    features, posting = _config()
+    features["reddit_subreddit"] = ""
+    features, _, notes = enable_all_announcements(features, posting)
+    assert features["reddit"] is False
+    assert any("reddit_subreddit" in note for note in notes)
+
+
+def test_x_is_not_announced_twice_when_posting_is_configured():
+    """The legacy unguarded twitter path and the guarded `posting` path
+    would otherwise both fire - once outside the cap."""
+    from utils.social_promoter import enable_all_announcements
+
+    features, posting = _config()
+    features["twitter"] = True
+    features, _, _ = enable_all_announcements(features, posting)
+    assert features["twitter"] is False
+
+
+def test_turning_everything_on_does_not_edit_the_caller_s_config():
+    """The flag governs one run. Rewriting config.json from a CLI flag
+    would silently change every run after it."""
+    from utils.social_promoter import enable_all_announcements
+
+    features, posting = _config()
+    enable_all_announcements(features, posting)
+    assert features["enabled"] is False
+    assert posting["enabled"] is False
+
+
+def test_one_call_turns_everything_off():
+    from utils.social_promoter import disable_all_announcements
+
+    features, posting, _ = disable_all_announcements(
+        {"enabled": True, "discord": True}, {"enabled": True})
+    assert features["enabled"] is False
+    assert posting["enabled"] is False
+
+
+def test_nothing_is_announced_once_the_switch_is_off():
+    """The end-to-end check: the switch has to reach the actual posting
+    path, not just the config dict."""
+    from utils.social_promoter import disable_all_announcements
+
+    features, posting, _ = disable_all_announcements(
+        {"enabled": True, "discord": True}, {"enabled": True})
+    assert announce_upload(features, "Stream",
+                           {"youtube": "https://youtu.be/abc"},
+                           posting=posting) == []
+
+
+def test_announcing_everywhere_still_goes_through_the_guard():
+    """Turning platforms on must not become a way past the kill switch,
+    caps or spacing."""
+    from utils.social_promoter import enable_all_announcements
+
+    features, posting = _config()
+    posting["kill_switch_file"] = __file__      # exists -> everything halts
+    features, posting, _ = enable_all_announcements(features, posting)
+    assert announce_to_platforms(posting, "Stream",
+                                 {"youtube": "https://youtu.be/abc"}) == []
+
+
+def test_reddit_is_not_announced_twice_either():
+    """praw handles Reddit on the features path; the guarded path leaving
+    it enabled would post the same link twice, once outside the cap."""
+    from utils.social_promoter import enable_all_announcements
+
+    features, posting, _ = enable_all_announcements(*_config())
+    assert features["reddit"] is True
+    assert posting["platforms"]["reddit"]["manual_approval_only"] is True
+
+
+def test_a_platform_with_no_publisher_is_skipped_not_failed(monkeypatch, tmp_path):
+    """It used to call post_link() on None; the AttributeError was caught
+    by the generic handler and recorded as a failed post, so three
+    announcements tripped the circuit breaker over a post never made."""
+    posting = {
+        "enabled": True,
+        "state_path": str(tmp_path / "state.json"),
+        "platforms": {"reddit": {"enabled": True, "daily_cap": 5}},
+    }
+    assert announce_to_platforms(posting, "Stream",
+                                 {"youtube": "https://youtu.be/abc"}) == []
+
+    from publish_guard import PublishGuard
+    guard = PublishGuard(posting, posting["state_path"])
+    assert guard.check("reddit"), "a skipped platform was recorded as failing"

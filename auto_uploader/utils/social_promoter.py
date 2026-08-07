@@ -202,6 +202,105 @@ def queue_manual_post(platform: str, title: str, new_uploads: dict,
     return text
 
 
+# ═════════════════════════════════════════════════════════════════════════
+# One switch for every channel
+# ═════════════════════════════════════════════════════════════════════════
+
+# Announcing lives in two config blocks - `features.social_promoter` for
+# Discord/Reddit and `posting` for the guarded public accounts - which is
+# right for configuring them individually and wrong for the question
+# "announce everywhere". These functions answer that question in one call.
+
+# Platforms that cannot be automated, and why. These stay manual no matter
+# what the switch says, because the blocker is not a setting.
+CANNOT_AUTOMATE = {
+    "instagram":
+        "Instagram has no link or text post. Every Content Publishing call "
+        "needs a rendered clip on public hosting, so there is nothing to "
+        "announce with until clips are hosted.",
+    "x":
+        "X charges per post through its API and there is no free tier. "
+        "Automating x.com in a browser instead would breach their terms and "
+        "risk the account, which costs more than the fee saves.",
+    "facebook_group":
+        "Facebook Groups have no publishing route that permits this, so "
+        "group posts stay manual on purpose.",
+    # Reddit IS automated - just on the other path, through praw. Leaving
+    # it manual here is what stops the same announcement going out twice,
+    # once outside the cap. Same rule X follows.
+    "reddit":
+        "posted through features.social_promoter (praw), so the guarded "
+        "path leaves it alone rather than announcing it twice.",
+}
+
+
+def enable_all_announcements(features: dict, posting: dict) -> tuple:
+    """Turn announcing on everywhere it can actually run.
+
+    Returns (features, posting, notes) - copies, so config on disk is
+    untouched - plus a line for every channel that stays manual and the
+    reason it does. A switch that silently left three platforms off would
+    be worse than no switch: the whole point is knowing where the post
+    went.
+    """
+    features = dict(features or {})
+    posting = dict(posting or {})
+    notes = []
+
+    features["enabled"] = True
+    features["discord"] = True
+
+    if features.get("reddit_subreddit"):
+        features["reddit"] = True
+    else:
+        features["reddit"] = False
+        notes.append("reddit: needs features.social_promoter.reddit_subreddit "
+                     "set to the subreddit to post in - there is nowhere to "
+                     "post it otherwise.")
+
+    # X is left to the guarded path below when `posting` exists, so the
+    # same announcement cannot go out twice - once outside the cap.
+    features["twitter"] = False if posting else features.get("twitter", False)
+
+    if not posting:
+        notes.append("facebook/instagram/x: no `posting` block in config, so "
+                     "only Discord and Reddit can be announced to.")
+        return features, posting, notes
+
+    posting["enabled"] = True
+    platforms = {}
+    for name, settings in (posting.get("platforms") or {}).items():
+        settings = dict(settings or {})
+        if name in CANNOT_AUTOMATE:
+            # Still announced - by a person, from the queued text. Forcing
+            # `enabled` here would only produce failed posts and trip the
+            # circuit breaker.
+            settings["enabled"] = False
+            settings["manual_approval_only"] = True
+            notes.append(f"{name}: stays manual - {CANNOT_AUTOMATE[name]}")
+        else:
+            settings["enabled"] = True
+            settings["manual_approval_only"] = False
+        platforms[name] = settings
+    posting["platforms"] = platforms
+    return features, posting, notes
+
+
+def disable_all_announcements(features: dict, posting: dict) -> tuple:
+    """Turn every announcement off in one call - Discord, Reddit, and the
+    guarded public accounts - without editing config on disk.
+
+    The kill switch file stops posting too, but it is a file that has to be
+    remembered and removed. This is for one run.
+    """
+    features = dict(features or {})
+    posting = dict(posting or {})
+    features["enabled"] = False
+    if posting:
+        posting["enabled"] = False
+    return features, posting, ["Announcements are off for this run."]
+
+
 def _publisher_for(platform: str, config: dict):
     """The publisher object for a guarded platform, or None if untyped."""
     if platform == "facebook":
@@ -263,6 +362,17 @@ def announce_to_platforms(posting: dict, title: str, new_uploads: dict,
             continue
 
         publisher = _publisher_for(platform, config)
+        if publisher is None and platform != "x":
+            # Reddit lands here: it is announced through praw on the
+            # features.social_promoter path, so there is no publisher for
+            # it in this one. Without this the code below called
+            # post_link() on None, and the AttributeError was caught by
+            # the generic handler and recorded as a failed post - three of
+            # those trip the circuit breaker over a post never attempted.
+            print(f"[Social] {platform}: skipped here - it has no publisher on "
+                  "this path (Reddit is announced via features.social_promoter).")
+            continue
+
         if publisher is not None and not getattr(publisher, "supports_link_posts", True):
             # Not a failure and not the guard's business: the platform has
             # no link-post endpoint at all, so recording it either way

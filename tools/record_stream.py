@@ -159,6 +159,68 @@ def expected_duration(url: str) -> Optional[float]:
         return None
 
 
+def _remove(path: str) -> None:
+    """Delete a file if it is there. Never raises - every caller is
+    cleaning up after itself and would rather leave a stray file than
+    lose the recording to an exception on the tidy-up path."""
+    try:
+        os.remove(path)
+    except OSError:
+        pass
+
+
+# How much shorter than its inputs a joined file may be before the join is
+# treated as having lost something. Each seam costs a fraction of a second,
+# so an exact match is not the test; two seconds a segment is.
+JOIN_TOLERANCE_S = 2.0
+
+
+def join_lost_material(joined: Optional[float], parts: list,
+                       tolerance_s: float = JOIN_TOLERANCE_S) -> bool:
+    """True when the joined file is materially shorter than its parts.
+
+    ffmpeg's concat demuxer does not always fail loudly. Given a segment
+    whose tail is corrupt - which is exactly what a recording killed
+    mid-fragment leaves - it can copy what it can, exit 0, and produce a
+    short file. The segments would then be deleted as redundant when they
+    are in fact the only complete copy.
+
+    Durations that cannot be measured return False: refusing to delete on
+    a failed probe would leak segments forever, and an unmeasurable file
+    is not evidence of loss.
+    """
+    known = [d for d in parts if d]
+    if not joined or len(known) != len(parts) or not known:
+        return False
+    return joined < (sum(known) - tolerance_s * len(known))
+
+
+def vod_args(url: str, output_path: str, concurrent: int = 8) -> list:
+    """Download the finished VOD rather than the live stream.
+
+    Starting a recorder late costs the beginning of the stream:
+    --live-from-start pulls what it can from YouTube's DVR buffer, but
+    that buffer is finite - typically a few hours - so anything older than
+    it is unrecoverable while the stream is running.
+
+    Once the stream ends the whole thing becomes an ordinary video, and an
+    ordinary video can be downloaded completely. No live flags, no waiting,
+    and fragments can be fetched in parallel because there is no realtime
+    pace to keep up with.
+    """
+    return [
+        "yt-dlp",
+        "--fragment-retries", "infinite",
+        "--retries", "infinite",
+        "--socket-timeout", "30",
+        "--concurrent-fragments", str(concurrent),
+        "--merge-output-format", "mp4",
+        "--no-progress", "--newline",
+        "-o", output_path,
+        url,
+    ]
+
+
 def coverage_report(recorded: Optional[float],
                     expected: Optional[float]) -> str:
     """One line on whether the whole stream was captured.
@@ -300,6 +362,9 @@ class Recorder:
     name: str = "stream"
     poll_seconds: int = 60
     concurrent_fragments: int = 4
+    # When the live recording came up short, download the finished VOD
+    # instead. Off for a stream that is not archived afterwards.
+    fill_gaps: bool = True
 
     def say(self, message: str) -> None:
         print(f"[{time.strftime('%H:%M:%S')}] {message}", flush=True)
@@ -406,6 +471,10 @@ class Recorder:
                      f"still in {self.staging} and are playable as they are.")
             return None
 
+        # Measured BEFORE the segments are gone, because this is the only
+        # moment both the parts and the whole exist to compare.
+        part_lengths = [probe_duration(p) for p in segments]
+
         destination = os.path.join(self.watch_folder, os.path.basename(final))
         os.makedirs(self.watch_folder, exist_ok=True)
         try:
@@ -414,11 +483,18 @@ class Recorder:
             self.say(f"Could not move the finished file: {exc}")
             return None
 
-        for path in segments:
-            try:
-                os.remove(path)
-            except OSError:
-                pass
+        if join_lost_material(probe_duration(destination), part_lengths):
+            # Nothing is deleted on this path. The joined file is still
+            # delivered - it is watchable and mostly right - but the
+            # segments are the complete copy and are worth more than the
+            # disk they occupy.
+            self.say(f"The joined file is shorter than the segments it was "
+                     f"built from, so the segments have been KEPT in "
+                     f"{self.staging}. Nothing is lost - they hold the full "
+                     "recording and can be re-joined by hand.")
+        else:
+            for path in segments:
+                _remove(path)
 
         # Checked here, while the stream is still in YouTube's DVR window
         # and a missing hour could still be re-fetched. Days later it is
@@ -426,11 +502,80 @@ class Recorder:
         report = coverage_report(probe_duration(destination),
                                  expected_duration(self.url))
         self.say(report)
+        if report.startswith("SHORT") and self.fill_gaps:
+            replaced = self._replace_with_vod(base, destination)
+            if replaced:
+                destination = replaced
+                report = coverage_report(probe_duration(destination),
+                                         expected_duration(self.url))
+                self.say(report)
         if report.startswith("SHORT"):
             self._notify_short(report)
 
         self.say(f"Delivered -> {destination}")
         self.say("The uploader will pick it up (run: python main.py --watch)")
+        return destination
+
+    def _replace_with_vod(self, base: str, current: str) -> Optional[str]:
+        """Swap a short recording for the complete published VOD.
+
+        Only worth doing when the VOD is genuinely longer - a stream that
+        was not archived, or one whose VOD is itself partial, would
+        otherwise trade a real recording for a worse one.
+        """
+        self.say("Recording is short - trying the published VOD, which has "
+                 "the whole stream...")
+        candidate = os.path.join(self.staging, f"{base}.vod.mp4")
+        code = self._run(vod_args(self.url, candidate),
+                         os.path.join(self.staging, f"{base}.log"))
+        if code != 0 or not os.path.exists(candidate):
+            self.say("The VOD is not available yet. YouTube can take a while "
+                     "to publish one after a stream ends - re-run later if the "
+                     "recording matters.")
+            _remove(candidate)
+            return None
+
+        vod_length = probe_duration(candidate) or 0
+        have_length = probe_duration(current) or 0
+        if vod_length <= have_length:
+            self.say(f"The VOD is no longer than what was recorded "
+                     f"({vod_length / 3600:.2f}h vs {have_length / 3600:.2f}h) "
+                     "- keeping the recording.")
+            _remove(candidate)
+            return None
+
+        # The live recording is moved aside rather than overwritten. A
+        # longer VOD is very probably a superset of it, but "probably" is
+        # not good enough to destroy the only other copy with, so the
+        # swap is made reversible and then only finalised below.
+        destination = os.path.join(self.watch_folder, os.path.basename(current))
+        kept = os.path.join(self.staging, f"{base}.live-recording.mp4")
+        try:
+            os.replace(current, kept)
+            os.replace(candidate, destination)
+        except OSError as exc:
+            self.say(f"Could not put the VOD in place: {exc}")
+            # Undo, so a failure here leaves the live recording delivered
+            # exactly as it was rather than nothing at all.
+            if not os.path.exists(destination) and os.path.exists(kept):
+                try:
+                    os.replace(kept, destination)
+                except OSError:
+                    self.say(f"The recording is safe at {kept}.")
+            return None
+        self.say(f"Replaced with the full VOD "
+                 f"({vod_length / 3600:.2f}h, was {have_length / 3600:.2f}h).")
+
+        expected = expected_duration(self.url)
+        if expected and vod_length >= expected * COVERAGE_OK:
+            # The VOD covers the whole stream, so the shorter live copy is
+            # genuinely redundant - not merely superseded - and holding
+            # gigabytes of it would fill the disk the next recording needs.
+            _remove(kept)
+        else:
+            self.say(f"Keeping the live recording at {kept} as well - the VOD "
+                     "is longer but not provably complete, so both copies stay "
+                     "until you have checked. Delete it once you are happy.")
         return destination
 
     def _notify_short(self, report: str) -> None:

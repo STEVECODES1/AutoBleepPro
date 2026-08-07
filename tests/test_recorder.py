@@ -460,3 +460,225 @@ def test_any_container_yt_dlp_picks_is_recognised(tmp_path):
     for ext in (".ts", ".mp4", ".mkv"):
         (staging / f"show.part01{ext}").write_bytes(b"data")
     assert len(existing_segments(str(staging), "show")) == 3
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Filling in the front of a stream the recorder started too late for
+#
+# --live-from-start pulls what it can from YouTube's DVR buffer, but that
+# buffer is finite: start an hour late on a five-hour stream and the first
+# hour is unreachable while it is still live. Once it ends the whole thing
+# becomes an ordinary video, and an ordinary video downloads completely.
+#
+# Everything below exists to answer one question - can this lose parts of
+# a recording it already has? It must not.
+# ═════════════════════════════════════════════════════════════════════════════
+
+def test_the_vod_download_does_not_use_the_live_flags():
+    """--live-from-start on a finished video makes yt-dlp wait for a live
+    edge that will never come."""
+    from record_stream import vod_args
+
+    args = vod_args("https://youtu.be/abc", "/tmp/out.mp4")
+    assert "--live-from-start" not in args
+    assert "--wait-for-video" not in args
+    assert args[args.index("--fragment-retries") + 1] == "infinite"
+
+
+def test_the_vod_is_fetched_in_parallel():
+    """There is no realtime pace to keep up with once the stream is over,
+    so a five-hour VOD need not take five hours."""
+    from record_stream import vod_args
+
+    args = vod_args("https://youtu.be/abc", "/tmp/out.mp4", concurrent=8)
+    assert args[args.index("--concurrent-fragments") + 1] == "8"
+
+
+def _delivered(recorder, base="show", seconds=3600.0):
+    """A finished recording sitting in the watch folder."""
+    os.makedirs(recorder.staging, exist_ok=True)
+    os.makedirs(recorder.watch_folder, exist_ok=True)
+    path = os.path.join(recorder.watch_folder, f"{base}.mp4")
+    with open(path, "wb") as f:
+        f.write(b"live recording")
+    return path
+
+
+def test_a_shorter_vod_never_replaces_the_recording(recorder, monkeypatch):
+    """A stream that was not archived, or whose VOD is itself partial,
+    must not overwrite a real recording with a worse one."""
+    import record_stream
+
+    current = _delivered(recorder)
+    candidate = os.path.join(recorder.staging, "show.vod.mp4")
+
+    def fake_run(self, args, log_path=""):
+        with open(candidate, "wb") as f:
+            f.write(b"short vod")
+        return 0
+
+    monkeypatch.setattr(Recorder, "_run", fake_run)
+    monkeypatch.setattr(record_stream, "probe_duration",
+                        lambda p: 1800.0 if p == candidate else 3600.0)
+
+    assert recorder._replace_with_vod("show", current) is None
+    assert open(current, "rb").read() == b"live recording"
+    assert not os.path.exists(candidate), "the rejected VOD was left on disk"
+
+
+def test_a_failed_vod_download_leaves_the_recording_alone(recorder, monkeypatch):
+    """YouTube can take hours to publish a VOD. Trying and failing must
+    cost nothing."""
+    current = _delivered(recorder)
+    monkeypatch.setattr(Recorder, "_run", lambda self, args, log_path="": 1)
+
+    assert recorder._replace_with_vod("show", current) is None
+    assert open(current, "rb").read() == b"live recording"
+
+
+def test_a_longer_but_incomplete_vod_keeps_both_copies(recorder, monkeypatch):
+    """The VOD wins on length but is not provably the whole stream, so the
+    live recording is kept as well rather than destroyed on a guess."""
+    import record_stream
+
+    current = _delivered(recorder)
+    candidate = os.path.join(recorder.staging, "show.vod.mp4")
+
+    def fake_run(self, args, log_path=""):
+        with open(candidate, "wb") as f:
+            f.write(b"longer vod")
+        return 0
+
+    monkeypatch.setattr(Recorder, "_run", fake_run)
+    monkeypatch.setattr(record_stream, "probe_duration",
+                        lambda p: 14400.0 if os.path.basename(p).endswith(".vod.mp4") else 10800.0)
+    monkeypatch.setattr(record_stream, "expected_duration", lambda url: 18000.0)
+
+    result = recorder._replace_with_vod("show", current)
+    assert result == current
+    assert open(result, "rb").read() == b"longer vod"
+    kept = os.path.join(recorder.staging, "show.live-recording.mp4")
+    assert os.path.exists(kept), "the live recording was thrown away"
+    assert open(kept, "rb").read() == b"live recording"
+
+
+def test_a_complete_vod_frees_the_superseded_recording(recorder, monkeypatch):
+    """Once the VOD provably covers the whole stream the live copy is
+    redundant, and keeping gigabytes of it fills the disk the next
+    recording needs."""
+    import record_stream
+
+    current = _delivered(recorder)
+    candidate = os.path.join(recorder.staging, "show.vod.mp4")
+
+    def fake_run(self, args, log_path=""):
+        with open(candidate, "wb") as f:
+            f.write(b"full vod")
+        return 0
+
+    monkeypatch.setattr(Recorder, "_run", fake_run)
+    monkeypatch.setattr(record_stream, "probe_duration",
+                        lambda p: 18000.0 if os.path.basename(p).endswith(".vod.mp4") else 10800.0)
+    monkeypatch.setattr(record_stream, "expected_duration", lambda url: 18000.0)
+
+    assert recorder._replace_with_vod("show", current) == current
+    assert open(current, "rb").read() == b"full vod"
+    assert not os.path.exists(
+        os.path.join(recorder.staging, "show.live-recording.mp4"))
+
+
+def test_gap_filling_can_be_turned_off(recorder, monkeypatch):
+    """A stream that is never archived has no VOD to fetch, and trying
+    every time would waste a download."""
+    recorder.fill_gaps = False
+    called = []
+    monkeypatch.setattr(Recorder, "_replace_with_vod",
+                        lambda self, base, cur: called.append(base))
+    assert recorder.fill_gaps is False
+    assert called == []
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Segments are only deleted once the join is known to have kept them
+# ═════════════════════════════════════════════════════════════════════════════
+
+def test_a_short_join_is_detected():
+    """ffmpeg's concat demuxer does not always fail loudly - given a
+    segment with a corrupt tail it can copy what it can and exit 0."""
+    from record_stream import join_lost_material
+
+    assert join_lost_material(3600.0, [3600.0, 3600.0])
+    assert not join_lost_material(7200.0, [3600.0, 3600.0])
+
+
+def test_seam_loss_is_not_treated_as_lost_material():
+    """Joining costs a fraction of a second at each seam. Keeping every
+    segment forever over that would fill the disk."""
+    from record_stream import join_lost_material
+
+    assert not join_lost_material(7199.0, [3600.0, 3600.0])
+
+
+def test_an_unmeasurable_duration_never_counts_as_loss():
+    """A failed ffprobe is not evidence that anything was lost, and
+    treating it as such would leak segments on every run."""
+    from record_stream import join_lost_material
+
+    assert not join_lost_material(None, [3600.0])
+    assert not join_lost_material(3600.0, [3600.0, None])
+
+
+def test_segments_are_kept_when_the_join_lost_material(recorder, monkeypatch):
+    """The user's actual worry: do I lose parts or segments? Not here -
+    when the joined file is short, the parts stay."""
+    import record_stream
+
+    os.makedirs(recorder.staging, exist_ok=True)
+    parts = []
+    for n in (1, 2):
+        path = os.path.join(recorder.staging, f"show.part{n:02d}.ts")
+        with open(path, "wb") as f:
+            f.write(b"segment")
+        parts.append(path)
+
+    def fake_ffmpeg(self, args):
+        with open(args[-1], "wb") as f:
+            f.write(b"joined")
+        return True
+
+    monkeypatch.setattr(Recorder, "_ffmpeg", fake_ffmpeg)
+    monkeypatch.setattr(record_stream, "probe_duration",
+                        lambda p: 3600.0 if "part" in os.path.basename(p) else 3600.0)
+    monkeypatch.setattr(record_stream, "expected_duration", lambda url: None)
+
+    recorder.finalise("show")
+    for path in parts:
+        assert os.path.exists(path), f"{path} was deleted despite a short join"
+
+
+def test_segments_are_removed_after_a_clean_join(recorder, monkeypatch):
+    """The other half of the trade: a good join means the segments are a
+    duplicate copy of a multi-hour stream, and the disk is finite."""
+    import record_stream
+
+    os.makedirs(recorder.staging, exist_ok=True)
+    parts = []
+    for n in (1, 2):
+        path = os.path.join(recorder.staging, f"show.part{n:02d}.ts")
+        with open(path, "wb") as f:
+            f.write(b"segment")
+        parts.append(path)
+
+    def fake_ffmpeg(self, args):
+        with open(args[-1], "wb") as f:
+            f.write(b"joined")
+        return True
+
+    monkeypatch.setattr(Recorder, "_ffmpeg", fake_ffmpeg)
+    monkeypatch.setattr(record_stream, "probe_duration",
+                        lambda p: 3600.0 if "part" in os.path.basename(p) else 7200.0)
+    monkeypatch.setattr(record_stream, "expected_duration", lambda url: 7200.0)
+
+    recorder.finalise("show")
+    for path in parts:
+        assert not os.path.exists(path)

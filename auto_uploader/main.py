@@ -24,7 +24,7 @@ from datetime import datetime
 # Bump when shipping user-visible changes, so --test-config can prove
 # which build is actually running (stale extracts have silently caused
 # several confusing "the fix did nothing" runs).
-BUILD = "2026-08-06.7 report the real precision"
+BUILD = "2026-08-07.1 announce-all switch + VOD gap fill"
 
 from utils.censor import censor_video
 from utils.ffmpeg_tools import StageTimer
@@ -574,6 +574,14 @@ def main(argv=None) -> int:
     parser.add_argument("--verify", action="store_true",
                         help="With --posting-status, also ask each API who your token "
                              "belongs to. Read-only - creates and publishes nothing.")
+    announce = parser.add_mutually_exclusive_group()
+    announce.add_argument("--announce-all", action="store_true",
+                          help="Announce this upload everywhere at once - Discord, "
+                               "Facebook, Reddit - without editing config. Says which "
+                               "platforms stay manual and why.")
+    announce.add_argument("--no-announce", action="store_true",
+                          help="Announce nowhere this run: no Discord, no Reddit, no "
+                               "Facebook/Instagram/X. Config is not changed.")
     args = _parse_args_helpfully(parser, argv)
 
     # Printed on EVERY run, not just --test-config: a stale extract running
@@ -583,6 +591,21 @@ def main(argv=None) -> int:
 
     config_dir = os.path.dirname(os.path.abspath(__file__))
     cfg = load_config(os.path.join(config_dir, "config.json"), os.path.join(config_dir, ".env"))
+
+    # Applied to the loaded config only - config.json is never rewritten, so
+    # the flag governs this run and nothing after it.
+    if args.announce_all or args.no_announce:
+        from utils.social_promoter import (
+            disable_all_announcements, enable_all_announcements)
+        switch = enable_all_announcements if args.announce_all else disable_all_announcements
+        promoter, posting, notes = switch(
+            cfg.features.get("social_promoter", {}), cfg.posting)
+        cfg.features["social_promoter"] = promoter
+        cfg.posting = posting
+        label = "ON everywhere it can run" if args.announce_all else "OFF everywhere"
+        print(f"[Social] Announcements: {label} for this run.")
+        for note in notes:
+            print(f"[Social]   {note}")
 
     if args.forget:
         if not os.path.isfile(args.forget):
