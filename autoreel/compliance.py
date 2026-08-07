@@ -64,6 +64,13 @@ DEFAULT_CATEGORIES: dict[str, list[str]] = {
 # segment goes. YouTube acts on context, not just the audible word.
 HIGH_SEVERITY_CATEGORIES: frozenset = frozenset({"hate_speech"})
 
+# How far a mute may cross into the word next to it. Whisper's word
+# timings are 100-300ms out, so a pad that stops dead at the neighbour's
+# reported boundary can still leave the flagged syllable audible. This is
+# the margin that absorbs that error - large enough to cover the timing
+# slop, small enough that a neighbouring word stays intelligible.
+NEIGHBOUR_BLEED_MS = 120
+
 
 @dataclass
 class Violation:
@@ -76,6 +83,12 @@ class Violation:
     # transcript passed to it separately.
     segment_start: Optional[float] = None
     segment_end: Optional[float] = None
+    # Where the words either side of this one begin and end. Padding is
+    # clamped against these so a mute cannot swallow the speech around it -
+    # without them the only choice is a fixed pad that is either too small
+    # to cover Whisper's timing error or big enough to eat a neighbour.
+    prev_end: Optional[float] = None
+    next_start: Optional[float] = None
 
     @property
     def is_high_severity(self) -> bool:
@@ -93,8 +106,11 @@ class ComplianceEngine:
     # Muting exactly the reported span leaves the first syllable audible,
     # which for a slur is the whole problem. Pad both edges.
     padding_ms: int = 250
-    # Mute the entire segment around a high-severity hit, not just the word.
-    mute_whole_segment: bool = True
+    # Mute the entire segment around a high-severity hit, not just the
+    # word. Off: the point of a word-level censor is that the sentence
+    # survives. Turn it on only if a platform is acting on context rather
+    # than on the audible word.
+    mute_whole_segment: bool = False
 
     def __post_init__(self) -> None:
         self.categories: dict[str, list[str]] = {
@@ -144,20 +160,28 @@ class ComplianceEngine:
                    segment_start: Optional[float] = None,
                    segment_end: Optional[float] = None) -> list[Violation]:
         """Scan word-level transcript entries (dicts with word/start/end)."""
+        # Materialised because each word needs to know about its
+        # neighbours, and `words` is often a generator.
+        words = list(words)
         violations: list[Violation] = []
-        for word_info in words:
+        for index, word_info in enumerate(words):
             reason = self._flag_reason(word_info["word"])
-            if reason:
-                violations.append(
-                    Violation(
-                        word=word_info["word"],
-                        start=word_info["start"],
-                        end=word_info["end"],
-                        category=reason,
-                        segment_start=segment_start,
-                        segment_end=segment_end,
-                    )
+            if not reason:
+                continue
+            previous = words[index - 1] if index > 0 else None
+            following = words[index + 1] if index + 1 < len(words) else None
+            violations.append(
+                Violation(
+                    word=word_info["word"],
+                    start=word_info["start"],
+                    end=word_info["end"],
+                    category=reason,
+                    segment_start=segment_start,
+                    segment_end=segment_end,
+                    prev_end=previous.get("end") if previous else None,
+                    next_start=following.get("start") if following else None,
                 )
+            )
         return violations
 
     def scan_segments(self, segments: Iterable[dict]) -> list[Violation]:
@@ -177,29 +201,55 @@ class ComplianceEngine:
     def mute_spans(self, violations: Iterable[Violation], total_ms: int) -> list:
         """Violations -> merged, clamped (start_ms, end_ms) spans to mute.
 
-        Three things happen here that muting each word in isolation misses:
+        The job is to remove the flagged WORD and nothing else. Two things
+        pull against each other there, and both are real:
 
-        1. Padding. Whisper's timings are approximate, so the exact span
-           leaves the leading syllable audible - for a slur that defeats
-           the point.
-        2. High-severity hits expand to their whole segment. Muting one
-           word out of the sentence leaves the meaning intact, and YouTube
-           acts on context.
-        3. Overlaps are merged, so the rebuild below stays correct and the
-           track length is preserved exactly.
+        - Pad too little and the leading syllable survives, because
+          Whisper's word timings are 100-300ms out. A slur whose first
+          syllable is audible is not censored.
+        - Pad too much and the words either side get clipped, which is
+          what makes a censored video sound chopped up.
+
+        A fixed pad has to pick one. This does not: it pads generously
+        into the SILENCE around the word, and stops at the neighbouring
+        word. Muting a gap between words costs nothing, so where there is
+        a gap the full padding is used; where the speech is packed tight
+        the pad shrinks to fit rather than eating the neighbour.
+
+        NEIGHBOUR_BLEED_MS is the one deliberate exception: the pad may
+        cross into a neighbour by that much, because the timing error it
+        exists to cover is roughly that size and refusing to cross at all
+        would leave the syllable audible in exactly the tight-speech case
+        that needs it most.
+
+        Overlaps are merged afterwards, so the rebuild stays correct and
+        the track length is preserved exactly.
         """
         spans: list = []
         for violation in violations:
             start = violation.start
             end = violation.end
-            if (self.mute_whole_segment and violation.is_high_severity
-                    and violation.segment_start is not None
-                    and violation.segment_end is not None):
+            whole_segment = (self.mute_whole_segment and violation.is_high_severity
+                             and violation.segment_start is not None
+                             and violation.segment_end is not None)
+            if whole_segment:
                 start = min(start, violation.segment_start)
                 end = max(end, violation.segment_end)
 
             start_ms = int(start * 1000) - self.padding_ms
             end_ms = int(end * 1000) + self.padding_ms
+
+            if not whole_segment:
+                # Expanding to the segment is already a decision to take
+                # the surrounding speech, so the neighbour clamp only
+                # applies to word-level mutes.
+                if violation.prev_end is not None:
+                    floor = int(violation.prev_end * 1000) - NEIGHBOUR_BLEED_MS
+                    start_ms = max(start_ms, min(floor, int(start * 1000)))
+                if violation.next_start is not None:
+                    ceiling = int(violation.next_start * 1000) + NEIGHBOUR_BLEED_MS
+                    end_ms = min(end_ms, max(ceiling, int(end * 1000)))
+
             start_ms = max(0, min(start_ms, total_ms))
             end_ms = max(0, min(end_ms, total_ms))
             if end_ms > start_ms:

@@ -109,6 +109,16 @@ DEFAULT_BEEP_FREQ = 1000
 # comfortable on a GPU.
 MODEL_CHOICES = ("tiny", "base", "small", "medium", "turbo",
                  "large-v2", "large-v3")
+
+# Widen every mute by this much on each side. Whisper's word timings are
+# 100-300ms out, so muting the exact reported span leaves the leading
+# syllable audible - and a word whose first syllable survives is not
+# censored. This engine had no padding at all.
+DEFAULT_PADDING_MS = 250
+# How far that pad may cross into the word next to it. Large enough to
+# absorb the timing error above, small enough that the neighbouring word
+# stays intelligible. See _clamp_to_neighbours.
+NEIGHBOUR_BLEED_MS = 120
 COMPUTE_CHOICES = ("auto", "int8", "float16", "float32")
 ENCODE_CHOICES = ("ultrafast", "fast", "medium", "slow")
 
@@ -812,10 +822,51 @@ def _match_params(seg, ref):
     return seg
 
 
+def _word_bounds(all_words: Iterable[dict] | None) -> list[tuple[int, int]]:
+    """Every word's (start_ms, end_ms), sorted. Used to find what sits
+    either side of a hit so the padding can stop there."""
+    bounds: list[tuple[int, int]] = []
+    for wd in all_words or ():
+        try:
+            s = int(round(float(wd.get("start", 0.0)) * 1000))
+            e = int(round(float(wd.get("end", 0.0)) * 1000))
+        except (TypeError, ValueError, AttributeError):
+            continue
+        bounds.append((min(s, e), max(s, e)))
+    bounds.sort()
+    return bounds
+
+
+def _clamp_to_neighbours(s: int, e: int, padded_s: int, padded_e: int,
+                         bounds: list[tuple[int, int]]) -> tuple[int, int]:
+    """Keep a padded span out of the words either side of it.
+
+    The pad exists to cover Whisper's timing error, which is 100-300ms.
+    Applied blindly it also clips whatever was said before and after,
+    which is what makes a censored video sound chopped up. Padding into
+    the SILENCE around a word costs nothing, so the pad expands freely
+    into a gap and stops when it reaches actual speech.
+
+    It may still cross into a neighbour by NEIGHBOUR_BLEED_MS, because
+    the neighbour's reported boundary is only approximate too, and
+    stopping dead at it would leave the flagged syllable audible in
+    exactly the tight-speech case that needs the pad most.
+    """
+    for b_start, b_end in bounds:
+        if b_end <= s:
+            padded_s = max(padded_s, min(b_end - NEIGHBOUR_BLEED_MS, s))
+        elif b_start >= e:
+            padded_e = min(padded_e, max(b_start + NEIGHBOUR_BLEED_MS, e))
+            break
+    return padded_s, padded_e
+
+
 def merge_spans(
     words: Iterable[dict],
     total_ms: int,
     min_ms: int = 50,
+    padding_ms: int = 0,
+    all_words: Iterable[dict] | None = None,
 ) -> list[tuple[int, int]]:
     """Word timings -> sorted, clamped, non-overlapping (start, end) ms spans.
 
@@ -823,7 +874,15 @@ def merge_spans(
     than by pushing the end out, and overlaps are merged. Both matter:
     without merging, two overlapping spans produce duplicated audio when
     the track is rebuilt.
+
+    `padding_ms` widens each span on both sides, because muting the exact
+    reported span leaves the leading syllable audible - Whisper's word
+    timings are 100-300ms out, and a word whose first syllable survives
+    is not censored. Pass `all_words` (the whole transcript, not just the
+    hits) and the padding is clamped to the words either side, so it takes
+    the flagged word and leaves the sentence around it intact.
     """
+    bounds = _word_bounds(all_words) if padding_ms and all_words else []
     spans: list[tuple[int, int]] = []
     for wd in words:
         try:
@@ -836,6 +895,12 @@ def merge_spans(
         if e - s < min_ms:
             centre = (s + e) // 2
             s, e = centre - min_ms // 2, centre - min_ms // 2 + min_ms
+        if padding_ms:
+            padded_s, padded_e = s - padding_ms, e + padding_ms
+            if bounds:
+                padded_s, padded_e = _clamp_to_neighbours(
+                    s, e, padded_s, padded_e, bounds)
+            s, e = padded_s, padded_e
         s = max(0, min(s, total_ms))
         e = max(0, min(e, total_ms))
         if e > s:
@@ -859,6 +924,8 @@ def apply_bleeps(
     min_ms: int = 50,
     progress: Callable[[int, int], None] | None = None,
     custom_wav: str | os.PathLike[str] | None = None,
+    padding_ms: int = DEFAULT_PADDING_MS,
+    all_words: Sequence[dict] | None = None,
 ):
     """Return `audio_seg` with every span in `words` replaced by a beep or silence.
 
@@ -878,7 +945,7 @@ def apply_bleeps(
         raise RuntimeError("pydub is required for audio processing")
 
     total_ms = len(audio_seg)
-    spans = merge_spans(words, total_ms, min_ms)
+    spans = merge_spans(words, total_ms, min_ms, padding_ms, all_words)
     if not spans:
         return audio_seg
 
@@ -1299,7 +1366,10 @@ def process_video(
         censored = apply_bleeps(
             AudioSegment.from_wav(audio_path), hits,
             method=options.method, freq_hz=options.beep_freq,
-            custom_wav=options.custom_beep_wav, progress=progress)
+            custom_wav=options.custom_beep_wav, progress=progress,
+            # The whole transcript, not just the hits: padding is clamped
+            # to the words either side so the sentence survives.
+            all_words=_flatten_words(transcript))
         censored.export(cleaned_path, format="wav")
 
         out_path = build_output_path(video_path, options.output_dir)

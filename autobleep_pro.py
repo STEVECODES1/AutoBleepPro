@@ -786,6 +786,10 @@ class AutoBleepPro:
                 audio_seg, words_to_bleep,
                 method=options.method, freq_hz=options.beep_freq,
                 custom_wav=options.custom_beep_wav,
+                # The whole transcript, not just the flagged words: the
+                # padding is clamped to the words either side so only the
+                # profanity goes, not the sentence around it.
+                all_words=engine._flatten_words(transcript),
                 progress=lambda done, total: self._update_status(
                     f"Censoring {done}/{total}…", 0.70 + 0.20 * done / max(total, 1)),
             )

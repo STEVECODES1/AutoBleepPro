@@ -107,24 +107,32 @@ def test_padding_is_clamped_at_the_track_edges():
 
 # ── Whole-segment muting ─────────────────────────────────────────────────────
 
-def test_slur_mutes_the_whole_sentence():
-    hits = ComplianceEngine().scan_segments(segs())
-    spans = ComplianceEngine().mute_spans(hits, 60_000)
+def test_slur_mutes_the_whole_sentence_when_asked_to():
+    """Off by default now - the point of a word-level censor is that the
+    sentence survives. Still available for a platform that acts on
+    context rather than on the audible word."""
+    engine = ComplianceEngine(mute_whole_segment=True)
+    spans = engine.mute_spans(engine.scan_segments(segs()), 60_000)
     # 10.0-14.0 widened by the padding, not just the 11.2-11.6 word.
     assert (9_750, 14_250) in spans
 
 
 def test_ordinary_profanity_does_not_mute_the_sentence():
+    engine = ComplianceEngine(mute_whole_segment=True)
+    spans = engine.mute_spans(engine.scan_segments(segs()), 60_000)
+    # Word+padding, not the whole 20.0-22.0 sentence. Starts at 20_080
+    # rather than 20_050 because "oh" ends at 20.2 and the pad is clamped
+    # to it - see test_padding_stops_at_the_previous_word.
+    assert (20_080, 20_950) in spans, "should be word+padding, not 20.0-22.0"
+
+
+def test_whole_segment_muting_is_off_by_default():
     hits = ComplianceEngine().scan_segments(segs())
     spans = ComplianceEngine().mute_spans(hits, 60_000)
-    assert (20_050, 20_950) in spans, "should be word+padding, not 20.0-22.0"
-
-
-def test_whole_segment_muting_can_be_switched_off():
-    hits = ComplianceEngine(mute_whole_segment=False).scan_segments(segs())
-    spans = ComplianceEngine(mute_whole_segment=False).mute_spans(hits, 60_000)
-    assert (10_950, 11_850) in spans
-    assert (9_750, 14_250) not in spans
+    # Ends at 11_820 rather than 11_850: "people" starts at 11.7, so the
+    # trailing pad stops there rather than clipping it.
+    assert (10_950, 11_820) in spans
+    assert (9_750, 14_250) not in spans, "the sentence around it must survive"
 
 
 def test_missing_segment_bounds_fall_back_to_the_word():
@@ -165,7 +173,7 @@ def tone():
 
 
 def test_slur_sentence_is_actually_silent(tone):
-    engine = ComplianceEngine()
+    engine = ComplianceEngine(mute_whole_segment=True)
     out = engine.censor_audio(tone, engine.scan_segments(segs()), method="silence")
     assert out[10_500:13_500].max == 0, "the sentence around the slur must be muted"
     assert out[16_000:19_000].max > 0, "unrelated audio must survive"
@@ -207,3 +215,85 @@ def test_many_violations_stay_fast_and_correct(tone):
     out = ComplianceEngine().censor_audio(tone, hits, method="silence")
     assert time.perf_counter() - started < 5.0
     assert len(out) == len(tone)
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Take the word, leave the sentence
+#
+# The pull is in two directions and both are real: pad too little and the
+# leading syllable survives, because Whisper's timings are 100-300ms out;
+# pad too much and the words either side get clipped, which is what makes
+# a censored video sound chopped up. A fixed pad has to pick one.
+#
+# So the pad expands into the SILENCE around the word and stops at the
+# neighbouring word. Muting a gap costs nothing.
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _one(word="shit", start=5.0, end=5.4, **kw):
+    return Violation(word=word, start=start, end=end, category="profanity", **kw)
+
+
+def test_padding_stops_at_the_previous_word():
+    """Without this the pad ran 250ms backwards into whatever was said
+    before, clipping its ending."""
+    v = _one(prev_end=4.9)
+    (start_ms, _), = ComplianceEngine(padding_ms=250).mute_spans([v], 60_000)
+    assert start_ms == 4_780, "the pad ate into the previous word"
+
+
+def test_padding_stops_at_the_next_word():
+    v = _one(next_start=5.5)
+    (_, end_ms), = ComplianceEngine(padding_ms=250).mute_spans([v], 60_000)
+    assert end_ms == 5_620
+
+
+def test_full_padding_is_used_when_there_is_silence_around_the_word():
+    """Muting a gap between words costs nothing, so nothing is given up
+    where there is room."""
+    v = _one(prev_end=3.0, next_start=8.0)
+    assert ComplianceEngine(padding_ms=250).mute_spans([v], 60_000) == [(4_750, 5_650)]
+
+
+def test_the_clamp_never_shrinks_the_mute_below_the_word_itself():
+    """Overlapping timings - which Whisper does produce - must not turn
+    into a mute that misses the word it exists to remove."""
+    v = _one(prev_end=5.2, next_start=5.1)     # neighbours overlap the word
+    (start_ms, end_ms), = ComplianceEngine(padding_ms=250).mute_spans([v], 60_000)
+    assert start_ms <= 5_000 and end_ms >= 5_400
+
+
+def test_a_word_with_no_neighbours_is_padded_normally():
+    """First or last word in a segment - there is nothing to clamp to."""
+    assert ComplianceEngine(padding_ms=250).mute_spans(
+        [_one()], 60_000) == [(4_750, 5_650)]
+
+
+def test_the_neighbour_clamp_still_covers_whisper_s_timing_error():
+    """Stopping dead at the neighbour's reported boundary would leave the
+    flagged syllable audible in exactly the tight-speech case that needs
+    the padding most, because the boundary itself is only approximate."""
+    from autoreel.compliance import NEIGHBOUR_BLEED_MS
+
+    assert NEIGHBOUR_BLEED_MS >= 100
+    v = _one(prev_end=5.0, next_start=5.4)     # no gap at all
+    (start_ms, end_ms), = ComplianceEngine(padding_ms=250).mute_spans([v], 60_000)
+    assert start_ms == 5_000 - NEIGHBOUR_BLEED_MS
+    assert end_ms == 5_400 + NEIGHBOUR_BLEED_MS
+
+
+def test_the_surrounding_speech_survives_a_word_level_mute(tone):
+    """The end-to-end version of the whole point: the sentence is still
+    there afterwards."""
+    engine = ComplianceEngine()
+    out = engine.censor_audio(tone, engine.scan_segments(segs()), method="silence")
+    assert out[11_300:11_500].max == 0, "the flagged word is still audible"
+    assert out[10_000:10_300].max > 0, "the speech before it was destroyed"
+    assert out[12_000:12_100].max > 0, "the speech after it was destroyed"
+
+
+def test_neighbour_clamping_does_not_apply_to_whole_segment_mutes():
+    """Expanding to the segment is already a decision to take the
+    surrounding speech; clamping it to a neighbour would half-undo that."""
+    engine = ComplianceEngine(mute_whole_segment=True)
+    spans = engine.mute_spans(engine.scan_segments(segs()), 60_000)
+    assert (9_750, 14_250) in spans

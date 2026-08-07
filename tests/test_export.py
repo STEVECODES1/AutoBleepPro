@@ -186,10 +186,16 @@ def test_silence_method_is_actually_silent(tone):
 
 
 def test_silence_leaves_surrounding_audio_byte_identical(tone):
+    """Outside the censored span nothing is re-encoded or shifted - the
+    bytes are the original ones. The span now starts DEFAULT_PADDING_MS
+    early, because muting the exact reported word leaves its leading
+    syllable audible."""
     out = engine.apply_bleeps(tone, [{"start": 2.0, "end": 3.0}],
                               method=METHOD_SILENCE)
-    cut = 2000 * tone.frame_rate // 1000 * tone.frame_width
+    untouched_ms = 2000 - engine.DEFAULT_PADDING_MS
+    cut = untouched_ms * tone.frame_rate // 1000 * tone.frame_width
     assert out.raw_data[:cut] == tone.raw_data[:cut]
+    assert out[untouched_ms:3000].max == 0, "the padded span must be silent"
 
 
 def test_short_span_does_not_stretch_the_track(tone):
@@ -301,3 +307,67 @@ def test_list_videos_skips_generated_output(tmp_path):
         (tmp_path / name).write_bytes(b"")
     found = [os.path.basename(p) for p in engine.list_videos(tmp_path)]
     assert found == ["a.mp4", "b.mkv"]
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Take the word, leave the sentence
+#
+# This engine had no padding at all: it muted the exact span Whisper
+# reported, and those timings are 100-300ms out, so the leading syllable
+# routinely survived. Padding fixes that and creates the opposite risk -
+# clipping the words either side - so the pad expands into silence and
+# stops when it reaches speech.
+# ═════════════════════════════════════════════════════════════════════════════
+
+def test_the_leading_syllable_is_covered(tone):
+    """The reason padding exists. Without it the moment just before the
+    reported start stayed audible, and that is where the word actually
+    begins."""
+    out = engine.apply_bleeps(tone, [{"start": 2.0, "end": 3.0}],
+                              method=METHOD_SILENCE)
+    assert out[1_900:2_000].max == 0
+
+
+def test_padding_stops_at_the_neighbouring_words(tone):
+    """The other half: with speech packed either side, the pad shrinks
+    instead of clipping it."""
+    all_words = [{"word": "oh", "start": 1.8, "end": 1.95},
+                 {"word": "shit", "start": 2.0, "end": 3.0},
+                 {"word": "man", "start": 3.05, "end": 3.4}]
+    out = engine.apply_bleeps(tone, [all_words[1]], method=METHOD_SILENCE,
+                              all_words=all_words)
+    assert out[1_800:1_820].max > 0, '"oh" was clipped'
+    assert out[3_300:3_400].max > 0, '"man" was clipped'
+    assert out[2_100:2_900].max == 0, "the flagged word survived"
+
+
+def test_full_padding_is_used_where_there_is_silence(tone):
+    """Muting a gap between words costs nothing, so nothing is given up
+    where there is room for it."""
+    all_words = [{"word": "oh", "start": 0.5, "end": 0.9},
+                 {"word": "shit", "start": 2.0, "end": 3.0}]
+    out = engine.apply_bleeps(tone, [all_words[1]], method=METHOD_SILENCE,
+                              all_words=all_words)
+    assert out[1_760:1_990].max == 0, "the pad was not used despite the gap"
+
+
+def test_the_transcript_is_optional(tone):
+    """apply_bleeps is called from two places and one of them may not
+    have the full word list; padding still applies, just unclamped."""
+    out = engine.apply_bleeps(tone, [{"start": 2.0, "end": 3.0}],
+                              method=METHOD_SILENCE, all_words=None)
+    assert out[1_800:2_000].max == 0
+
+
+def test_padding_can_be_turned_off(tone):
+    out = engine.apply_bleeps(tone, [{"start": 2.0, "end": 3.0}],
+                              method=METHOD_SILENCE, padding_ms=0)
+    assert out[1_900:1_990].max > 0
+
+
+def test_padding_never_changes_the_track_length(tone):
+    """Any drift desyncs the audio from the video."""
+    out = engine.apply_bleeps(tone, [{"start": 0.05, "end": 0.1},
+                                     {"start": 59.9, "end": 59.99}],
+                              method=METHOD_SILENCE)
+    assert len(out) == len(tone)
