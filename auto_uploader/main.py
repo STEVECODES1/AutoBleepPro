@@ -24,7 +24,7 @@ from datetime import datetime
 # Bump when shipping user-visible changes, so --test-config can prove
 # which build is actually running (stale extracts have silently caused
 # several confusing "the fix did nothing" runs).
-BUILD = "2026-08-06.6 GPU: large-v3 + --gpu-check"
+BUILD = "2026-08-06.7 report the real precision"
 
 from utils.censor import censor_video
 from utils.ffmpeg_tools import StageTimer
@@ -642,7 +642,7 @@ def main(argv=None) -> int:
             return 1
         print(f"[OK] Loaded on {transcriber._resolved_device.upper()} "
               f"in {_t.time() - started:.0f}s using "
-              f"{transcriber.compute_type or 'the default'} precision.")
+              f"{transcriber._resolved_compute or 'default'} precision.")
         if transcriber._resolved_device != "cuda" and wanted == "cuda":
             print("     It fell back to CPU - censoring will work but be slow.")
             print("     Fix with: pip install nvidia-cublas-cu12 nvidia-cudnn-cu12")

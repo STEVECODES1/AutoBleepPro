@@ -31,6 +31,13 @@ from __future__ import annotations
 
 import os
 import warnings
+
+# Set before huggingface_hub is imported by faster-whisper. It warns on
+# every model load that Windows cannot symlink its cache without
+# Developer Mode; the cache works either way, and the only "fix" is to
+# turn on a Windows developer setting, which is not something a
+# censoring tool should be asking for.
+os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
@@ -123,6 +130,8 @@ class Transcriber:
     backend: Optional[str] = None      # None = faster-whisper if installed
     _model: Any = field(default=None, init=False, repr=False)
     _resolved_device: str = field(default="", init=False, repr=False)
+    # What was ACTUALLY used, which is not always what was asked for.
+    _resolved_compute: str = field(default="", init=False, repr=False)
 
     def __post_init__(self) -> None:
         if self.backend is None:
@@ -143,12 +152,14 @@ class Transcriber:
                 self._model = WhisperModel(
                     self.model_name, device=self._resolved_device,
                     compute_type=compute)
+                self._resolved_compute = compute
             except ValueError:
                 # Some builds refuse a compute type the hardware can't do
                 # (no AVX2 -> no int8). Fall back rather than fail.
                 self._model = WhisperModel(
                     self.model_name, device=self._resolved_device,
                     compute_type="default")
+                self._resolved_compute = "default"
             except Exception as exc:
                 # A GPU that cannot actually load the model - missing
                 # cuDNN, a driver too old, or not enough VRAM for
@@ -163,9 +174,10 @@ class Transcriber:
                       "Install the CUDA runtime with: pip install "
                       "nvidia-cublas-cu12 nvidia-cudnn-cu12")
                 self._resolved_device = "cpu"
+                self._resolved_compute = default_compute_type("cpu")
                 self._model = WhisperModel(
                     self.model_name, device="cpu",
-                    compute_type=default_compute_type("cpu"))
+                    compute_type=self._resolved_compute)
         else:
             import whisper
 
