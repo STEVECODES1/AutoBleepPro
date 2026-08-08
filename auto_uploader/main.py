@@ -24,7 +24,7 @@ from datetime import datetime
 # Bump when shipping user-visible changes, so --test-config can prove
 # which build is actually running (stale extracts have silently caused
 # several confusing "the fix did nothing" runs).
-BUILD = "2026-08-08.4 setup-meta + reddit/X automated"
+BUILD = "2026-08-08.5 instagram reels for clips"
 
 from utils.censor import censor_video
 from utils.ffmpeg_tools import StageTimer, media_duration
@@ -505,7 +505,11 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
             announce_upload(cfg.features.get("social_promoter", {}), yt_title,
                             newly_uploaded, posting=cfg.posting,
                             config={"features": cfg.features},
-                            all_uploads=results)
+                            all_uploads=results,
+                            # Only a CLIP goes to Instagram as a Reel. A
+                            # five-hour stream is neither wanted there nor
+                            # accepted - Reels cap at 15 minutes.
+                            clip_path=video_path if is_clip else "")
         except Exception as exc:
             print(f"[Social] WARNING: announce failed: {exc}")
         try:
@@ -596,6 +600,13 @@ def main(argv=None) -> int:
     parser.add_argument("--verify", action="store_true",
                         help="With --posting-status, also ask each API who your token "
                              "belongs to. Read-only - creates and publishes nothing.")
+    parser.add_argument("--post-reel", metavar="FILE",
+                        help="Publish one video to Instagram as a Reel, now. "
+                             "Uploads the file directly - no hosting needed. "
+                             "Use it to prove Instagram works before trusting "
+                             "it to the pipeline.")
+    parser.add_argument("--caption", default="",
+                        help="Caption for --post-reel.")
     parser.add_argument("--setup-meta", action="store_true",
                         help="Fill in FB_PAGE_TOKEN/FB_PAGE_ID/IG_* in .env from a "
                              "Meta token you already have. Reads from Graph, writes "
@@ -640,6 +651,46 @@ def main(argv=None) -> int:
         print(f"[Social] Announcements: {label} for this run.")
         for note in notes:
             print(f"[Social]   {note}")
+
+    if args.post_reel:
+        from publishers.instagram import InstagramPublisher
+        from utils.ffmpeg_tools import media_duration
+
+        if not os.path.isfile(args.post_reel):
+            print(f"[ERROR] File not found: {args.post_reel}")
+            for path in _suggest_paths(cfg, os.path.basename(args.post_reel)):
+                print(f"        Did you mean: {path}")
+            return 1
+
+        seconds = media_duration(args.post_reel) or 0
+        if seconds > 15 * 60:
+            print(f"[Instagram] {os.path.basename(args.post_reel)} is "
+                  f"{seconds / 60:.0f} min. Reels cap at 15 - upload a clip, "
+                  "not a full stream.")
+            return 1
+
+        # The guard still decides, even for a hand-run post: the cap and
+        # spacing exist to protect the account, and a manual trigger is
+        # exactly when they get walked past.
+        from publish_guard import PublishGuard
+        guard = PublishGuard(cfg.posting, (cfg.posting or {}).get("state_path"))
+        allowed, reason = guard.can_post("instagram")
+        if not allowed:
+            print(f"[Instagram] blocked: {reason}")
+            return 1
+
+        publisher = InstagramPublisher({"features": cfg.features})
+        caption = args.caption or os.path.splitext(
+            os.path.basename(args.post_reel))[0]
+        print(f"[Instagram] Uploading {os.path.basename(args.post_reel)} "
+              f"({seconds:.0f}s) as a Reel...")
+        if publisher.post_reel_from_file(args.post_reel, caption):
+            guard.record_result("instagram", True)
+            print("[Instagram] Published. Check the account.")
+            return 0
+        guard.record_result("instagram", False)
+        print("[Instagram] Failed - the reason is in the log above.")
+        return 1
 
     if args.setup_meta:
         from utils.meta_setup import MetaError, WRITES, setup

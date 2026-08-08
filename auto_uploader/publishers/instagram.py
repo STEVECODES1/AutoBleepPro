@@ -35,6 +35,13 @@ except ImportError:
     log.warning("instagram: 'requests' not installed — pip install requests")
 
 GRAPH_API = "https://graph.facebook.com/v19.0"
+# Uploading the bytes goes to a different host from the rest of Graph.
+RUPLOAD_API = "https://rupload.facebook.com/ig-api-upload/v19.0"
+# Reels cap at 1 GB and 15 minutes. Clips are seconds long, so this only
+# catches a full stream being handed here by mistake - which would
+# otherwise upload for an hour and then be rejected.
+MAX_REEL_BYTES = 1_000_000_000
+_UPLOAD_TIMEOUT = 600
 _PUBLISH_POLL_INTERVAL = 5   # seconds between status checks
 _PUBLISH_TIMEOUT      = 120  # give up after 2 minutes
 
@@ -51,6 +58,12 @@ class InstagramPublisher:
     # It becomes reachable once clips are rendered AND hosted somewhere
     # public - at which point post_reel() below is already written.
     supports_link_posts = False
+
+    # ...but a VIDEO can be published, which is what a clip is. See
+    # post_reel_from_file(): the bytes are uploaded directly, so no
+    # hosting is needed and this is reachable for clips even though a
+    # link announcement never will be.
+    supports_reels = True
 
     def __init__(self, cfg: Dict[str, Any]) -> None:
         self._cfg = cfg
@@ -76,6 +89,96 @@ class InstagramPublisher:
                 "set in .env before posting can be enabled."
             )
             return False
+        return True
+
+    def post_reel_from_file(self, video_path: str, caption: str = "",
+                            share_to_feed: bool = True) -> bool:
+        """Publish a local file as a Reel, with no hosting anywhere.
+
+        This is what makes Instagram reachable at all. The documented
+        Content Publishing flow takes a `video_url` that Meta fetches
+        server-side, which means every clip needs a public URL first -
+        and a Rumble page is not a fetchable video file, so there was
+        nothing to give it.
+
+        upload_type=resumable removes that requirement: the container is
+        created empty and the bytes are POSTed straight to
+        rupload.facebook.com. Same container, same publish step
+        afterwards.
+
+        Returns True on success. On any failure the caller still has the
+        hosted-URL path in post_reel().
+        """
+        if not self._ready():
+            return False
+        if not os.path.isfile(video_path):
+            log.error("Instagram: no such file: %s", video_path)
+            return False
+
+        size = os.path.getsize(video_path)
+        if size > MAX_REEL_BYTES:
+            log.error("Instagram: %s is %.0f MB - Reels cap at %.0f MB.",
+                      os.path.basename(video_path), size / 1e6,
+                      MAX_REEL_BYTES / 1e6)
+            return False
+
+        container_id = self._create_resumable_container(caption, share_to_feed)
+        if not container_id:
+            return False
+        if not self._upload_bytes(container_id, video_path, size):
+            return False
+
+        log.info("Instagram: waiting for container %s to be ready ...", container_id)
+        if not self._wait_for_container(container_id):
+            return False
+        return self._publish_container(container_id)
+
+    def _create_resumable_container(self, caption: str,
+                                    share_to_feed: bool) -> Optional[str]:
+        params = {
+            "media_type": "REELS",
+            "upload_type": "resumable",
+            "caption": caption,
+            "share_to_feed": str(share_to_feed).lower(),
+            "access_token": self._token,
+        }
+        try:
+            r = requests.post(f"{GRAPH_API}/{self._account_id}/media",
+                              data=params, timeout=30)
+            r.raise_for_status()
+            container_id = r.json().get("id")
+        except Exception as exc:
+            log.error("Instagram: resumable container creation failed: %s", exc)
+            return None
+        if not container_id:
+            log.error("Instagram: no container id came back")
+            return None
+        return container_id
+
+    def _upload_bytes(self, container_id: str, video_path: str,
+                      size: int) -> bool:
+        """POST the file to the upload host. offset/file_size are required.
+
+        Read whole rather than streamed: a Reel is capped at a size that
+        fits in memory comfortably, and a streamed body without a known
+        length is what the offset/file_size headers exist to avoid.
+        """
+        url = f"{RUPLOAD_API}/{container_id}"
+        headers = {
+            "Authorization": f"OAuth {self._token}",
+            "offset": "0",
+            "file_size": str(size),
+        }
+        try:
+            with open(video_path, "rb") as f:
+                r = requests.post(url, data=f.read(), headers=headers,
+                                  timeout=_UPLOAD_TIMEOUT)
+            r.raise_for_status()
+        except Exception as exc:
+            log.error("Instagram: upload failed: %s", exc)
+            return False
+        log.info("Instagram: uploaded %.1f MB for container %s",
+                 size / 1e6, container_id)
         return True
 
     def post_reel(

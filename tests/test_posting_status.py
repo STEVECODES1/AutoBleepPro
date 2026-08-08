@@ -241,7 +241,7 @@ def test_a_platform_that_cannot_link_post_says_so_next_to_ALLOW(capsys):
     out = capsys.readouterr().out
     assert "ALLOW" in out and "instagram" in out
     assert "announcements still skip it" in out
-    assert "public hosting" in out
+    assert "Reels" in out
     assert "instagram" in NO_LINK_POST
 
 

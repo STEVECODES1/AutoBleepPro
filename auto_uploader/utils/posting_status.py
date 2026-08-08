@@ -38,8 +38,9 @@ SKIPPED = "skipped"
 # and why. Credentials being correct does not make these postable.
 NO_LINK_POST = {
     "instagram":
-        "Instagram has no link or text post. Every publish needs a rendered "
-        "clip on public hosting for Meta to fetch.",
+        "Instagram has no link or text post, so a stream announcement never "
+        "reaches it. CLIPS do: they are published as Reels, uploaded "
+        "directly. Test one with --post-reel FILE.",
 }
 
 # platform -> the .env variables it cannot work without.

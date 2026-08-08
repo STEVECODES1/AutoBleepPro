@@ -450,9 +450,58 @@ def announce_to_platforms(posting: dict, title: str, new_uploads: dict,
     return posted
 
 
+def post_clip_to_instagram(posting: dict, video_path: str, caption: str,
+                           config: dict = None, dry_run: bool = False) -> bool:
+    """Publish a clip to Instagram as a Reel. True if it went out.
+
+    Instagram cannot carry a link announcement - it has no link post at
+    all - so it is skipped everywhere else in this module. A CLIP is the
+    one thing it can take, because a Reel is a video and the bytes can be
+    uploaded directly.
+
+    Behind the same guard as everything else: kill switch, cap, spacing,
+    circuit breaker.
+    """
+    if not posting or not video_path or not os.path.isfile(video_path):
+        return False
+
+    from publish_guard import PublishGuard
+
+    guard = PublishGuard(posting, posting.get("state_path"))
+    allowed, reason = guard.can_post("instagram")
+    if not allowed:
+        print(f"[Social] instagram: {reason}")
+        return False
+
+    publisher = _publisher_for("instagram", config or {})
+    if publisher is None or not getattr(publisher, "supports_reels", False):
+        return False
+    if not publisher.ready():
+        print("[Social] instagram: skipped - not configured yet. Run: "
+              "python main.py --setup-meta")
+        return False
+
+    if dry_run:
+        print(f"[Social] instagram: WOULD post {os.path.basename(video_path)} "
+              "as a Reel")
+        return True
+
+    print(f"[Social] instagram: uploading "
+          f"{os.path.basename(video_path)} as a Reel...")
+    try:
+        ok = publisher.post_reel_from_file(video_path, caption)
+    except Exception as exc:
+        ok = False
+        print(f"[Social] instagram: Reel upload raised {exc}")
+    guard.record_result("instagram", ok)
+    print(f"[Social] instagram: {'posted a Reel' if ok else 'Reel failed'}.")
+    return ok
+
+
 def announce_upload(features: dict, title: str, new_uploads: dict,
                     posting: dict = None, config: dict = None,
-                    dry_run: bool = False, all_uploads: dict = None) -> list:
+                    dry_run: bool = False, all_uploads: dict = None,
+                    clip_path: str = "") -> list:
     """Announce `new_uploads` ({platform: url}, only things uploaded THIS
     run - never pre-existing skips). Returns the channels that posted.
 
@@ -468,6 +517,15 @@ def announce_upload(features: dict, title: str, new_uploads: dict,
     """
     if not features.get("enabled") or not new_uploads:
         return []
+
+    posted_extra = []
+    if clip_path:
+        # The one route Instagram has. Done first so a failure here still
+        # leaves every other platform to announce normally.
+        if post_clip_to_instagram(posting, clip_path,
+                                  build_message(title, all_uploads or new_uploads),
+                                  config, dry_run):
+            posted_extra.append("instagram")
 
     # WHAT triggers an announcement and WHAT it says are different
     # questions. Only a real upload this run should trigger one - that is
@@ -533,4 +591,4 @@ def announce_upload(features: dict, title: str, new_uploads: dict,
         posted.extend(announce_to_platforms(posting, title, announced,
                                             config, dry_run))
 
-    return posted
+    return posted + [p for p in posted_extra if p not in posted]

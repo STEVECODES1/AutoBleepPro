@@ -313,3 +313,131 @@ def test_an_empty_message_still_gets_a_title(monkeypatch):
 
     publisher.post_link("", "https://y/1")
     assert sent["title"] == "New upload"
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Instagram CAN take a clip, even though it cannot take a link
+#
+# The documented flow wants a video_url that Meta fetches server-side,
+# which means every clip needs public hosting first - and a Rumble page
+# is not a fetchable video file, so there was nothing to hand it. The
+# resumable upload removes that requirement entirely.
+# ═════════════════════════════════════════════════════════════════════════════
+
+def test_instagram_advertises_reels_even_though_it_refuses_links():
+    from auto_uploader.publishers.instagram import InstagramPublisher
+
+    assert InstagramPublisher.supports_link_posts is False
+    assert InstagramPublisher.supports_reels is True
+
+
+def test_the_container_is_created_for_a_direct_upload(monkeypatch, tmp_path):
+    from auto_uploader.publishers import instagram as ig
+
+    clip = tmp_path / "clip.mp4"
+    clip.write_bytes(b"video bytes")
+    seen = {}
+
+    class Response:
+        status_code = 200
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"id": "container-1", "status_code": "FINISHED"}
+
+    def fake_post(url, **kw):
+        seen.setdefault("posts", []).append((url, kw))
+        return Response()
+
+    monkeypatch.setattr(ig.requests, "post", fake_post)
+    monkeypatch.setattr(ig.requests, "get", lambda *a, **k: Response())
+    monkeypatch.setenv("IG_PAGE_TOKEN", "tok")
+    monkeypatch.setenv("IG_BUSINESS_ACCOUNT_ID", "123")
+
+    assert ig.InstagramPublisher({}).post_reel_from_file(str(clip), "hi") is True
+
+    create = seen["posts"][0][1]["data"]
+    assert create["upload_type"] == "resumable", \
+        "without this Meta expects a hosted URL, which is the whole problem"
+    assert create["media_type"] == "REELS"
+    assert "video_url" not in create
+
+
+def test_the_bytes_go_to_the_upload_host_with_the_size(monkeypatch, tmp_path):
+    """offset and file_size are required headers; without them the upload
+    is rejected."""
+    from auto_uploader.publishers import instagram as ig
+
+    clip = tmp_path / "clip.mp4"
+    clip.write_bytes(b"x" * 4096)
+    seen = []
+
+    class Response:
+        status_code = 200
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"id": "container-1", "status_code": "FINISHED"}
+
+    monkeypatch.setattr(ig.requests, "post",
+                        lambda url, **kw: seen.append((url, kw)) or Response())
+    monkeypatch.setattr(ig.requests, "get", lambda *a, **k: Response())
+    monkeypatch.setenv("IG_PAGE_TOKEN", "tok")
+    monkeypatch.setenv("IG_BUSINESS_ACCOUNT_ID", "123")
+
+    ig.InstagramPublisher({}).post_reel_from_file(str(clip), "hi")
+
+    upload = [(u, kw) for u, kw in seen if "rupload" in u]
+    assert upload, "the file was never uploaded"
+    url, kw = upload[0]
+    assert kw["headers"]["file_size"] == "4096"
+    assert kw["headers"]["offset"] == "0"
+    assert kw["headers"]["Authorization"].startswith("OAuth ")
+    assert kw["data"] == b"x" * 4096
+
+
+def test_a_missing_file_is_refused_before_any_network_call(monkeypatch):
+    from auto_uploader.publishers import instagram as ig
+
+    def explode(*a, **k):
+        raise AssertionError("called the API for a file that does not exist")
+
+    monkeypatch.setattr(ig.requests, "post", explode)
+    monkeypatch.setenv("IG_PAGE_TOKEN", "tok")
+    monkeypatch.setenv("IG_BUSINESS_ACCOUNT_ID", "123")
+    assert ig.InstagramPublisher({}).post_reel_from_file("nope.mp4") is False
+
+
+def test_a_full_stream_is_refused_before_uploading_for_an_hour(monkeypatch, tmp_path):
+    from auto_uploader.publishers import instagram as ig
+
+    big = tmp_path / "stream.mp4"
+    big.write_bytes(b"x" * 16)
+    monkeypatch.setattr(ig, "MAX_REEL_BYTES", 8)
+    monkeypatch.setattr(ig.requests, "post",
+                        lambda *a, **k: (_ for _ in ()).throw(
+                            AssertionError("started uploading anyway")))
+    monkeypatch.setenv("IG_PAGE_TOKEN", "tok")
+    monkeypatch.setenv("IG_BUSINESS_ACCOUNT_ID", "123")
+    assert ig.InstagramPublisher({}).post_reel_from_file(str(big)) is False
+
+
+def test_a_reel_still_goes_through_the_guard(tmp_path):
+    """A clip route must not become a way around the cap and spacing."""
+    import sys
+    sys.path.insert(0, os.path.join(_REPO, "auto_uploader"))
+    from utils.social_promoter import post_clip_to_instagram
+
+    clip = tmp_path / "clip.mp4"
+    clip.write_bytes(b"video")
+    posting = {
+        "enabled": True,
+        "kill_switch_file": __file__,          # exists -> everything halts
+        "state_path": str(tmp_path / "state.json"),
+        "platforms": {"instagram": {"enabled": True, "daily_cap": 5}},
+    }
+    assert post_clip_to_instagram(posting, str(clip), "caption") is False
