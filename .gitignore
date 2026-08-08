@@ -5,6 +5,14 @@ autoreel_output/
 
 # auto_uploader secrets/state - never commit these
 auto_uploader/.env
+# Every .env variant, including the dated backups --setup-meta takes
+# before it writes. Those hold the full set of credentials, and one
+# `git add -A` would publish them to a public repo - the ignore has to
+# cover the backups, not just the file itself.
+.env
+.env.*
+*/.env
+*/.env.*
 auto_uploader/client_secrets.json
 auto_uploader/youtube_token.json
 auto_uploader/uploaded_hashes.json
