@@ -259,3 +259,16 @@ def test_streams_are_cut_into_clips_automatically():
         clips = json.load(f)["clips"]
     assert clips["auto_from_streams"] is True
     assert clips["count"] >= 1
+
+
+def test_instagram_clips_keep_their_original_audio():
+    """Instagram does not demonetise or age-restrict over spoken
+    language, so censoring a clip for it removes the moment and buys
+    nothing. Only YouTube gets the censored copy."""
+    import json
+
+    with open(os.path.join(_UPLOADER, "config.json")) as f:
+        config = json.load(f)
+    assert config["instagram"]["censor_uploads"] is False
+    assert config["rumble"]["censor_uploads"] is False
+    assert config["youtube"]["censor_uploads"] is True

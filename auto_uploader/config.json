@@ -114,6 +114,8 @@
   "_clip_routing_comment": "route_clips_separately: a video at or under max_seconds is a CLIP, not a stream, so it goes to Rumble (which takes shorts) and the social announcement instead of the main YouTube channel - a channel of full VODs should not fill up with 30-second Twitch highlights. Twitch clips top out around 90s; 180 leaves margin for a hand-exported highlight. Set route_clips_separately false to upload everything the same way. --only overrides this.",
   "_instagram_comment": "How a clip is posted as a Reel. caption_template takes {title} (the clip's own name, cleaned up). vertical: re-frame 16:9 to full-bleed 9:16 before uploading - Instagram otherwise letterboxes a landscape clip into black bars with the picture a third of the height, which is what a raw Twitch clip looks like posted straight through. share_to_feed also puts it on the grid, not only the Reels tab.",
   "instagram": {
+    "_censor_comment": "false = post the ORIGINAL audio. Instagram does not demonetise or age-restrict over spoken language the way YouTube does, so bleeping a clip for it removes the moment and buys nothing. Rumble is already uncensored for the same reason. Only YouTube gets the censored copy.",
+    "censor_uploads": false,
     "vertical": true,
     "share_to_feed": true,
     "caption_template": "{title} \ud83e\udd23\ud83e\udd23\ud83e\udd23\ud83d\udc80\ud83d\udc80\ud83d\udc80#stackswopo\n\nLink Youtube monkey - https://www.youtube.com/channel/UCSvsXHRDW4HQjONLhXdEtLw\n\nWatch full stream - https://rumble.com/user/BinScripts"

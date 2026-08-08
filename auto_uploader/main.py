@@ -24,7 +24,7 @@ from datetime import datetime
 # Bump when shipping user-visible changes, so --test-config can prove
 # which build is actually running (stale extracts have silently caused
 # several confusing "the fix did nothing" runs).
-BUILD = "2026-08-09.1 auto clips from streams, every 25 min"
+BUILD = "2026-08-09.2 instagram keeps the original audio"
 
 from utils.censor import censor_video
 from utils.ffmpeg_tools import StageTimer, media_duration
@@ -415,6 +415,23 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
         _vertical[source] = made
         return made
 
+    def instagram_clip_path() -> str:
+        """The file Instagram gets. Deliberately the ORIGINAL audio.
+
+        Instagram is not YouTube: it does not demonetise or age-restrict
+        over spoken language, so censoring a clip for it removes the
+        moment and buys nothing. Set instagram.censor_uploads true to
+        change that.
+
+        Written as its own function because the obvious shortcut - reuse
+        whichever re-frame already exists - would hand Instagram the
+        CENSORED copy on any run where another platform asked for one.
+        """
+        source = video_path
+        if (cfg.instagram or {}).get("censor_uploads", False):
+            source = upload_path_for(True)
+        return vertical_path(source)
+
     def upload_path_for(platform_wants_censoring: bool) -> str:
         if not (platform_wants_censoring and cfg.general.censor_before_upload):
             return vertical_path(video_path)
@@ -613,9 +630,7 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
                             # The re-framed copy if one was made, so
                             # Instagram does not pay for a second crop of
                             # the same clip.
-                            clip_path=(_vertical.get(video_path)
-                                       or next(iter(_vertical.values()), "")
-                                       or video_path) if is_clip else "")
+                            clip_path=instagram_clip_path() if is_clip else "")
         except Exception as exc:
             print(f"[Social] WARNING: announce failed: {exc}")
         # A finished STREAM is the source of the next day of clips. The
