@@ -371,3 +371,82 @@ def test_padding_never_changes_the_track_length(tone):
                                      {"start": 59.9, "end": 59.99}],
                               method=METHOD_SILENCE)
     assert len(out) == len(tone)
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Muxing the censored audio back on
+#
+# The censor pass only ever changes AUDIO. Re-encoding the video to swap
+# the track re-compresses frames that did not need touching and, on a
+# multi-hour 1080p60 stream, is the difference between a minute and most
+# of an afternoon.
+# ═════════════════════════════════════════════════════════════════════════════
+
+def test_the_video_stream_is_copied_not_re_encoded(monkeypatch, tmp_path):
+    out = tmp_path / "out.mp4"
+    seen = {}
+
+    def fake_run(args, **kw):
+        seen["args"] = args
+        out.write_bytes(b"muxed")
+        return type("R", (), {"returncode": 0})()
+
+    monkeypatch.setattr(engine.subprocess, "run", fake_run)
+    engine.render_video("in.ts", "clean.wav", str(out))
+
+    args = seen["args"]
+    assert args[args.index("-c:v") + 1] == "copy"
+    assert "libx264" not in args
+
+
+def test_moviepy_is_never_reached_when_the_copy_works(monkeypatch, tmp_path):
+    """The fallback re-encodes the whole video. Reaching it by accident
+    would look like the tool simply being slow."""
+    out = tmp_path / "out.mp4"
+
+    def fake_run(args, **kw):
+        out.write_bytes(b"muxed")
+        return type("R", (), {"returncode": 0})()
+
+    def explode(*a, **kw):
+        raise AssertionError("fell back to a full re-encode")
+
+    monkeypatch.setattr(engine.subprocess, "run", fake_run)
+    monkeypatch.setitem(__import__("sys").modules, "moviepy",
+                        type("M", (), {"VideoFileClip": explode,
+                                       "AudioFileClip": explode})())
+    engine.render_video("in.ts", "clean.wav", str(out))
+
+
+def test_a_failed_copy_does_not_leave_a_partial_file(monkeypatch, tmp_path):
+    """A zero-byte or half-written output looks like a success to
+    everything downstream."""
+    out = tmp_path / "out.mp4"
+
+    def fake_run(args, **kw):
+        out.write_bytes(b"")            # ffmpeg refused the container
+        return type("R", (), {"returncode": 1})()
+
+    monkeypatch.setattr(engine.subprocess, "run", fake_run)
+    assert engine._mux_stream_copy("in.ts", "clean.wav", str(out)) is False
+    assert not out.exists()
+
+
+def test_a_missing_ffmpeg_falls_back_rather_than_crashing(monkeypatch, tmp_path):
+    def boom(*a, **kw):
+        raise FileNotFoundError("ffmpeg")
+
+    monkeypatch.setattr(engine.subprocess, "run", boom)
+    assert engine._mux_stream_copy(
+        "in.ts", "clean.wav", str(tmp_path / "out.mp4")) is False
+
+
+def test_stream_copy_can_be_turned_off(monkeypatch, tmp_path):
+    """A container that cannot hold the source codec needs the encode."""
+    def explode(*a, **kw):
+        raise AssertionError("tried to stream copy anyway")
+
+    monkeypatch.setattr(engine, "_mux_stream_copy", explode)
+    with pytest.raises(Exception):
+        engine.render_video("in.ts", "clean.wav", str(tmp_path / "out.mp4"),
+                            allow_stream_copy=False)

@@ -27,6 +27,7 @@ import re
 import subprocess
 import tempfile
 import unicodedata
+import warnings
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
@@ -1247,20 +1248,71 @@ def extract_audio(video_path: str, wav_path: str) -> None:
                 pass
 
 
+def _mux_stream_copy(video_path: str, audio_path: str, out_path: str) -> bool:
+    """Swap the audio track without touching the pictures.
+
+    Censoring only ever changes AUDIO, so re-encoding the video is pure
+    loss: it costs hours on a long stream and re-compresses frames that
+    did not need touching. Copying the video stream is lossless and
+    limited by disk speed rather than the CPU.
+
+    Returns False when ffmpeg is missing or the container refuses the
+    source codec, so the caller can fall back to a real encode.
+    """
+    try:
+        completed = subprocess.run(
+            ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+             "-i", video_path, "-i", audio_path,
+             "-map", "0:v:0", "-map", "1:a:0",
+             "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
+             "-movflags", "+faststart", "-shortest", out_path],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    except (FileNotFoundError, OSError):
+        return False
+    if completed.returncode == 0 and os.path.exists(out_path) \
+            and os.path.getsize(out_path) > 0:
+        return True
+    # A partial file from the failed attempt would look like a success to
+    # everything downstream.
+    safe_remove(out_path)
+    return False
+
+
 def render_video(video_path: str, audio_path: str, out_path: str,
-                 encode_preset: str = "fast", threads: int | None = None) -> None:
-    """Mux `audio_path` onto `video_path`. Always closes its clips."""
+                 encode_preset: str = "fast", threads: int | None = None,
+                 allow_stream_copy: bool = True) -> None:
+    """Mux `audio_path` onto `video_path`. Always closes its clips.
+
+    Tries a stream copy first. The moviepy path below is the fallback for
+    when ffmpeg is missing or refuses the file - it re-encodes the whole
+    video to change the audio, and on a multi-hour 1080p60 stream that is
+    the difference between a minute and most of an afternoon.
+
+    It is also where the "N bytes wanted but 0 bytes read ... using the
+    last valid frame instead" warnings come from: moviepy trusts the
+    frame count ffmpeg reports, which is an estimate, and reads past the
+    end of the file when it is too high. Harmless in itself - it repeats
+    the final frame - but it buries real output under hundreds of lines.
+    """
+    if allow_stream_copy and _mux_stream_copy(video_path, audio_path, out_path):
+        return
+
     from moviepy import AudioFileClip, VideoFileClip
 
     video = audio = final = None
     try:
-        video = VideoFileClip(video_path)
-        audio = AudioFileClip(audio_path)
-        final = video.with_audio(audio)
-        final.write_videofile(
-            out_path, codec="libx264", audio_codec="aac",
-            preset=encode_preset, threads=threads or os.cpu_count() or 4,
-            logger=None)
+        with warnings.catch_warnings():
+            # See above: an over-estimated frame count, once per frame at
+            # the tail of the file. Nothing the user can act on.
+            warnings.filterwarnings(
+                "ignore", message=".*bytes wanted but 0 bytes read.*")
+            video = VideoFileClip(video_path)
+            audio = AudioFileClip(audio_path)
+            final = video.with_audio(audio)
+            final.write_videofile(
+                out_path, codec="libx264", audio_codec="aac",
+                preset=encode_preset, threads=threads or os.cpu_count() or 4,
+                logger=None)
     finally:
         for clip in (final, audio, video):
             if clip is not None:
