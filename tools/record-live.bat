@@ -1,41 +1,59 @@
 @echo off
 REM ============================================================================
-REM  record-live.bat - record the YouTube livestream into the watch folder.
+REM  record-live.bat - record YouTube AND Twitch into the watch folder.
 REM
-REM  YouTube only, on purpose. The original record-all.bat opened four windows
-REM  (Stackswopo/YouTube, OnlyThaGuys/YouTube, Twitch, Kick) all writing into
-REM  D:\videos. Only the YouTube channel is wanted now, and it delivers into
-REM  auto_uploader\watch_folder instead, so a finished stream flows straight
-REM  into the normal upload path with nothing to move by hand.
+REM  Double-click this file. It does not matter what folder you are in: the
+REM  cd below jumps to wherever this .bat lives, which is why running
+REM  record_stream.py by hand from C:\Users\<you> fails and this does not.
+REM
+REM  Three sources, one window:
+REM    - the YouTube livestream
+REM    - the Twitch livestream
+REM    - the Twitch clips page (last 7 days)
+REM
+REM  Live streams are RECORDED as they happen. The clips page is DOWNLOADED
+REM  instead - clips are already finished videos - and an archive file means
+REM  a clip is only ever fetched once, however many times this runs.
+REM
+REM  Everything lands in auto_uploader\watch_folder, so a finished stream
+REM  flows straight into the normal upload path with nothing to move by hand.
 REM
 REM  The recording itself is done by record_stream.py, not by this file. A
 REM  plain yt-dlp command stops early on a long stream - the defaults give up
 REM  after ten failed fragments, and over four hours of home wifi that is not
 REM  a question of if. The Python recorder retries fragments indefinitely,
-REM  writes MPEG-TS so an interrupted file still plays, and reconnects and
-REM  resumes if it drops mid-stream. See the comments at the top of that file.
+REM  writes MPEG-TS so an interrupted file still plays, reconnects and resumes
+REM  if it drops mid-stream, and falls back to the published VOD if the
+REM  recording still came up short. See the comments at the top of that file.
 REM
 REM  Needs:  pip install -U yt-dlp     (ffmpeg is already required by this project)
 REM ============================================================================
 
 cd /d "%~dp0"
 
-start "Stackswopo (YouTube)" python record_stream.py "https://www.youtube.com/@stackswopo_/live" --name "Stackswopo"
+start "Stackswopo (YouTube + Twitch)" python record_stream.py ^
+    "https://www.youtube.com/@stackswopo_/live" ^
+    "https://www.twitch.tv/stackswopo" ^
+    "https://www.twitch.tv/stackswopo/clips?range=7d" ^
+    --name "Stackswopo"
 
-REM Other channels, kept for reference - uncomment to bring one back. Each
-REM gets its own window and records independently; they all deliver to the
-REM same watch_folder and the uploader processes them one at a time.
-REM start "OnlyThaGuys (YouTube)" python record_stream.py "https://www.youtube.com/@OnlyThaGuys26/live" --name "OnlyThaGuys"
-REM start "Stackswopo (Twitch)"   python record_stream.py "https://www.twitch.tv/stackswopo" --name "Stackswopo Twitch"
-REM start "Stackswopo (Kick)"     python record_stream.py "https://kick.com/stackswopo1k" --name "Stackswopo Kick"
+REM Other channels, kept for reference - add a URL to the list above to bring
+REM one back. They all deliver to the same watch_folder and the uploader
+REM processes them one at a time.
+REM     "https://www.youtube.com/@OnlyThaGuys26/live"
+REM     "https://kick.com/stackswopo1k"
 
 echo.
 echo Recorder started in its own window.
-echo It waits for the channel to go live, records the full stream (retrying
+echo It waits for either channel to go live, records the full stream (retrying
 echo through network drops), then delivers the finished file to
-echo auto_uploader\watch_folder.
+echo auto_uploader\watch_folder. New Twitch clips are picked up as they appear.
 echo.
-echo Run the uploader alongside it so the file gets picked up automatically:
+echo While it is waiting it stays quiet on purpose - one line every 30 minutes
+echo rather than a countdown every minute. The full yt-dlp output is still
+echo written to the .log beside the recording.
+echo.
+echo Run the uploader alongside it so the files get picked up automatically:
 echo     cd /d "%~dp0..\auto_uploader"
 echo     python main.py --watch
 echo.
