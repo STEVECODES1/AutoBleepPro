@@ -24,7 +24,7 @@ from datetime import datetime
 # Bump when shipping user-visible changes, so --test-config can prove
 # which build is actually running (stale extracts have silently caused
 # several confusing "the fix did nothing" runs).
-BUILD = "2026-08-08.1 twitch + quiet wait + credential skip"
+BUILD = "2026-08-08.2 quiet wait fix + clips isolation"
 
 from utils.censor import censor_video
 from utils.ffmpeg_tools import StageTimer

@@ -215,6 +215,41 @@ def is_waiting_noise(line: str) -> bool:
     return any(marker in line for marker in _WAITING_NOISE)
 
 
+# What actually starting to record looks like. Recognising the START is
+# far more reliable than enumerating every extractor's chatter: listing
+# the noise meant Twitch's "[twitch:stream] Downloading stream GraphQL"
+# was read as real output, so the console flipped between "Not live yet"
+# and "Live - recording started" every few seconds while nothing had
+# changed.
+_RECORDING_MARKERS = (
+    "[download] Destination:",
+    "[download] Resuming",
+    "[hlsnative]",
+    "[Merger]",
+    "[FixupM3u8]",
+    "Downloading item",
+)
+
+
+def is_recording_line(line: str) -> bool:
+    """True once bytes are actually being fetched."""
+    if any(marker in line for marker in _RECORDING_MARKERS):
+        return True
+    # "[download]  12.3% of ~4.20GiB" - progress, but not the bare
+    # "[download] Downloading playlist" announcements.
+    return "[download]" in line and "%" in line
+
+
+def is_worth_saying(line: str) -> bool:
+    """Errors always reach the console, even mid-wait.
+
+    A wait that is quietly failing - an unavailable channel, a network
+    that is down - must not look identical to a wait that is working.
+    """
+    stripped = line.lstrip()
+    return stripped.startswith("ERROR") or "HTTP Error" in line
+
+
 def _remove(path: str) -> None:
     """Delete a file if it is there. Never raises - every caller is
     cleaning up after itself and would rather leave a stray file than
@@ -456,7 +491,8 @@ class Recorder:
         args.append(self.url)
         return args
 
-    def _run(self, args: list, log_path: str = "") -> int:
+    def _run(self, args: list, log_path: str = "",
+             quiet_wait: bool = True) -> int:
         """Run yt-dlp, echoing its output and keeping a copy on disk.
 
         The copy is the point. A recording that stops after three hours of
@@ -480,8 +516,11 @@ class Recorder:
                 log = open(log_path, "a", encoding="utf-8")
                 log.write(f"\n=== {time.strftime('%Y-%m-%d %H:%M:%S')} "
                           f"{' '.join(args)}\n")
-            waiting_since = 0.0
-            last_heartbeat = 0.0
+            # Suppression is opt-in per call: a clips download has no
+            # "waiting for live" phase, and running it through this state
+            # machine would report it as a stream starting.
+            waiting = quiet_wait
+            waiting_since = last_heartbeat = 0.0
             for line in process.stdout:
                 line = line.rstrip()
                 if not line:
@@ -497,25 +536,33 @@ class Recorder:
                     log.write(line + "\n")
                     log.flush()
 
-                if is_waiting_noise(line):
-                    now = time.time()
-                    if not waiting_since:
-                        waiting_since = now
-                        self.say(f"Not live yet - checking every "
-                                 f"{self.poll_seconds}s. This window can stay "
-                                 "open for days; each check is one page fetch, "
-                                 "so it costs practically no data.")
-                        last_heartbeat = now
-                    elif now - last_heartbeat >= WAIT_HEARTBEAT_S:
-                        waited = (now - waiting_since) / 3600
-                        self.say(f"Still waiting ({waited:.1f}h). "
-                                 f"Full detail: {log_path or 'the log'}")
-                        last_heartbeat = now
-                    continue
+                if waiting:
+                    # Only the download actually starting ends the wait.
+                    # Deciding by "not a known noise line" instead meant
+                    # every extractor's own chatter looked like the
+                    # stream beginning.
+                    if is_recording_line(line):
+                        waiting = False
+                        self.say("Live - recording started.")
+                    elif is_worth_saying(line):
+                        print(line, flush=True)
+                        continue
+                    else:
+                        now = time.time()
+                        if not waiting_since:
+                            waiting_since = last_heartbeat = now
+                            self.say(f"Not live yet - checking every "
+                                     f"{self.poll_seconds}s. This window can "
+                                     "stay open for days; each check is one "
+                                     "page fetch, so it costs practically no "
+                                     "data.")
+                        elif now - last_heartbeat >= WAIT_HEARTBEAT_S:
+                            self.say(f"Still waiting "
+                                     f"({(now - waiting_since) / 3600:.1f}h). "
+                                     f"Full detail: {log_path or 'the log'}")
+                            last_heartbeat = now
+                        continue
 
-                if waiting_since:
-                    waiting_since = 0.0
-                    self.say("Live - recording started.")
                 print(line, flush=True)
             return process.wait()
         except KeyboardInterrupt:
@@ -836,19 +883,28 @@ def fetch_clips(url: str, staging: str, watch_folder: str,
     """
     os.makedirs(staging, exist_ok=True)
     os.makedirs(watch_folder, exist_ok=True)
-    archive = os.path.join(staging, f"{safe_name(name)}.clips-archive.txt")
+    prefix = safe_name(name)
+    archive = os.path.join(staging, f"{prefix}.clips-archive.txt")
     before = set(os.listdir(staging))
 
-    template = os.path.join(staging, f"{safe_name(name)} %(title)s.%(ext)s")
+    template = os.path.join(staging, f"{prefix} %(title)s.%(ext)s")
     recorder = Recorder(url=url, staging=staging, watch_folder=watch_folder,
                         name=name)
     recorder.say(f"Checking {url} for new clips...")
     recorder._run(clips_args(url, template, archive, limit),
-                  os.path.join(staging, f"{safe_name(name)}.log"))
+                  os.path.join(staging, f"{prefix}.log"),
+                  quiet_wait=False)
 
     delivered = []
     for filename in sorted(set(os.listdir(staging)) - before):
         source = os.path.join(staging, filename)
+        # Only this fetcher's own files. Live recorders share the staging
+        # folder and write finished-looking .ts segments between the
+        # download ending and the join starting - handing one of those to
+        # the uploader would publish a fragment of a stream and delete it
+        # out from under the recorder.
+        if not filename.startswith(prefix):
+            continue
         if is_unfinished(filename) or not filename.lower().endswith(MEDIA_EXTENSIONS):
             continue
         if os.path.getsize(source) == 0:
@@ -924,7 +980,8 @@ def main(argv: Optional[list] = None) -> int:
         # soon as there is more than one source.
         if len(args.url) == 1:
             return args.name
-        return f"{args.name} {platform_of(url)}"
+        kind = "clips" if is_clips_url(url) else "live"
+        return f"{args.name} {platform_of(url)} {kind}"
 
     print("=" * 62)
     print(f" Recording : {args.name}")

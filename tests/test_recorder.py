@@ -744,7 +744,7 @@ def test_new_clips_land_in_the_watch_folder(tmp_path, monkeypatch):
     watch = tmp_path / "watch_folder"
     staging.mkdir()
 
-    def fake_run(self, args, log_path=""):
+    def fake_run(self, args, log_path="", quiet_wait=True):
         (staging / "Stackswopo Funny moment.mp4").write_bytes(b"clip")
         (staging / "Stackswopo Half.mp4.part").write_bytes(b"partial")
         return 0
@@ -790,3 +790,68 @@ def test_real_output_is_never_mistaken_for_noise():
         "[Merger] Merging formats into \"out.mp4\"",
     ):
         assert not is_waiting_noise(line), line
+
+
+def test_extractor_chatter_is_not_mistaken_for_the_stream_starting():
+    """Twitch's own progress lines were read as real output, so the
+    console flipped between "Not live yet" and "Live - recording started"
+    every few seconds while nothing had changed."""
+    from record_stream import is_recording_line
+
+    for line in (
+        "[twitch:stream] stackswopo: Downloading stream GraphQL",
+        "[twitch:videos:clips] stackswopo: Downloading Clips GraphQL page 1",
+        "[youtube:tab] Extracting URL: https://www.youtube.com/@x/live",
+        "[download] Downloading playlist: stackswopo - Clips Top 7D",
+    ):
+        assert not is_recording_line(line), line
+
+
+def test_bytes_actually_moving_ends_the_wait():
+    from record_stream import is_recording_line
+
+    for line in (
+        "[download] Destination: Stackswopo 2026-08-08.part01.ts",
+        "[download]  12.3% of ~4.20GiB at 3.10MiB/s",
+        "[hlsnative] Downloading m3u8 manifest",
+        "[Merger] Merging formats into \"out.mp4\"",
+    ):
+        assert is_recording_line(line), line
+
+
+def test_errors_are_never_swallowed_by_the_quiet_wait():
+    """A wait that is quietly failing must not look identical to a wait
+    that is working."""
+    from record_stream import is_worth_saying
+
+    assert is_worth_saying("ERROR: [youtube] Video unavailable")
+    assert is_worth_saying("  ERROR: unable to download")
+    assert is_worth_saying("fragment 4213: HTTP Error 403: Forbidden")
+    assert not is_worth_saying("[wait] Remaining time until next attempt: 00:01:00")
+
+
+def test_the_clips_fetcher_leaves_live_recordings_alone(tmp_path, monkeypatch):
+    """Live recorders share the staging folder and write finished-looking
+    .ts segments between the download ending and the join starting.
+    Delivering one would publish a fragment of a stream AND delete it out
+    from under the recorder."""
+    import record_stream
+
+    staging = tmp_path / "recording"
+    watch = tmp_path / "watch_folder"
+    staging.mkdir()
+    in_flight = staging / "Stackswopo youtube live.part01.ts"
+    in_flight.write_bytes(b"half a stream")
+
+    def fake_run(self, args, log_path="", quiet_wait=True):
+        (staging / "Stackswopo twitch clips Funny.mp4").write_bytes(b"clip")
+        return 0
+
+    monkeypatch.setattr(record_stream.Recorder, "_run", fake_run)
+    delivered = record_stream.fetch_clips(
+        "https://twitch.tv/x/clips", str(staging), str(watch),
+        name="Stackswopo twitch clips")
+
+    assert delivered == ["Stackswopo twitch clips Funny.mp4"]
+    assert in_flight.exists(), "the clips fetcher stole a live recording"
+    assert not (watch / in_flight.name).exists()
