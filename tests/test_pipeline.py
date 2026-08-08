@@ -158,3 +158,35 @@ def test_duration_is_read_from_ffprobe(monkeypatch):
 
     monkeypatch.setattr("subprocess.run", lambda *a, **k: Done())
     assert media_duration("clip.mp4") == 42.5
+
+
+def test_missing_reel_file_lists_the_clips_that_do_exist(tmp_path, monkeypatch):
+    """A basename match is no help when the guess was the wrong NAME
+    rather than the wrong folder - which is exactly what happens with
+    clips, since they are named after whatever the streamer called them."""
+    import main
+
+    watch = tmp_path / "watch_folder"
+    uploaded = tmp_path / "uploaded"
+    watch.mkdir()
+    uploaded.mkdir()
+    (watch / "ff.mp4").write_bytes(b"clip")
+    (watch / "long stream.mp4").write_bytes(b"stream")
+    (watch / "notes.txt").write_text("not a video")
+
+    class Cfg:
+        class general:
+            watch_folder = str(watch)
+            uploaded_folder = str(uploaded)
+            supported_formats = (".mp4",)
+
+    monkeypatch.setattr(
+        main, "media_duration",
+        lambda p: 30.0 if p.endswith("ff.mp4") else 4 * 60 * 60)
+    monkeypatch.setattr("utils.ffmpeg_tools.media_duration",
+                        lambda p: 30.0 if p.endswith("ff.mp4") else 4 * 60 * 60)
+
+    found = main._find_clips(Cfg)
+    assert len(found) == 1
+    assert "ff.mp4" in found[0]
+    assert "30s" in found[0]

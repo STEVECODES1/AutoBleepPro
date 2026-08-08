@@ -24,7 +24,7 @@ from datetime import datetime
 # Bump when shipping user-visible changes, so --test-config can prove
 # which build is actually running (stale extracts have silently caused
 # several confusing "the fix did nothing" runs).
-BUILD = "2026-08-08.5 instagram reels for clips"
+BUILD = "2026-08-08.6 list clips when --post-reel misses"
 
 from utils.censor import censor_video
 from utils.ffmpeg_tools import StageTimer, media_duration
@@ -85,6 +85,32 @@ def _suggest_paths(cfg, basename: str, limit: int = 5) -> list:
             found.append(candidate)
         if len(found) >= limit:
             break
+    return found
+
+
+def _find_clips(cfg, limit: int = 15) -> list:
+    """Every video short enough to be a Reel, across the usual folders.
+
+    Duration rather than filename: clips arrive named after whatever the
+    streamer called them, so there is no prefix to match on.
+    """
+    from utils.ffmpeg_tools import media_duration
+
+    found, seen = [], set()
+    for folder in (cfg.general.watch_folder, cfg.general.uploaded_folder):
+        folder = os.path.abspath(folder or "")
+        if not folder or folder in seen or not os.path.isdir(folder):
+            continue
+        seen.add(folder)
+        for name in sorted(os.listdir(folder)):
+            if os.path.splitext(name)[1].lower() not in cfg.general.supported_formats:
+                continue
+            path = os.path.join(folder, name)
+            seconds = media_duration(path)
+            if seconds and seconds <= CLIP_MAX_SECONDS:
+                found.append(f'"{path}"  ({seconds:.0f}s)')
+            if len(found) >= limit:
+                return found
     return found
 
 
@@ -660,6 +686,15 @@ def main(argv=None) -> int:
             print(f"[ERROR] File not found: {args.post_reel}")
             for path in _suggest_paths(cfg, os.path.basename(args.post_reel)):
                 print(f"        Did you mean: {path}")
+            # A basename match is no help when the guess was the wrong
+            # NAME rather than the wrong folder. Reels only take short
+            # videos anyway, so listing every clip lying around turns a
+            # dead end into a menu.
+            candidates = _find_clips(cfg)
+            if candidates:
+                print("\n        Clips found (short enough to be a Reel):")
+                for path in candidates:
+                    print(f"          {path}")
             return 1
 
         seconds = media_duration(args.post_reel) or 0
