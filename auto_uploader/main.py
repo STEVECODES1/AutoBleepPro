@@ -24,7 +24,7 @@ from datetime import datetime
 # Bump when shipping user-visible changes, so --test-config can prove
 # which build is actually running (stale extracts have silently caused
 # several confusing "the fix did nothing" runs).
-BUILD = "2026-08-08.8 --post-reel --now"
+BUILD = "2026-08-08.9 clips go up vertical (Rumble Shorts + Reels)"
 
 from utils.censor import censor_video
 from utils.ffmpeg_tools import StageTimer, media_duration
@@ -252,7 +252,15 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
         print(f"[SKIP] {filename} already uploaded to {where} previously (matched by content hash).")
         return {"skipped": "duplicate"}
 
-    stream_title = get_stream_title(video_path, cli_title, cfg, allow_prompt)
+    if is_clip and not cli_title:
+        # A clip carries its own title in the filename ("who put stacks on
+        # slots"), and a batch of eleven should not stop eleven times to
+        # ask for something already on disk.
+        from utils.social_promoter import clip_title as _clip_title
+        stream_title = _clip_title(video_path)
+        print(f"[Clip] Title from the filename: {stream_title}")
+    else:
+        stream_title = get_stream_title(video_path, cli_title, cfg, allow_prompt)
     # A freshly-finished stream should be dated today; an old VOD being
     # backfilled should keep its original air date if the filename has one
     # (e.g. "'!howl' 3-20-26 ...") - otherwise every backlog upload would
@@ -346,10 +354,45 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
     # doesn't want censoring, transcription (the slow part, many minutes
     # per stream) is never run at all.
     _censored = {}
+    _vertical = {}
+
+    def vertical_path(source: str) -> str:
+        """A clip re-framed 9:16, made once and shared.
+
+        Rumble decides Shorts by aspect ratio, so a 16:9 clip lands in
+        Videos next to the five-hour streams no matter how short it is.
+        Instagram wants the same shape for a Reel, so one re-frame serves
+        both - and it is the expensive step, so doing it twice would be
+        the whole cost again.
+        """
+        if not is_clip or not (cfg.instagram or {}).get("vertical", True):
+            return source
+        if source in _vertical:
+            return _vertical[source]
+        try:
+            from autoreel.clip_maker import make_vertical
+            from autoreel.crop_strategy import resolve_crop_strategy
+        except Exception:
+            return source
+
+        strategy = resolve_crop_strategy({"clips": cfg.clips},
+                                         (cfg.clips or {}).get("content_kind", "gameplay"))
+        os.makedirs(cfg.general.censored_folder, exist_ok=True)
+        target = os.path.join(cfg.general.censored_folder,
+                              f"_vertical_{os.path.basename(source)}")
+        print(f"[Clip] Re-framing to 9:16 ({strategy} crop) so Rumble files it "
+              "as a Short...")
+        made = make_vertical(source, target, strategy)
+        if not made:
+            print("[Clip] Could not re-frame - uploading as-is (it will be a "
+                  "regular video, not a Short).")
+            made = source
+        _vertical[source] = made
+        return made
 
     def upload_path_for(platform_wants_censoring: bool) -> str:
         if not (platform_wants_censoring and cfg.general.censor_before_upload):
-            return video_path
+            return vertical_path(video_path)
         if "path" not in _censored:
             print(f"[Censor] Transcribing + scanning for profanity (model={cfg.general.censor_model})...")
             censor_result = censor_video(
@@ -375,7 +418,7 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
                 )
             else:
                 print("[Censor] No profanity/mature language detected - uploading original audio.")
-        return _censored["path"]
+        return vertical_path(_censored["path"])
 
     run_started_at = time.time()
     stage_timer = StageTimer(filename,
@@ -531,13 +574,23 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
             announce_upload(cfg.features.get("social_promoter", {}), yt_title,
                             newly_uploaded, posting=cfg.posting,
                             config={"features": cfg.features,
-                                    "instagram": cfg.instagram,
+                                    # Already 9:16 if a re-frame happened;
+                                    # cropping it again would be a no-op
+                                    # that still costs a full re-encode.
+                                    "instagram": ({**cfg.instagram,
+                                                   "vertical": False}
+                                                  if _vertical else cfg.instagram),
                                     "clips": cfg.clips},
                             all_uploads=results,
                             # Only a CLIP goes to Instagram as a Reel. A
                             # five-hour stream is neither wanted there nor
                             # accepted - Reels cap at 15 minutes.
-                            clip_path=video_path if is_clip else "")
+                            # The re-framed copy if one was made, so
+                            # Instagram does not pay for a second crop of
+                            # the same clip.
+                            clip_path=(_vertical.get(video_path)
+                                       or next(iter(_vertical.values()), "")
+                                       or video_path) if is_clip else "")
         except Exception as exc:
             print(f"[Social] WARNING: announce failed: {exc}")
         try:

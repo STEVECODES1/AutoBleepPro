@@ -230,24 +230,54 @@ def _shipped_posting():
     return posting
 
 
+# What each platform itself allows in 24h. A cap above this is not a
+# policy choice, it is posts that will fail.
+PLATFORM_CEILING = {
+    "instagram": 50,     # Content Publishing API rejects the 51st
+    "x": 16,             # free tier is ~500/month
+    "reddit": 25,
+    "facebook": 25,
+    "facebook_group": 25,
+}
+
+
 def test_every_enabled_platform_has_a_real_cap():
     """Turning a platform on is a decision; turning the limits off with it
     is not. daily_cap 0 means unlimited in the guard, so an enabled
-    platform that ships with 0 would post without bound."""
+    platform that ships with 0 would post without bound - and would keep
+    attempting past the platform's own limit, where the rejections are
+    real failures that trip the circuit breaker."""
     for name, settings in _shipped_posting()["platforms"].items():
         if not settings.get("enabled"):
             continue
         cap = int(settings.get("daily_cap", 0) or 0)
+        ceiling = PLATFORM_CEILING.get(name, 25)
         assert cap > 0, f"{name} is enabled with no daily cap"
-        assert cap <= 25, f"{name} cap of {cap} is above the platform ceiling"
+        assert cap <= ceiling, \
+            f"{name} cap of {cap} is above what {name} itself allows ({ceiling})"
+
+
+# Instagram posts every clip the moment it is ready, deliberately - the
+# owner asked for no waiting there. Listed by name so turning the spacing
+# off somewhere else stays a decision rather than a drift.
+UNSPACED_BY_CHOICE = {"instagram"}
 
 
 def test_every_enabled_platform_spaces_its_posts():
     """Back-to-back posts are what a spam classifier is looking for."""
     for name, settings in _shipped_posting()["platforms"].items():
-        if settings.get("enabled"):
+        if settings.get("enabled") and name not in UNSPACED_BY_CHOICE:
             assert float(settings.get("min_minutes_between", 0) or 0) > 0, \
                 f"{name} is enabled with no spacing between posts"
+
+
+def test_an_unspaced_platform_is_still_capped():
+    """Spacing off and cap off together is unbounded posting."""
+    for name in UNSPACED_BY_CHOICE:
+        settings = _shipped_posting()["platforms"].get(name, {})
+        if settings.get("enabled"):
+            assert int(settings.get("daily_cap", 0) or 0) > 0, \
+                f"{name} has neither spacing nor a cap"
 
 
 def test_the_kill_switch_stays_configured():

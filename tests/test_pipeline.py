@@ -2,7 +2,9 @@ import os
 import sys
 import unittest
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+_REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_UPLOADER = os.path.join(_REPO, "auto_uploader")
+sys.path.insert(0, _REPO)
 
 from autoreel.compliance import Violation
 from autoreel.highlights import Highlight
@@ -190,3 +192,49 @@ def test_missing_reel_file_lists_the_clips_that_do_exist(tmp_path, monkeypatch):
     assert len(found) == 1
     assert "ff.mp4" in found[0]
     assert "30s" in found[0]
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# A clip has to be vertical to be a Short
+# ═════════════════════════════════════════════════════════════════════════════
+
+def test_rumble_files_clips_as_shorts_only_if_they_are_vertical():
+    """Rumble decides Shorts by aspect ratio, not by duration - an 18
+    second 16:9 clip lands in Videos next to the five-hour streams."""
+    from autoreel.clip_maker import VERTICAL_HEIGHT, VERTICAL_WIDTH
+
+    assert VERTICAL_HEIGHT > VERTICAL_WIDTH
+    assert round(VERTICAL_HEIGHT / VERTICAL_WIDTH, 4) == round(16 / 9, 4)
+
+
+def test_instagram_posts_every_clip_without_waiting():
+    """No spacing and no self-imposed cap - every clip goes out when it
+    is ready."""
+    import json
+
+    with open(os.path.join(_UPLOADER, "config.json")) as f:
+        instagram = json.load(f)["posting"]["platforms"]["instagram"]
+    assert instagram["min_minutes_between"] == 0
+    assert instagram["enabled"] is True
+
+
+def test_the_instagram_cap_matches_instagram_s_own_limit():
+    """Set to 50 rather than 0, because 0 means unlimited to the guard -
+    and the 51st post would then be attempted, fail as a real API error,
+    and count toward the circuit breaker."""
+    import json
+
+    with open(os.path.join(_UPLOADER, "config.json")) as f:
+        instagram = json.load(f)["posting"]["platforms"]["instagram"]
+    assert instagram["daily_cap"] == 50
+
+
+def test_a_clip_takes_its_title_from_the_filename():
+    """A batch of eleven must not stop eleven times to ask for something
+    already on disk."""
+    import sys
+    sys.path.insert(0, _UPLOADER)
+    from utils.social_promoter import clip_title
+
+    assert clip_title("Stackswopo twitch Ayo.mp4") == "Ayo"
+    assert clip_title("Stackswopo twitch clips ban that....mp4") == "ban that"
