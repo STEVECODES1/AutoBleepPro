@@ -5,6 +5,7 @@ otherwise a half-copied file would get "uploaded" mid-write.
 """
 
 import os
+import queue
 import re
 import threading
 import time
@@ -118,15 +119,63 @@ class _NewVideoHandler(FileSystemEventHandler):
 
 
 class FolderWatcher:
+    """Watch a folder and process new videos ONE AT A TIME.
+
+    The serialisation is the important part. Each file gets its own
+    stability-watching thread, and those used to call straight through to
+    the handler - so eleven Twitch clips arriving together started eleven
+    simultaneous censor passes. Each of those loads its own Whisper model,
+    and eleven copies of large-v3 do not fit on a consumer GPU: CUDA
+    returned "out of memory", every one of them silently fell back to the
+    CPU, and the machine crawled.
+
+    Videos now queue and a single worker drains them, so the second file
+    starts when the first has finished. On a GPU that is also FASTER
+    overall - one pass at full speed beats eleven fighting for VRAM.
+    """
+
     def __init__(self, folder: str, supported_formats: tuple, stability_seconds: int, on_ready: Callable[[str], None]):
         os.makedirs(folder, exist_ok=True)
         self.folder = folder
-        self._handler = _NewVideoHandler(supported_formats, stability_seconds, on_ready)
+        self._on_ready = on_ready
+        self._queue: queue.Queue = queue.Queue()
+        self._stopping = threading.Event()
+        self._handler = _NewVideoHandler(supported_formats, stability_seconds,
+                                         self._enqueue)
         self._observer = Observer()
         self._observer.schedule(self._handler, folder, recursive=False)
         self._paused = threading.Event()
+        self._worker = None
+
+    def _enqueue(self, path: str) -> None:
+        depth = self._queue.qsize()
+        if depth:
+            print(f"[Queue] {os.path.basename(path)} is next - {depth} "
+                  "already waiting. Videos are processed one at a time so "
+                  "the GPU is not split between them.")
+        self._queue.put(path)
+
+    def _drain(self) -> None:
+        while not self._stopping.is_set():
+            try:
+                path = self._queue.get(timeout=1)
+            except queue.Empty:
+                continue
+            try:
+                self._on_ready(path)
+            except Exception as exc:
+                # One bad video must not end the watch. Whatever went
+                # wrong was already reported by the handler; this only
+                # keeps the queue moving.
+                print(f"[Queue] {os.path.basename(path)} failed: {exc}")
+            finally:
+                self._queue.task_done()
 
     def start(self) -> None:
+        self._stopping.clear()
+        self._worker = threading.Thread(target=self._drain, name="upload-worker",
+                                        daemon=True)
+        self._worker.start()
         self._observer.start()
 
     def pause(self) -> None:
@@ -139,5 +188,8 @@ class FolderWatcher:
         self._observer.start()
 
     def stop(self) -> None:
+        self._stopping.set()
         self._observer.stop()
         self._observer.join()
+        if self._worker is not None:
+            self._worker.join(timeout=5)

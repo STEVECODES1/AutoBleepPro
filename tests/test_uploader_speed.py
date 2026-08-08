@@ -335,3 +335,76 @@ def test_speed_defaults_are_safe():
     assert speed["hardware_encode"] == "auto"
     assert speed["reuse_model"] is True
     assert speed["reuse_transcript"] is True
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# One video at a time
+#
+# Eleven Twitch clips arriving together started eleven simultaneous censor
+# passes, each loading its own Whisper model. Eleven copies of large-v3 do
+# not fit on a consumer GPU: CUDA returned "out of memory", every one fell
+# back to the CPU, and the machine crawled.
+# ═════════════════════════════════════════════════════════════════════════════
+
+def test_files_are_processed_one_at_a_time(tmp_path):
+    """The whole point. Overlap here is what melted the GPU."""
+    import threading
+    import time as _time
+
+    from utils.file_watcher import FolderWatcher
+
+    overlapping = []
+    active = []
+    lock = threading.Lock()
+    done = threading.Event()
+
+    def slow(path):
+        with lock:
+            active.append(path)
+            if len(active) > 1:
+                overlapping.append(list(active))
+        _time.sleep(0.05)
+        with lock:
+            active.remove(path)
+            if path.endswith("c.mp4"):
+                done.set()
+
+    watcher = FolderWatcher(str(tmp_path), (".mp4",), 1, slow)
+    watcher.start()
+    try:
+        for name in ("a.mp4", "b.mp4", "c.mp4"):
+            watcher._enqueue(str(tmp_path / name))
+        assert done.wait(timeout=10), "the queue never drained"
+    finally:
+        watcher.stop()
+
+    assert not overlapping, f"processed concurrently: {overlapping}"
+
+
+def test_one_bad_video_does_not_end_the_watch(tmp_path):
+    """An unattended watcher that dies on a single bad file stops
+    uploading everything after it, silently."""
+    import threading
+
+    from utils.file_watcher import FolderWatcher
+
+    seen = []
+    done = threading.Event()
+
+    def handler(path):
+        seen.append(path)
+        if path.endswith("bad.mp4"):
+            raise RuntimeError("corrupt")
+        if path.endswith("after.mp4"):
+            done.set()
+
+    watcher = FolderWatcher(str(tmp_path), (".mp4",), 1, handler)
+    watcher.start()
+    try:
+        watcher._enqueue(str(tmp_path / "bad.mp4"))
+        watcher._enqueue(str(tmp_path / "after.mp4"))
+        assert done.wait(timeout=10), "the queue stopped at the bad file"
+    finally:
+        watcher.stop()
+
+    assert len(seen) == 2

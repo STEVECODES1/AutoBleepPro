@@ -115,3 +115,46 @@ class AutoReelPipelineWiringTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# A clip is not a stream
+#
+# A channel of full VODs should not fill up with thirty-second Twitch
+# highlights. Clips go to Rumble (which takes shorts) and the social
+# accounts; the main YouTube channel gets streams only.
+# ═════════════════════════════════════════════════════════════════════════════
+
+def test_a_short_video_is_a_clip():
+    import main
+
+    assert main.CLIP_MAX_SECONDS >= 90, \
+        "Twitch clips run to about 90 seconds"
+
+
+def test_the_clip_threshold_never_catches_a_stream():
+    """A four-hour VOD must never be mistaken for a highlight."""
+    import main
+
+    four_hours = 4 * 60 * 60
+    assert four_hours > main.CLIP_MAX_SECONDS * 10
+
+
+def test_an_unmeasurable_duration_is_not_treated_as_zero(monkeypatch):
+    """ffprobe missing or refusing the file must fall through to the
+    normal path, not classify every video as a zero-second clip."""
+    from utils.ffmpeg_tools import media_duration
+
+    monkeypatch.setattr("subprocess.run", lambda *a, **k: (_ for _ in ()).throw(
+        FileNotFoundError("ffprobe")))
+    assert media_duration("whatever.mp4") is None
+
+
+def test_duration_is_read_from_ffprobe(monkeypatch):
+    from utils.ffmpeg_tools import media_duration
+
+    class Done:
+        stdout = b"42.5\n"
+
+    monkeypatch.setattr("subprocess.run", lambda *a, **k: Done())
+    assert media_duration("clip.mp4") == 42.5

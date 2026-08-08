@@ -197,3 +197,24 @@ class StageTimer:
             return f"{self.label}: nothing timed"
         parts = ", ".join(f"{name} {seconds:.1f}s" for name, seconds in self.stages)
         return f"{self.label}: {parts} (total {self.total():.1f}s)"
+
+
+def media_duration(path: str) -> Optional[float]:
+    """Seconds of media in a file, or None if it cannot be determined.
+
+    None rather than 0 on failure, and the distinction matters: callers
+    use this to decide whether a video is a short clip, and an
+    unmeasurable file must fall through to the normal path rather than be
+    treated as zero seconds long.
+    """
+    try:
+        completed = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+             "-of", "csv=p=0", path],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=120)
+    except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
+        return None
+    try:
+        return float(completed.stdout.decode().strip().splitlines()[0])
+    except (ValueError, IndexError):
+        return None

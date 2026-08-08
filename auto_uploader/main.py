@@ -24,10 +24,15 @@ from datetime import datetime
 # Bump when shipping user-visible changes, so --test-config can prove
 # which build is actually running (stale extracts have silently caused
 # several confusing "the fix did nothing" runs).
-BUILD = "2026-08-08.2 quiet wait fix + clips isolation"
+BUILD = "2026-08-08.3 one at a time + clips route to Rumble+social"
 
 from utils.censor import censor_video
-from utils.ffmpeg_tools import StageTimer
+from utils.ffmpeg_tools import StageTimer, media_duration
+
+# Anything at or under this many seconds is a clip rather than a stream.
+# Twitch clips top out around 90 seconds; the margin covers a highlight
+# exported by hand. A five-hour VOD is never close to this.
+CLIP_MAX_SECONDS = 180
 from utils.cleanup import (
     SOURCE_DELETE,
     SOURCE_KEEP,
@@ -194,6 +199,23 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
               "been uploaded before - this takes a minute on a big file...",
               flush=True)
     file_hash = hash_file(video_path)
+
+    # A short video is a CLIP, not a stream, and clips go somewhere else:
+    # Rumble (which takes shorts) and the social accounts, never the main
+    # YouTube channel - a channel of full VODs should not fill up with
+    # thirty-second Twitch highlights.
+    clip_cfg = cfg.clips or {}
+    is_clip = False
+    if clip_cfg.get("route_clips_separately", True):
+        seconds = media_duration(video_path)
+        is_clip = bool(seconds and seconds <= float(
+            clip_cfg.get("max_seconds", CLIP_MAX_SECONDS)))
+
+    if is_clip and not only_platform:
+        print(f"[Clip] {filename} is {seconds / 60:.1f} min - treating it as a "
+              "clip: Rumble + social announcement, NOT the YouTube channel. "
+              "(clips.route_clips_separately in config.json turns this off.)")
+        only_platform = "rumble"
 
     # With --only, "done" means done for that platform alone; the other's
     # history is neither required nor written.
