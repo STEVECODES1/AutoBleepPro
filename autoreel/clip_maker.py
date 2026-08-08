@@ -287,3 +287,38 @@ class ClipMaker:
         if not results and failures:
             raise ClipError("; ".join(failures))
         return results
+
+
+def make_vertical(source_path: str, output_path: str,
+                  strategy: str = CROP_CENTER,
+                  encoder: str = "libx264", preset: str = "fast") -> Optional[str]:
+    """Re-frame a 16:9 clip as a full-bleed 9:16 video. Path, or None.
+
+    Instagram accepts a landscape video and letterboxes it - black bars
+    top and bottom, the picture a third of the height, thumbnail mostly
+    empty. That is not a Reel, it is a video someone forgot to crop, and
+    it is what a raw Twitch clip looks like posted straight through.
+
+    Centre crop rather than fit-with-bars: for gameplay the crosshair,
+    the HUD and the action are all centre-screen, so the crop keeps
+    everything that matters and fills the frame. Same filter the clip
+    renderer uses.
+
+    Audio is stream-copied - only the framing changes.
+    """
+    if not have_ffmpeg():
+        return None
+    args = ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+            "-i", source_path, "-vf", crop_filter(strategy),
+            *_encoder_args(encoder, preset),
+            "-c:a", "copy", "-movflags", "+faststart", output_path]
+    try:
+        completed = subprocess.run(args, stdout=subprocess.PIPE,
+                                   stderr=subprocess.PIPE)
+    except (FileNotFoundError, OSError):
+        return None
+    if completed.returncode != 0 or not os.path.exists(output_path) \
+            or os.path.getsize(output_path) == 0:
+        _remove(output_path)
+        return None
+    return output_path

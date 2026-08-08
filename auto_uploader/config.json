@@ -112,6 +112,13 @@
 
   "_clips_comment": "Short-form clip rendering. crop_strategy turns a 16:9 source into a 9:16 vertical clip: 'center' (default) takes a fixed centre crop - GTA puts the crosshair, HUD and action centre-screen, so it keeps all three and cannot drift. 'motion' follows a smoothed centroid of frame movement (costs an extra pass). 'face' uses the face tracker and is for FACE-CAM/IRL footage ONLY - on gameplay it locks onto NPC faces and the crop jitters around the scene. 'auto' = pick from content_kind. Leave this on center for gaming content.",
   "_clip_routing_comment": "route_clips_separately: a video at or under max_seconds is a CLIP, not a stream, so it goes to Rumble (which takes shorts) and the social announcement instead of the main YouTube channel - a channel of full VODs should not fill up with 30-second Twitch highlights. Twitch clips top out around 90s; 180 leaves margin for a hand-exported highlight. Set route_clips_separately false to upload everything the same way. --only overrides this.",
+  "_instagram_comment": "How a clip is posted as a Reel. caption_template takes {title} (the clip's own name, cleaned up). vertical: re-frame 16:9 to full-bleed 9:16 before uploading - Instagram otherwise letterboxes a landscape clip into black bars with the picture a third of the height, which is what a raw Twitch clip looks like posted straight through. share_to_feed also puts it on the grid, not only the Reels tab.",
+  "instagram": {
+    "vertical": true,
+    "share_to_feed": true,
+    "caption_template": "{title} \ud83e\udd23\ud83e\udd23\ud83e\udd23\ud83d\udc80\ud83d\udc80\ud83d\udc80#stackswopo\n\nLink Youtube monkey - https://www.youtube.com/@StacksDailyDose\n\nWatch full stream - https://rumble.com/user/BinScripts"
+  },
+
   "clips": {
     "crop_strategy": "center",
     "content_kind": "gameplay",

@@ -24,7 +24,7 @@ from datetime import datetime
 # Bump when shipping user-visible changes, so --test-config can prove
 # which build is actually running (stale extracts have silently caused
 # several confusing "the fix did nothing" runs).
-BUILD = "2026-08-08.6 list clips when --post-reel misses"
+BUILD = "2026-08-08.7 reels: your caption + 9:16 crop"
 
 from utils.censor import censor_video
 from utils.ffmpeg_tools import StageTimer, media_duration
@@ -530,7 +530,9 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
             # even when one of them succeeded on an earlier run.
             announce_upload(cfg.features.get("social_promoter", {}), yt_title,
                             newly_uploaded, posting=cfg.posting,
-                            config={"features": cfg.features},
+                            config={"features": cfg.features,
+                                    "instagram": cfg.instagram,
+                                    "clips": cfg.clips},
                             all_uploads=results,
                             # Only a CLIP goes to Instagram as a Reel. A
                             # five-hour stream is neither wanted there nor
@@ -714,16 +716,19 @@ def main(argv=None) -> int:
             print(f"[Instagram] blocked: {reason}")
             return 1
 
-        publisher = InstagramPublisher({"features": cfg.features})
-        caption = args.caption or os.path.splitext(
-            os.path.basename(args.post_reel))[0]
-        print(f"[Instagram] Uploading {os.path.basename(args.post_reel)} "
-              f"({seconds:.0f}s) as a Reel...")
-        if publisher.post_reel_from_file(args.post_reel, caption):
-            guard.record_result("instagram", True)
+        # Routed through the same function the pipeline uses, so a hand
+        # test proves the real thing - caption template, 9:16 re-frame
+        # and all - rather than a simpler path that happens to work.
+        from utils.social_promoter import post_clip_to_instagram
+
+        print(f"[Instagram] {os.path.basename(args.post_reel)} ({seconds:.0f}s)")
+        ok = post_clip_to_instagram(
+            cfg.posting, args.post_reel, args.caption,
+            config={"features": cfg.features, "instagram": cfg.instagram,
+                    "clips": cfg.clips})
+        if ok:
             print("[Instagram] Published. Check the account.")
             return 0
-        guard.record_result("instagram", False)
         print("[Instagram] Failed - the reason is in the log above.")
         return 1
 

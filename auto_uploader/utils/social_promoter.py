@@ -450,6 +450,61 @@ def announce_to_platforms(posting: dict, title: str, new_uploads: dict,
     return posted
 
 
+def clip_title(video_path: str) -> str:
+    """A caption headline from the clip's filename.
+
+    The recorder names clips "<name> <platform> clips <clip title>.mp4",
+    so the interesting part is the tail - "ban that...", "who put stacks
+    on slots". Stripping the prefix is what turns a filename into
+    something that reads like a caption.
+    """
+    stem = os.path.splitext(os.path.basename(video_path or ""))[0]
+    for marker in (" clips ", " twitch ", " youtube "):
+        if marker in stem:
+            stem = stem.split(marker, 1)[1]
+    return stem.strip(" -_.") or "Stackswopo"
+
+
+def build_caption(template: str, video_path: str, title: str = "") -> str:
+    """Fill the Instagram caption template. Never raises on a bad key."""
+    headline = title or clip_title(video_path)
+    if not template:
+        return headline
+    try:
+        return template.format(title=headline)
+    except (KeyError, IndexError):
+        # A typo'd placeholder must not cost the post.
+        return headline
+
+
+def _vertical_copy(video_path: str, instagram_cfg: dict, clips_cfg: dict):
+    """A full-bleed 9:16 re-frame, or (None, "") to post as-is.
+
+    Returns (path, temp_path) - temp_path is what the caller deletes.
+    """
+    if not instagram_cfg.get("vertical", True):
+        return video_path, ""
+    try:
+        from autoreel.clip_maker import make_vertical
+        from autoreel.crop_strategy import resolve_crop_strategy
+    except Exception:
+        return video_path, ""
+
+    strategy = resolve_crop_strategy(
+        {"clips": clips_cfg or {}},
+        (clips_cfg or {}).get("content_kind", "gameplay"))
+    target = os.path.join(
+        os.path.dirname(os.path.abspath(video_path)),
+        f"_vertical_{os.path.basename(video_path)}")
+    print(f"[Social] instagram: re-framing to 9:16 ({strategy} crop)...")
+    made = make_vertical(video_path, target, strategy)
+    if not made:
+        # Letterboxed beats not posted.
+        print("[Social] instagram: could not re-frame - posting as-is.")
+        return video_path, ""
+    return made, made
+
+
 def post_clip_to_instagram(posting: dict, video_path: str, caption: str,
                            config: dict = None, dry_run: bool = False) -> bool:
     """Publish a clip to Instagram as a Reel. True if it went out.
@@ -486,13 +541,27 @@ def post_clip_to_instagram(posting: dict, video_path: str, caption: str,
               "as a Reel")
         return True
 
+    instagram_cfg = (config or {}).get("instagram", {}) or {}
+    caption = build_caption(instagram_cfg.get("caption_template", ""),
+                            video_path) or caption
+    upload_path, temp = _vertical_copy(video_path, instagram_cfg,
+                                       (config or {}).get("clips", {}))
+
     print(f"[Social] instagram: uploading "
           f"{os.path.basename(video_path)} as a Reel...")
     try:
-        ok = publisher.post_reel_from_file(video_path, caption)
+        ok = publisher.post_reel_from_file(
+            upload_path, caption,
+            share_to_feed=bool(instagram_cfg.get("share_to_feed", True)))
     except Exception as exc:
         ok = False
         print(f"[Social] instagram: Reel upload raised {exc}")
+    finally:
+        if temp:
+            try:
+                os.remove(temp)
+            except OSError:
+                pass
     guard.record_result("instagram", ok)
     print(f"[Social] instagram: {'posted a Reel' if ok else 'Reel failed'}.")
     return ok

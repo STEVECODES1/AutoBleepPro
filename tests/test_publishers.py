@@ -441,3 +441,100 @@ def test_a_reel_still_goes_through_the_guard(tmp_path):
         "platforms": {"instagram": {"enabled": True, "daily_cap": 5}},
     }
     assert post_clip_to_instagram(posting, str(clip), "caption") is False
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Making a posted clip look like the ones already on the account
+# ═════════════════════════════════════════════════════════════════════════════
+
+def test_the_caption_follows_the_account_s_own_format():
+    import json
+    import sys
+    sys.path.insert(0, os.path.join(_REPO, "auto_uploader"))
+    from utils.social_promoter import build_caption
+
+    with open(os.path.join(_REPO, "auto_uploader", "config.json")) as f:
+        template = json.load(f)["instagram"]["caption_template"]
+
+    caption = build_caption(template, "Stackswopo twitch clips ban that....mp4")
+    assert caption.startswith("ban that")
+    assert "#stackswopo" in caption
+    assert "youtube.com/@StacksDailyDose" in caption
+    assert "rumble.com/user/BinScripts" in caption
+
+
+def test_the_clip_name_survives_the_recorder_s_prefix():
+    import sys
+    sys.path.insert(0, os.path.join(_REPO, "auto_uploader"))
+    from utils.social_promoter import clip_title
+
+    assert clip_title("Stackswopo twitch clips who put stacks on slots.mp4") \
+        == "who put stacks on slots"
+    assert clip_title("Stackswopo twitch ff.mp4") == "ff"
+    # Nothing to strip - a hand-dropped clip keeps its own name.
+    assert clip_title("my highlight.mp4") == "my highlight"
+
+
+def test_a_broken_template_costs_the_style_not_the_post():
+    import sys
+    sys.path.insert(0, os.path.join(_REPO, "auto_uploader"))
+    from utils.social_promoter import build_caption
+
+    assert build_caption("{nonsense}", "clip.mp4") == "clip"
+    assert build_caption("", "clip.mp4") == "clip"
+
+
+def test_a_landscape_clip_is_cropped_to_full_bleed_vertical(monkeypatch):
+    """Instagram letterboxes a 16:9 video into black bars with the picture
+    a third of the height - that is a video someone forgot to crop, not a
+    Reel."""
+    from autoreel.clip_maker import VERTICAL_HEIGHT, VERTICAL_WIDTH, crop_filter
+
+    chain = crop_filter("center")
+    assert "crop=" in chain
+    assert f"scale={VERTICAL_WIDTH}:{VERTICAL_HEIGHT}" in chain
+    assert VERTICAL_HEIGHT / VERTICAL_WIDTH == 16 / 9
+
+
+def test_the_audio_is_not_re_encoded_when_re_framing(monkeypatch, tmp_path):
+    """Only the framing changes."""
+    from autoreel import clip_maker
+
+    seen = {}
+    out = tmp_path / "vertical.mp4"
+
+    def fake_run(args, **kw):
+        seen["args"] = args
+        out.write_bytes(b"reframed")
+        return type("R", (), {"returncode": 0, "stderr": b""})()
+
+    monkeypatch.setattr(clip_maker, "have_ffmpeg", lambda: True)
+    monkeypatch.setattr(clip_maker.subprocess, "run", fake_run)
+    assert clip_maker.make_vertical("in.mp4", str(out)) == str(out)
+    assert seen["args"][seen["args"].index("-c:a") + 1] == "copy"
+
+
+def test_a_failed_re_frame_still_posts_the_clip(monkeypatch, tmp_path):
+    """Letterboxed beats not posted."""
+    import sys
+    sys.path.insert(0, os.path.join(_REPO, "auto_uploader"))
+    from utils.social_promoter import _vertical_copy
+
+    clip = tmp_path / "clip.mp4"
+    clip.write_bytes(b"video")
+    monkeypatch.setattr("autoreel.clip_maker.make_vertical",
+                        lambda *a, **k: None)
+    path, temp = _vertical_copy(str(clip), {"vertical": True}, {})
+    assert path == str(clip)
+    assert temp == ""
+
+
+def test_re_framing_can_be_turned_off(tmp_path):
+    import sys
+    sys.path.insert(0, os.path.join(_REPO, "auto_uploader"))
+    from utils.social_promoter import _vertical_copy
+
+    clip = tmp_path / "clip.mp4"
+    clip.write_bytes(b"video")
+    path, temp = _vertical_copy(str(clip), {"vertical": False}, {})
+    assert path == str(clip) and temp == ""

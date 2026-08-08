@@ -87,6 +87,7 @@ class AppConfig:
     features: dict = field(default_factory=dict)
     posting: dict = field(default_factory=dict)
     clips: dict = field(default_factory=dict)
+    instagram: dict = field(default_factory=dict)
 
 
 def _resolve_path(project_root: str, path: str) -> str:
@@ -191,7 +192,8 @@ def load_config(config_path: str = "config.json", env_path: str = ".env") -> App
                      project_root=project_root,
                      features=raw.get("features", {}),
                      posting=posting,
-                     clips=raw.get("clips", {}))
+                     clips=raw.get("clips", {}),
+                     instagram=raw.get("instagram", {}))
 
 
 def validate_config(cfg: AppConfig) -> list:
