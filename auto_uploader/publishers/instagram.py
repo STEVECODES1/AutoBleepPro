@@ -57,6 +57,16 @@ class InstagramPublisher:
         self._token = os.getenv("IG_PAGE_TOKEN", "")
         self._account_id = os.getenv("IG_BUSINESS_ACCOUNT_ID", "")
 
+    def ready(self) -> bool:
+        """Whether this publisher can post at all right now.
+
+        Public because the announcer asks before attempting: an unset
+        credential is a CONFIGURATION problem, and treating it as a failed
+        post tripped the circuit breaker after three uploads - so filling
+        the credentials in correctly still left the platform blocked.
+        """
+        return self._ready()
+
     def _ready(self) -> bool:
         if not _REQUESTS_OK:
             return False

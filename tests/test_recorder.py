@@ -682,3 +682,111 @@ def test_segments_are_removed_after_a_clean_join(recorder, monkeypatch):
     recorder.finalise("show")
     for path in parts:
         assert not os.path.exists(path)
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# More than one platform, one watch folder
+# ═════════════════════════════════════════════════════════════════════════════
+
+def test_youtube_gets_live_from_start(recorder):
+    from record_stream import PLATFORM_YOUTUBE, platform_of
+
+    assert platform_of("https://www.youtube.com/@stackswopo_/live") == PLATFORM_YOUTUBE
+    assert "--live-from-start" in recorder.download_args("/tmp/out.ts")
+
+
+def test_twitch_does_not_get_live_from_start(tmp_path):
+    """It is a YouTube capability - it walks back through the DASH
+    manifest's sequence numbers. Twitch warns and does nothing."""
+    from record_stream import PLATFORM_TWITCH, platform_of
+
+    assert platform_of("https://www.twitch.tv/stackswopo") == PLATFORM_TWITCH
+    twitch = Recorder(url="https://www.twitch.tv/stackswopo",
+                      staging=str(tmp_path / "s"),
+                      watch_folder=str(tmp_path / "w"), name="Stackswopo")
+    args = twitch.download_args("/tmp/out.ts")
+    assert "--live-from-start" not in args
+    # Everything that keeps a long recording alive still applies.
+    assert args[args.index("--fragment-retries") + 1] == "infinite"
+    assert "--hls-use-mpegts" in args
+
+
+def test_a_clips_url_is_recognised():
+    from record_stream import is_clips_url
+
+    assert is_clips_url("https://www.twitch.tv/stackswopo/clips?range=7d")
+    assert not is_clips_url("https://www.twitch.tv/stackswopo")
+    assert not is_clips_url("https://www.youtube.com/@stackswopo_/live")
+
+
+def test_clips_are_never_downloaded_twice():
+    """Without an archive, every pass re-fetches every clip and hands the
+    uploader a pile of duplicates."""
+    from record_stream import clips_args
+
+    args = clips_args("https://twitch.tv/x/clips", "/tmp/%(title)s.%(ext)s",
+                      "/tmp/archive.txt")
+    assert args[args.index("--download-archive") + 1] == "/tmp/archive.txt"
+
+
+def test_a_clips_page_can_be_bounded():
+    from record_stream import clips_args
+
+    args = clips_args("u", "o", "a", limit=25)
+    assert args[args.index("--playlist-end") + 1] == "25"
+    assert "--playlist-end" not in clips_args("u", "o", "a")
+
+
+def test_new_clips_land_in_the_watch_folder(tmp_path, monkeypatch):
+    import record_stream
+
+    staging = tmp_path / "recording"
+    watch = tmp_path / "watch_folder"
+    staging.mkdir()
+
+    def fake_run(self, args, log_path=""):
+        (staging / "Stackswopo Funny moment.mp4").write_bytes(b"clip")
+        (staging / "Stackswopo Half.mp4.part").write_bytes(b"partial")
+        return 0
+
+    monkeypatch.setattr(record_stream.Recorder, "_run", fake_run)
+    delivered = record_stream.fetch_clips(
+        "https://twitch.tv/x/clips", str(staging), str(watch))
+
+    assert delivered == ["Stackswopo Funny moment.mp4"]
+    assert (watch / "Stackswopo Funny moment.mp4").exists()
+    # Still downloading - handing it over would publish a truncated clip.
+    assert (staging / "Stackswopo Half.mp4.part").exists()
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# The waiting loop, which ran for days
+# ═════════════════════════════════════════════════════════════════════════════
+
+def test_the_per_minute_countdown_is_recognised_as_noise():
+    """Six lines a minute, forever, between streams - thousands overnight,
+    burying the one line that matters."""
+    from record_stream import is_waiting_noise
+
+    for line in (
+        "[wait] Waiting for 00:01:00 - Press Ctrl+C to try now",
+        "[wait] Remaining time until next attempt: 00:01:00",
+        "[wait] Wait period ended; Re-extracting data",
+        "[youtube:tab] Extracting URL: https://www.youtube.com/@x/live",
+        "[youtube:tab] @x/live: Downloading webpage",
+        "WARNING: [youtube:tab] @x: The channel is not currently live",
+    ):
+        assert is_waiting_noise(line), line
+
+
+def test_real_output_is_never_mistaken_for_noise():
+    """Quietening the wait must not quieten the recording."""
+    from record_stream import is_waiting_noise
+
+    for line in (
+        "[download] Destination: Stackswopo 2026-08-08.part01.ts",
+        "ERROR: fragment 4213 not found; HTTP Error 403: Forbidden",
+        "[download]  12.3% of ~4.20GiB at 3.10MiB/s",
+        "[Merger] Merging formats into \"out.mp4\"",
+    ):
+        assert not is_waiting_noise(line), line

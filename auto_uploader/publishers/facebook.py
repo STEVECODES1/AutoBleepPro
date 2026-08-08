@@ -57,6 +57,16 @@ class FacebookPublisher:
                 "Graph API route exists. Ignoring config flag."
             )
 
+    def ready(self) -> bool:
+        """Whether this publisher can post at all right now.
+
+        Public because the announcer asks before attempting: an unset
+        credential is a CONFIGURATION problem, and treating it as a failed
+        post tripped the circuit breaker after three uploads - so filling
+        the credentials in correctly still left the platform blocked.
+        """
+        return self._ready()
+
     def _ready(self) -> bool:
         if not _REQUESTS_OK:
             return False

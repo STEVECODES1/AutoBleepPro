@@ -1,5 +1,10 @@
 """
-Records a YouTube live stream end to end, and survives the network.
+Records live streams end to end, and survives the network.
+
+YouTube and Twitch, several at once, all delivering into the same watch
+folder. A /clips URL is downloaded rather than recorded - clips are
+already finished videos - and an archive file stops the same clip being
+fetched twice.
 
 WHY THE PLAIN yt-dlp COMMAND KEEPS STOPPING EARLY
 -------------------------------------------------
@@ -51,6 +56,11 @@ RESUME_WINDOW_S = 90
 MAX_RESUMES = 20
 
 SAFE_CHARS = " -_.,'!()[]"
+
+# While waiting for a channel to go live, say so this often instead of
+# echoing yt-dlp's per-minute countdown. Long enough to be quiet
+# overnight, short enough to prove the window is still alive.
+WAIT_HEARTBEAT_S = 1800
 
 # A five-hour stream is roughly this much at 1080p. Checked before
 # starting, because running out of disk four hours in loses the lot.
@@ -157,6 +167,52 @@ def expected_duration(url: str) -> Optional[float]:
         return float(completed.stdout.decode().strip().splitlines()[0])
     except (ValueError, IndexError):
         return None
+
+
+PLATFORM_YOUTUBE = "youtube"
+PLATFORM_TWITCH = "twitch"
+
+
+def platform_of(url: str) -> str:
+    """Which site this URL is on. Decides which flags are legal.
+
+    Not cosmetic: --live-from-start is a YouTube-only capability (it walks
+    back through the DASH manifest's sequence numbers). Twitch has no
+    equivalent, and passing it there produces a warning and no benefit.
+    """
+    lowered = (url or "").lower()
+    if "twitch.tv" in lowered:
+        return PLATFORM_TWITCH
+    return PLATFORM_YOUTUBE
+
+
+def is_clips_url(url: str) -> bool:
+    """True for a clips listing rather than a single stream.
+
+    A clips page is a playlist of finished videos, so it is downloaded
+    once rather than recorded live - and re-running must not fetch the
+    same clips again.
+    """
+    return "/clips" in (url or "").lower()
+
+
+# yt-dlp's --wait-for-video chatter. Six lines a minute, forever, between
+# streams: the URL, the webpage fetch, "not currently live", and three
+# countdown lines. Over a night that is thousands of lines, and it buries
+# the one message that matters - the recording actually starting.
+_WAITING_NOISE = (
+    "[wait]",
+    "Downloading webpage",
+    "Extracting URL",
+    "is not currently live",
+    "Downloading API JSON",
+    "Re-extracting data",
+)
+
+
+def is_waiting_noise(line: str) -> bool:
+    """True for a line that only says 'still not live'."""
+    return any(marker in line for marker in _WAITING_NOISE)
 
 
 def _remove(path: str) -> None:
@@ -383,13 +439,18 @@ class Recorder:
             "--socket-timeout", "30",
             # Valid at every byte, so an interrupted file still plays.
             "--hls-use-mpegts",
-            "--live-from-start",
             "--no-playlist",
             "--concurrent-fragments", str(self.concurrent_fragments),
             "--no-progress",
             "--newline",
             "-o", output_path,
         ]
+        if platform_of(self.url) == PLATFORM_YOUTUBE:
+            # YouTube only. It walks back through the DASH manifest's
+            # sequence numbers to pull what is still in the DVR buffer, so
+            # starting late does not automatically cost the beginning.
+            # Twitch has no equivalent and warns if it is passed.
+            args.append("--live-from-start")
         if wait:
             args += ["--wait-for-video", str(self.poll_seconds)]
         args.append(self.url)
@@ -419,15 +480,43 @@ class Recorder:
                 log = open(log_path, "a", encoding="utf-8")
                 log.write(f"\n=== {time.strftime('%Y-%m-%d %H:%M:%S')} "
                           f"{' '.join(args)}\n")
+            waiting_since = 0.0
+            last_heartbeat = 0.0
             for line in process.stdout:
                 line = line.rstrip()
-                if line:
-                    print(line, flush=True)
-                    tail.append(line)
-                    del tail[:-40]
-                    if log:
-                        log.write(line + "\n")
-                        log.flush()
+                if not line:
+                    continue
+                tail.append(line)
+                del tail[:-40]
+                if log:
+                    # The log keeps EVERYTHING. Quietening the console is
+                    # about being able to read it; throwing away the
+                    # record of what happened is a different thing, and
+                    # the log is the only evidence when a recording
+                    # stops.
+                    log.write(line + "\n")
+                    log.flush()
+
+                if is_waiting_noise(line):
+                    now = time.time()
+                    if not waiting_since:
+                        waiting_since = now
+                        self.say(f"Not live yet - checking every "
+                                 f"{self.poll_seconds}s. This window can stay "
+                                 "open for days; each check is one page fetch, "
+                                 "so it costs practically no data.")
+                        last_heartbeat = now
+                    elif now - last_heartbeat >= WAIT_HEARTBEAT_S:
+                        waited = (now - waiting_since) / 3600
+                        self.say(f"Still waiting ({waited:.1f}h). "
+                                 f"Full detail: {log_path or 'the log'}")
+                        last_heartbeat = now
+                    continue
+
+                if waiting_since:
+                    waiting_since = 0.0
+                    self.say("Live - recording started.")
+                print(line, flush=True)
             return process.wait()
         except KeyboardInterrupt:
             process.terminate()
@@ -708,46 +797,178 @@ class Recorder:
         return self.finalise(base)
 
 
+def clips_args(url: str, output_path: str, archive_path: str,
+               limit: int = 0) -> list:
+    """Download clips from a clips listing, skipping ones already fetched.
+
+    --download-archive is what makes this safe to re-run: yt-dlp records
+    every downloaded id in that file and never fetches it twice. Without
+    it, a second run would re-download every clip and hand the uploader a
+    pile of duplicates.
+
+    --playlist-end bounds a listing that could be hundreds of clips long.
+    """
+    args = [
+        "yt-dlp",
+        "--fragment-retries", "infinite",
+        "--retries", "infinite",
+        "--socket-timeout", "30",
+        "--concurrent-fragments", "4",
+        "--download-archive", archive_path,
+        "--no-post-overwrites",
+        "--merge-output-format", "mp4",
+        "--no-progress", "--newline",
+        "-o", output_path,
+    ]
+    if limit:
+        args += ["--playlist-end", str(limit)]
+    args.append(url)
+    return args
+
+
+def fetch_clips(url: str, staging: str, watch_folder: str,
+                name: str = "clips", limit: int = 0) -> list:
+    """Download any NEW clips from a clips page into the watch folder.
+
+    Clips are already finished videos, so there is nothing to record -
+    this is a download, and the only interesting part is not fetching the
+    same ones twice.
+    """
+    os.makedirs(staging, exist_ok=True)
+    os.makedirs(watch_folder, exist_ok=True)
+    archive = os.path.join(staging, f"{safe_name(name)}.clips-archive.txt")
+    before = set(os.listdir(staging))
+
+    template = os.path.join(staging, f"{safe_name(name)} %(title)s.%(ext)s")
+    recorder = Recorder(url=url, staging=staging, watch_folder=watch_folder,
+                        name=name)
+    recorder.say(f"Checking {url} for new clips...")
+    recorder._run(clips_args(url, template, archive, limit),
+                  os.path.join(staging, f"{safe_name(name)}.log"))
+
+    delivered = []
+    for filename in sorted(set(os.listdir(staging)) - before):
+        source = os.path.join(staging, filename)
+        if is_unfinished(filename) or not filename.lower().endswith(MEDIA_EXTENSIONS):
+            continue
+        if os.path.getsize(source) == 0:
+            continue
+        try:
+            shutil.move(source, os.path.join(watch_folder, filename))
+        except OSError as exc:
+            recorder.say(f"Could not deliver {filename}: {exc}")
+            continue
+        delivered.append(filename)
+
+    if delivered:
+        recorder.say(f"Delivered {len(delivered)} new clip(s) -> {watch_folder}")
+    else:
+        recorder.say("No new clips.")
+    return delivered
+
+
+def _source_loop(recorder: "Recorder", once: bool, stop) -> None:
+    """Record one source forever. One of these runs per URL."""
+    try:
+        while not stop.is_set():
+            recorder.record_one_stream()
+            if once:
+                return
+            stop.wait(recorder.poll_seconds)
+    except KeyboardInterrupt:
+        pass
+
+
 def main(argv: Optional[list] = None) -> int:
     import argparse
+    import threading
 
     here = os.path.dirname(os.path.abspath(__file__))
     root = os.path.dirname(here)
 
     parser = argparse.ArgumentParser(
-        description="Record a live stream into the uploader's watch folder.")
-    parser.add_argument("url", help="Channel live URL, e.g. "
-                                    "https://www.youtube.com/@stackswopo_/live")
+        description="Record live streams into the uploader\'s watch folder. "
+                    "Give more than one URL to watch several channels at "
+                    "once - YouTube and Twitch together, same output folder.")
+    parser.add_argument("url", nargs="+",
+                        help="Live URLs, e.g. "
+                             "https://www.youtube.com/@stackswopo_/live "
+                             "https://www.twitch.tv/stackswopo . A /clips URL "
+                             "is downloaded rather than recorded.")
     parser.add_argument("--name", default="Stackswopo",
-                        help="Used in the filename.")
+                        help="Used in the filename. With several URLs the "
+                             "platform is appended, so files stay distinct.")
     parser.add_argument("--staging",
                         default=os.path.join(root, "auto_uploader", "recording"))
     parser.add_argument("--watch-folder",
                         default=os.path.join(root, "auto_uploader", "watch_folder"))
     parser.add_argument("--poll-seconds", type=int, default=60)
     parser.add_argument("--once", action="store_true",
-                        help="Record one stream, then exit instead of waiting "
-                             "for the next.")
+                        help="Record one stream per source, then exit instead "
+                             "of waiting for the next.")
+    parser.add_argument("--no-fill-gaps", action="store_true",
+                        help="Do not fall back to the published VOD when a "
+                             "recording comes up short.")
+    parser.add_argument("--clip-limit", type=int, default=0,
+                        help="Most clips to fetch from a /clips URL per pass "
+                             "(0 = no limit).")
     args = parser.parse_args(argv)
 
-    recorder = Recorder(url=args.url, staging=args.staging,
-                        watch_folder=args.watch_folder, name=args.name,
-                        poll_seconds=args.poll_seconds)
+    streams, clip_pages = [], []
+    for url in args.url:
+        (clip_pages if is_clips_url(url) else streams).append(url)
+
+    def label(url: str) -> str:
+        # Two recorders writing the same base filename would fight over
+        # the same segment paths, so the platform goes in the name as
+        # soon as there is more than one source.
+        if len(args.url) == 1:
+            return args.name
+        return f"{args.name} {platform_of(url)}"
 
     print("=" * 62)
     print(f" Recording : {args.name}")
-    print(f" Source    : {args.url}")
+    for url in streams:
+        print(f" Live      : {url}")
+    for url in clip_pages:
+        print(f" Clips     : {url}")
     print(f" Delivers  : {args.watch_folder}")
     print("=" * 62)
     print(" Leave this window open. Ctrl+C stops.\n")
 
+    stop = threading.Event()
+    threads = []
+    for url in streams:
+        recorder = Recorder(url=url, staging=args.staging,
+                            watch_folder=args.watch_folder, name=label(url),
+                            poll_seconds=args.poll_seconds,
+                            fill_gaps=not args.no_fill_gaps)
+        thread = threading.Thread(target=_source_loop,
+                                  args=(recorder, args.once, stop),
+                                  name=f"record-{platform_of(url)}", daemon=True)
+        thread.start()
+        threads.append(thread)
+
     try:
+        # Clips are a poll, not a recording: check them on the same
+        # cadence in this thread while the recorders run in theirs.
         while True:
-            recorder.record_one_stream()
-            if args.once:
+            for url in clip_pages:
+                fetch_clips(url, args.staging, args.watch_folder,
+                            name=label(url), limit=args.clip_limit)
+            if args.once and not threads:
                 return 0
-            time.sleep(args.poll_seconds)
+            if not threads and not clip_pages:
+                return 0
+            if args.once and all(not t.is_alive() for t in threads):
+                return 0
+            # Clips appear far more slowly than streams start, so this
+            # deliberately does not poll on poll_seconds.
+            stop.wait(max(args.poll_seconds, 900) if clip_pages else 3600)
+            if args.once and all(not t.is_alive() for t in threads):
+                return 0
     except KeyboardInterrupt:
+        stop.set()
         print("\nStopped.")
         return 0
 

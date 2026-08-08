@@ -24,7 +24,7 @@ from datetime import datetime
 # Bump when shipping user-visible changes, so --test-config can prove
 # which build is actually running (stale extracts have silently caused
 # several confusing "the fix did nothing" runs).
-BUILD = "2026-08-07.1 announce-all switch + VOD gap fill"
+BUILD = "2026-08-08.1 twitch + quiet wait + credential skip"
 
 from utils.censor import censor_video
 from utils.ffmpeg_tools import StageTimer
@@ -574,6 +574,9 @@ def main(argv=None) -> int:
     parser.add_argument("--verify", action="store_true",
                         help="With --posting-status, also ask each API who your token "
                              "belongs to. Read-only - creates and publishes nothing.")
+    parser.add_argument("--reset-failures", nargs="?", const="all", metavar="PLATFORM",
+                        help="Clear a tripped circuit breaker (all platforms, or one "
+                             "named). Use after fixing whatever was failing.")
     announce = parser.add_mutually_exclusive_group()
     announce.add_argument("--announce-all", action="store_true",
                           help="Announce this upload everywhere at once - Discord, "
@@ -606,6 +609,22 @@ def main(argv=None) -> int:
         print(f"[Social] Announcements: {label} for this run.")
         for note in notes:
             print(f"[Social]   {note}")
+
+    if args.reset_failures:
+        from publish_guard import PublishGuard
+        guard = PublishGuard(cfg.posting, (cfg.posting or {}).get("state_path"))
+        target = None if args.reset_failures == "all" else args.reset_failures
+        before = {p: guard.consecutive_failures(p)
+                  for p in (cfg.posting.get("platforms") or {})}
+        guard.reset_failures(target)
+        tripped = {p: n for p, n in before.items() if n}
+        if tripped:
+            for platform, count in tripped.items():
+                if target in (None, platform):
+                    print(f"[Posting] Cleared {platform} ({count} consecutive failures).")
+        else:
+            print("[Posting] No circuit breaker was tripped - nothing to clear.")
+        return 0
 
     if args.forget:
         if not os.path.isfile(args.forget):

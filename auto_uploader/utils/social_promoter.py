@@ -301,6 +301,27 @@ def disable_all_announcements(features: dict, posting: dict) -> tuple:
     return features, posting, ["Announcements are off for this run."]
 
 
+def _missing_credentials(platform: str, config: dict) -> list:
+    """.env variables this platform cannot post without, or [].
+
+    Checked BEFORE attempting a post so an unconfigured platform is
+    skipped rather than counted as a failure. Import is local and
+    defensive: a missing posting_status module must not stop announcing.
+    """
+    try:
+        from utils.posting_status import missing_env
+    except Exception:
+        return []
+    account = ""
+    if platform == "reddit":
+        account = str(((config or {}).get("features", {})
+                       .get("social_promoter", {}) or {}).get("reddit_account", ""))
+    try:
+        return list(missing_env(platform, account))
+    except Exception:
+        return []
+
+
 def _publisher_for(platform: str, config: dict):
     """The publisher object for a guarded platform, or None if untyped."""
     if platform == "facebook":
@@ -380,6 +401,25 @@ def announce_to_platforms(posting: dict, title: str, new_uploads: dict,
             print(f"[Social] {platform}: skipped - no link-post endpoint "
                   "exists on this platform; needs a rendered clip and public "
                   "hosting to post at all")
+            continue
+
+        # Ask the publisher itself, not a central table: it owns which
+        # credentials it needs. A publisher that does not answer (a test
+        # double, a future platform) is treated as ready.
+        ready = getattr(publisher, "ready", None)
+        configured = True if ready is None else bool(ready())
+        missing = _missing_credentials(platform, config) if not configured else []
+        if not configured:
+            # NOT a failure. The circuit breaker exists to stop hammering
+            # an account that is rejecting posts; an unset .env variable
+            # is a configuration problem, and counting it tripped the
+            # breaker after three uploads - so filling the credentials in
+            # correctly STILL left the platform blocked until someone
+            # reset it by hand. That is what happened to Facebook.
+            detail = (f"Set {', '.join(missing)} in .env"
+                      if missing else "credentials are not usable")
+            print(f"[Social] {platform}: skipped - not configured yet. "
+                  f"{detail} (then: python main.py --posting-status --verify)")
             continue
 
         if dry_run:

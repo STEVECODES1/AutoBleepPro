@@ -661,3 +661,90 @@ def test_a_platform_with_no_publisher_is_skipped_not_failed(monkeypatch, tmp_pat
     from publish_guard import PublishGuard
     guard = PublishGuard(posting, posting["state_path"])
     assert guard.check("reddit"), "a skipped platform was recorded as failing"
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Missing credentials are not a failed post
+#
+# The circuit breaker exists to stop hammering an account that is
+# rejecting posts. An unset .env variable is a configuration problem, and
+# counting it tripped the breaker after three uploads - so filling the
+# credentials in correctly STILL left the platform blocked until someone
+# reset it by hand. That is what happened to Facebook.
+# ═════════════════════════════════════════════════════════════════════════════
+
+class _Unconfigured:
+    supports_link_posts = True
+
+    def ready(self):
+        return False
+
+    def post_link(self, message, link):
+        raise AssertionError("posted without credentials")
+
+
+def test_an_unconfigured_platform_is_skipped_not_failed(monkeypatch, tmp_path):
+    from publish_guard import PublishGuard
+
+    posting = {"enabled": True, "state_path": str(tmp_path / "state.json"),
+               "platforms": {"facebook": {"enabled": True, "daily_cap": 5}}}
+    monkeypatch.setattr(social_promoter, "_publisher_for",
+                        lambda platform, config: _Unconfigured())
+
+    for _ in range(5):
+        assert announce_to_platforms(
+            posting, "Stream", {"youtube": "https://youtu.be/abc"}) == []
+
+    guard = PublishGuard(posting, posting["state_path"])
+    assert guard.consecutive_failures("facebook") == 0, \
+        "the breaker tripped over an unset credential"
+    assert guard.check("facebook").allowed, \
+        "fixing the credentials would still leave it blocked"
+
+
+def test_the_skip_names_the_variables_to_set(monkeypatch, tmp_path, capsys):
+    monkeypatch.delenv("FB_PAGE_TOKEN", raising=False)
+    monkeypatch.delenv("FB_PAGE_ID", raising=False)
+    monkeypatch.setattr(social_promoter, "_publisher_for",
+                        lambda platform, config: _Unconfigured())
+    announce_to_platforms(
+        {"enabled": True, "state_path": str(tmp_path / "s.json"),
+         "platforms": {"facebook": {"enabled": True, "daily_cap": 5}}},
+        "Stream", {"youtube": "https://youtu.be/abc"})
+    out = capsys.readouterr().out
+    assert "FB_PAGE_TOKEN" in out and "FB_PAGE_ID" in out
+
+
+def test_a_publisher_that_does_not_answer_is_treated_as_ready():
+    """Test doubles and future platforms have no ready(); they must not
+    all be silently skipped."""
+    class Bare:
+        supports_link_posts = True
+    assert getattr(Bare(), "ready", None) is None
+
+
+def test_a_real_post_failure_still_trips_the_breaker(monkeypatch, tmp_path):
+    """The breaker must keep working for what it is actually for."""
+    from publish_guard import PublishGuard
+
+    class Rejecting:
+        supports_link_posts = True
+
+        def ready(self):
+            return True
+
+        def post_link(self, message, link):
+            return False
+
+    posting = {"enabled": True, "state_path": str(tmp_path / "state.json"),
+               "platforms": {"facebook": {"enabled": True, "daily_cap": 50}},
+               "circuit_breaker": {"consecutive_failures": 3}}
+    monkeypatch.setattr(social_promoter, "_publisher_for",
+                        lambda platform, config: Rejecting())
+    for _ in range(3):
+        announce_to_platforms(posting, "Stream",
+                              {"youtube": "https://youtu.be/abc"})
+
+    guard = PublishGuard(posting, posting["state_path"])
+    assert guard.consecutive_failures("facebook") == 3
+    assert not guard.check("facebook").allowed
