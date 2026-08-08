@@ -191,11 +191,20 @@ class PublishGuard:
 
     # ── The decision ─────────────────────────────────────────────────────
 
-    def check(self, platform: str, now: Optional[float] = None) -> Decision:
+    def check(self, platform: str, now: Optional[float] = None,
+              ignore_spacing: bool = False) -> Decision:
         """May `platform` be posted to right now?
 
         Checked cheapest-and-most-absolute first, so a kill switch beats
         everything and no amount of per-platform config can override it.
+
+        `ignore_spacing` waives ONLY the minimum gap between posts, and
+        only for a person running a single command by hand. Spacing
+        exists so an automated run does not fire a burst; one deliberate
+        post is not a burst. The kill switch, the daily cap, the
+        manual-only rule and the circuit breaker all still apply - those
+        are about whether a post should happen at all, which a human
+        being present does not change.
         """
         now = time.time() if now is None else now
 
@@ -240,7 +249,7 @@ class PublishGuard:
                 retry_after_s=wait)
 
         spacing_min = float(settings.get("min_minutes_between", 0) or 0)
-        if spacing_min > 0 and recent:
+        if spacing_min > 0 and recent and not ignore_spacing:
             since = now - recent[-1]
             needed = spacing_min * 60
             if since < needed:
@@ -290,12 +299,12 @@ class PublishGuard:
 
     # ── Publisher-facing API ─────────────────────────────────────────────
 
-    def can_post(self, platform: str) -> tuple:
+    def can_post(self, platform: str, ignore_spacing: bool = False) -> tuple:
         """(allowed, reason). reason is "" when allowed.
 
         Same checks as check(); this shape is what publishers/ expects.
         """
-        decision = self.check(platform)
+        decision = self.check(platform, ignore_spacing=ignore_spacing)
         return decision.allowed, ("" if decision.allowed else decision.reason)
 
     def record_result(self, platform: str, success: bool) -> None:

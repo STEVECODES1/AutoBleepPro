@@ -24,7 +24,7 @@ from datetime import datetime
 # Bump when shipping user-visible changes, so --test-config can prove
 # which build is actually running (stale extracts have silently caused
 # several confusing "the fix did nothing" runs).
-BUILD = "2026-08-08.7 reels: your caption + 9:16 crop"
+BUILD = "2026-08-08.8 --post-reel --now"
 
 from utils.censor import censor_video
 from utils.ffmpeg_tools import StageTimer, media_duration
@@ -635,6 +635,11 @@ def main(argv=None) -> int:
                              "it to the pipeline.")
     parser.add_argument("--caption", default="",
                         help="Caption for --post-reel.")
+    parser.add_argument("--now", action="store_true",
+                        help="With --post-reel: skip the minimum gap between "
+                             "posts and publish immediately. For testing one "
+                             "clip by hand. The daily cap, the kill switch and "
+                             "the circuit breaker all still apply.")
     parser.add_argument("--setup-meta", action="store_true",
                         help="Fill in FB_PAGE_TOKEN/FB_PAGE_ID/IG_* in .env from a "
                              "Meta token you already have. Reads from Graph, writes "
@@ -711,7 +716,8 @@ def main(argv=None) -> int:
         # exactly when they get walked past.
         from publish_guard import PublishGuard
         guard = PublishGuard(cfg.posting, (cfg.posting or {}).get("state_path"))
-        allowed, reason = guard.can_post("instagram")
+        allowed, reason = guard.can_post("instagram",
+                                         ignore_spacing=args.now)
         if not allowed:
             print(f"[Instagram] blocked: {reason}")
             return 1
@@ -725,7 +731,8 @@ def main(argv=None) -> int:
         ok = post_clip_to_instagram(
             cfg.posting, args.post_reel, args.caption,
             config={"features": cfg.features, "instagram": cfg.instagram,
-                    "clips": cfg.clips})
+                    "clips": cfg.clips},
+            ignore_spacing=args.now)
         if ok:
             print("[Instagram] Published. Check the account.")
             return 0

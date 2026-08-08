@@ -506,7 +506,8 @@ def _vertical_copy(video_path: str, instagram_cfg: dict, clips_cfg: dict):
 
 
 def post_clip_to_instagram(posting: dict, video_path: str, caption: str,
-                           config: dict = None, dry_run: bool = False) -> bool:
+                           config: dict = None, dry_run: bool = False,
+                           ignore_spacing: bool = False) -> bool:
     """Publish a clip to Instagram as a Reel. True if it went out.
 
     Instagram cannot carry a link announcement - it has no link post at
@@ -523,10 +524,13 @@ def post_clip_to_instagram(posting: dict, video_path: str, caption: str,
     from publish_guard import PublishGuard
 
     guard = PublishGuard(posting, posting.get("state_path"))
-    allowed, reason = guard.can_post("instagram")
+    allowed, reason = guard.can_post("instagram", ignore_spacing=ignore_spacing)
     if not allowed:
         print(f"[Social] instagram: {reason}")
         return False
+    if ignore_spacing:
+        print("[Social] instagram: posting now, ignoring the spacing rule "
+              "(you asked for this one by hand). The daily cap still applies.")
 
     publisher = _publisher_for("instagram", config or {})
     if publisher is None or not getattr(publisher, "supports_reels", False):

@@ -499,3 +499,62 @@ def test_status_covers_every_configured_platform(guard):
     by_name = {name: (ok, why) for name, ok, why in rows}
     assert by_name["facebook_group"][0] is False
     assert "manual" in by_name["facebook_group"][1]
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Testing one clip by hand
+#
+# Spacing exists so an automated run does not fire a burst. A person
+# running one command is not a burst - and being unable to check a single
+# post for 100 minutes is how config gets edited in a hurry and left
+# wrong.
+# ═════════════════════════════════════════════════════════════════════════════
+
+def test_spacing_can_be_waived_for_a_single_hand_run_post(guard):
+    guard.record_post("instagram")
+    assert not guard.check("instagram").allowed
+    assert guard.check("instagram", ignore_spacing=True).allowed
+
+
+def test_waiving_spacing_does_not_waive_the_daily_cap(tmp_path):
+    """The cap is about how much goes out in a day, which a human being
+    present does not change."""
+    from publish_guard import PublishGuard
+
+    config = {"enabled": True,
+              "platforms": {"instagram": {"enabled": True, "daily_cap": 2,
+                                          "min_minutes_between": 100}}}
+    g = PublishGuard(config, str(tmp_path / "state.json"))
+    g.record_post("instagram")
+    g.record_post("instagram")
+    decision = g.check("instagram", ignore_spacing=True)
+    assert not decision.allowed
+    assert "cap" in decision.reason
+
+
+def test_waiving_spacing_does_not_waive_the_kill_switch(tmp_path):
+    from publish_guard import PublishGuard
+
+    config = {"enabled": True, "kill_switch_file": __file__,
+              "platforms": {"instagram": {"enabled": True, "daily_cap": 5}}}
+    g = PublishGuard(config, str(tmp_path / "state.json"))
+    assert not g.check("instagram", ignore_spacing=True).allowed
+
+
+def test_waiving_spacing_does_not_waive_the_circuit_breaker(tmp_path):
+    from publish_guard import PublishGuard
+
+    config = {"enabled": True,
+              "circuit_breaker": {"consecutive_failures": 3},
+              "platforms": {"instagram": {"enabled": True, "daily_cap": 5}}}
+    g = PublishGuard(config, str(tmp_path / "state.json"))
+    for _ in range(3):
+        g.record_failure("instagram")
+    assert not g.check("instagram", ignore_spacing=True).allowed
+
+
+def test_spacing_still_applies_by_default(guard):
+    """The waiver must be something you ask for, never the default - the
+    automated path must never reach it."""
+    guard.record_post("instagram")
+    assert not guard.can_post("instagram")[0]
