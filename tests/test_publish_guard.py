@@ -263,12 +263,17 @@ def test_facebook_group_never_ships_enabled():
     assert settings.get("manual_approval_only") is True
 
 
-def test_shipped_config_keeps_reddit_parked_until_deliberately_enabled():
+def test_shipped_config_spaces_reddit_posts_out():
+    """Reddit is automated now, so the cap and the gap between posts are
+    the only things standing between this and a burst of self-promotion
+    from one account - which is what gets a domain shadowbanned."""
     with open(os.path.join(_UPLOADER, "config.json")) as f:
         shipped = json.load(f)
     reddit = shipped["posting"]["platforms"]["reddit"]
-    assert reddit["manual_approval_only"] is True, \
-        "reddit must ship parked even though it is now configurable"
+    assert reddit["daily_cap"] <= 10
+    assert reddit["min_minutes_between"] >= 60
+    assert reddit["daily_cap"] * reddit["min_minutes_between"] >= 600, \
+        "the day's posts must be spread over hours, not minutes"
 
 
 # ═════════════════════════════════════════════════════════════════════════════

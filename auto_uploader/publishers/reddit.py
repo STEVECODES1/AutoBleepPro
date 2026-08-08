@@ -49,6 +49,10 @@ def _credential_helpers():
 
 
 class RedditPublisher:
+    # Reddit takes a title and a URL, so a link announcement is native
+    # here - no hosted media needed, unlike Instagram.
+    supports_link_posts = True
+
     def __init__(self, cfg: Optional[Dict[str, Any]] = None,
                  account: Optional[str] = None) -> None:
         cfg = cfg or {}
@@ -90,6 +94,16 @@ class RedditPublisher:
             return False
         return True
 
+    def ready(self) -> bool:
+        """Whether a post could actually go out right now.
+
+        Public because the announcer asks BEFORE attempting: an unset
+        credential is a configuration problem, and recording it as a
+        failed post would trip the circuit breaker over a post that was
+        never made.
+        """
+        return self._ready()
+
     def _get_reddit(self):
         if self._reddit is None:
             import praw  # optional dependency; raises ImportError if absent
@@ -126,7 +140,18 @@ class RedditPublisher:
             return False
 
     def post_link(self, title: str, url: str, flair: Optional[str] = None) -> bool:
-        """Post a link post to the configured subreddit. True on success."""
+        """Post a link post to the configured subreddit. True on success.
+
+        The announcer passes a whole multi-line announcement here, but a
+        Reddit title is one line and caps at 300 characters - so the
+        headline is taken from the first line rather than submitting a
+        title with newlines in it, which Reddit rejects.
+        """
+        # splitlines() on an empty string is [], not [""], so the index
+        # has to be guarded - an announcement that arrived empty would
+        # otherwise crash here instead of posting.
+        lines = (title or "").strip().splitlines()
+        title = (lines[0][:300] if lines else "") or "New upload"
         kwargs = {"title": title, "url": url}
         if flair:
             # Passing flair_id=None is not the same as omitting it on some

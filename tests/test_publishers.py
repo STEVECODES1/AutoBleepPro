@@ -253,3 +253,63 @@ def test_shipped_config_uses_center_for_gameplay():
     from autoreel.crop_strategy import CROP_CENTER, resolve_crop_strategy
     assert resolve_crop_strategy(shipped) == CROP_CENTER
     assert shipped["clips"]["content_kind"] == "gameplay"
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Reddit through the guard
+#
+# It used to post on the older unguarded path, which had no cap and no
+# spacing. Behind the guard it gets both, and that is the whole reason a
+# daily figure like 8 is safe to set at all.
+# ═════════════════════════════════════════════════════════════════════════════
+
+def test_reddit_is_reachable_as_a_guarded_publisher():
+    from utils.social_promoter import _publisher_for
+
+    publisher = _publisher_for("reddit", {})
+    assert publisher is not None
+    assert publisher.supports_link_posts is True
+    assert callable(getattr(publisher, "ready", None))
+
+
+def test_a_multi_line_announcement_becomes_a_one_line_title(monkeypatch):
+    """Reddit titles are one line and cap at 300 characters; submitting
+    the whole announcement would be rejected."""
+    from auto_uploader.publishers.reddit import RedditPublisher
+
+    sent = {}
+    publisher = RedditPublisher({}, account="2")
+    monkeypatch.setattr(publisher, "_ready", lambda: True)
+    monkeypatch.setattr(publisher, "_submit",
+                        lambda what, **kw: sent.update(kw) or True)
+
+    publisher.post_link("🎬 New upload: Big Stream\n▶️ YouTube: https://y/1",
+                        "https://y/1")
+    assert "\n" not in sent["title"]
+    assert sent["title"] == "🎬 New upload: Big Stream"
+
+
+def test_a_very_long_title_is_truncated(monkeypatch):
+    from auto_uploader.publishers.reddit import RedditPublisher
+
+    sent = {}
+    publisher = RedditPublisher({}, account="2")
+    monkeypatch.setattr(publisher, "_ready", lambda: True)
+    monkeypatch.setattr(publisher, "_submit",
+                        lambda what, **kw: sent.update(kw) or True)
+
+    publisher.post_link("x" * 500, "https://y/1")
+    assert len(sent["title"]) == 300
+
+
+def test_an_empty_message_still_gets_a_title(monkeypatch):
+    from auto_uploader.publishers.reddit import RedditPublisher
+
+    sent = {}
+    publisher = RedditPublisher({}, account="2")
+    monkeypatch.setattr(publisher, "_ready", lambda: True)
+    monkeypatch.setattr(publisher, "_submit",
+                        lambda what, **kw: sent.update(kw) or True)
+
+    publisher.post_link("", "https://y/1")
+    assert sent["title"] == "New upload"

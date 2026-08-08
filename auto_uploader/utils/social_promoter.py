@@ -218,19 +218,9 @@ CANNOT_AUTOMATE = {
         "Instagram has no link or text post. Every Content Publishing call "
         "needs a rendered clip on public hosting, so there is nothing to "
         "announce with until clips are hosted.",
-    "x":
-        "X charges per post through its API and there is no free tier. "
-        "Automating x.com in a browser instead would breach their terms and "
-        "risk the account, which costs more than the fee saves.",
     "facebook_group":
         "Facebook Groups have no publishing route that permits this, so "
         "group posts stay manual on purpose.",
-    # Reddit IS automated - just on the other path, through praw. Leaving
-    # it manual here is what stops the same announcement going out twice,
-    # once outside the cap. Same rule X follows.
-    "reddit":
-        "posted through features.social_promoter (praw), so the guarded "
-        "path leaves it alone rather than announcing it twice.",
 }
 
 
@@ -250,13 +240,15 @@ def enable_all_announcements(features: dict, posting: dict) -> tuple:
     features["enabled"] = True
     features["discord"] = True
 
-    if features.get("reddit_subreddit"):
-        features["reddit"] = True
-    else:
-        features["reddit"] = False
+    if not features.get("reddit_subreddit"):
         notes.append("reddit: needs features.social_promoter.reddit_subreddit "
                      "set to the subreddit to post in - there is nowhere to "
                      "post it otherwise.")
+    # Reddit goes through the guard now, so the older unguarded praw path
+    # must stay off or the same link is announced twice - once outside the
+    # daily cap and the spacing, which is exactly the pattern Reddit's
+    # spam filters act on.
+    features["reddit"] = False if posting else bool(features.get("reddit_subreddit"))
 
     # X is left to the guarded path below when `posting` exists, so the
     # same announcement cannot go out twice - once outside the cap.
@@ -330,6 +322,9 @@ def _publisher_for(platform: str, config: dict):
     if platform == "instagram":
         from publishers.instagram import InstagramPublisher
         return InstagramPublisher(config)
+    if platform == "reddit":
+        from publishers.reddit import RedditPublisher
+        return RedditPublisher(config)
     return None
 
 

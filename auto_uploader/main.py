@@ -24,7 +24,7 @@ from datetime import datetime
 # Bump when shipping user-visible changes, so --test-config can prove
 # which build is actually running (stale extracts have silently caused
 # several confusing "the fix did nothing" runs).
-BUILD = "2026-08-08.3 one at a time + clips route to Rumble+social"
+BUILD = "2026-08-08.4 setup-meta + reddit/X automated"
 
 from utils.censor import censor_video
 from utils.ffmpeg_tools import StageTimer, media_duration
@@ -596,6 +596,15 @@ def main(argv=None) -> int:
     parser.add_argument("--verify", action="store_true",
                         help="With --posting-status, also ask each API who your token "
                              "belongs to. Read-only - creates and publishes nothing.")
+    parser.add_argument("--setup-meta", action="store_true",
+                        help="Fill in FB_PAGE_TOKEN/FB_PAGE_ID/IG_* in .env from a "
+                             "Meta token you already have. Reads from Graph, writes "
+                             "to .env, posts nothing.")
+    parser.add_argument("--meta-token", metavar="TOKEN",
+                        help="Use this Meta token for --setup-meta instead of "
+                             "looking for one in .env.")
+    parser.add_argument("--meta-page", metavar="NAME",
+                        help="Which Page to use, when the token can see several.")
     parser.add_argument("--reset-failures", nargs="?", const="all", metavar="PLATFORM",
                         help="Clear a tripped circuit breaker (all platforms, or one "
                              "named). Use after fixing whatever was failing.")
@@ -631,6 +640,33 @@ def main(argv=None) -> int:
         print(f"[Social] Announcements: {label} for this run.")
         for note in notes:
             print(f"[Social]   {note}")
+
+    if args.setup_meta:
+        from utils.meta_setup import MetaError, WRITES, setup
+
+        env_path = os.path.join(config_dir, ".env")
+        try:
+            result = setup(env_path, args.meta_token or "", args.meta_page or "")
+        except MetaError as exc:
+            print(f"[Meta] {exc}")
+            return 1
+        print(f"[Meta] Token found via {result['source']}.")
+        print(f"[Meta] Page: {result['page_name']} ({result['values']['FB_PAGE_ID']})")
+        for key in WRITES:
+            value = result["values"].get(key)
+            if value:
+                # Never the token itself. A .env is pasted into chat logs
+                # and screenshots more often than anyone means to.
+                shown = f"{value[:6]}...{value[-4:]}" if "TOKEN" in key else value
+                print(f"[Meta]   {key} = {shown}")
+            else:
+                print(f"[Meta]   {key} = (not set)")
+        for warning in result["warnings"]:
+            print(f"[Meta] NOTE: {warning}")
+        if result["backup"]:
+            print(f"[Meta] Previous .env saved as {os.path.basename(result['backup'])}")
+        print("[Meta] Done. Check it with: python main.py --posting-status --verify")
+        return 0
 
     if args.reset_failures:
         from publish_guard import PublishGuard

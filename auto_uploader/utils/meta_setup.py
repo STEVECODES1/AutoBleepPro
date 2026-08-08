@@ -1,0 +1,273 @@
+"""
+Fill in the Facebook/Instagram credentials from a token you already have.
+
+FB_PAGE_TOKEN, FB_PAGE_ID, IG_PAGE_TOKEN and IG_BUSINESS_ACCOUNT_ID are
+four separate values, and clicking through Meta's Graph API Explorer to
+find each one is where most people give up. Only ONE of them is actually
+a secret you have to obtain: a token with pages_show_list and
+pages_manage_posts. Everything else is derivable from it.
+
+    /me/accounts                      -> Page id AND that Page's own token
+    /{page}?fields=instagram_business_account  -> the IG account id
+
+A System User token, a long-lived user token, or a Page token all work as
+the starting point, so this looks for any of them under any of the names
+they are commonly stored as.
+
+Nothing is guessed and nothing is posted. This reads from Graph and
+writes to .env, and it says exactly what it found before it writes.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import shutil
+import time
+import urllib.parse
+import urllib.request
+from typing import Optional
+
+GRAPH_API = "https://graph.facebook.com/v19.0"
+_TIMEOUT = 30
+
+# Where a usable Meta token might already be sitting. Ordered by how
+# specific each one is - a Page token beats a system user token, because
+# it needs no exchange.
+TOKEN_NAMES = (
+    "FB_PAGE_TOKEN",
+    "META_SYSTEM_USER_TOKEN",
+    "META_ACCESS_TOKEN",
+    "META_TOKEN",
+    "FB_SYSTEM_USER_TOKEN",
+    "FB_ACCESS_TOKEN",
+    "FB_USER_TOKEN",
+    "IG_PAGE_TOKEN",
+)
+
+# What this writes. Kept in one place so the CLI, the tests and the
+# summary all agree on the set.
+WRITES = ("FB_PAGE_TOKEN", "FB_PAGE_ID",
+          "IG_PAGE_TOKEN", "IG_BUSINESS_ACCOUNT_ID")
+
+
+class MetaError(RuntimeError):
+    """A Graph call failed, carrying the reason Graph actually gave."""
+
+
+def _get(path: str, params: dict) -> dict:
+    url = f"{GRAPH_API}/{path}?{urllib.parse.urlencode(params)}"
+    try:
+        with urllib.request.urlopen(url, timeout=_TIMEOUT) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        # Graph puts the real reason in the body, never the status line.
+        # "400 Bad Request" on its own is useless; the body says whether
+        # the token expired, lacks a scope, or is for the wrong app.
+        try:
+            detail = json.loads(exc.read().decode("utf-8"))
+            message = detail.get("error", {}).get("message", "")
+        except Exception:
+            message = ""
+        raise MetaError(message or f"HTTP {exc.code} from {path}") from None
+    except Exception as exc:
+        raise MetaError(str(exc)) from None
+
+
+# ── Reading and writing .env ─────────────────────────────────────────────
+
+def read_env(path: str) -> dict:
+    """Parse a .env into a dict. Missing file = {}."""
+    values: dict = {}
+    if not os.path.isfile(path):
+        return values
+    with open(path, "r", encoding="utf-8", errors="replace") as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, _, value = line.partition("=")
+            values[key.strip()] = value.strip().strip('"').strip("'")
+    return values
+
+
+def update_env(path: str, values: dict) -> str:
+    """Set these keys in .env, keeping everything else exactly as it is.
+
+    Rewritten line by line rather than regenerated: a .env holds hand-
+    written comments and credentials for half a dozen services, and
+    regenerating it would quietly drop whatever this module does not know
+    about. A dated backup is taken first, because this file is the one
+    thing in the project that cannot be recovered from git.
+    """
+    backup = ""
+    lines: list = []
+    if os.path.isfile(path):
+        backup = f"{path}.backup-{time.strftime('%Y%m%d-%H%M%S')}"
+        shutil.copy2(path, backup)
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            lines = f.read().splitlines()
+
+    remaining = dict(values)
+    out: list = []
+    for line in lines:
+        key = line.split("=", 1)[0].strip() if "=" in line else ""
+        if key in remaining and not line.lstrip().startswith("#"):
+            out.append(f"{key}={remaining.pop(key)}")
+        else:
+            out.append(line)
+
+    if remaining:
+        if out and out[-1].strip():
+            out.append("")
+        out.append("# Written by: python main.py --setup-meta")
+        for key, value in remaining.items():
+            out.append(f"{key}={value}")
+
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("\n".join(out).rstrip() + "\n")
+    return backup
+
+
+# ── Talking to Graph ─────────────────────────────────────────────────────
+
+def find_token(env: dict) -> tuple:
+    """(name, token) of the first usable-looking Meta token, or ("", "")."""
+    for name in TOKEN_NAMES:
+        value = (env.get(name) or os.environ.get(name) or "").strip()
+        if value:
+            return name, value
+    return "", ""
+
+
+def token_scopes(token: str) -> list:
+    """Permissions this token actually carries.
+
+    Worth checking before anything else: a token missing
+    pages_manage_posts will list Pages perfectly and then fail on the
+    first real post, which looks like a completely different problem.
+    """
+    data = _get("debug_token", {"input_token": token, "access_token": token})
+    return list(data.get("data", {}).get("scopes", []) or [])
+
+
+def list_pages(token: str) -> list:
+    """Every Page this token can act for: [{id, name, access_token}].
+
+    The Page's OWN token comes back in this response, which is the part
+    that makes the rest automatic - it is what FB_PAGE_TOKEN wants, and
+    it does not expire the way a user token does.
+    """
+    data = _get("me/accounts", {"access_token": token,
+                                "fields": "id,name,access_token"})
+    return list(data.get("data", []) or [])
+
+
+def instagram_account(page_id: str, page_token: str) -> str:
+    """The IG Business account id linked to this Page, or "".
+
+    Empty is a normal answer, not an error: an IG account has to be a
+    Business/Creator account AND linked to the Page in Meta Business
+    Suite before it exists here at all.
+    """
+    data = _get(page_id, {"access_token": page_token,
+                          "fields": "instagram_business_account"})
+    return str((data.get("instagram_business_account") or {}).get("id", ""))
+
+
+REQUIRED_SCOPES = ("pages_show_list", "pages_manage_posts")
+
+
+def resolve(token: str, page_choice: str = "") -> dict:
+    """Token -> everything needed, or raise MetaError explaining what is
+    missing. Returns {values, page_name, scopes, warnings}."""
+    warnings: list = []
+
+    try:
+        scopes = token_scopes(token)
+    except MetaError as exc:
+        # Not fatal on its own - some tokens cannot introspect themselves
+        # but work fine for the calls below.
+        scopes, warnings = [], [f"could not read the token's scopes ({exc})"]
+
+    missing = [s for s in REQUIRED_SCOPES if scopes and s not in scopes]
+    if missing:
+        warnings.append(
+            f"the token is missing {', '.join(missing)} - listing Pages may "
+            "work but posting will fail. Add the scope in the Meta app, then "
+            "regenerate the token.")
+
+    pages = list_pages(token)
+    if not pages:
+        raise MetaError(
+            "the token can see no Pages. Either it lacks pages_show_list, or "
+            "it is a System User token that has not been given access to the "
+            "Page in Meta Business Suite (Business Settings -> System Users "
+            "-> Assign Assets -> Pages).")
+
+    page = pages[0]
+    if page_choice:
+        wanted = page_choice.strip().lower()
+        matched = [p for p in pages
+                   if wanted in str(p.get("name", "")).lower()
+                   or wanted == str(p.get("id", ""))]
+        if not matched:
+            names = ", ".join(f"{p.get('name')} ({p.get('id')})" for p in pages)
+            raise MetaError(f"no Page matching '{page_choice}'. Found: {names}")
+        page = matched[0]
+    elif len(pages) > 1:
+        warnings.append(
+            "several Pages are available and the first was used: "
+            + ", ".join(f"{p.get('name')} ({p.get('id')})" for p in pages)
+            + ". Re-run with --meta-page \"<name>\" to pick another.")
+
+    page_id = str(page.get("id", ""))
+    page_token = str(page.get("access_token", "")) or token
+    values = {"FB_PAGE_TOKEN": page_token, "FB_PAGE_ID": page_id}
+
+    try:
+        ig_id = instagram_account(page_id, page_token)
+    except MetaError as exc:
+        ig_id = ""
+        warnings.append(f"could not check for a linked Instagram account ({exc})")
+    if ig_id:
+        # Instagram publishing goes through the PAGE's token; there is no
+        # separate Instagram one to fetch.
+        values["IG_BUSINESS_ACCOUNT_ID"] = ig_id
+        values["IG_PAGE_TOKEN"] = page_token
+    else:
+        warnings.append(
+            "no Instagram Business account is linked to this Page, so "
+            "Instagram stays unconfigured. Link it in Meta Business Suite "
+            "(the IG account must be Business or Creator, not personal).")
+
+    return {"values": values, "page_name": str(page.get("name", "")),
+            "scopes": scopes, "warnings": warnings}
+
+
+def setup(env_path: str, token: str = "", page_choice: str = "",
+          write: bool = True) -> dict:
+    """Resolve and (optionally) write. Returns the resolve() result plus
+    `backup` and `written`."""
+    env = read_env(env_path)
+    if not token:
+        name, token = find_token(env)
+        if not token:
+            raise MetaError(
+                "no Meta token found in .env. Looked for: "
+                + ", ".join(TOKEN_NAMES)
+                + ". Paste one with --meta-token \"<token>\", or get one from "
+                "developers.facebook.com -> your app -> Graph API Explorer, "
+                "with pages_show_list and pages_manage_posts.")
+        result_source = name
+    else:
+        result_source = "--meta-token"
+
+    result = resolve(token, page_choice)
+    result["source"] = result_source
+    result["backup"] = ""
+    result["written"] = False
+    if write:
+        result["backup"] = update_env(env_path, result["values"])
+        result["written"] = True
+    return result

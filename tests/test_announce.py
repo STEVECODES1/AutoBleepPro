@@ -395,16 +395,20 @@ def test_facebook_group_is_not_parked(tmp_path, publishers, no_x):
     assert not queue.exists() or "facebook_group" not in queue.read_text()
 
 
-def test_the_shipped_config_parks_x_rather_than_paying_for_it():
+def test_the_shipped_config_keeps_x_inside_the_free_tier():
+    """X's free API tier allows roughly 500 posts a month. The daily cap
+    is what keeps automated posting inside it - 8/day is 240/month."""
     import json
 
     with open(os.path.join(_UPLOADER, "config.json")) as f:
         shipped = json.load(f)
     x = shipped["posting"]["platforms"]["x"]
-    assert x["manual_approval_only"] is True
-    assert x["enabled"] is False
+    assert x["daily_cap"] * 31 < 500, \
+        "the daily cap would exceed X's free monthly allowance"
+    assert x["min_minutes_between"] >= 60, \
+        "posts must be spread through the day, not fired in a burst"
     assert shipped["posting"].get("manual_queue_path"), \
-        "parked posts need somewhere to land"
+        "parked posts still need somewhere to land"
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -542,8 +546,11 @@ def test_one_call_turns_on_everything_that_can_run():
     from utils.social_promoter import enable_all_announcements
 
     features, posting, _ = enable_all_announcements(*_config())
-    assert features["enabled"] and features["discord"] and features["reddit"]
+    assert features["enabled"] and features["discord"]
     assert posting["enabled"]
+    # Reddit and X are automated through the guard, not the legacy path.
+    for name in ("reddit", "x"):
+        assert posting["platforms"][name]["enabled"], name
     assert posting["platforms"]["facebook"]["enabled"]
     assert not posting["platforms"]["facebook"]["manual_approval_only"]
 
@@ -554,7 +561,7 @@ def test_platforms_that_cannot_be_automated_stay_manual():
     from utils.social_promoter import enable_all_announcements
 
     _, posting, notes = enable_all_announcements(*_config())
-    for name in ("instagram", "x", "facebook_group"):
+    for name in ("instagram", "facebook_group"):
         assert not posting["platforms"][name]["enabled"], name
         assert posting["platforms"][name]["manual_approval_only"], name
         assert any(name in note for note in notes), f"{name} was silently skipped"
@@ -636,14 +643,16 @@ def test_announcing_everywhere_still_goes_through_the_guard():
                                  {"youtube": "https://youtu.be/abc"}) == []
 
 
-def test_reddit_is_not_announced_twice_either():
-    """praw handles Reddit on the features path; the guarded path leaving
-    it enabled would post the same link twice, once outside the cap."""
+def test_reddit_is_not_announced_twice():
+    """Reddit posts through the guard now, so the older unguarded praw
+    path must stay off - otherwise the same link goes out twice, once
+    outside the daily cap and the spacing, which is exactly the pattern
+    Reddit's spam filters act on."""
     from utils.social_promoter import enable_all_announcements
 
     features, posting, _ = enable_all_announcements(*_config())
-    assert features["reddit"] is True
-    assert posting["platforms"]["reddit"]["manual_approval_only"] is True
+    assert features["reddit"] is False
+    assert posting["platforms"]["reddit"]["enabled"] is True
 
 
 def test_a_platform_with_no_publisher_is_skipped_not_failed(monkeypatch, tmp_path):

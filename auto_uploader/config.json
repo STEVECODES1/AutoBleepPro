@@ -102,10 +102,11 @@
     "platforms": {
       "instagram":      { "enabled": true,  "daily_cap": 5, "min_minutes_between": 45 },
       "facebook":       { "enabled": true,  "daily_cap": 5, "min_minutes_between": 45 },
-      "x":              { "enabled": false, "daily_cap": 3, "min_minutes_between": 90, "manual_approval_only": true, "_note": "X charges per post via its API and automating x.com in a browser instead breaks their ToS - a suspension costs more than the fee saves. So X is manual: the announcement text is composed for you and pinged to Discord, and you paste it. Set manual_approval_only:false and enabled:true if you ever add API credits." },
-      "reddit":         { "enabled": false, "daily_cap": 1, "min_minutes_between": 720, "manual_approval_only": true },
+      "x":              { "enabled": true,  "daily_cap": 8, "min_minutes_between": 100, "_note": "X's FREE API tier does allow posting - roughly 500 posts a month, write-only. 8/day is 240/month, comfortably inside it. The 401 you hit was the app being Read-only: developer.twitter.com -> your app -> User authentication settings -> set Read+Write -> then REGENERATE the Access Token+Secret, because the existing one keeps the old permission. Needs: pip install tweepy" },
+      "reddit":         { "enabled": true,  "daily_cap": 8, "min_minutes_between": 100, "_note": "Needs praw, the REDDIT_*_2 credentials, and features.social_promoter.reddit_subreddit. READ THE SUBREDDIT RULES FIRST: most cap self-promotion (roughly 1 in 10 posts is the common convention) and several ban links to your own channel outright. The cap and spacing here keep the ACCOUNT safe; they cannot keep you inside a subreddit rule you have not read." },
       "facebook_group": { "enabled": false, "daily_cap": 1, "manual_approval_only": true }
     },
+    "_spacing_comment": "min_minutes_between is what spreads posts through the day rather than firing them in a burst. 8 posts at 100 minutes apart covers about 13 hours, so a day of clips goes out steadily instead of all at once - which is the pattern every platform's spam detection actually keys on.",
     "circuit_breaker": { "consecutive_failures": 3 }
   },
 
