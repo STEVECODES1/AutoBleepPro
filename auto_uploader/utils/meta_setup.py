@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import time
 import urllib.parse
@@ -271,3 +272,70 @@ def setup(env_path: str, token: str = "", page_choice: str = "",
         result["backup"] = update_env(env_path, result["values"])
         result["written"] = True
     return result
+
+
+# ── Learning the account's own caption style ─────────────────────────────
+
+def recent_captions(account_id: str, token: str, limit: int = 25) -> list:
+    """The account's own recent captions, newest first.
+
+    Its own posts, through its own credentials - the documented
+    /{ig-user}/media edge. Nothing is scraped and no other account is
+    read.
+    """
+    data = _get(f"{account_id}/media",
+                {"fields": "caption,media_type,timestamp",
+                 "limit": str(limit), "access_token": token})
+    return [item for item in (data.get("data") or []) if item.get("caption")]
+
+
+def _hashtags(caption: str) -> list:
+    return re.findall(r"#\w+", caption or "")
+
+
+def _emoji_run(caption: str) -> str:
+    """The longest unbroken run of non-text characters on the first line.
+
+    That run is the account's signature - "🤣🤣🤣💀💀💀" - and it is the
+    part a generated caption has to reproduce to look like the others.
+    """
+    first = (caption or "").splitlines()[0] if caption else ""
+    runs = re.findall(r"[^\w\s#@,.!?'\"()\-:/]+", first)
+    return max(runs, key=len) if runs else ""
+
+
+def study_captions(captions: list) -> dict:
+    """What these captions have in common. Frequencies, not guesses."""
+    from collections import Counter
+
+    tags, emoji, links = Counter(), Counter(), Counter()
+    for item in captions:
+        caption = item.get("caption", "")
+        tags.update(t.lower() for t in _hashtags(caption))
+        run = _emoji_run(caption)
+        if run:
+            emoji[run] += 1
+        for line in caption.splitlines():
+            for url in re.findall(r"https?://\S+", line):
+                # The label matters as much as the URL - "Link Youtube
+                # monkey - <url>" is the account's own phrasing.
+                label = line.split(url)[0].strip(" -–—:")
+                links[(label, url)] += 1
+    return {
+        "sampled": len(captions),
+        "hashtags": tags.most_common(6),
+        "emoji": emoji.most_common(3),
+        "links": links.most_common(4),
+    }
+
+
+def suggest_template(study: dict) -> str:
+    """A caption_template built from what the account actually posts."""
+    run = study["emoji"][0][0] if study["emoji"] else ""
+    tags = " ".join(tag for tag, _ in study["hashtags"][:2])
+    head = f"{{title}} {run}{tags}".strip()
+    lines = [head]
+    for (label, url), _ in study["links"]:
+        lines.append("")
+        lines.append(f"{label} - {url}" if label else url)
+    return "\n".join(lines)

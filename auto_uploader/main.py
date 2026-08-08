@@ -24,7 +24,7 @@ from datetime import datetime
 # Bump when shipping user-visible changes, so --test-config can prove
 # which build is actually running (stale extracts have silently caused
 # several confusing "the fix did nothing" runs).
-BUILD = "2026-08-08.9 clips go up vertical (Rumble Shorts + Reels)"
+BUILD = "2026-08-09.1 auto clips from streams, every 25 min"
 
 from utils.censor import censor_video
 from utils.ffmpeg_tools import StageTimer, media_duration
@@ -43,7 +43,7 @@ from utils.cleanup import (
 from utils.config import load_config, validate_config
 from utils.duplicate_checker import DuplicateChecker, hash_file
 from utils.file_watcher import FolderWatcher, is_intermediate_download, is_sidecar_file
-from utils.logging_setup import setup_logger
+from utils.logging_setup import setup_logger, setup_publisher_logging
 from utils.notifier import notify
 from utils.retry import retry_with_backoff
 from utils.rumble_checker import fetch_rumble_videos
@@ -86,6 +86,29 @@ def _suggest_paths(cfg, basename: str, limit: int = 5) -> list:
         if len(found) >= limit:
             break
     return found
+
+
+def _deliver_clips(run, cfg) -> int:
+    """Move rendered clips into the watch folder. Returns how many.
+
+    Delivered rather than posted directly: the watch folder is where the
+    queue, the one-at-a-time worker and the per-platform spacing already
+    live, so a clip that arrives there is handled exactly like a Twitch
+    clip and needs no second code path.
+    """
+    moved = 0
+    os.makedirs(cfg.general.watch_folder, exist_ok=True)
+    for clip in getattr(run, "clips", []) or []:
+        source = getattr(clip, "path", "")
+        if not source or not os.path.isfile(source):
+            continue
+        try:
+            shutil.move(source, os.path.join(cfg.general.watch_folder,
+                                             os.path.basename(source)))
+            moved += 1
+        except OSError as exc:
+            print(f"[Clips] could not deliver {os.path.basename(source)}: {exc}")
+    return moved
 
 
 def _find_clips(cfg, limit: int = 15) -> list:
@@ -234,8 +257,10 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
     is_clip = False
     if clip_cfg.get("route_clips_separately", True):
         seconds = media_duration(video_path)
+        # NOT clips.max_seconds - that is how long a rendered clip may
+        # be, which is a different question from what counts as one.
         is_clip = bool(seconds and seconds <= float(
-            clip_cfg.get("max_seconds", CLIP_MAX_SECONDS)))
+            clip_cfg.get("treat_as_clip_under_seconds", CLIP_MAX_SECONDS)))
 
     if is_clip and not only_platform:
         print(f"[Clip] {filename} is {seconds / 60:.1f} min - treating it as a "
@@ -593,6 +618,29 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
                                        or video_path) if is_clip else "")
         except Exception as exc:
             print(f"[Social] WARNING: announce failed: {exc}")
+        # A finished STREAM is the source of the next day of clips. The
+        # transcript the censor pass already produced is what scores the
+        # highlights, so this is nearly free at this point - and doing it
+        # here rather than by hand is the difference between having clips
+        # and meaning to make some.
+        if not is_clip and (cfg.clips or {}).get("auto_from_streams", False):
+            try:
+                from utils.clip_runner import make_clips, print_run
+
+                run = make_clips(cfg, video_path, stream_title,
+                                 count=(cfg.clips or {}).get("count"))
+                print_run(run)
+                delivered = _deliver_clips(run, cfg)
+                if delivered:
+                    print(f"[Clips] {delivered} clip(s) moved into "
+                          f"{cfg.general.watch_folder} - they will be posted "
+                          "one at a time, on the spacing set for each "
+                          "platform.")
+            except Exception as exc:
+                # Clips are a bonus on top of a successful upload; failing
+                # to make them must not make the upload look failed.
+                print(f"[Clips] WARNING: could not make clips: {exc}")
+
         try:
             optimizer_cfg = cfg.features.get("content_optimizer", {})
             if optimizer_cfg.get("enabled", True):
@@ -693,6 +741,15 @@ def main(argv=None) -> int:
                              "posts and publish immediately. For testing one "
                              "clip by hand. The daily cap, the kill switch and "
                              "the circuit breaker all still apply.")
+    parser.add_argument("--study-instagram", action="store_true",
+                        help="Read your own recent Instagram captions and "
+                             "print a caption_template matching how you "
+                             "actually post. Reads only; changes nothing.")
+    parser.add_argument("--set-env", nargs="+", metavar="KEY=VALUE",
+                        help="Write credentials into .env without opening an "
+                             "editor, e.g. --set-env TWITTER_ACCESS_TOKEN=abc "
+                             "TWITTER_ACCESS_SECRET=def. Backs .env up first "
+                             "and leaves every other line alone.")
     parser.add_argument("--setup-meta", action="store_true",
                         help="Fill in FB_PAGE_TOKEN/FB_PAGE_ID/IG_* in .env from a "
                              "Meta token you already have. Reads from Graph, writes "
@@ -791,6 +848,75 @@ def main(argv=None) -> int:
             return 0
         print("[Instagram] Failed - the reason is in the log above.")
         return 1
+
+    if args.study_instagram:
+        from utils.meta_setup import (MetaError, recent_captions,
+                                      study_captions, suggest_template)
+
+        token = os.environ.get("IG_PAGE_TOKEN", "")
+        account = os.environ.get("IG_BUSINESS_ACCOUNT_ID", "")
+        if not token or not account:
+            print("[Instagram] IG_PAGE_TOKEN and IG_BUSINESS_ACCOUNT_ID must "
+                  "be set. Run: python main.py --setup-meta")
+            return 1
+        try:
+            captions = recent_captions(account, token)
+        except MetaError as exc:
+            print(f"[Instagram] {exc}")
+            return 1
+        if not captions:
+            print("[Instagram] No captioned posts came back to learn from.")
+            return 1
+
+        study = study_captions(captions)
+        print(f"[Instagram] Read {study['sampled']} of your own captions.")
+        for label, items in (("Hashtags", study["hashtags"]),
+                             ("Emoji run", study["emoji"])):
+            for value, count in items:
+                print(f"[Instagram]   {label}: {value}  ({count}x)")
+        for (text, url), count in study["links"]:
+            print(f"[Instagram]   Link: {text or '(no label)'} -> {url}  ({count}x)")
+
+        print("\n--- caption_template ---")
+        print(suggest_template(study))
+        print("------------------------")
+        print("\nPaste that into config.json under \"instagram\" -> "
+              "\"caption_template\" if you want it. {title} is filled in "
+              "with the clip name.")
+        return 0
+
+    if args.set_env:
+        from utils.meta_setup import update_env
+
+        values, bad = {}, []
+        for pair in args.set_env:
+            key, sep, value = pair.partition("=")
+            key = key.strip()
+            if not sep or not key:
+                bad.append(pair)
+                continue
+            # Quotes survive a copy/paste from a credentials page and
+            # would be stored as part of the secret.
+            values[key] = value.strip().strip('"').strip("'")
+        if bad:
+            print("[Env] Not in KEY=VALUE form, ignored: " + ", ".join(bad))
+        if not values:
+            print("[Env] Nothing to write.")
+            return 1
+
+        env_path = os.path.join(config_dir, ".env")
+        backup = update_env(env_path, values)
+        for key, value in values.items():
+            # Never the secret itself - this scrolls back in a terminal
+            # and ends up in screenshots.
+            shown = f"{value[:4]}...{value[-4:]}" if len(value) > 12 else "(set)"
+            print(f"[Env] {key} = {shown}")
+        if backup:
+            print(f"[Env] Previous .env saved as {os.path.basename(backup)}")
+        print("[Env] Check it with: python main.py --posting-status --verify")
+        print("[Env] If a platform was failing, clear its breaker: "
+              "python main.py --reset-failures")
+        return 0
 
     if args.setup_meta:
         from utils.meta_setup import MetaError, WRITES, setup
@@ -971,6 +1097,9 @@ def main(argv=None) -> int:
             return 1
         print(f"Batch folder: {batch_folder}")
 
+    # Before anything can post, so a failure explains itself the first
+    # time rather than three uploads later as a tripped breaker.
+    setup_publisher_logging(cfg.general.logs_folder)
     yt_logger = setup_logger("youtube", cfg.general.logs_folder)
     rb_logger = setup_logger("rumble", cfg.general.logs_folder)
     dup_checker = DuplicateChecker(cfg.general.duplicate_store_path)

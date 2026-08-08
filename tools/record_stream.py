@@ -863,6 +863,15 @@ def clips_args(url: str, output_path: str, archive_path: str,
         "--concurrent-fragments", "4",
         "--download-archive", archive_path,
         "--no-post-overwrites",
+        # Clip titles are whatever the clipper typed, and on Twitch that
+        # is routinely emoji. A filename containing them survives the
+        # download and then breaks everything downstream on Windows -
+        # shutil.move raised "[WinError 2] The system cannot find the
+        # file specified" for a file plainly sitting there, because the
+        # name that came back from listdir and the name the move used
+        # were not encoded the same way. ASCII-only names cost a little
+        # readability and remove the whole class of failure.
+        "--restrict-filenames",
         "--merge-output-format", "mp4",
         "--no-progress", "--newline",
         "-o", output_path,

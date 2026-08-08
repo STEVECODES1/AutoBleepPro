@@ -260,7 +260,7 @@ def test_every_enabled_platform_has_a_real_cap():
 # Instagram posts every clip the moment it is ready, deliberately - the
 # owner asked for no waiting there. Listed by name so turning the spacing
 # off somewhere else stays a decision rather than a drift.
-UNSPACED_BY_CHOICE = {"instagram"}
+UNSPACED_BY_CHOICE = set()
 
 
 def test_every_enabled_platform_spaces_its_posts():

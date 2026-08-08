@@ -207,14 +207,15 @@ def test_rumble_files_clips_as_shorts_only_if_they_are_vertical():
     assert round(VERTICAL_HEIGHT / VERTICAL_WIDTH, 4) == round(16 / 9, 4)
 
 
-def test_instagram_posts_every_clip_without_waiting():
-    """No spacing and no self-imposed cap - every clip goes out when it
-    is ready."""
+def test_instagram_posts_a_clip_every_25_minutes():
+    """A stream is cut into several clips at once, so they need pacing -
+    posting six back to back is a burst however good they are. 25 minutes
+    is what the account owner asked for."""
     import json
 
     with open(os.path.join(_UPLOADER, "config.json")) as f:
         instagram = json.load(f)["posting"]["platforms"]["instagram"]
-    assert instagram["min_minutes_between"] == 0
+    assert instagram["min_minutes_between"] == 25
     assert instagram["enabled"] is True
 
 
@@ -238,3 +239,23 @@ def test_a_clip_takes_its_title_from_the_filename():
 
     assert clip_title("Stackswopo twitch Ayo.mp4") == "Ayo"
     assert clip_title("Stackswopo twitch clips ban that....mp4") == "ban that"
+
+
+def test_clip_length_and_clip_routing_are_separate_settings():
+    """They shared one key, so raising the routing threshold to 3 minutes
+    silently made every rendered clip 3 minutes long."""
+    import json
+
+    with open(os.path.join(_UPLOADER, "config.json")) as f:
+        clips = json.load(f)["clips"]
+    assert clips["treat_as_clip_under_seconds"] > clips["max_seconds"]
+    assert clips["max_seconds"] <= 90, "Reels and Shorts want short clips"
+
+
+def test_streams_are_cut_into_clips_automatically():
+    import json
+
+    with open(os.path.join(_UPLOADER, "config.json")) as f:
+        clips = json.load(f)["clips"]
+    assert clips["auto_from_streams"] is True
+    assert clips["count"] >= 1

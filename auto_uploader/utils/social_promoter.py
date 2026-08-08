@@ -459,10 +459,14 @@ def clip_title(video_path: str) -> str:
     something that reads like a caption.
     """
     stem = os.path.splitext(os.path.basename(video_path or ""))[0]
-    for marker in (" clips ", " twitch ", " youtube "):
+    for marker in (" clips ", " twitch ", " youtube ",
+                   "_clips_", "_twitch_", "_youtube_"):
         if marker in stem:
             stem = stem.split(marker, 1)[1]
-    return stem.strip(" -_.") or "Stackswopo"
+    # Downloads are stored with ASCII-safe names, which means underscores
+    # where the clip title had spaces. A caption should read as the title
+    # did, not as the filename does.
+    return " ".join(stem.replace("_", " ").split()).strip(" -.") or "Stackswopo"
 
 
 def build_caption(template: str, video_path: str, title: str = "") -> str:
