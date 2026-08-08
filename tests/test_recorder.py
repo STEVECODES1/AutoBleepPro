@@ -751,7 +751,8 @@ def test_new_clips_land_in_the_watch_folder(tmp_path, monkeypatch):
 
     monkeypatch.setattr(record_stream.Recorder, "_run", fake_run)
     delivered = record_stream.fetch_clips(
-        "https://twitch.tv/x/clips", str(staging), str(watch))
+        "https://twitch.tv/x/clips", str(staging), str(watch),
+        name="Stackswopo")
 
     assert delivered == ["Stackswopo Funny moment.mp4"]
     assert (watch / "Stackswopo Funny moment.mp4").exists()
