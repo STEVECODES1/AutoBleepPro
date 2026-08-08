@@ -34,6 +34,14 @@ MISSING = "missing"
 FAILED = "failed"
 SKIPPED = "skipped"
 
+# Platforms the guard can permit but the announcer cannot actually use,
+# and why. Credentials being correct does not make these postable.
+NO_LINK_POST = {
+    "instagram":
+        "Instagram has no link or text post. Every publish needs a rendered "
+        "clip on public hosting for Meta to fetch.",
+}
+
 # platform -> the .env variables it cannot work without.
 REQUIRED_ENV = {
     "instagram": ("IG_PAGE_TOKEN", "IG_BUSINESS_ACCOUNT_ID"),
@@ -374,6 +382,14 @@ def report(cfg_dict: dict, guard, reddit_account: str = "",
     print("\nPer platform (the guard's actual verdict right now):")
     for name, allowed, reason in guard.status(platforms):
         print(f"  {'ALLOW' if allowed else 'BLOCK'}  {name:<16} {reason}")
+        if allowed and name in NO_LINK_POST:
+            # ALLOW on its own reads as "this will post", and for
+            # Instagram it does not: the guard permits it, and the
+            # announcer then skips it because the platform has no link
+            # post at all. Saying so here stops that looking like a bug
+            # once the credentials are finally working.
+            print(f"         {'':<16} ...but announcements still skip it: "
+                  f"{NO_LINK_POST[name]}")
 
     print("\nCredentials in .env:")
     for name in platforms:

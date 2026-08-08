@@ -226,3 +226,30 @@ def test_load_config_keeps_the_clips_block():
     cfg = load_config(os.path.join(_UPLOADER, "config.json"),
                       os.path.join(_UPLOADER, ".env"))
     assert resolve_crop_strategy({"clips": cfg.clips}) == CROP_CENTER
+
+
+def test_a_platform_that_cannot_link_post_says_so_next_to_ALLOW(capsys):
+    """"ALLOW" reads as "this will post", and for Instagram it does not:
+    the guard permits it and the announcer then skips it. Once the
+    credentials finally work, that gap looks exactly like a bug."""
+    from publish_guard import PublishGuard
+    from utils.posting_status import NO_LINK_POST, report
+
+    cfg = {"enabled": True,
+           "platforms": {"instagram": {"enabled": True, "daily_cap": 5}}}
+    report(cfg, PublishGuard(cfg, ""))
+    out = capsys.readouterr().out
+    assert "ALLOW" in out and "instagram" in out
+    assert "announcements still skip it" in out
+    assert "public hosting" in out
+    assert "instagram" in NO_LINK_POST
+
+
+def test_a_platform_that_can_link_post_gets_no_such_note(capsys):
+    from publish_guard import PublishGuard
+    from utils.posting_status import report
+
+    cfg = {"enabled": True,
+           "platforms": {"facebook": {"enabled": True, "daily_cap": 5}}}
+    report(cfg, PublishGuard(cfg, ""))
+    assert "announcements still skip it" not in capsys.readouterr().out
