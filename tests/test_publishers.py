@@ -459,7 +459,10 @@ def test_the_caption_follows_the_account_s_own_format():
     caption = build_caption(template, "Stackswopo twitch clips ban that....mp4")
     assert caption.startswith("ban that")
     assert "#stackswopo" in caption
-    assert "youtube.com/@StacksDailyDose" in caption
+    # The monkey channel, by id rather than handle - a handle can be
+    # changed or taken, and every Reel already posted keeps the link it
+    # was published with.
+    assert "youtube.com/channel/UCSvsXHRDW4HQjONLhXdEtLw" in caption
     assert "rumble.com/user/BinScripts" in caption
 
 
