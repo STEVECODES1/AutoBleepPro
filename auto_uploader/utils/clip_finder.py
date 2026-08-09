@@ -40,7 +40,8 @@ def ytdlp_command() -> list:
     return [sys.executable, "-m", "yt_dlp"]
 
 
-def list_args(url: str, limit: int = 20, browser: str = "") -> list:
+def list_args(url: str, limit: int = 20, browser: str = "",
+              cookies_file: str = "") -> list:
     """Metadata only. --flat-playlist is what keeps this a listing.
 
     Without it yt-dlp resolves every entry, which is slower and starts
@@ -53,7 +54,9 @@ def list_args(url: str, limit: int = 20, browser: str = "") -> list:
         "--no-warnings",
         "--ignore-errors",
         "--socket-timeout", "30",
-    ] + (["--cookies-from-browser", browser] if browser else []) + [url]
+    ] + (["--cookies", cookies_file] if cookies_file
+         else ["--cookies-from-browser", browser] if browser
+         else []) + [url]
 
 
 def _entries(payload) -> list:
@@ -66,11 +69,13 @@ def _entries(payload) -> list:
     return [e for e in entries if isinstance(e, dict)]
 
 
-def find(url: str, limit: int = 20, browser: str = "") -> tuple:
+def find(url: str, limit: int = 20, browser: str = "",
+         cookies_file: str = "") -> tuple:
     """(clips, error). Each clip is a plain dict, ready to print."""
     try:
         completed = subprocess.run(
-            list_args(url, limit, browser), stdout=subprocess.PIPE,
+            list_args(url, limit, browser, cookies_file),
+            stdout=subprocess.PIPE,
             stderr=subprocess.PIPE, timeout=_TIMEOUT)
     except FileNotFoundError:
         return [], "yt-dlp is not installed"
@@ -160,12 +165,13 @@ def write_report(clips: list, path: str) -> str:
 
 
 def run(sources: list, limit: int = 20,
-        report_path: str = "", browser: str = "") -> list:
+        report_path: str = "", browser: str = "",
+        cookies_file: str = "") -> list:
     """Search every source, print a ranked table, return the clips."""
     found: list = []
     for url in sources:
         print(f"[Find] {url}")
-        clips, error = find(url, limit, browser)
+        clips, error = find(url, limit, browser, cookies_file)
         if error:
             print(f"[Find]   skipped - {error}")
             continue
@@ -191,10 +197,11 @@ def run(sources: list, limit: int = 20,
     else:
         print("\n[Find] Nothing came back. None of these platforms will list "
               "results for a signed-out request.")
-        if not browser:
-            print("[Find] --browser chrome reads the session you are already "
-                  "signed into, so it sees the same pages you do. It still "
-                  "only LISTS - nothing is downloaded either way.")
+        if not browser and not cookies_file:
+            print("[Find] Two ways to sign the listing in, both read-only:\n"
+                  "         --browser firefox      (Chrome locks its cookies)\n"
+                  "         --cookies cookies.txt  (exported with a "
+                  "'Get cookies.txt' extension - no new browser needed)")
 
     if report_path and unique:
         problem = write_report(unique, report_path)

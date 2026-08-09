@@ -452,3 +452,18 @@ def test_the_chrome_cookie_lock_explains_itself(monkeypatch):
     monkeypatch.setattr(clip_finder.subprocess, "run", lambda *a, **k: Done())
     _, error = clip_finder.find("https://x.com/a", browser="chrome")
     assert "firefox" in error.lower()
+
+
+def test_a_cookies_file_works_without_installing_a_browser():
+    """Chrome 127+ locks its store, and installing Firefox to read four
+    pages is a poor trade. An exported cookies.txt needs neither."""
+    import sys
+    sys.path.insert(0, _UPLOADER)
+    from utils.clip_finder import list_args
+
+    args = list_args("https://x.com/a", 20, cookies_file="c.txt")
+    assert args[args.index("--cookies") + 1] == "c.txt"
+    assert "--cookies-from-browser" not in args
+    assert "--flat-playlist" in args
+    for forbidden in ("-o", "--output", "-f"):
+        assert forbidden not in args
