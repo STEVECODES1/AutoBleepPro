@@ -57,7 +57,9 @@ def list_args(url: str, limit: int = 20) -> list:
     ]
 
 
-def _entries(payload: dict) -> list:
+def _entries(payload) -> list:
+    if not isinstance(payload, dict):
+        return []
     entries = payload.get("entries")
     if entries is None:
         # A single video URL rather than a listing.
@@ -89,6 +91,13 @@ def find(url: str, limit: int = 20) -> tuple:
         payload = json.loads(raw)
     except ValueError:
         return [], "could not read the response"
+    if not isinstance(payload, dict):
+        # yt-dlp prints a literal `null` when an extractor returns
+        # nothing - a search page it cannot read without a login, most
+        # often. That parses fine as JSON and is not a dict, which is a
+        # different thing from a parse failure.
+        return [], "nothing to list (the site returned no results, "\
+                   "usually because listing needs a login)"
 
     clips = []
     for entry in _entries(payload):

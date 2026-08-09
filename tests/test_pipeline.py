@@ -387,3 +387,30 @@ def test_the_finder_credits_who_posted_it():
                       "uploader": "ClipzCentrall", "url": "https://x.com/i/1",
                       "duration": 48, "date": "20260118"})
     assert "ClipzCentrall" in row and "https://x.com/i/1" in row
+
+
+def test_a_null_response_is_reported_not_crashed(monkeypatch):
+    """yt-dlp prints a literal `null` when an extractor returns nothing.
+    That parses fine as JSON and is not a dict - a different thing from a
+    parse failure, and it crashed on payload.get()."""
+    import sys
+    sys.path.insert(0, _UPLOADER)
+    from utils import clip_finder
+
+    class Done:
+        stdout = b"null"
+        stderr = b""
+
+    monkeypatch.setattr(clip_finder.subprocess, "run", lambda *a, **k: Done())
+    clips, error = clip_finder.find("https://www.tiktok.com/search/video?q=x")
+    assert clips == []
+    assert "login" in error
+
+
+def test_entries_survives_anything_json_can_hold():
+    import sys
+    sys.path.insert(0, _UPLOADER)
+    from utils.clip_finder import _entries
+
+    for payload in (None, [], "text", 3, {}):
+        assert _entries(payload) == []
