@@ -897,7 +897,28 @@ def test_the_kick_403_explains_itself():
 
 
 def test_ordinary_output_has_no_advice_attached():
+    """"kick" appears in every ordinary Kick progress line; matching
+    those would attach installation advice to a working recording."""
     from record_stream import known_fix
 
     assert known_fix("[download] Destination: show.part01.ts") == ""
     assert known_fix("[wait] Waiting for 00:01:00") == ""
+    assert known_fix("[kick:live] Extracting URL: https://kick.com/x") == ""
+
+
+def test_the_kick_403_gets_the_dependency_fix_not_the_generic_one():
+    """The 403 arrives BEFORE the warning that names the dependency, so
+    matching the generic 403 first sent you looking in the wrong place."""
+    from record_stream import known_fix
+
+    kick = known_fix("ERROR: [kick:live] stackswopo1k: Unable to download "
+                     "JSON metadata: HTTP Error 403: Forbidden")
+    assert "curl_cffi" in kick
+
+
+def test_a_mid_recording_403_is_not_blamed_on_kick():
+    from record_stream import known_fix
+
+    generic = known_fix("fragment 4213: HTTP Error 403: Forbidden")
+    assert "curl_cffi" not in generic
+    assert "expired" in generic

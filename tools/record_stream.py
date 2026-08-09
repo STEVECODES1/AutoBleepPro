@@ -246,13 +246,19 @@ def is_recording_line(line: str) -> bool:
 
 # Failures that have a specific, known fix. Printed instead of leaving
 # the raw error to be searched for.
+_CURL_CFFI_FIX = (
+    "Kick sits behind Cloudflare, and yt-dlp needs a browser TLS "
+    "fingerprint to get past it. Install the dependency it is asking for:\n"
+    "        pip install -U curl_cffi\n"
+    "    Then close this window and run START.bat again. It is yt-dlp's own "
+    "documented optional dependency; nothing else changes.")
+
+# Ordered most specific first: a Kick 403 and a generic mid-recording 403
+# have completely different fixes, and the generic one matching first
+# would send you looking in the wrong place.
 KNOWN_FIXES = (
-    ("no impersonate target is available",
-     "Kick sits behind Cloudflare, and yt-dlp needs a browser TLS "
-     "fingerprint to get past it. Install the dependency it is asking for:\n"
-     "        pip install -U curl_cffi\n"
-     "    Then restart this window. Nothing else changes - it is yt-dlp's "
-     "own documented optional dependency, not a workaround."),
+    ("no impersonate target is available", _CURL_CFFI_FIX),
+    ("kick", _CURL_CFFI_FIX),
     ("HTTP Error 403",
      "A 403 mid-recording usually means the fragment URLs expired. If this "
      "keeps happening on one platform, say so - it is fixable per site."),
@@ -260,9 +266,22 @@ KNOWN_FIXES = (
 
 
 def known_fix(line: str) -> str:
-    """The fix for this error, if it is one with a known fix."""
+    """The fix for this error, if it is one with a known fix.
+
+    The impersonation warning is unambiguous on its own and is matched
+    anywhere - yt-dlp prints it as a WARNING, not an ERROR, so requiring
+    an error would skip the one line that names the missing dependency.
+    Everything else has to look like a failure first: "kick" appears in
+    every ordinary Kick progress line too, and matching those would
+    attach installation advice to a working recording.
+    """
+    lowered = line.lower()
+    if "no impersonate target is available" in lowered:
+        return _CURL_CFFI_FIX
+    if not is_worth_saying(line):
+        return ""
     for marker, advice in KNOWN_FIXES:
-        if marker in line:
+        if marker.lower() in lowered:
             return advice
     return ""
 
@@ -611,6 +630,16 @@ class Recorder:
                 self.say("Last thing yt-dlp said before stopping:")
                 for line in tail[-6:]:
                     self.say(f"    {line}")
+                # The line naming the missing dependency appears HERE and
+                # nowhere else - yt-dlp prints it as a warning on its way
+                # out, after the error that actually stopped it. Checking
+                # only the live stream meant the useful advice was the
+                # one line never examined.
+                for line in tail:
+                    advice = known_fix(line)
+                    if advice:
+                        self.say(f"FIX: {advice}")
+                        break
 
     # ── Assembling and delivering ────────────────────────────────────────
 
