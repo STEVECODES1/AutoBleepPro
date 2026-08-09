@@ -92,6 +92,7 @@
     }
   },
 
+  "_platform_limits_comment": "What each platform ITSELF allows in 24h, so a cap above it is not a policy choice but posts that will fail: Instagram 50 (Content Publishing API rejects the 51st), X ~16/day on the free tier's 500/month, Reddit and Facebook have no published hard number but act on burst rate rather than volume. Rumble has no API cap - clips.count is what decides how many go there, currently 10 per stream. Caps below sit at or under those.",
   "_posting_comment": "Short-form clip publishing. Instagram and Facebook are ENABLED — credentials confirmed live. X stays disabled until the 401 Unauthorized is fixed (go to developer.twitter.com → your app → User authentication settings → set Read+Write → regenerate Access Token+Secret → update .env). Reddit is manual-only until a separate account is configured. Create the kill_switch_file to halt ALL posting immediately. For one run, `python main.py --announce-all` turns announcing on everywhere it can actually run (and prints why the rest stay manual); `--no-announce` turns it off everywhere. Neither edits this file.",
   "posting": {
     "enabled": true,
@@ -101,7 +102,7 @@
     "manual_queue_path": "./logs/manual_posts.txt",
     "platforms": {
       "instagram":      { "enabled": true,  "daily_cap": 50, "min_minutes_between": 25, "_note": "No spacing and no self-imposed cap: every clip goes out as a Reel the moment it is ready. 50 is Instagram's OWN limit - the Content Publishing API rejects the 51st post in any 24h window - so it is set to that rather than to 0, because a cap of 0 would mean unlimited here and the 51st would fail as a real error and trip the circuit breaker. Raise the spacing above 0 if the account ever starts looking automated." },
-      "facebook":       { "enabled": true,  "daily_cap": 8, "min_minutes_between": 100 },
+      "facebook":       { "enabled": true,  "daily_cap": 10, "min_minutes_between": 80 },
       "x":              { "enabled": true,  "daily_cap": 8, "min_minutes_between": 100, "_note": "X's FREE API tier does allow posting - roughly 500 posts a month, write-only. 8/day is 240/month, comfortably inside it. The 401 you hit was the app being Read-only: developer.twitter.com -> your app -> User authentication settings -> set Read+Write -> then REGENERATE the Access Token+Secret, because the existing one keeps the old permission. Needs: pip install tweepy" },
       "reddit":         { "enabled": true,  "daily_cap": 8, "min_minutes_between": 100, "_note": "Needs praw, the REDDIT_*_2 credentials, and features.social_promoter.reddit_subreddit. READ THE SUBREDDIT RULES FIRST: most cap self-promotion (roughly 1 in 10 posts is the common convention) and several ban links to your own channel outright. The cap and spacing here keep the ACCOUNT safe; they cannot keep you inside a subreddit rule you have not read." },
       "facebook_group": { "enabled": false, "daily_cap": 1, "manual_approval_only": true }
@@ -131,7 +132,7 @@
     "max_seconds": 60,
     "_auto_comment": "auto_from_streams: after a stream uploads, cut the best moments out of it and drop them in watch_folder, where they are posted one at a time on each platform's spacing. Scoring reuses the transcript the censor pass already made, so it costs a render and not a second transcription. count is how many per stream.",
     "auto_from_streams": true,
-    "count": 6,
+    "count": 10,
     "min_seconds": 15,
     "burn_captions": true
   },
