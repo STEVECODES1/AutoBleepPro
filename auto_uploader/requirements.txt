@@ -56,6 +56,19 @@ psutil==7.2.2
 # Kick recording (tools/record_stream.py). Kick is behind Cloudflare, and
 # yt-dlp needs a real browser TLS fingerprint to reach it - without this
 # every Kick request comes back "HTTP Error 403: Forbidden" and yt-dlp
-# warns that "no impersonate target is available". This is yt-dlp's own
-# documented optional dependency. Not needed for YouTube or Twitch.
-curl_cffi
+# warns that "no impersonate target is available". Not needed for YouTube
+# or Twitch.
+#
+# Installed through yt-dlp's own extra rather than as a bare `curl_cffi`,
+# because THE VERSION MATTERS and a bare install takes the newest one.
+# curl_cffi 0.16 installs and imports perfectly while yt-dlp reports
+# every impersonate target as unavailable - which looks like a broken
+# install rather than a version mismatch, and cost an evening to find.
+# The extra resolves whatever this yt-dlp actually supports (0.15 at time
+# of writing) and downgrades if needed:
+#
+#     python -m pip install -U "yt-dlp[default,curl-cffi]"
+#
+# Check it worked - every line must NOT say "(unavailable)":
+#     python -m yt_dlp --list-impersonate-targets
+yt-dlp[default,curl-cffi]
