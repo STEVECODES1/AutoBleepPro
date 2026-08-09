@@ -856,3 +856,30 @@ def test_the_clips_fetcher_leaves_live_recordings_alone(tmp_path, monkeypatch):
     assert delivered == ["Stackswopo twitch clips Funny.mp4"]
     assert in_flight.exists(), "the clips fetcher stole a live recording"
     assert not (watch / in_flight.name).exists()
+
+
+def test_kick_is_recognised(tmp_path):
+    """Kick is HLS live with no live-from-start equivalent, same as
+    Twitch - sending YouTube's flag there only warns."""
+    from record_stream import PLATFORM_KICK, platform_of
+
+    assert platform_of("https://kick.com/stackswopo1k") == PLATFORM_KICK
+    kick = Recorder(url="https://kick.com/stackswopo1k",
+                    staging=str(tmp_path / "s"),
+                    watch_folder=str(tmp_path / "w"), name="Stackswopo")
+    args = kick.download_args("/tmp/out.ts")
+    assert "--live-from-start" not in args
+    # Everything that keeps a long recording alive still applies.
+    assert args[args.index("--fragment-retries") + 1] == "infinite"
+    assert args[args.index("--retries") + 1] == "infinite"
+    assert "--hls-use-mpegts" in args
+
+
+def test_every_platform_gets_its_own_filename(tmp_path):
+    """Four recorders share one staging folder; two writing the same base
+    name would fight over the same segment paths."""
+    from record_stream import platform_of
+
+    urls = ("https://www.youtube.com/@x/live", "https://www.twitch.tv/x",
+            "https://kick.com/x")
+    assert len({platform_of(u) for u in urls}) == 3

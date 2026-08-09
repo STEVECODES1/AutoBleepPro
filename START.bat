@@ -4,9 +4,9 @@ REM  START.bat - the whole system, in one double-click.
 REM
 REM  Opens two windows and leaves them running:
 REM
-REM    1. RECORDER  - waits for YouTube or Twitch to go live, records the full
-REM                   stream, and fetches any new Twitch clips. Everything it
-REM                   produces lands in auto_uploader\watch_folder.
+REM    1. RECORDER  - waits for YouTube, Twitch or Kick to go live, records the
+REM                   full stream, and fetches any new Twitch clips. Everything
+REM                   it produces lands in auto_uploader\watch_folder.
 REM
 REM    2. UPLOADER  - watches that folder and handles whatever arrives:
 REM                   censors it (YouTube only), uploads it, cuts a finished
@@ -26,12 +26,12 @@ echo ============================================================
 echo  Starting AutoBleepPro
 echo ============================================================
 echo.
-echo  Recorder : YouTube + Twitch live, plus new Twitch clips
+echo  Recorder : YouTube + Twitch + Kick live, plus new Twitch clips
 echo  Uploader : censor, upload, clip, announce
 echo  Folder   : %~dp0auto_uploader\watch_folder
 echo.
 
-start "AutoBleep RECORDER" cmd /k "cd /d "%~dp0tools" && python record_stream.py "https://www.youtube.com/@stackswopo_/live" "https://www.twitch.tv/stackswopo" "https://www.twitch.tv/stackswopo/clips?range=7d" --name "Stackswopo""
+start "AutoBleep RECORDER" cmd /k "cd /d "%~dp0tools" && python record_stream.py "https://www.youtube.com/@stackswopo_/live" "https://www.twitch.tv/stackswopo" "https://www.twitch.tv/stackswopo/clips?range=7d" "https://kick.com/stackswopo1k" --name "Stackswopo""
 
 REM A moment apart so the two windows do not fight over the console while
 REM they start, and so the recorder's banner is readable.

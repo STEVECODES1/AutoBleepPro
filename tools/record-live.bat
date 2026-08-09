@@ -6,9 +6,10 @@ REM  Double-click this file. It does not matter what folder you are in: the
 REM  cd below jumps to wherever this .bat lives, which is why running
 REM  record_stream.py by hand from C:\Users\<you> fails and this does not.
 REM
-REM  Three sources, one window:
+REM  Four sources, one window:
 REM    - the YouTube livestream
 REM    - the Twitch livestream
+REM    - the Kick livestream
 REM    - the Twitch clips page (last 7 days)
 REM
 REM  Live streams are RECORDED as they happen. The clips page is DOWNLOADED
@@ -35,13 +36,13 @@ start "Stackswopo (YouTube + Twitch)" python record_stream.py ^
     "https://www.youtube.com/@stackswopo_/live" ^
     "https://www.twitch.tv/stackswopo" ^
     "https://www.twitch.tv/stackswopo/clips?range=7d" ^
+    "https://kick.com/stackswopo1k" ^
     --name "Stackswopo"
 
 REM Other channels, kept for reference - add a URL to the list above to bring
 REM one back. They all deliver to the same watch_folder and the uploader
 REM processes them one at a time.
 REM     "https://www.youtube.com/@OnlyThaGuys26/live"
-REM     "https://kick.com/stackswopo1k"
 
 echo.
 echo Recorder started in its own window.

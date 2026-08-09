@@ -1,8 +1,8 @@
 """
 Records live streams end to end, and survives the network.
 
-YouTube and Twitch, several at once, all delivering into the same watch
-folder. A /clips URL is downloaded rather than recorded - clips are
+YouTube, Twitch and Kick, several at once, all delivering into the same
+watch folder. A /clips URL is downloaded rather than recorded - clips are
 already finished videos - and an archive file stops the same clip being
 fetched twice.
 
@@ -171,18 +171,22 @@ def expected_duration(url: str) -> Optional[float]:
 
 PLATFORM_YOUTUBE = "youtube"
 PLATFORM_TWITCH = "twitch"
+PLATFORM_KICK = "kick"
 
 
 def platform_of(url: str) -> str:
     """Which site this URL is on. Decides which flags are legal.
 
     Not cosmetic: --live-from-start is a YouTube-only capability (it walks
-    back through the DASH manifest's sequence numbers). Twitch has no
-    equivalent, and passing it there produces a warning and no benefit.
+    back through the DASH manifest's sequence numbers). Neither Twitch nor
+    Kick has an equivalent, and passing it there produces a warning and no
+    benefit.
     """
     lowered = (url or "").lower()
     if "twitch.tv" in lowered:
         return PLATFORM_TWITCH
+    if "kick.com" in lowered:
+        return PLATFORM_KICK
     return PLATFORM_YOUTUBE
 
 
