@@ -922,3 +922,43 @@ def test_a_mid_recording_403_is_not_blamed_on_kick():
     generic = known_fix("fragment 4213: HTTP Error 403: Forbidden")
     assert "curl_cffi" not in generic
     assert "expired" in generic
+
+
+def test_yt_dlp_is_invoked_through_this_interpreter_when_possible(monkeypatch):
+    """`yt-dlp` on PATH is often the standalone .exe, which bundles its
+    own Python and cannot see site-packages - so installing curl_cffi
+    appears to work while yt-dlp still reports every impersonate target
+    unavailable."""
+    import sys as _sys
+
+    import record_stream
+
+    monkeypatch.setitem(_sys.modules, "yt_dlp", object())
+    assert record_stream.ytdlp_command() == [_sys.executable, "-m", "yt_dlp"]
+
+
+def test_it_falls_back_to_the_executable(monkeypatch):
+    import builtins
+
+    import record_stream
+
+    real_import = builtins.__import__
+
+    def no_yt_dlp(name, *args, **kwargs):
+        if name == "yt_dlp":
+            raise ImportError("not installed here")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", no_yt_dlp)
+    assert record_stream.ytdlp_command() == ["yt-dlp"]
+
+
+def test_every_command_starts_with_the_resolved_yt_dlp(recorder):
+    """Three separate argument builders; one hard-coding the executable
+    would use a different Python than the other two."""
+    from record_stream import YTDLP, clips_args, vod_args
+
+    for args in (recorder.download_args("/tmp/o.ts"),
+                 vod_args("u", "/tmp/o.mp4"),
+                 clips_args("u", "/tmp/o.mp4", "/tmp/a.txt")):
+        assert args[:len(YTDLP)] == YTDLP

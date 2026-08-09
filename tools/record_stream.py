@@ -158,8 +158,8 @@ def expected_duration(url: str) -> Optional[float]:
     """How long the stream actually was, according to the platform."""
     try:
         completed = subprocess.run(
-            ["yt-dlp", "--no-warnings", "--skip-download",
-             "--print", "duration", url],
+            YTDLP + ["--no-warnings", "--skip-download",
+                     "--print", "duration", url],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=120)
     except (FileNotFoundError, subprocess.TimeoutExpired):
         return None
@@ -167,6 +167,31 @@ def expected_duration(url: str) -> Optional[float]:
         return float(completed.stdout.decode().strip().splitlines()[0])
     except (ValueError, IndexError):
         return None
+
+
+def ytdlp_command() -> list:
+    """How to invoke yt-dlp, preferring the one in THIS interpreter.
+
+    `yt-dlp` on PATH is often the standalone .exe, which bundles its own
+    Python and cannot see site-packages. Installing curl_cffi - the
+    dependency Kick needs to get past Cloudflare - therefore appears to
+    work (it imports fine) while yt-dlp still reports every impersonate
+    target as unavailable, because a different Python is running.
+
+    `python -m yt_dlp` removes the ambiguity: same interpreter, same
+    site-packages, same curl_cffi. Falls back to the PATH executable when
+    the module is not installed here.
+    """
+    try:
+        import yt_dlp  # noqa: F401
+    except Exception:
+        return ["yt-dlp"]
+    return [sys.executable, "-m", "yt_dlp"]
+
+
+# Resolved once - it cannot change while the process runs, and every
+# argument builder below starts with it.
+YTDLP = ytdlp_command()
 
 
 PLATFORM_YOUTUBE = "youtube"
@@ -248,10 +273,15 @@ def is_recording_line(line: str) -> bool:
 # the raw error to be searched for.
 _CURL_CFFI_FIX = (
     "Kick sits behind Cloudflare, and yt-dlp needs a browser TLS "
-    "fingerprint to get past it. Install the dependency it is asking for:\n"
-    "        pip install -U curl_cffi\n"
-    "    Then close this window and run START.bat again. It is yt-dlp's own "
-    "documented optional dependency; nothing else changes.")
+    "fingerprint to get past it:\n"
+    "        python -m pip install -U curl_cffi yt-dlp\n"
+    "    If curl_cffi is ALREADY installed and this still fails, the yt-dlp "
+    "being run is the standalone .exe, which bundles its own Python and "
+    "cannot see it. Check with:\n"
+    "        python -m yt_dlp --list-impersonate-targets\n"
+    "    Targets listed there but not by plain `yt-dlp` means exactly that; "
+    "installing yt-dlp with pip fixes it, and this recorder then uses it "
+    "automatically.")
 
 # Ordered most specific first: a Kick 403 and a generic mid-recording 403
 # have completely different fixes, and the generic one matching first
@@ -345,8 +375,7 @@ def vod_args(url: str, output_path: str, concurrent: int = 8) -> list:
     and fragments can be fetched in parallel because there is no realtime
     pace to keep up with.
     """
-    return [
-        "yt-dlp",
+    return YTDLP + [
         "--fragment-retries", "infinite",
         "--retries", "infinite",
         "--socket-timeout", "30",
@@ -509,8 +538,7 @@ class Recorder:
     # ── The yt-dlp invocation ────────────────────────────────────────────
 
     def download_args(self, output_path: str, wait: bool = True) -> list:
-        args = [
-            "yt-dlp",
+        args = YTDLP + [
             # Never stop on a fragment; this is the setting that keeps a
             # four-hour recording alive on a domestic connection.
             "--fragment-retries", "infinite",
@@ -919,8 +947,7 @@ def clips_args(url: str, output_path: str, archive_path: str,
 
     --playlist-end bounds a listing that could be hundreds of clips long.
     """
-    args = [
-        "yt-dlp",
+    args = YTDLP + [
         "--fragment-retries", "infinite",
         "--retries", "infinite",
         "--socket-timeout", "30",
