@@ -24,7 +24,7 @@ from datetime import datetime
 # Bump when shipping user-visible changes, so --test-config can prove
 # which build is actually running (stale extracts have silently caused
 # several confusing "the fix did nothing" runs).
-BUILD = "2026-08-09.4 ten clips a day"
+BUILD = "2026-08-09.5 --find-clips"
 
 from utils.censor import censor_video
 from utils.ffmpeg_tools import StageTimer, media_duration
@@ -768,6 +768,12 @@ def main(argv=None) -> int:
                              "posts and publish immediately. For testing one "
                              "clip by hand. The daily cap, the kill switch and "
                              "the circuit breaker all still apply.")
+    parser.add_argument("--find-clips", action="store_true",
+                        help="List clips of you across X, TikTok and Facebook - "
+                             "who posted, when, how many views. Downloads "
+                             "nothing and posts nothing; you decide per clip.")
+    parser.add_argument("--find-limit", type=int, default=20,
+                        help="Most results per source for --find-clips.")
     parser.add_argument("--study-instagram", action="store_true",
                         help="Read your own recent Instagram captions and "
                              "print a caption_template matching how you "
@@ -875,6 +881,21 @@ def main(argv=None) -> int:
             return 0
         print("[Instagram] Failed - the reason is in the log above.")
         return 1
+
+    if args.find_clips:
+        from utils.clip_finder import run
+
+        sources = (cfg.clips or {}).get("find_sources") or []
+        if not sources:
+            print("[Find] No sources. Add clips.find_sources to config.json - "
+                  "search URLs or profile URLs, one per entry.")
+            return 1
+        report = os.path.join(cfg.general.logs_folder, "clips_found.txt")
+        run(sources, limit=args.find_limit, report_path=report)
+        print("\n[Find] Nothing was downloaded and nothing was posted. These "
+              "are other people's cuts and captions - ask before reposting, "
+              "or credit the poster.")
+        return 0
 
     if args.study_instagram:
         from utils.meta_setup import (MetaError, recent_captions,

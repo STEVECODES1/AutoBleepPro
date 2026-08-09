@@ -131,6 +131,13 @@
     "treat_as_clip_under_seconds": 180,
     "max_seconds": 60,
     "_auto_comment": "auto_from_streams: after a stream uploads, cut the best moments out of it and drop them in watch_folder, where they are posted one at a time on each platform's spacing. Scoring reuses the transcript the censor pass already made, so it costs a render and not a second transcription. count is how many per stream.",
+    "_find_comment": "Where --find-clips looks. LISTING ONLY: it reads titles, view counts and links, downloads nothing and posts nothing. Add or remove URLs freely - search pages and profile pages both work.",
+    "find_sources": [
+      "https://www.tiktok.com/search/video?q=stackswopo%20monkey",
+      "https://x.com/ClipzCentrall",
+      "https://x.com/s_strawhat",
+      "https://www.facebook.com/stackswopo.man/reels/"
+    ],
     "auto_from_streams": true,
     "count": 10,
     "min_seconds": 15,

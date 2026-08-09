@@ -320,3 +320,70 @@ def test_a_long_hook_is_cut_at_a_word():
     out = headline_for(Clip())
     assert len(out) <= 74 and out.endswith("...")
     assert not out[:-3].endswith(" ")
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Finding clips of you, without taking them
+# ═════════════════════════════════════════════════════════════════════════════
+
+def test_the_finder_only_lists(monkeypatch):
+    """--flat-playlist is what keeps this a listing rather than a fetch.
+    Nothing here may download or write media."""
+    import sys
+    sys.path.insert(0, _UPLOADER)
+    from utils.clip_finder import list_args
+
+    args = list_args("https://x.com/someone", 20)
+    assert "--flat-playlist" in args
+    assert "--dump-single-json" in args
+    for forbidden in ("-o", "--output", "--write-thumbnail", "-f"):
+        assert forbidden not in args, f"{forbidden} would fetch media"
+
+
+def test_the_finder_bounds_each_source():
+    import sys
+    sys.path.insert(0, _UPLOADER)
+    from utils.clip_finder import list_args
+
+    args = list_args("https://x.com/someone", 5)
+    assert args[args.index("--playlist-end") + 1] == "5"
+
+
+def test_results_are_ranked_by_views():
+    import sys
+    sys.path.insert(0, _UPLOADER)
+    from utils.clip_finder import rank
+
+    ranked = rank([{"views": 10}, {"views": 94800}, {"views": None},
+                   {"views": 6319}])
+    assert [c["views"] for c in ranked] == [94800, 6319, 10, None], \
+        "an unknown view count must sink, not lead"
+
+
+def test_a_login_walled_source_is_reported_not_crashed(monkeypatch):
+    """Several of these platforms need a login to list search results,
+    which is a real answer rather than a failure."""
+    import sys
+    sys.path.insert(0, _UPLOADER)
+    from utils import clip_finder
+
+    class Done:
+        stdout = b""
+        stderr = b"ERROR: unable to extract; login required"
+
+    monkeypatch.setattr(clip_finder.subprocess, "run", lambda *a, **k: Done())
+    clips, error = clip_finder.find("https://x.com/someone")
+    assert clips == []
+    assert "login" in error
+
+
+def test_the_finder_credits_who_posted_it():
+    """The whole point is deciding per clip, which needs a name."""
+    import sys
+    sys.path.insert(0, _UPLOADER)
+    from utils.clip_finder import format_row
+
+    row = format_row({"title": "Stackswopo trolls siblings", "views": 32000,
+                      "uploader": "ClipzCentrall", "url": "https://x.com/i/1",
+                      "duration": 48, "date": "20260118"})
+    assert "ClipzCentrall" in row and "https://x.com/i/1" in row
