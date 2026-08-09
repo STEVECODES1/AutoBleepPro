@@ -56,6 +56,46 @@ def _load_segments(cfg, source_path: str) -> Optional[list]:
     return None
 
 
+# Words a clip's first line often opens with that say nothing about it.
+_FILLER = ("uh", "um", "like", "so", "and", "but", "okay", "ok", "yeah",
+           "yo", "bro", "i mean", "you know")
+
+
+def headline_for(clip, fallback: str = "") -> str:
+    """A TITLE for one clip, from what is actually said in it.
+
+    The alternative was the filename, which produced titles like
+    "live 2026-08-08 19 08 clip06" - identical in shape across every
+    clip, meaningless to a viewer, and worthless in search. The
+    transcript already sits on the spec; this is the line a human would
+    have picked out of it.
+
+    Leading filler is dropped because a hook starting "uh so like" reads
+    as a transcript rather than a title, and the first words are the
+    only ones that get read on a thumbnail.
+    """
+    spoken = " ".join((getattr(clip.spec, "title", "") or "").split())
+    # Repeated passes: real speech opens "uh so like ...", and one pass
+    # per word only ever removes the first of them.
+    stripping = True
+    while stripping and spoken:
+        stripping = False
+        lowered = spoken.lower()
+        for word in sorted(_FILLER, key=len, reverse=True):
+            if lowered.startswith(word + " "):
+                spoken = spoken[len(word) + 1:].lstrip(" ,.")
+                stripping = True
+                break
+    if not spoken:
+        return fallback
+
+    # Rumble and YouTube both truncate well before this; a title that
+    # ends mid-word looks like a bug rather than a choice.
+    if len(spoken) > 70:
+        spoken = spoken[:70].rsplit(" ", 1)[0].rstrip(" ,;:-") + "..."
+    return spoken[0].upper() + spoken[1:] if spoken else fallback
+
+
 def caption_for(clip, title: str, tags: list) -> str:
     """The caption to paste with a clip.
 

@@ -24,7 +24,7 @@ from datetime import datetime
 # Bump when shipping user-visible changes, so --test-config can prove
 # which build is actually running (stale extracts have silently caused
 # several confusing "the fix did nothing" runs).
-BUILD = "2026-08-09.2 instagram keeps the original audio"
+BUILD = "2026-08-09.3 real titles for streams and clips"
 
 from utils.censor import censor_video
 from utils.ffmpeg_tools import StageTimer, media_duration
@@ -103,8 +103,20 @@ def _deliver_clips(run, cfg) -> int:
         if not source or not os.path.isfile(source):
             continue
         try:
-            shutil.move(source, os.path.join(cfg.general.watch_folder,
-                                             os.path.basename(source)))
+            target = os.path.join(cfg.general.watch_folder,
+                                  os.path.basename(source))
+            shutil.move(source, target)
+            # A .txt beside the video is how a title reaches the uploader
+            # without a prompt - get_stream_title reads it first. Without
+            # one the title came from the FILENAME, which produced
+            # "live 2026-08-08 19 08 clip06": identical in shape across
+            # every clip and meaningless to a viewer.
+            from utils.clip_runner import headline_for
+            headline = headline_for(clip)
+            if headline:
+                with open(os.path.splitext(target)[0] + ".txt", "w",
+                          encoding="utf-8") as f:
+                    f.write(headline + "\n")
             moved += 1
         except OSError as exc:
             print(f"[Clips] could not deliver {os.path.basename(source)}: {exc}")

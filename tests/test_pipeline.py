@@ -272,3 +272,51 @@ def test_instagram_clips_keep_their_original_audio():
     assert config["instagram"]["censor_uploads"] is False
     assert config["rumble"]["censor_uploads"] is False
     assert config["youtube"]["censor_uploads"] is True
+
+
+def test_a_clip_gets_a_title_from_what_is_said_in_it():
+    """The filename produced "live 2026-08-08 19 08 clip06" - identical
+    in shape across every clip and meaningless to a viewer."""
+    import sys
+    sys.path.insert(0, _UPLOADER)
+    from utils.clip_runner import headline_for
+
+    class Spec:
+        title = "uh so like yall aint know i was wild bro"
+
+    class Clip:
+        spec = Spec()
+
+    assert headline_for(Clip()) == "Yall aint know i was wild bro"
+
+
+def test_a_silent_clip_falls_back_rather_than_titling_itself_blank():
+    import sys
+    sys.path.insert(0, _UPLOADER)
+    from utils.clip_runner import headline_for
+
+    class Spec:
+        title = "   "
+
+    class Clip:
+        spec = Spec()
+
+    assert headline_for(Clip(), "Stackswopo Stream") == "Stackswopo Stream"
+
+
+def test_a_long_hook_is_cut_at_a_word():
+    """A title ending mid-word looks like a bug rather than a choice."""
+    import sys
+    sys.path.insert(0, _UPLOADER)
+    from utils.clip_runner import headline_for
+
+    class Spec:
+        title = "this is a very long thing that somebody said on stream " \
+                "and it keeps going well past any sensible title length"
+
+    class Clip:
+        spec = Spec()
+
+    out = headline_for(Clip())
+    assert len(out) <= 74 and out.endswith("...")
+    assert not out[:-3].endswith(" ")

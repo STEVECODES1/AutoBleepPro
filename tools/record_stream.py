@@ -154,6 +154,24 @@ def probe_duration(path: str) -> Optional[float]:
         return None
 
 
+def stream_title(url: str) -> str:
+    """The title the streamer actually gave this stream, or "".
+
+    Asked WHILE it is live, because afterwards a live URL resolves to
+    nothing. Without it the uploader falls back to the filename, which is
+    a timestamp - so a Kick stream called "WOW" was published as
+    "Stackswopo kick live 2026-08-08 19_08".
+    """
+    try:
+        completed = subprocess.run(
+            YTDLP + ["--no-warnings", "--skip-download", "--print", "title", url],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=120)
+    except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
+        return ""
+    title = completed.stdout.decode("utf-8", "replace").strip().splitlines()
+    return title[0].strip() if title else ""
+
+
 def expected_duration(url: str) -> Optional[float]:
     """How long the stream actually was, according to the platform."""
     try:
@@ -531,6 +549,9 @@ class Recorder:
     # When the live recording came up short, download the finished VOD
     # instead. Off for a stream that is not archived afterwards.
     fill_gaps: bool = True
+    # Captured when the recording starts, because a live URL resolves to
+    # nothing once the stream has ended.
+    title: str = ""
 
     def say(self, message: str) -> None:
         print(f"[{time.strftime('%H:%M:%S')}] {message}", flush=True)
@@ -622,6 +643,12 @@ class Recorder:
                     if is_recording_line(line):
                         waiting = False
                         self.say("Live - recording started.")
+                        # Asked NOW, while the stream is still live - a
+                        # live URL resolves to nothing once it ends.
+                        if not self.title:
+                            self.title = stream_title(self.url)
+                            if self.title:
+                                self.say(f'Title: "{self.title}"')
                     elif is_worth_saying(line):
                         print(line, flush=True)
                         advice = known_fix(line)
@@ -739,6 +766,16 @@ class Recorder:
                 self.say(report)
         if report.startswith("SHORT"):
             self._notify_short(report)
+
+        # The real title, written where the uploader looks for it.
+        if self.title:
+            try:
+                with open(os.path.splitext(destination)[0] + ".txt", "w",
+                          encoding="utf-8") as f:
+                    f.write(self.title + "\n")
+                self.say(f'Title: "{self.title}"')
+            except OSError:
+                pass
 
         self.say(f"Delivered -> {destination}")
         self.say("The uploader will pick it up (run: python main.py --watch)")

@@ -462,8 +462,12 @@ def test_the_caption_follows_the_account_s_own_format():
     # The monkey channel, by id rather than handle - a handle can be
     # changed or taken, and every Reel already posted keeps the link it
     # was published with.
-    assert "youtube.com/channel/UCSvsXHRDW4HQjONLhXdEtLw" in caption
-    assert "rumble.com/user/BinScripts" in caption
+    # No printed URL for the channel: Instagram captions never make a URL
+    # tappable, on app or web, so one is just noise. Only the bio link is
+    # clickable, and that is what the caption points at.
+    assert "LINK IN BIO" in caption
+    assert "https://" not in caption
+    assert "BinScript" in caption
 
 
 def test_the_clip_name_survives_the_recorder_s_prefix():
