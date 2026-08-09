@@ -13,7 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Command-line interface** (`cli.py`) — the whole pipeline without the
   GUI, for servers, cron jobs and batch scripts. Progress on stderr,
   output paths on stdout, exit 0/non-zero. It imports `bleep_engine` only;
-  customtkinter is never loaded. `START_CLI_HELP.bat` prints its usage.
+  customtkinter is never loaded.
 - **SRT + transcript export.** `words_to_srt()` and `words_to_txt()` in the
   engine, plus `bleeps_to_srt()` for a "censored words only" subtitle track
   that shows each detection's reason. All three accept either a

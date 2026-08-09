@@ -63,7 +63,7 @@ python cli.py stream.mp4 --sensitivity 30 --custom-words "brand1,brand2" \
     --method beep --beep-wav ./beep.wav
 ```
 
-`python cli.py -h` lists every flag (or double-click **`START_CLI_HELP.bat`**).
+`python cli.py -h` lists every flag.
 
 **Sensitivity** (`--sensitivity`, or the slider on the Single Video tab) is
 a rule gate from 0–100, not a confidence score. Default is **70**.
