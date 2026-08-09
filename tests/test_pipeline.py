@@ -414,3 +414,25 @@ def test_entries_survives_anything_json_can_hold():
 
     for payload in (None, [], "text", 3, {}):
         assert _entries(payload) == []
+
+
+def test_borrowing_a_browser_session_still_only_lists():
+    """The session makes signed-in pages readable; it must not turn a
+    listing into a fetch."""
+    import sys
+    sys.path.insert(0, _UPLOADER)
+    from utils.clip_finder import list_args
+
+    args = list_args("https://x.com/someone", 20, "chrome")
+    assert args[args.index("--cookies-from-browser") + 1] == "chrome"
+    assert "--flat-playlist" in args
+    for forbidden in ("-o", "--output", "--write-thumbnail", "-f"):
+        assert forbidden not in args
+
+
+def test_no_browser_means_no_cookies_are_touched():
+    import sys
+    sys.path.insert(0, _UPLOADER)
+    from utils.clip_finder import list_args
+
+    assert "--cookies-from-browser" not in list_args("https://x.com/a", 20)

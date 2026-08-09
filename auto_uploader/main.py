@@ -24,7 +24,7 @@ from datetime import datetime
 # Bump when shipping user-visible changes, so --test-config can prove
 # which build is actually running (stale extracts have silently caused
 # several confusing "the fix did nothing" runs).
-BUILD = "2026-08-09.6 find-clips null fix"
+BUILD = "2026-08-09.7 find-clips --browser"
 
 from utils.censor import censor_video
 from utils.ffmpeg_tools import StageTimer, media_duration
@@ -774,6 +774,10 @@ def main(argv=None) -> int:
                              "nothing and posts nothing; you decide per clip.")
     parser.add_argument("--find-limit", type=int, default=20,
                         help="Most results per source for --find-clips.")
+    parser.add_argument("--browser", default="", metavar="NAME",
+                        help="With --find-clips: read cookies from this "
+                             "browser (chrome, edge, firefox) so signed-in "
+                             "pages can be listed. Still lists only.")
     parser.add_argument("--study-instagram", action="store_true",
                         help="Read your own recent Instagram captions and "
                              "print a caption_template matching how you "
@@ -891,7 +895,8 @@ def main(argv=None) -> int:
                   "search URLs or profile URLs, one per entry.")
             return 1
         report = os.path.join(cfg.general.logs_folder, "clips_found.txt")
-        run(sources, limit=args.find_limit, report_path=report)
+        run(sources, limit=args.find_limit, report_path=report,
+            browser=args.browser)
         print("\n[Find] Nothing was downloaded and nothing was posted. These "
               "are other people's cuts and captions - ask before reposting, "
               "or credit the poster.")
