@@ -52,3 +52,10 @@ psutil==7.2.2
 # Optional social posting (only if you enable them in config features):
 # tweepy   - Twitter/X
 # praw     - Reddit
+
+# Kick recording (tools/record_stream.py). Kick is behind Cloudflare, and
+# yt-dlp needs a real browser TLS fingerprint to reach it - without this
+# every Kick request comes back "HTTP Error 403: Forbidden" and yt-dlp
+# warns that "no impersonate target is available". This is yt-dlp's own
+# documented optional dependency. Not needed for YouTube or Twitch.
+curl_cffi

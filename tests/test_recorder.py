@@ -883,3 +883,21 @@ def test_every_platform_gets_its_own_filename(tmp_path):
     urls = ("https://www.youtube.com/@x/live", "https://www.twitch.tv/x",
             "https://kick.com/x")
     assert len({platform_of(u) for u in urls}) == 3
+
+
+def test_the_kick_403_explains_itself():
+    """yt-dlp names the dependency in a warning that scrolls past in a
+    wall of retries. A recorder that waits all night on a fixable error
+    is worse than one that fails."""
+    from record_stream import known_fix
+
+    advice = known_fix("WARNING: [kick:live] The extractor is attempting "
+                       "impersonation, but no impersonate target is available.")
+    assert "curl_cffi" in advice
+
+
+def test_ordinary_output_has_no_advice_attached():
+    from record_stream import known_fix
+
+    assert known_fix("[download] Destination: show.part01.ts") == ""
+    assert known_fix("[wait] Waiting for 00:01:00") == ""

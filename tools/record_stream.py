@@ -244,6 +244,29 @@ def is_recording_line(line: str) -> bool:
     return "[download]" in line and "%" in line
 
 
+# Failures that have a specific, known fix. Printed instead of leaving
+# the raw error to be searched for.
+KNOWN_FIXES = (
+    ("no impersonate target is available",
+     "Kick sits behind Cloudflare, and yt-dlp needs a browser TLS "
+     "fingerprint to get past it. Install the dependency it is asking for:\n"
+     "        pip install -U curl_cffi\n"
+     "    Then restart this window. Nothing else changes - it is yt-dlp's "
+     "own documented optional dependency, not a workaround."),
+    ("HTTP Error 403",
+     "A 403 mid-recording usually means the fragment URLs expired. If this "
+     "keeps happening on one platform, say so - it is fixable per site."),
+)
+
+
+def known_fix(line: str) -> str:
+    """The fix for this error, if it is one with a known fix."""
+    for marker, advice in KNOWN_FIXES:
+        if marker in line:
+            return advice
+    return ""
+
+
 def is_worth_saying(line: str) -> bool:
     """Errors always reach the console, even mid-wait.
 
@@ -525,6 +548,10 @@ class Recorder:
             # machine would report it as a stream starting.
             waiting = quiet_wait
             waiting_since = last_heartbeat = 0.0
+            # Said once per run, not once per poll - this loop retries
+            # every 60 seconds and would otherwise repeat the advice all
+            # night.
+            said_fixes: set = set()
             for line in process.stdout:
                 line = line.rstrip()
                 if not line:
@@ -550,6 +577,10 @@ class Recorder:
                         self.say("Live - recording started.")
                     elif is_worth_saying(line):
                         print(line, flush=True)
+                        advice = known_fix(line)
+                        if advice and advice not in said_fixes:
+                            self.say(f"FIX: {advice}")
+                            said_fixes.add(advice)
                         continue
                     else:
                         now = time.time()
