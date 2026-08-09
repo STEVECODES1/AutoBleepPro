@@ -84,7 +84,15 @@ def find(url: str, limit: int = 20, browser: str = "") -> tuple:
         detail = completed.stderr.decode("utf-8", "replace").strip()
         # Several of these sites need a login to list anything, which is
         # a real answer rather than a failure to report as a crash.
-        return [], (detail.splitlines()[-1] if detail else "nothing returned")
+        line = detail.splitlines()[-1] if detail else "nothing returned"
+        if "DPAPI" in line or "decrypt" in line.lower():
+            # Chrome 127+ locks its cookie store with App-Bound
+            # Encryption. Nothing outside Chrome can read it any more,
+            # including yt-dlp, and there is no flag that changes that.
+            return [], ("Chrome encrypts its cookies so nothing else can "
+                        "read them (Chrome 127+). Try --browser firefox; "
+                        "Edge is Chromium too and has the same lock.")
+        return [], line
 
     try:
         payload = json.loads(raw)

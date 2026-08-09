@@ -436,3 +436,19 @@ def test_no_browser_means_no_cookies_are_touched():
     from utils.clip_finder import list_args
 
     assert "--cookies-from-browser" not in list_args("https://x.com/a", 20)
+
+
+def test_the_chrome_cookie_lock_explains_itself(monkeypatch):
+    """Chrome 127+ locks its cookie store; no flag changes that, so the
+    error has to name the browser that still works."""
+    import sys
+    sys.path.insert(0, _UPLOADER)
+    from utils import clip_finder
+
+    class Done:
+        stdout = b""
+        stderr = b"ERROR: Failed to decrypt with DPAPI. See ... for more info"
+
+    monkeypatch.setattr(clip_finder.subprocess, "run", lambda *a, **k: Done())
+    _, error = clip_finder.find("https://x.com/a", browser="chrome")
+    assert "firefox" in error.lower()
