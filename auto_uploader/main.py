@@ -24,7 +24,7 @@ from datetime import datetime
 # Bump when shipping user-visible changes, so --test-config can prove
 # which build is actually running (stale extracts have silently caused
 # several confusing "the fix did nothing" runs).
-BUILD = "2026-08-09.8 find-clips --cookies"
+BUILD = "2026-08-09.9 clip from wherever the video went"
 
 from utils.censor import censor_video
 from utils.ffmpeg_tools import StageTimer, media_duration
@@ -654,7 +654,16 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
             try:
                 from utils.clip_runner import make_clips, print_run
 
-                run = make_clips(cfg, video_path, stream_title,
+                    # The source has usually been MOVED to uploaded/ by now -
+                # cleanup runs before this - so the path that was valid
+                # at the top of the function is not any more. Clipping
+                # silently produced nothing every time because of it.
+                source = video_path
+                if not os.path.isfile(source):
+                    moved = _suggest_paths(cfg, os.path.basename(video_path))
+                    if moved:
+                        source = moved[0]
+                run = make_clips(cfg, source, stream_title,
                                  count=(cfg.clips or {}).get("count"))
                 print_run(run)
                 delivered = _deliver_clips(run, cfg)

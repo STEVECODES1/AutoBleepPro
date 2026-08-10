@@ -467,3 +467,29 @@ def test_a_cookies_file_works_without_installing_a_browser():
     assert "--flat-playlist" in args
     for forbidden in ("-o", "--output", "-f"):
         assert forbidden not in args
+
+
+def test_clips_are_cut_from_the_video_wherever_it_ended_up(tmp_path):
+    """Cleanup moves the source to uploaded/ before the clip pass runs,
+    so the path captured at the top of process_file is already stale -
+    clipping produced nothing on every real stream because of it."""
+    import sys
+    sys.path.insert(0, _UPLOADER)
+    import main
+
+    watch = tmp_path / "watch_folder"
+    uploaded = tmp_path / "uploaded"
+    censored = tmp_path / "censored"
+    for d in (watch, uploaded, censored):
+        d.mkdir()
+    (uploaded / "stream.mp4").write_bytes(b"video")
+
+    class Cfg:
+        class general:
+            watch_folder = str(watch)
+            uploaded_folder = str(uploaded)
+            censored_folder = str(censored)
+
+    found = main._suggest_paths(Cfg, "stream.mp4")
+    assert found and found[0].endswith("stream.mp4")
+    assert "uploaded" in found[0]
