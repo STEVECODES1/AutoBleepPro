@@ -530,3 +530,33 @@ def test_clips_are_cut_from_the_video_wherever_it_ended_up(tmp_path):
     found = main._suggest_paths(Cfg, "stream.mp4")
     assert found and found[0].endswith("stream.mp4")
     assert "uploaded" in found[0]
+
+
+def test_a_finished_sentence_keeps_its_last_word():
+    """"to you" belongs in "he said that to you." - only a line that ran
+    out gets walked back."""
+    import sys
+    sys.path.insert(0, _UPLOADER)
+    from utils.clip_runner import headline_for
+
+    class Spec:
+        title = "he actually said that to you."
+
+    class Clip:
+        spec = Spec()
+
+    assert headline_for(Clip()) == "He actually said that to you"
+
+
+def test_a_line_that_ran_out_is_walked_back():
+    import sys
+    sys.path.insert(0, _UPLOADER)
+    from utils.clip_runner import headline_for
+
+    class Spec:
+        title = "the whole lobby started screaming at him because he"
+
+    class Clip:
+        spec = Spec()
+
+    assert headline_for(Clip()) == "The whole lobby started screaming at him"

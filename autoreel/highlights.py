@@ -342,6 +342,29 @@ class HighlightScorer:
 
     # ── Selection ────────────────────────────────────────────────────────
 
+    def _take(self, candidates: list, count: int,
+              min_gap: float) -> list[Highlight]:
+        selected: list[Highlight] = []
+        for candidate in candidates:
+            overlaps = any(
+                candidate.start < existing.end + min_gap
+                and candidate.end > existing.start - min_gap
+                for existing in selected
+            )
+            if overlaps:
+                continue
+            selected.append(candidate)
+            if len(selected) >= count:
+                break
+        return selected
+
+    @staticmethod
+    def _gap_ladder(min_gap: float) -> list[float]:
+        """The gaps to try, widest first. Never wider than asked for."""
+        ladder = [min_gap, min_gap / 2, min_gap / 4, 0.0]
+        return [gap for i, gap in enumerate(ladder)
+                if gap <= min_gap and gap not in ladder[:i]]
+
     def select_clips(
         self,
         segments: Iterable[dict],
@@ -352,20 +375,20 @@ class HighlightScorer:
 
         Windows are ranked, then taken greedily as long as each is at
         least `min_gap` clear of everything already chosen. `min_gap` is
-        what stops ten clips coming out of the same two minutes: the same
-        good moment produces dozens of overlapping high-scoring windows,
-        and without a gap the answer would be all of them.
+        what stops ten clips coming out of the same two minutes: one good
+        moment produces dozens of overlapping high-scoring windows, and
+        without a gap the answer would be all of them.
+
+        If that leaves fewer clips than asked for, the gap is relaxed and
+        tried again. A stream whose best moments happen to fall close
+        together should still produce a full set - spreading them out is
+        a preference, and coming back with one clip to honour it is not
+        what anybody wanted.
         """
+        candidates = self.candidate_windows(segments)
         selected: list[Highlight] = []
-        for candidate in self.candidate_windows(segments):
-            overlaps = any(
-                candidate.start < existing.end + min_gap
-                and candidate.end > existing.start - min_gap
-                for existing in selected
-            )
-            if overlaps:
-                continue
-            selected.append(candidate)
+        for gap in self._gap_ladder(min_gap):
+            selected = self._take(candidates, count, gap)
             if len(selected) >= count:
                 break
 

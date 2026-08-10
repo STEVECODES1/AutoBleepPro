@@ -224,3 +224,45 @@ class HookTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class GapRelaxationTests(unittest.TestCase):
+    """Spreading clips out is a preference, not a reason to return one."""
+
+    def run_of(self, start, count, text, length=4.0, gap=0.2):
+        segments, at = [], start
+        for n in range(count):
+            segments.append(segment(at, at + length, f"{text} number {n}"))
+            at += length + gap
+        return segments
+
+    def test_clips_clustered_together_still_fill_the_count(self):
+        scorer = HighlightScorer(min_duration=15, max_duration=45)
+        segments = []
+        # Three real moments, all inside two minutes of each other.
+        for offset in (0.0, 40.0, 80.0):
+            segments.extend(self.run_of(
+                offset, 5, "No way, that was actually insane"))
+
+        clips = scorer.select_clips(segments, count=3, min_gap=90)
+
+        self.assertEqual(len(clips), 3,
+                         "the gap was honoured at the cost of the clips")
+
+    def test_the_gap_is_still_honoured_when_it_can_be(self):
+        scorer = HighlightScorer(min_duration=15, max_duration=45)
+        segments = []
+        for minute in range(4):
+            segments.extend(self.run_of(
+                minute * 400.0, 5, "No way, that was actually insane"))
+
+        clips = scorer.select_clips(segments, count=3, min_gap=90)
+
+        starts = sorted(c.start for c in clips)
+        for earlier, later in zip(starts, starts[1:]):
+            self.assertGreaterEqual(later - earlier, 90)
+
+    def test_the_gap_ladder_never_widens(self):
+        for asked in (5.0, 90.0, 0.0):
+            for gap in HighlightScorer._gap_ladder(asked):
+                self.assertLessEqual(gap, asked)

@@ -75,6 +75,9 @@ _MIN_TITLE_CHARS = 14
 _MIN_TITLE_WORDS = 3
 _MAX_TITLE_CHARS = 70
 
+# A line ending in one of these finished; anything else ran out.
+_END_PUNCT = (".", "!", "?", "\u2026")
+
 
 def _strip_filler(spoken: str) -> str:
     """Drop leading filler, repeatedly - speech opens "uh so like ..."."""
@@ -91,11 +94,25 @@ def _strip_filler(spoken: str) -> str:
 
 
 def _trim_to_length(spoken: str) -> str:
-    """Cut to title length on a word boundary, ending somewhere real."""
+    """Cut to title length on a word boundary."""
     if len(spoken) <= _MAX_TITLE_CHARS:
         return spoken
-    words = spoken[:_MAX_TITLE_CHARS].rsplit(" ", 1)[0].split()
-    # Walk back off anything that leaves the line hanging mid-thought.
+    return spoken[:_MAX_TITLE_CHARS].rsplit(" ", 1)[0].rstrip(" ,;:-")
+
+
+def _drop_dangling(spoken: str) -> str:
+    """Walk back off a line that stops mid-thought.
+
+    Only when it does not end in real punctuation: "he actually said that
+    to you." is a finished sentence and "to you" belongs there, while
+    "the whole lobby started screaming at him because he" is a transcript
+    that ran out - and that is what titles were reading like. It happens
+    with or without truncation, because the line comes from speech and
+    speech does not stop where a title should.
+    """
+    if spoken.endswith(_END_PUNCT):
+        return spoken
+    words = spoken.split()
     while len(words) > _MIN_TITLE_WORDS and \
             words[-1].strip(",.;:-!?").lower() in _DANGLING:
         words.pop()
@@ -122,11 +139,11 @@ def headline_for(clip, fallback: str = "") -> str:
     if not spoken:
         return fallback
 
-    spoken = _trim_to_length(spoken)
+    spoken = _drop_dangling(_trim_to_length(spoken))
     # A title does not end in a full stop; ? and ! are doing work, so
     # they stay.
-    spoken = spoken.rstrip(".").strip(" ,;:-") if not spoken.endswith(("?", "!")) \
-        else spoken
+    if not spoken.endswith(("?", "!")):
+        spoken = spoken.rstrip(".\u2026").strip(" ,;:-")
     if len(spoken) < _MIN_TITLE_CHARS or len(spoken.split()) < _MIN_TITLE_WORDS:
         return fallback
     return spoken[0].upper() + spoken[1:]
