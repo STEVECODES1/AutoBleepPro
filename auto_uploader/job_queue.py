@@ -290,6 +290,26 @@ class JobQueue:
         self._save()
         return job
 
+    def abandon(self, job_id: str, reason: str = "",
+                now: Optional[float] = None) -> Optional[Job]:
+        """Give up now, without spending the retry budget on it.
+
+        `fail()` is for something that might work next time. Some things
+        will not: the clip has been deleted, or it is old enough that
+        posting it would be worse than not. Retrying those three times
+        with backoff only delays the same answer.
+        """
+        now = time.time() if now is None else now
+        job = self._jobs.get(job_id)
+        if job is None:
+            return None
+        job.state = FAILED
+        job.last_error = str(reason)[:500]
+        job.claimed_at = 0.0
+        job.updated_at = now
+        self._save()
+        return job
+
     def block(self, job_id: str, reason: str = "",
               retry_after_s: Optional[float] = None,
               now: Optional[float] = None) -> Optional[Job]:

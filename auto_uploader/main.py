@@ -24,7 +24,12 @@ from datetime import datetime
 # Bump when shipping user-visible changes, so --test-config can prove
 # which build is actually running (stale extracts have silently caused
 # several confusing "the fix did nothing" runs).
-BUILD = "2026-08-10.1 keep the transcript for clips"
+BUILD = "2026-08-10.2 clips that cannot post yet are queued, not dropped"
+
+# How often --watch checks whether a deferred clip's wait is up. A minute
+# is fine: the waits themselves are 25 to 80 minutes, so the resolution
+# that matters is "well under the shortest spacing", not "immediate".
+CLIP_DRAIN_SECONDS = 60
 
 from utils.censor import censor_video
 from utils.ffmpeg_tools import StageTimer, media_duration
@@ -121,6 +126,12 @@ def _deliver_clips(run, cfg) -> int:
         except OSError as exc:
             print(f"[Clips] could not deliver {os.path.basename(source)}: {exc}")
     return moved
+
+
+def _clip_config(cfg) -> dict:
+    """The slice of config the clip publishers actually read."""
+    return {"instagram": cfg.instagram, "facebook": cfg.facebook,
+            "clips": cfg.clips, "features": cfg.features}
 
 
 def _find_clips(cfg, limit: int = 15) -> list:
@@ -617,6 +628,23 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
     stage_timer.mark("upload")
 
     if newly_uploaded:
+        # A CLIP goes to Instagram and Facebook as a Reel - the bytes are
+        # uploaded, so nothing needs hosting. Through the queue rather
+        # than directly, because ten clips arrive within minutes of each
+        # other and the platforms are spaced much wider than that: the
+        # ones that cannot go now are kept and posted when their wait is
+        # up, instead of being dropped the way they were.
+        clip_reels = {}
+        if is_clip and cfg.posting:
+            try:
+                from utils.clip_queue import CLIP_PLATFORMS, offer
+
+                clip_reels = offer(
+                    cfg.posting, _clip_config(cfg), instagram_clip_path(),
+                    fallback_caption=yt_title, dry_run=dry_run)
+            except Exception as exc:
+                print(f"[Clips] WARNING: could not offer the clip: {exc}")
+
         try:
             from utils.social_promoter import announce_upload
             # cfg.posting carries the guarded public platforms (Facebook,
@@ -636,13 +664,11 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
                                                   if _vertical else cfg.instagram),
                                     "clips": cfg.clips},
                             all_uploads=results,
-                            # Only a CLIP goes to Instagram as a Reel. A
-                            # five-hour stream is neither wanted there nor
-                            # accepted - Reels cap at 15 minutes.
-                            # The re-framed copy if one was made, so
-                            # Instagram does not pay for a second crop of
-                            # the same clip.
-                            clip_path=instagram_clip_path() if is_clip else "")
+                            # The Reel platforms were handled above, by
+                            # the queue. Announcing to them here as well
+                            # would post the same clip twice - once as a
+                            # Reel and once as a link to the Rumble page.
+                            skip_platforms=tuple(clip_reels))
         except Exception as exc:
             print(f"[Social] WARNING: announce failed: {exc}")
         # A finished STREAM is the source of the next day of clips. The
@@ -770,6 +796,10 @@ def main(argv=None) -> int:
     parser.add_argument("--verify", action="store_true",
                         help="With --posting-status, also ask each API who your token "
                              "belongs to. Read-only - creates and publishes nothing.")
+    parser.add_argument("--post-queue", action="store_true",
+                        help="Post whatever clips are waiting on a platform's "
+                             "spacing and are now due, then stop. --watch does "
+                             "this on a timer; this is for checking it by hand.")
     parser.add_argument("--post-reel", metavar="FILE",
                         help="Publish one video to Instagram as a Reel, now. "
                              "Uploads the file directly - no hosting needed. "
@@ -1111,12 +1141,27 @@ def main(argv=None) -> int:
 
     if args.posting_status:
         from publish_guard import PublishGuard
+        from utils.clip_queue import summary
         from utils.posting_status import report
 
         guard = PublishGuard(cfg.posting, cfg.posting.get("state_path"))
         account = (cfg.features.get("social_promoter", {}) or {}).get(
             "reddit_account", "")
         report({"posting": cfg.posting}, guard, account, live=args.verify)
+        print(f"\n  {summary(cfg.posting)}")
+        return 0
+
+    if args.post_queue:
+        from utils.clip_queue import drain, summary
+
+        print(f"[Clips] {summary(cfg.posting)}")
+        posted = drain(cfg.posting, _clip_config(cfg),
+                       dry_run=args.dry_run or cfg.general.dry_run_mode)
+        if not posted:
+            print("[Clips] Nothing was due to post right now.")
+        else:
+            for platform, count in sorted(posted.items()):
+                print(f"[Clips] {platform}: posted {count}.")
         return 0
 
     if args.test_config:
@@ -1167,6 +1212,14 @@ def main(argv=None) -> int:
             print(f"[ERROR] --batch folder does not exist: {batch_folder}")
             return 1
         print(f"Batch folder: {batch_folder}")
+        if cfg.posting:
+            try:
+                from utils.clip_queue import drain
+
+                drain(cfg.posting, _clip_config(cfg), dry_run=dry_run,
+                      quiet=True)
+            except Exception as exc:
+                print(f"[Clips] WARNING: could not post the queue: {exc}")
 
     # Before anything can post, so a failure explains itself the first
     # time rather than three uploads later as a tripped breaker.
@@ -1312,8 +1365,23 @@ def main(argv=None) -> int:
         watcher.start()
         try:
             import time
+
+            # Clips deferred by a platform's spacing wait here, not in
+            # the bin. Checked on a timer rather than only when a new
+            # video arrives, because the whole point is that the wait
+            # expires long after the last file did.
+            next_drain = 0.0
             while True:
                 time.sleep(1)
+                if cfg.posting and time.time() >= next_drain:
+                    next_drain = time.time() + CLIP_DRAIN_SECONDS
+                    try:
+                        from utils.clip_queue import drain
+
+                        drain(cfg.posting, _clip_config(cfg),
+                              dry_run=dry_run, quiet=True)
+                    except Exception as exc:
+                        print(f"[Clips] WARNING: could not post the queue: {exc}")
         except KeyboardInterrupt:
             print("\nStopping...")
             watcher.stop()

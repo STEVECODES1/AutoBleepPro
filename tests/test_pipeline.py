@@ -305,7 +305,11 @@ def test_a_silent_clip_falls_back_rather_than_titling_itself_blank():
 
 
 def test_a_long_hook_is_cut_at_a_word():
-    """A title ending mid-word looks like a bug rather than a choice."""
+    """A title ending mid-word looks like a bug rather than a choice.
+
+    And no trailing "..." - an ellipsis on every long title is one of the
+    things that made these read as machine-made rather than written.
+    """
     import sys
     sys.path.insert(0, _UPLOADER)
     from utils.clip_runner import headline_for
@@ -318,8 +322,41 @@ def test_a_long_hook_is_cut_at_a_word():
         spec = Spec()
 
     out = headline_for(Clip())
-    assert len(out) <= 74 and out.endswith("...")
-    assert not out[:-3].endswith(" ")
+    assert len(out) <= 70
+    assert not out.endswith("...")
+    assert out.split()[-1] in Spec.title.split()
+
+
+def test_a_title_does_not_end_on_a_dangling_word():
+    """"He walked in there and" is not a sentence anyone would have typed."""
+    import sys
+    sys.path.insert(0, _UPLOADER)
+    from utils.clip_runner import _DANGLING, headline_for
+
+    class Spec:
+        title = ("he walked straight in there and then the whole lobby "
+                 "started screaming at him")
+
+    class Clip:
+        spec = Spec()
+
+    out = headline_for(Clip())
+    assert out.split()[-1].strip(",.;:-!?").lower() not in _DANGLING
+
+
+def test_a_title_too_short_to_say_anything_falls_back():
+    """"Wow!" is a noise, not a title - the stream's own name beats it."""
+    import sys
+    sys.path.insert(0, _UPLOADER)
+    from utils.clip_runner import headline_for
+
+    class Spec:
+        title = "Wow!"
+
+    class Clip:
+        spec = Spec()
+
+    assert headline_for(Clip(), "Stackswopo Stream") == "Stackswopo Stream"
 
 
 # ═════════════════════════════════════════════════════════════════════════════

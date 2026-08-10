@@ -51,6 +51,15 @@ DEFAULT_MIN_SECONDS = 15.0
 DEFAULT_MAX_SECONDS = 60.0
 DEFAULT_CLIP_COUNT = 3
 
+# Ten clips out of one good minute is ten versions of the same clip. This
+# is how far apart two chosen windows have to start on a long stream.
+DEFAULT_MIN_GAP = 90.0
+
+# A stream opens on a waiting screen and closes on goodbyes; neither is a
+# clip, and both score well because people talk over them.
+DEFAULT_SKIP_INTRO = 120.0
+DEFAULT_SKIP_OUTRO = 60.0
+
 _TIMEOUT = 60 * 30
 
 
@@ -66,6 +75,10 @@ class ClipSpec:
     index: int = 1
     title: str = ""
     score: float = 0.0
+    # Everything said in the window. `title` is one line out of this -
+    # the line worth putting on a thumbnail - and a caption wants the
+    # rest, so both are carried rather than one being derived twice.
+    transcript: str = ""
 
     @property
     def duration(self) -> float:
@@ -199,13 +212,20 @@ def _remove(path: str) -> None:
 
 def specs_from_segments(segments: Iterable[dict], count: int = DEFAULT_CLIP_COUNT,
                         min_seconds: float = DEFAULT_MIN_SECONDS,
-                        max_seconds: float = DEFAULT_MAX_SECONDS) -> list:
+                        max_seconds: float = DEFAULT_MAX_SECONDS,
+                        skip_intro_seconds: float = 0.0,
+                        skip_outro_seconds: float = 0.0,
+                        min_gap_seconds: float = DEFAULT_MIN_GAP) -> list:
     """Pick clip windows from a transcript."""
-    scorer = HighlightScorer(min_duration=min_seconds, max_duration=max_seconds)
-    highlights = scorer.select_clips(list(segments), count=count)
+    scorer = HighlightScorer(min_duration=min_seconds, max_duration=max_seconds,
+                             skip_intro_seconds=skip_intro_seconds,
+                             skip_outro_seconds=skip_outro_seconds)
+    highlights = scorer.select_clips(list(segments), count=count,
+                                     min_gap=min_gap_seconds)
     return [
-        ClipSpec(start=h.start, end=h.end, index=i, title=h.text.strip(),
-                 score=h.score)
+        ClipSpec(start=h.start, end=h.end, index=i,
+                 title=(h.hook or h.text).strip(),
+                 score=h.score, transcript=h.text.strip())
         for i, h in enumerate(highlights, start=1)
     ]
 
@@ -230,6 +250,9 @@ class ClipMaker:
     encoder: str = "libx264"
     preset: str = "fast"
     crf: int = 20
+    skip_intro_seconds: float = DEFAULT_SKIP_INTRO
+    skip_outro_seconds: float = DEFAULT_SKIP_OUTRO
+    min_gap_seconds: float = DEFAULT_MIN_GAP
 
     @property
     def strategy(self) -> str:
@@ -245,7 +268,10 @@ class ClipMaker:
         """
         segments = list(segments or ())
         specs = specs_from_segments(segments, self.count,
-                                    self.min_seconds, self.max_seconds)
+                                    self.min_seconds, self.max_seconds,
+                                    self.skip_intro_seconds,
+                                    self.skip_outro_seconds,
+                                    self.min_gap_seconds)
         if not specs:
             return []
 

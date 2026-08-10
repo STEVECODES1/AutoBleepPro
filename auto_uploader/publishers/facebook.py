@@ -38,11 +38,37 @@ GRAPH_API = "https://graph.facebook.com/v19.0"
 _POLL_INTERVAL = 5
 _POLL_TIMEOUT  = 180
 
+# Reels are uploaded as bytes to the upload host, not fetched by Meta
+# from a URL. The Graph call only hands back where to send them.
+_RUPLOAD_TIMEOUT = 600
+
+# Facebook rejects a Reel outside this range outright, so it is worth
+# saying so before spending the upload.
+MIN_REEL_SECONDS = 3
+MAX_REEL_SECONDS = 90
+
+
+def _graph_reason(exc: Exception) -> str:
+    """The real reason, which Graph puts in the body and not the status.
+
+    A bare `400 Client Error` says nothing actionable; the JSON underneath
+    names the permission or the parameter that was wrong.
+    """
+    response = getattr(exc, "response", None)
+    if response is None:
+        return ""
+    try:
+        return str(response.json().get("error", {}).get("message", ""))
+    except Exception:
+        return ""
+
 
 class FacebookPublisher:
     # A Page can publish a plain link post, so an announcement needs no
     # hosting for the video itself.
     supports_link_posts = True
+    # And a Reel can be uploaded from disk - see post_reel_from_file.
+    supports_reels = True
 
     def __init__(self, cfg: Dict[str, Any]) -> None:
         self._cfg = cfg
@@ -102,21 +128,116 @@ class FacebookPublisher:
             r.raise_for_status()
             post_id = r.json().get("id")
         except Exception as exc:
-            # Graph puts the real reason in the body, not the status line.
-            detail = ""
-            response = getattr(exc, "response", None)
-            if response is not None:
-                try:
-                    detail = response.json().get("error", {}).get("message", "")
-                except Exception:
-                    detail = ""
-            log.error("Facebook: link post failed: %s", detail or exc)
+            log.error("Facebook: link post failed: %s", _graph_reason(exc) or exc)
             return False
 
         if not post_id:
             log.error("Facebook: link post returned no id")
             return False
         log.info("Facebook: posted link, id=%s", post_id)
+        return True
+
+    # ── Reels from a local file ──────────────────────────────────────────
+
+    def post_reel_from_file(self, video_path: str, caption: str = "",
+                            share_to_feed: bool = True) -> bool:
+        """Publish a local clip as a Page Reel. No hosting anywhere.
+
+        post_reel() below takes a `file_url` that Meta fetches server-side,
+        which is why Facebook never received a single Reel: there is
+        nothing to hand it. A Rumble watch page is not a video file, and
+        putting clips on public hosting purely to satisfy a fetch is
+        infrastructure for its own sake.
+
+        /{page_id}/video_reels removes the requirement the same way
+        Instagram's resumable upload does - start the session, POST the
+        bytes to the upload host it names, then finish and publish.
+
+        `share_to_feed` is accepted so this matches the Instagram
+        publisher's signature; a Page Reel appears on the Page either way,
+        so there is nothing to pass on.
+        """
+        if not self._ready():
+            return False
+        if not os.path.isfile(video_path):
+            log.error("Facebook: no such file: %s", video_path)
+            return False
+
+        size = os.path.getsize(video_path)
+        if size <= 0:
+            log.error("Facebook: %s is empty", os.path.basename(video_path))
+            return False
+
+        session = self._start_reel_session()
+        if not session:
+            return False
+        video_id, upload_url = session
+
+        if not self._upload_reel_bytes(upload_url, video_path, size):
+            return False
+        return self._finish_reel(video_id, caption)
+
+    def _start_reel_session(self) -> Optional[tuple]:
+        """(video_id, upload_url) for a new Reel, or None."""
+        url = f"{GRAPH_API}/{self._page_id}/video_reels"
+        try:
+            r = requests.post(url, data={"upload_phase": "start",
+                                         "access_token": self._token},
+                              timeout=30)
+            r.raise_for_status()
+            data = r.json()
+        except Exception as exc:
+            log.error("Facebook: could not start a Reel upload: %s",
+                      _graph_reason(exc) or exc)
+            return None
+        video_id = data.get("video_id") or data.get("id")
+        upload_url = data.get("upload_url")
+        if not video_id or not upload_url:
+            log.error("Facebook: Reel session came back without an upload "
+                      "target: %s", data)
+            return None
+        return video_id, upload_url
+
+    def _upload_reel_bytes(self, upload_url: str, video_path: str,
+                           size: int) -> bool:
+        headers = {
+            "Authorization": f"OAuth {self._token}",
+            "offset": "0",
+            "file_size": str(size),
+        }
+        try:
+            with open(video_path, "rb") as f:
+                r = requests.post(upload_url, data=f.read(), headers=headers,
+                                  timeout=_RUPLOAD_TIMEOUT)
+            r.raise_for_status()
+        except Exception as exc:
+            log.error("Facebook: Reel upload failed: %s",
+                      _graph_reason(exc) or exc)
+            return False
+        log.info("Facebook: uploaded %.1f MB", size / 1e6)
+        return True
+
+    def _finish_reel(self, video_id: str, caption: str) -> bool:
+        url = f"{GRAPH_API}/{self._page_id}/video_reels"
+        params = {
+            "upload_phase": "finish",
+            "video_id": video_id,
+            "video_state": "PUBLISHED",
+            "description": caption,
+            "access_token": self._token,
+        }
+        try:
+            r = requests.post(url, data=params, timeout=60)
+            r.raise_for_status()
+            data = r.json()
+        except Exception as exc:
+            log.error("Facebook: publishing Reel %s failed: %s", video_id,
+                      _graph_reason(exc) or exc)
+            return False
+        if not data.get("success", True):
+            log.error("Facebook: Reel %s was not published: %s", video_id, data)
+            return False
+        log.info("Facebook: published Reel %s", video_id)
         return True
 
     def post_reel(

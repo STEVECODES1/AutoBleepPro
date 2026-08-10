@@ -329,7 +329,8 @@ def _publisher_for(platform: str, config: dict):
 
 
 def announce_to_platforms(posting: dict, title: str, new_uploads: dict,
-                          config: dict = None, dry_run: bool = False) -> list:
+                          config: dict = None, dry_run: bool = False,
+                          skip: tuple = ()) -> list:
     """Announce to the guarded public platforms. Returns those that posted.
 
     Every platform here goes through PublishGuard first - kill switch,
@@ -365,6 +366,10 @@ def announce_to_platforms(posting: dict, title: str, new_uploads: dict,
     for platform in platforms:
         if platform == "facebook_group":
             continue   # no route at all, and nothing useful to hand a human
+        if platform in skip:
+            # Already handled elsewhere this run - a clip posted as a Reel
+            # must not also be announced here as a link to itself.
+            continue
 
         decision = guard.check(platform)
         if not decision:
@@ -578,7 +583,7 @@ def post_clip_to_instagram(posting: dict, video_path: str, caption: str,
 def announce_upload(features: dict, title: str, new_uploads: dict,
                     posting: dict = None, config: dict = None,
                     dry_run: bool = False, all_uploads: dict = None,
-                    clip_path: str = "") -> list:
+                    clip_path: str = "", skip_platforms: tuple = ()) -> list:
     """Announce `new_uploads` ({platform: url}, only things uploaded THIS
     run - never pre-existing skips). Returns the channels that posted.
 
@@ -666,6 +671,6 @@ def announce_upload(features: dict, title: str, new_uploads: dict,
 
     if posting:
         posted.extend(announce_to_platforms(posting, title, announced,
-                                            config, dry_run))
+                                            config, dry_run, skip_platforms))
 
     return posted + [p for p in posted_extra if p not in posted]

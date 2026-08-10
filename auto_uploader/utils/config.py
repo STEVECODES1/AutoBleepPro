@@ -88,6 +88,11 @@ class AppConfig:
     posting: dict = field(default_factory=dict)
     clips: dict = field(default_factory=dict)
     instagram: dict = field(default_factory=dict)
+    # Optional. Facebook's posting limits live under `posting.platforms`;
+    # this block is for how a Reel is composed - caption, framing - and
+    # falls back to Instagram's so the same clip does not read two
+    # different ways across two accounts.
+    facebook: dict = field(default_factory=dict)
 
 
 def _resolve_path(project_root: str, path: str) -> str:
@@ -193,7 +198,8 @@ def load_config(config_path: str = "config.json", env_path: str = ".env") -> App
                      features=raw.get("features", {}),
                      posting=posting,
                      clips=raw.get("clips", {}),
-                     instagram=raw.get("instagram", {}))
+                     instagram=raw.get("instagram", {}),
+                     facebook=raw.get("facebook", {}))
 
 
 def validate_config(cfg: AppConfig) -> list:

@@ -60,23 +60,24 @@ def _load_segments(cfg, source_path: str) -> Optional[list]:
 _FILLER = ("uh", "um", "like", "so", "and", "but", "okay", "ok", "yeah",
            "yo", "bro", "i mean", "you know")
 
+# Words that leave a truncated title hanging. Cutting at 70 characters
+# lands on one of these often enough that it is the single thing that
+# made titles read as machine-made: "He walked in there and" is not a
+# sentence a person would have typed.
+_DANGLING = ("and", "but", "so", "or", "the", "a", "an", "to", "of", "in",
+             "on", "at", "for", "with", "that", "this", "is", "was", "it",
+             "he", "she", "they", "we", "i", "you", "my", "his", "her",
+             "their", "because", "when", "if", "then", "just", "like")
 
-def headline_for(clip, fallback: str = "") -> str:
-    """A TITLE for one clip, from what is actually said in it.
+# Under this, the line says nothing - "Wow!" is not a title, it is a
+# noise. Falls back to the stream's own title instead.
+_MIN_TITLE_CHARS = 14
+_MIN_TITLE_WORDS = 3
+_MAX_TITLE_CHARS = 70
 
-    The alternative was the filename, which produced titles like
-    "live 2026-08-08 19 08 clip06" - identical in shape across every
-    clip, meaningless to a viewer, and worthless in search. The
-    transcript already sits on the spec; this is the line a human would
-    have picked out of it.
 
-    Leading filler is dropped because a hook starting "uh so like" reads
-    as a transcript rather than a title, and the first words are the
-    only ones that get read on a thumbnail.
-    """
-    spoken = " ".join((getattr(clip.spec, "title", "") or "").split())
-    # Repeated passes: real speech opens "uh so like ...", and one pass
-    # per word only ever removes the first of them.
+def _strip_filler(spoken: str) -> str:
+    """Drop leading filler, repeatedly - speech opens "uh so like ..."."""
     stripping = True
     while stripping and spoken:
         stripping = False
@@ -86,14 +87,49 @@ def headline_for(clip, fallback: str = "") -> str:
                 spoken = spoken[len(word) + 1:].lstrip(" ,.")
                 stripping = True
                 break
+    return spoken
+
+
+def _trim_to_length(spoken: str) -> str:
+    """Cut to title length on a word boundary, ending somewhere real."""
+    if len(spoken) <= _MAX_TITLE_CHARS:
+        return spoken
+    words = spoken[:_MAX_TITLE_CHARS].rsplit(" ", 1)[0].split()
+    # Walk back off anything that leaves the line hanging mid-thought.
+    while len(words) > _MIN_TITLE_WORDS and \
+            words[-1].strip(",.;:-!?").lower() in _DANGLING:
+        words.pop()
+    return " ".join(words).rstrip(" ,;:-")
+
+
+def headline_for(clip, fallback: str = "") -> str:
+    """A TITLE for one clip, from what is actually said in it.
+
+    The alternative was the filename, which produced titles like
+    "live 2026-08-08 19 08 clip06" - identical in shape across every
+    clip, meaningless to a viewer, and worthless in search.
+
+    What arrives here is already the best single SENTENCE in the clip
+    rather than whatever segment the window happened to open on - the
+    scorer picks it. This is the cleanup: leading filler goes because a
+    title starting "uh so like" reads as a transcript, a trailing full
+    stop goes because titles do not carry one, and a line too short to
+    say anything is dropped in favour of the stream's own title rather
+    than shipped as "Wow!".
+    """
+    spoken = _strip_filler(" ".join(
+        (getattr(clip.spec, "title", "") or "").split()))
     if not spoken:
         return fallback
 
-    # Rumble and YouTube both truncate well before this; a title that
-    # ends mid-word looks like a bug rather than a choice.
-    if len(spoken) > 70:
-        spoken = spoken[:70].rsplit(" ", 1)[0].rstrip(" ,;:-") + "..."
-    return spoken[0].upper() + spoken[1:] if spoken else fallback
+    spoken = _trim_to_length(spoken)
+    # A title does not end in a full stop; ? and ! are doing work, so
+    # they stay.
+    spoken = spoken.rstrip(".").strip(" ,;:-") if not spoken.endswith(("?", "!")) \
+        else spoken
+    if len(spoken) < _MIN_TITLE_CHARS or len(spoken.split()) < _MIN_TITLE_WORDS:
+        return fallback
+    return spoken[0].upper() + spoken[1:]
 
 
 def caption_for(clip, title: str, tags: list) -> str:
@@ -148,6 +184,14 @@ def make_clips(cfg, source_path: str, title: str,
         max_seconds=float(clips_cfg.get("max_seconds", 60)),
         encoder=_encoder_for(speed),
         preset=speed.get("encode_preset", "fast"),
+        # The waiting screen at the top of a stream and the goodbyes at
+        # the end both transcribe as people talking, so both score - and
+        # neither is a clip anyone watches.
+        skip_intro_seconds=float(clips_cfg.get("skip_intro_seconds", 120)),
+        skip_outro_seconds=float(clips_cfg.get("skip_outro_seconds", 60)),
+        # Without this, one genuinely good minute produces every clip:
+        # overlapping windows over the same moment all score highly.
+        min_gap_seconds=float(clips_cfg.get("min_gap_seconds", 90)),
     )
 
     base = os.path.splitext(os.path.basename(source_path))[0]

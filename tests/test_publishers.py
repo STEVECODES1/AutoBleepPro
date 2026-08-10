@@ -545,3 +545,100 @@ def test_re_framing_can_be_turned_off(tmp_path):
     clip.write_bytes(b"video")
     path, temp = _vertical_copy(str(clip), {"vertical": False}, {})
     assert path == str(clip) and temp == ""
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Facebook Reels from a local file
+#
+# Facebook received no Reel at all until this existed: post_reel() takes a
+# `file_url` Meta fetches server-side, and there was never anything to
+# hand it - a Rumble watch page is not a video file.
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _fb_ready(monkeypatch):
+    monkeypatch.setenv("FB_PAGE_TOKEN", "tok")
+    monkeypatch.setenv("FB_PAGE_ID", "999")
+
+
+def test_facebook_reel_uploads_bytes_instead_of_asking_for_a_url(
+        monkeypatch, tmp_path):
+    from auto_uploader.publishers import facebook as fb
+
+    clip = tmp_path / "clip.mp4"
+    clip.write_bytes(b"x" * 2048)
+    calls = []
+
+    class Response:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"video_id": "v1",
+                    "upload_url": "https://rupload.facebook.com/video-upload/v19.0/v1",
+                    "success": True}
+
+    def fake_post(url, **kw):
+        calls.append((url, kw))
+        return Response()
+
+    monkeypatch.setattr(fb.requests, "post", fake_post)
+    _fb_ready(monkeypatch)
+
+    assert fb.FacebookPublisher({}).post_reel_from_file(str(clip), "caption") is True
+
+    start, upload, finish = calls
+    assert start[1]["data"]["upload_phase"] == "start"
+    assert "rupload.facebook.com" in upload[0], \
+        "the bytes must go to the upload host, not the Graph endpoint"
+    assert upload[1]["headers"]["file_size"] == "2048"
+    assert upload[1]["headers"]["offset"] == "0"
+    assert upload[1]["headers"]["Authorization"] == "OAuth tok"
+    assert finish[1]["data"]["upload_phase"] == "finish"
+    assert finish[1]["data"]["video_state"] == "PUBLISHED"
+    assert finish[1]["data"]["description"] == "caption"
+
+
+def test_facebook_reel_needs_credentials(monkeypatch, tmp_path):
+    monkeypatch.delenv("FB_PAGE_TOKEN", raising=False)
+    monkeypatch.delenv("FB_PAGE_ID", raising=False)
+    from auto_uploader.publishers.facebook import FacebookPublisher
+
+    clip = tmp_path / "clip.mp4"
+    clip.write_bytes(b"x")
+    assert FacebookPublisher({}).post_reel_from_file(str(clip)) is False
+
+
+def test_facebook_reel_stops_if_the_session_gives_no_upload_target(
+        monkeypatch, tmp_path):
+    """No upload_url means nowhere to send the bytes; posting them at the
+    Graph endpoint instead would 400 with an unrelated message."""
+    from auto_uploader.publishers import facebook as fb
+
+    clip = tmp_path / "clip.mp4"
+    clip.write_bytes(b"x")
+
+    class Response:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"video_id": "v1"}
+
+    posts = []
+
+    def fake_post(url, **kw):
+        posts.append(url)
+        return Response()
+
+    monkeypatch.setattr(fb.requests, "post", fake_post)
+    _fb_ready(monkeypatch)
+
+    assert fb.FacebookPublisher({}).post_reel_from_file(str(clip)) is False
+    assert len(posts) == 1, "it kept going after the session failed"
+
+
+def test_facebook_announces_it_can_take_reels():
+    """clip_queue asks this before offering a clip to a platform."""
+    from auto_uploader.publishers.facebook import FacebookPublisher
+
+    assert FacebookPublisher({}).supports_reels is True

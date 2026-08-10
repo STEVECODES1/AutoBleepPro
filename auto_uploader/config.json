@@ -141,7 +141,12 @@
     "auto_from_streams": true,
     "count": 10,
     "min_seconds": 15,
-    "burn_captions": true
+    "_quality_comment": "How the best moments are chosen. skip_intro/outro drop the waiting screen and the goodbyes - both transcribe as talking, both score, neither is a clip. min_gap_seconds is how far apart two clips must start: one good minute produces dozens of overlapping high-scoring windows, and without a gap every clip would come out of it.",
+    "skip_intro_seconds": 120,
+    "skip_outro_seconds": 60,
+    "min_gap_seconds": 90,
+    "_captions_comment": "Burned-in subtitles. Off: Whisper's line breaks land mid-phrase and the box sits over the picture, which reads worse than no captions at all. Instagram and Rumble both caption automatically anyway.",
+    "burn_captions": false
   },
 
   "features": {
