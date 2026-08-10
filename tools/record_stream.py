@@ -1164,6 +1164,11 @@ def main(argv: Optional[list] = None) -> int:
     except KeyboardInterrupt:
         stop.set()
         print("\nStopped.")
+        for t in threads:
+            try:
+                t.join(timeout=2)
+            except Exception:
+                pass
         return 0
 
 
