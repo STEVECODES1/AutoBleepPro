@@ -23,6 +23,20 @@ REM ============================================================================
 cd /d "%~dp0"
 
 echo ============================================================
+echo  Pulling latest code from GitHub...
+echo ============================================================
+git pull
+if %ERRORLEVEL% neq 0 (
+    echo.
+    echo  WARNING: git pull failed. Check your internet connection or
+    echo  whether this folder is a git repo (git status).
+    echo  Continuing with the version already on disk...
+    echo.
+    timeout /t 4 /nobreak >nul
+)
+echo.
+
+echo ============================================================
 echo  Starting AutoBleepPro
 echo ============================================================
 echo.
