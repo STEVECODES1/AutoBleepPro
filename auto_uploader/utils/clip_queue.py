@@ -77,7 +77,12 @@ def caption_for(platform: str, video_path: str, fallback: str,
 
 def publish(platform: str, video_path: str, caption: str,
             config: dict, dry_run: bool = False) -> bool:
-    """Actually post one clip. No guard, no queue - callers do that."""
+    """Actually post one clip. No guard, no queue - callers do that.
+
+    Raises NotConfigured when the platform refuses for a reason no retry
+    can fix - a missing token scope, most often.
+    """
+    from publishers.errors import NotConfigured
     if not os.path.isfile(video_path):
         print(f"[Clips] {platform}: the clip is gone: {video_path}")
         return False
@@ -105,6 +110,10 @@ def publish(platform: str, video_path: str, caption: str,
         ok = bool(publisher.post_reel_from_file(
             upload_path, caption,
             share_to_feed=bool(settings.get("share_to_feed", True))))
+    except NotConfigured as exc:
+        # Re-raised for the caller to treat as "not set up yet" rather
+        # than a failed post - see publishers/errors.
+        raise
     except Exception as exc:
         ok = False
         print(f"[Clips] {platform}: Reel upload raised {exc}")
@@ -125,6 +134,7 @@ def offer(posting: dict, config: dict, video_path: str,
     Returns {platform: "posted" | "queued" | "skipped: reason"}.
     """
     from publish_guard import PublishGuard
+    from publishers.errors import NotConfigured
 
     outcome: dict = {}
     if not posting or not video_path:
@@ -171,7 +181,13 @@ def offer(posting: dict, config: dict, video_path: str,
                   f"{decision.retry_after_s / 60:.0f} min.")
             continue
 
-        ok = publish(platform, video_path, caption, config, dry_run)
+        try:
+            ok = publish(platform, video_path, caption, config, dry_run)
+        except NotConfigured as exc:
+            queue.block(job_id, str(exc), MAX_DEFERRED_AGE_S)
+            outcome[platform] = "skipped: not configured"
+            print(f"[Clips] {platform}: skipped - {exc}")
+            continue
         if dry_run:
             queue.block(job_id, "dry run", 300)
             outcome[platform] = "posted"
@@ -200,6 +216,7 @@ def drain(posting: dict, config: dict, limit: int = 0,
     Returns {platform: posted_count}.
     """
     from publish_guard import PublishGuard
+    from publishers.errors import NotConfigured
 
     posted: dict = {}
     if not posting:
@@ -236,7 +253,16 @@ def drain(posting: dict, config: dict, limit: int = 0,
                 print(f"[Clips] {job.platform}: still waiting - {decision.reason}")
             continue
 
-        ok = publish(job.platform, job.clip_path, job.caption, config, dry_run)
+        try:
+            ok = publish(job.platform, job.clip_path, job.caption, config,
+                         dry_run)
+        except NotConfigured as exc:
+            # Held, not failed: the clip is fine, the token is not. It
+            # comes back once somebody fixes the scope.
+            queue.block(job.id, str(exc), MAX_DEFERRED_AGE_S)
+            if not quiet:
+                print(f"[Clips] {job.platform}: held - {exc}")
+            continue
         if dry_run:
             # Put it back with a real wait: a zero would make it eligible
             # again on the next claim and loop this forever.

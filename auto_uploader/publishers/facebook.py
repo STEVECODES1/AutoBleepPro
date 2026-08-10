@@ -34,6 +34,8 @@ except ImportError:
     _REQUESTS_OK = False
     log.warning("facebook: 'requests' not installed — pip install requests")
 
+from .errors import NotConfigured, is_configuration_problem
+
 GRAPH_API = "https://graph.facebook.com/v19.0"
 _POLL_INTERVAL = 5
 _POLL_TIMEOUT  = 180
@@ -48,19 +50,42 @@ MIN_REEL_SECONDS = 3
 MAX_REEL_SECONDS = 90
 
 
-def _graph_reason(exc: Exception) -> str:
-    """The real reason, which Graph puts in the body and not the status.
+def _graph_error(exc: Exception) -> tuple:
+    """(code, message) from the body, which is where Graph puts them.
 
     A bare `400 Client Error` says nothing actionable; the JSON underneath
     names the permission or the parameter that was wrong.
     """
     response = getattr(exc, "response", None)
     if response is None:
-        return ""
+        return None, ""
     try:
-        return str(response.json().get("error", {}).get("message", ""))
+        error = response.json().get("error", {}) or {}
     except Exception:
-        return ""
+        return None, ""
+    return error.get("code"), str(error.get("message", ""))
+
+
+def _graph_reason(exc: Exception) -> str:
+    return _graph_error(exc)[1]
+
+
+def _raise_if_setup(exc: Exception, doing: str) -> None:
+    """Turn a permissions refusal into NotConfigured rather than a failure.
+
+    A token missing pages_manage_posts refuses every post forever. Counted
+    as failures, three of those trip the circuit breaker - and then fixing
+    the token leaves Facebook blocked anyway until someone runs
+    --reset-failures. That is a config problem wearing an error code.
+    """
+    code, message = _graph_error(exc)
+    if is_configuration_problem(code, message):
+        raise NotConfigured(
+            f"Facebook cannot {doing} with this token: {message.strip()} "
+            "Fix it at developers.facebook.com -> your app -> Graph API "
+            "Explorer: grant pages_manage_posts and pages_read_engagement, "
+            "generate a new PAGE token, then: python main.py --set-env "
+            "FB_PAGE_TOKEN=<new token>") from exc
 
 
 class FacebookPublisher:
@@ -128,6 +153,7 @@ class FacebookPublisher:
             r.raise_for_status()
             post_id = r.json().get("id")
         except Exception as exc:
+            _raise_if_setup(exc, "post a link")
             log.error("Facebook: link post failed: %s", _graph_reason(exc) or exc)
             return False
 
@@ -187,6 +213,7 @@ class FacebookPublisher:
             r.raise_for_status()
             data = r.json()
         except Exception as exc:
+            _raise_if_setup(exc, "publish a Reel")
             log.error("Facebook: could not start a Reel upload: %s",
                       _graph_reason(exc) or exc)
             return None

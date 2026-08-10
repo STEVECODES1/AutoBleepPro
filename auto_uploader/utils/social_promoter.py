@@ -354,6 +354,7 @@ def announce_to_platforms(posting: dict, title: str, new_uploads: dict,
         return []
 
     from publish_guard import PublishGuard
+    from publishers.errors import NotConfigured
 
     guard = PublishGuard(posting, posting.get("state_path"))
     message = build_message(title, new_uploads)
@@ -436,6 +437,12 @@ def announce_to_platforms(posting: dict, title: str, new_uploads: dict,
         except ImportError:
             print(f"[Social] {platform}: skipped - required library not "
                   "installed (pip install tweepy)")
+            continue
+        except NotConfigured as exc:
+            # A missing scope refuses every post forever, so counting it
+            # would trip the breaker and leave the platform blocked even
+            # after the token is fixed. Not a failure - a setup step.
+            print(f"[Social] {platform}: skipped - {exc}")
             continue
         except Exception as exc:
             ok = False

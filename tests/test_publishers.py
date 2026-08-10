@@ -650,3 +650,114 @@ def test_facebook_announces_it_can_take_reels():
     from auto_uploader.publishers.facebook import FacebookPublisher
 
     assert FacebookPublisher({}).supports_reels is True
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# A missing permission is setup, not failure
+#
+# A token without pages_manage_posts refuses every post forever. Counted as
+# failures, three streams trip the circuit breaker - and then fixing the
+# token leaves Facebook blocked anyway until someone runs --reset-failures.
+# The user experiences that as "I fixed it and it is still broken".
+# ═════════════════════════════════════════════════════════════════════════════
+
+class _GraphError(Exception):
+    def __init__(self, code, message):
+        super().__init__(message)
+
+        class Response:
+            def json(self_inner):
+                return {"error": {"code": code, "message": message}}
+
+        self.response = Response()
+
+
+def _raise_graph(code, message):
+    def post(*args, **kwargs):
+        raise _GraphError(code, message)
+    return post
+
+
+PERMISSION_MESSAGE = (
+    "(#200) If posting to a page, requires both pages_read_engagement and "
+    "pages_manage_posts as an admin with sufficient administrative permission")
+
+
+def test_a_missing_scope_raises_not_configured_rather_than_failing(monkeypatch):
+    from auto_uploader.publishers import facebook as fb
+    from auto_uploader.publishers.errors import NotConfigured
+
+    monkeypatch.setattr(fb.requests, "post", _raise_graph(200, PERMISSION_MESSAGE))
+    monkeypatch.setenv("FB_PAGE_TOKEN", "tok")
+    monkeypatch.setenv("FB_PAGE_ID", "999")
+
+    with pytest.raises(NotConfigured) as caught:
+        fb.FacebookPublisher({}).post_link("hi", "https://example.com/v")
+
+    assert "pages_manage_posts" in str(caught.value)
+    assert "--set-env" in str(caught.value), \
+        "the message must say what to actually do about it"
+
+
+def test_a_reel_refused_for_a_scope_says_the_same_thing(monkeypatch):
+    from auto_uploader.publishers import facebook as fb
+    from auto_uploader.publishers.errors import NotConfigured
+
+    monkeypatch.setattr(fb.requests, "post", _raise_graph(200, PERMISSION_MESSAGE))
+    monkeypatch.setenv("FB_PAGE_TOKEN", "tok")
+    monkeypatch.setenv("FB_PAGE_ID", "999")
+    clip = "/tmp/does-not-matter.mp4"
+    with open(clip, "wb") as f:
+        f.write(b"x")
+
+    with pytest.raises(NotConfigured):
+        fb.FacebookPublisher({}).post_reel_from_file(clip)
+
+
+def test_an_ordinary_rejection_is_still_a_failure(monkeypatch):
+    """Only setup problems get the exemption; a rejected post must still
+    count, or the circuit breaker protects nothing."""
+    from auto_uploader.publishers import facebook as fb
+
+    monkeypatch.setattr(fb.requests, "post",
+                        _raise_graph(368, "temporarily blocked for policies violations"))
+    monkeypatch.setenv("FB_PAGE_TOKEN", "tok")
+    monkeypatch.setenv("FB_PAGE_ID", "999")
+
+    assert fb.FacebookPublisher({}).post_link("hi", "https://example.com/v") is False
+
+
+def test_the_announcer_skips_a_scope_problem_without_recording_it(monkeypatch, tmp_path):
+    """The regression that matters: three of these must not trip the breaker."""
+    from publish_guard import PublishGuard
+    from publishers.errors import NotConfigured
+    from utils import social_promoter
+
+    posting = {
+        "enabled": True,
+        "kill_switch_file": str(tmp_path / "STOP"),
+        "state_path": str(tmp_path / "state.json"),
+        "platforms": {"facebook": {"enabled": True, "daily_cap": 10}},
+        "circuit_breaker": {"consecutive_failures": 3},
+    }
+
+    class Refusing:
+        supports_link_posts = True
+
+        def ready(self):
+            return True
+
+        def post_link(self, message, link):
+            raise NotConfigured("Facebook cannot post a link with this token")
+
+    monkeypatch.setattr(social_promoter, "_publisher_for",
+                        lambda platform, config: Refusing())
+
+    for _ in range(4):
+        social_promoter.announce_to_platforms(
+            posting, "A Stream", {"youtube": "https://youtu.be/abc"})
+
+    guard = PublishGuard(posting, posting["state_path"])
+    assert guard.consecutive_failures("facebook") == 0, \
+        "a permission problem tripped the circuit breaker"
+    assert guard.check("facebook").allowed
