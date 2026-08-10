@@ -74,6 +74,41 @@ _NOISE = re.compile(
     re.IGNORECASE,
 )
 
+# ── Watermark ────────────────────────────────────────────────────────────
+
+# Burned into every clip bottom-left so viewers know where to find us.
+WATERMARK_TEXT = "rumble.com/c/BinScripts"
+
+# font size relative to 1080px wide frame — small but legible on phone.
+WATERMARK_FONTSIZE = 28
+
+# distance from the bottom-left corner (in pixels)
+WATERMARK_MARGIN_X = 18
+WATERMARK_MARGIN_Y = 22
+
+# 0 = fully transparent, 1 = fully opaque.  0.55 keeps it unobtrusive.
+WATERMARK_ALPHA = 0.55
+
+
+def watermark_filter() -> str:
+    """Return an ffmpeg drawtext filter string for the BinScripts watermark.
+
+    Uses the built-in ffmpeg monospace font so no font file needs to
+    be bundled with the repo.  The text sits in the bottom-left corner,
+    slightly inset from the edge, at half-opacity so it does not compete
+    with the content.
+    """
+    # y expression: H - line height - margin  (H/h are ffmpeg's canvas/text vars)
+    return (
+        f"drawtext="
+        f"text='{WATERMARK_TEXT}':"
+        f"fontsize={WATERMARK_FONTSIZE}:"
+        f"fontcolor=white@{WATERMARK_ALPHA:.2f}:"
+        f"x={WATERMARK_MARGIN_X}:"
+        f"y=h-th-{WATERMARK_MARGIN_Y}:"
+        f"font=monospace"
+    )
+
 
 class ClipError(RuntimeError):
     """Rendering failed in a way the caller should hear about."""
@@ -189,9 +224,16 @@ def escape_filter_path(path: str) -> str:
 def build_filter(strategy: str = CROP_CENTER,
                  caption_path: Optional[str] = None,
                  region: Optional[dict] = None) -> str:
+    """Compose the full ffmpeg -vf filter chain for one clip.
+
+    Order: crop/fit  →  captions (optional)  →  watermark.
+    The watermark goes on last so it sits above every other layer.
+    """
     chain = crop_filter(strategy, region)
     if caption_path:
         chain += f",subtitles='{escape_filter_path(caption_path)}'"
+    # Watermark always applied last — sits on top of captions too.
+    chain += f",{watermark_filter()}"
     return chain
 
 
@@ -447,8 +489,11 @@ def make_vertical(source_path: str, output_path: str,
     """
     if not have_ffmpeg():
         return None
+    # Watermark is applied here too so standalone vertical conversions
+    # are branded the same as clips produced by ClipMaker.
+    vf = f"{crop_filter(strategy)},{watermark_filter()}"
     args = ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
-            "-i", source_path, "-vf", crop_filter(strategy),
+            "-i", source_path, "-vf", vf,
             *_encoder_args(encoder, preset),
             "-c:a", "copy", "-movflags", "+faststart", output_path]
     try:
