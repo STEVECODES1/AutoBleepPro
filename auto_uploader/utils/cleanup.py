@@ -239,6 +239,7 @@ def cleanup_after_upload(
     results: Optional[dict] = None,
     since_ts: Optional[float] = None,
     active_platforms: Iterable[str] = ALL_PLATFORMS,
+    keep_transcript: bool = False,
 ) -> CleanupReport:
     """Free this video's working files, per the contract at the top.
 
@@ -276,7 +277,13 @@ def cleanup_after_upload(
 
     # 2. Transcript cache - same condition; it exists to make a re-censor
     #    cheap, and the optimizer report has already been written by now.
-    if not settings.get("transcript_cache", True):
+    if keep_transcript:
+        # Clips are scored FROM this transcript. Deleting it here left
+        # the clip pass with "no cached transcript for this video" on
+        # every stream - and re-transcribing four hours to cut ten clips
+        # is not a trade worth making for a few KB of JSON.
+        report.keep("transcript cache", "clips are still to be cut from it")
+    elif not settings.get("transcript_cache", True):
         report.keep("transcript cache", "cleanup.transcript_cache is false")
     elif not censored_copy_is_safe_to_delete(cfg, results, active_platforms):
         report.keep("transcript cache", "still needed to retry censoring")

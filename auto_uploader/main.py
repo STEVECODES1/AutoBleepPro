@@ -24,7 +24,7 @@ from datetime import datetime
 # Bump when shipping user-visible changes, so --test-config can prove
 # which build is actually running (stale extracts have silently caused
 # several confusing "the fix did nothing" runs).
-BUILD = "2026-08-09.9 clip from wherever the video went"
+BUILD = "2026-08-10.1 keep the transcript for clips"
 
 from utils.censor import censor_video
 from utils.ffmpeg_tools import StageTimer, media_duration
@@ -701,7 +701,12 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
         report = cleanup_after_upload(
             cfg, video_path, _censored.get("path"),
             results=results, since_ts=run_started_at,
-            active_platforms=active_platforms)
+            active_platforms=active_platforms,
+            # Clips are cut AFTER this runs and are scored from the
+            # transcript, so deleting it here left every stream with
+            # "no cached transcript for this video".
+            keep_transcript=bool(
+                not is_clip and (cfg.clips or {}).get("auto_from_streams")))
         freed = report.freed_mb
         keep = int((cfg.general.cleanup or {}).get("keep_uploaded_videos", 0) or 0)
         if keep > 0:

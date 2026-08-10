@@ -537,3 +537,15 @@ def test_prune_is_idempotent(env):
 def test_prune_missing_folder(env):
     cfg = load(env, uploaded_folder=str(env["tmp"] / "nope"))
     assert prune_uploaded_folder(cfg, keep_newest=1) == 0.0
+
+
+def test_the_transcript_survives_when_clips_are_still_to_be_cut(tmp_path):
+    """Clips are scored FROM the transcript and are cut after cleanup
+    runs. Deleting it left every stream with "no cached transcript" -
+    and re-transcribing four hours to cut ten clips is not a trade worth
+    making for a few KB of JSON."""
+    from utils.cleanup import cleanup_after_upload
+
+    import inspect
+    assert "keep_transcript" in inspect.signature(
+        cleanup_after_upload).parameters
