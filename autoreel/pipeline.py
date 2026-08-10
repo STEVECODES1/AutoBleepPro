@@ -86,6 +86,8 @@ class AutoReelPipeline:
     device: Optional[str] = None  # None = auto-detect (GPU if available, else CPU)
     censor_profanity: bool = True  # False = detect and report violations but leave audio untouched
     face_tracking: bool = True  # False = always use the static center crop
+    upload_youtube: bool = True   # False = skip YouTube upload
+    upload_rumble: bool = True    # False = skip Rumble upload
 
     transcriber: Transcriber = field(init=False)
     compliance_engine: ComplianceEngine = field(init=False)
