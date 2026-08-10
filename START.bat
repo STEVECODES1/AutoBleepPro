@@ -26,16 +26,20 @@ echo ============================================================
 echo  Pulling latest code from GitHub...
 echo ============================================================
 git pull
-if %ERRORLEVEL% neq 0 (
-    echo.
-    echo  WARNING: git pull failed. Check your internet connection or
-    echo  whether this folder is a git repo (git status).
-    echo  Continuing with the version already on disk...
-    echo.
-    timeout /t 4 /nobreak >nul
-)
-echo.
+set GIT_EXIT=%ERRORLEVEL%
+if %GIT_EXIT% neq 0 goto pull_warn
+goto pull_done
 
+:pull_warn
+echo.
+echo  WARNING: git pull failed ^(exit code %GIT_EXIT%^).
+echo  Check your internet connection or run: git status
+echo  Continuing with the version already on disk...
+echo.
+timeout /t 4 /nobreak >nul
+
+:pull_done
+echo.
 echo ============================================================
 echo  Starting AutoBleepPro
 echo ============================================================
