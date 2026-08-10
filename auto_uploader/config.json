@@ -77,7 +77,9 @@
       "encode_preset": "fast",
       "reuse_model": true,
       "reuse_transcript": true,
-      "stage_timings": true
+      "stage_timings": true,
+      "_parallel_comment": "YouTube and Rumble upload at the same time instead of one after the other. Both are network-bound and independent, and Rumble spends minutes on login, the form and the category dropdowns that overlap with YouTube s transfer for free. Set false to go back to one at a time.",
+      "parallel_uploads": true
     },
 
     "_cleanup_comment": "Frees disk after each successful upload. The censored copy is a full re-encode (roughly the size of the source video) - that's what actually costs gigabytes; logs are kilobytes, so they're trimmed rather than deleted so failures stay diagnosable. source_video: 'move' keeps the original in uploaded/ (default), 'delete' frees it once BOTH platforms succeeded (the original is gone - only use this if the video exists elsewhere), 'keep' leaves it where it was. keep_uploaded_videos: 0 = off; set e.g. 3 to keep only the 3 newest in uploaded/.",

@@ -15,7 +15,9 @@ import argparse
 import os
 import shutil
 import sys
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -24,7 +26,7 @@ from datetime import datetime
 # Bump when shipping user-visible changes, so --test-config can prove
 # which build is actually running (stale extracts have silently caused
 # several confusing "the fix did nothing" runs).
-BUILD = "2026-08-10.3 clips are queued not dropped; the model is discovered, not pinned"
+BUILD = "2026-08-10.4 YouTube and Rumble upload at the same time"
 
 # How often --watch checks whether a deferred clip's wait is up. A minute
 # is fine: the waits themselves are 25 to 80 minutes, so the resolution
@@ -519,64 +521,97 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
 
     notify("Upload starting", filename, cfg.general.enable_desktop_notifications)
 
-    # --- YouTube ---
-    # existing_yt was already determined (and, if it came from
-    # find_existing_video, already persisted) above the dry-run check.
-    if "youtube" not in active_platforms:
-        print("[YouTube] Skipped - --only rumble.")
-    elif existing_yt:
-        results["youtube"] = existing_yt  # already announced above
-    else:
+    # YouTube and Rumble are independent and both spend nearly all their
+    # time waiting on the network, so they run together rather than one
+    # after the other. Rumble's browser path in particular spends minutes
+    # logging in, filling the form, picking categories and polling for the
+    # finished URL - all of which overlaps with YouTube's transfer for
+    # free.
+    #
+    # What this does NOT do is fire an upload and walk away. For both
+    # platforms the wait IS the byte transfer: YouTube's loop is the
+    # resumable PUT, and Rumble's progress bar is the browser sending the
+    # file. There is nothing to return early from.
+    #
+    # Both threads write to the same three places, so a lock guards them.
+    # The duplicate store is a JSON file: two threads writing it at once
+    # is how an upload record gets lost, and a lost record is a re-upload.
+    upload_lock = threading.Lock()
+
+    def record(platform: str, title: str) -> None:
+        with upload_lock:
+            dup_checker.record_platform_result(
+                file_hash, filename, platform,
+                results.get(platform, "FAILED: interrupted"), title=title)
+
+    def progress_reporter(label: str, parallel: bool):
+        """Two uploads sharing one terminal line produce garbage, so in
+        parallel each reports on its own line every 10%."""
+        if not parallel:
+            return lambda pct: print(f"\r[{label}] Uploading... {pct}%",
+                                     end="", flush=True)
+        seen = {"step": -1}
+
+        def report(pct: int) -> None:
+            step = int(pct) // 10
+            if step > seen["step"]:
+                seen["step"] = step
+                print(f"[{label}] Uploading... {pct}%", flush=True)
+        return report
+
+    # Resolved BEFORE anything starts. upload_path_for() runs the censor
+    # pass on first use and caches it; asked for concurrently by two
+    # threads it would transcribe the same video twice, on one GPU.
+    yt_source = rb_source = ""
+    if "youtube" in active_platforms and not existing_yt:
+        yt_source = upload_path_for(cfg.youtube.censor_uploads)
+    if "rumble" in active_platforms and not existing_rb:
+        rb_source = upload_path_for(cfg.rumble.censor_uploads)
+
+    def do_youtube(parallel: bool) -> None:
         try:
             yt = YouTubeUploader(cfg.youtube.client_secrets_path, cfg.youtube.token_path)
-
-            def yt_progress(pct):
-                print(f"\r[YouTube] Uploading... {pct}%", end="", flush=True)
 
             def yt_on_retry(attempt, delay, exc):
                 yt_logger.warning(f"{filename}: attempt {attempt} failed ({exc}); retrying in {delay}s")
 
             url = retry_with_backoff(
                 lambda: yt.upload(
-                    upload_path_for(cfg.youtube.censor_uploads), yt_title, yt_description, cfg.youtube.tags,
+                    yt_source, yt_title, yt_description, cfg.youtube.tags,
                     chunk_mb=float(getattr(cfg.youtube, 'upload_chunk_mb', 8) or 8),
                     privacy=cfg.youtube.privacy, category_id=cfg.youtube.category_id,
                     made_for_kids=cfg.youtube.made_for_kids,
                     thumbnail_path=cfg.youtube.thumbnail_path or None,
                     playlist_id=cfg.youtube.playlist_id or None,
-                    progress_callback=yt_progress,
+                    progress_callback=progress_reporter("YouTube", parallel),
                 ),
                 max_retries=cfg.general.max_retries, delays=cfg.general.retry_delays, on_retry=yt_on_retry,
             )
-            print()
+            if not parallel:
+                print()
             yt_logger.info(f"{filename}: uploaded successfully -> {url}")
             notify("YouTube upload complete", url, cfg.general.enable_desktop_notifications)
-            results["youtube"] = url
-            newly_uploaded["youtube"] = url
+            with upload_lock:
+                results["youtube"] = url
+                newly_uploaded["youtube"] = url
         except Exception as exc:
-            print()
+            if not parallel:
+                print()
             print(f"[YouTube] UPLOAD FAILED: {exc}")
             print(f"          Full details: {os.path.join(cfg.general.logs_folder, 'youtube.log')}")
             yt_logger.error(f"{filename}: FAILED: {exc}")
             notify("YouTube upload FAILED", f"{filename}: {exc}", cfg.general.enable_desktop_notifications)
-            results["youtube"] = f"FAILED: {exc}"
+            with upload_lock:
+                results["youtube"] = f"FAILED: {exc}"
         finally:
             # Runs even on an uncaught KeyboardInterrupt (Ctrl+C), which is
             # exactly what we need: whatever happened gets persisted
             # immediately, so a Ctrl+C here can't cause a later re-upload -
             # but the interrupt still propagates and actually stops the
             # script, instead of being silently swallowed.
-            dup_checker.record_platform_result(file_hash, filename, "youtube", results.get("youtube", "FAILED: interrupted"), title=yt_title)
+            record("youtube", yt_title)
 
-    # --- Rumble ---
-    # existing_rb was already determined (hash -> stored title -> RSS feed)
-    # above the dry-run check, and announced there.
-    if "rumble" not in active_platforms:
-        print("[Rumble] Skipped - --only youtube.")
-    elif existing_rb:
-        print(f"[Rumble] Already on the channel - skipping: {existing_rb}")
-        results["rumble"] = existing_rb
-    else:
+    def do_rumble(parallel: bool) -> None:
         try:
             rb = RumbleUploader(
                 cfg.rumble.username, cfg.rumble.password, cfg.rumble.login_url, cfg.rumble.upload_url,
@@ -585,27 +620,27 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
                 secondary_category=cfg.rumble.secondary_category,
             )
 
-            def rb_progress(pct):
-                print(f"\r[Rumble] Uploading... {pct}%", end="", flush=True)
-
             def rb_on_retry(attempt, delay, exc):
                 rb_logger.warning(f"{filename}: attempt {attempt} failed ({exc}); retrying in {delay}s")
 
             url = retry_with_backoff(
                 lambda: rb.upload(
-                    upload_path_for(cfg.rumble.censor_uploads), rb_title, rb_description, cfg.rumble.tags,
+                    rb_source, rb_title, rb_description, cfg.rumble.tags,
                     privacy=cfg.rumble.privacy, thumbnail_path=cfg.rumble.thumbnail_path or None,
-                    progress_callback=rb_progress,
+                    progress_callback=progress_reporter("Rumble", parallel),
                 ),
                 max_retries=cfg.general.max_retries, delays=cfg.general.retry_delays, on_retry=rb_on_retry,
             )
-            print()
+            if not parallel:
+                print()
             rb_logger.info(f"{filename}: uploaded successfully -> {url}")
             notify("Rumble upload complete", url, cfg.general.enable_desktop_notifications)
-            results["rumble"] = url
-            newly_uploaded["rumble"] = url
+            with upload_lock:
+                results["rumble"] = url
+                newly_uploaded["rumble"] = url
         except Exception as exc:
-            print()
+            if not parallel:
+                print()
             # Printed, not just logged. This used to go to rumble.log and a
             # desktop toast only, so a failed Rumble upload looked exactly
             # like a successful one from the terminal: no output at all.
@@ -617,9 +652,43 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
             print(f"         Full details: {os.path.join(cfg.general.logs_folder, 'rumble.log')}")
             rb_logger.error(f"{filename}: FAILED: {exc}")
             notify("Rumble upload FAILED", f"{filename}: {exc}", cfg.general.enable_desktop_notifications)
-            results["rumble"] = f"FAILED: {exc}"
+            with upload_lock:
+                results["rumble"] = f"FAILED: {exc}"
         finally:
-            dup_checker.record_platform_result(file_hash, filename, "rumble", results.get("rumble", "FAILED: interrupted"), title=rb_title)
+            record("rumble", rb_title)
+
+    # --- Dispatch ---
+    jobs = []
+    if "youtube" not in active_platforms:
+        print("[YouTube] Skipped - --only rumble.")
+    elif existing_yt:
+        results["youtube"] = existing_yt  # already announced above
+    else:
+        jobs.append(("youtube", do_youtube))
+
+    if "rumble" not in active_platforms:
+        print("[Rumble] Skipped - --only youtube.")
+    elif existing_rb:
+        print(f"[Rumble] Already on the channel - skipping: {existing_rb}")
+        results["rumble"] = existing_rb
+    else:
+        jobs.append(("rumble", do_rumble))
+
+    parallel = len(jobs) > 1 and bool(
+        (cfg.general.speed or {}).get("parallel_uploads", True))
+    if parallel:
+        print(f"[Upload] YouTube and Rumble together - the slower of the two "
+              f"is the wait, not the sum.")
+        with ThreadPoolExecutor(max_workers=len(jobs)) as pool:
+            futures = [pool.submit(job, True) for _, job in jobs]
+            for future in futures:
+                # Re-raised here rather than swallowed; each job already
+                # catches its own failures, so anything reaching this is a
+                # bug rather than a failed upload.
+                future.result()
+    else:
+        for _, job in jobs:
+            job(False)
 
     fully_uploaded = dup_checker.is_fully_uploaded(file_hash, platforms=active_platforms)
     if fully_uploaded:
