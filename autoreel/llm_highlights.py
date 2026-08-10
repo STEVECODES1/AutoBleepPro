@@ -151,6 +151,66 @@ def _post(url: str, payload: dict, headers: dict) -> Optional[dict]:
         return None
 
 
+def _post_detailed(url: str, payload: dict, headers: dict) -> tuple:
+    """(data, error). Same call as _post, but says what went wrong.
+
+    The normal path does not want the reason - it falls back silently and
+    the reason would just be noise on every clip run. `--check-llm` wants
+    nothing else, because "it did not work" is the one answer that helps
+    nobody when a key has just been pasted in.
+    """
+    body = json.dumps(payload).encode("utf-8")
+    request = urllib.request.Request(url, data=body, headers={
+        "Content-Type": "application/json", **headers})
+    try:
+        with urllib.request.urlopen(request, timeout=_TIMEOUT) as response:
+            return json.loads(response.read().decode("utf-8", "replace")), ""
+    except urllib.error.HTTPError as exc:
+        detail = ""
+        try:
+            payload = json.loads(exc.read().decode("utf-8", "replace"))
+            detail = str(payload.get("error", {}).get("message", "")).strip()
+        except Exception:
+            detail = ""
+        return None, f"HTTP {exc.code}: {detail or exc.reason}"
+    except urllib.error.URLError as exc:
+        return None, f"could not reach the API: {exc.reason}"
+    except (OSError, ValueError, TimeoutError) as exc:
+        return None, str(exc)
+
+
+def check(provider: str = "", model: str = "") -> tuple:
+    """(ok, detail) for the configured key. One tiny real request.
+
+    A key that is present but wrong looks exactly like a key that works,
+    right up until the clips come out chosen by the fallback scorer and
+    nobody knows why. This asks.
+    """
+    provider, key = available(provider)
+    if not provider:
+        return False, ("no GEMINI_API_KEY or OPENAI_API_KEY in .env")
+    model = model or DEFAULT_MODELS[provider]
+
+    if provider == GEMINI:
+        url = (f"https://generativelanguage.googleapis.com/v1beta/models/"
+               f"{model}:generateContent?key={key}")
+        data, error = _post_detailed(
+            url, {"contents": [{"parts": [{"text": "Reply with: ok"}]}]}, {})
+    else:
+        data, error = _post_detailed(
+            "https://api.openai.com/v1/chat/completions",
+            {"model": model,
+             "messages": [{"role": "user", "content": "Reply with: ok"}],
+             "max_tokens": 5},
+            {"Authorization": f"Bearer {key}"})
+
+    if error:
+        return False, f"{provider} ({model}) rejected the key - {error}"
+    if not isinstance(data, dict):
+        return False, f"{provider} returned nothing usable"
+    return True, f"{provider} ({model}) answered - the key works"
+
+
 def _ask_gemini(key: str, model: str, prompt: str) -> str:
     url = (f"https://generativelanguage.googleapis.com/v1beta/models/"
            f"{model}:generateContent?key={key}")

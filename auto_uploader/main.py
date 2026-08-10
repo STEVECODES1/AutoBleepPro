@@ -822,6 +822,11 @@ def main(argv=None) -> int:
     parser.add_argument("--verify", action="store_true",
                         help="With --posting-status, also ask each API who your token "
                              "belongs to. Read-only - creates and publishes nothing.")
+    parser.add_argument("--check-llm", action="store_true",
+                        help="Ask the configured model provider one question, "
+                             "to prove the key in .env actually works. A wrong "
+                             "key looks exactly like a working one until the "
+                             "clips come out picked by the fallback scorer.")
     parser.add_argument("--post-queue", action="store_true",
                         help="Post whatever clips are waiting on a platform's "
                              "spacing and are now due, then stop. --watch does "
@@ -1176,6 +1181,21 @@ def main(argv=None) -> int:
         report({"posting": cfg.posting}, guard, account, live=args.verify)
         print(f"\n  {summary(cfg.posting)}")
         return 0
+
+    if args.check_llm:
+        from autoreel.llm_highlights import check
+
+        clips = cfg.clips or {}
+        ok, detail = check(str(clips.get("llm_provider", "")),
+                           str(clips.get("llm_model", "")))
+        print(f"[LLM] {detail}")
+        if not ok:
+            print("[LLM] Clips will still be cut - the scorer picks them "
+                  "instead. It is the model pass that adds the judgement.")
+            print("[LLM] A Gemini key from aistudio.google.com/apikey looks "
+                  "like AIzaSy... - anything else is a different Google "
+                  "credential and will not work here.")
+        return 0 if ok else 1
 
     if args.post_queue:
         from utils.clip_queue import drain, summary

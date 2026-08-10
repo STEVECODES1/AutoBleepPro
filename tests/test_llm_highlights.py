@@ -217,3 +217,40 @@ def test_turning_the_model_pass_off_never_calls_out(no_keys, monkeypatch):
 
     clip_maker.specs_from_segments(segments, count=1, min_seconds=10,
                                    max_seconds=40, llm_rank=False)
+
+
+# ── --check-llm ──────────────────────────────────────────────────────────
+
+def test_check_says_so_when_nothing_is_configured(no_keys):
+    from autoreel.llm_highlights import check
+
+    ok, detail = check()
+    assert ok is False
+    assert "GEMINI_API_KEY" in detail
+
+
+def test_check_reports_the_providers_own_reason(no_keys, monkeypatch):
+    """A rejected key must say WHY - "it did not work" helps nobody."""
+    from autoreel import llm_highlights
+
+    no_keys.setenv("GEMINI_API_KEY", "AQ.wrong-shape")
+    monkeypatch.setattr(
+        llm_highlights, "_post_detailed",
+        lambda url, payload, headers: (None, "HTTP 400: API key not valid"))
+
+    ok, detail = llm_highlights.check()
+
+    assert ok is False
+    assert "API key not valid" in detail
+
+
+def test_check_confirms_a_working_key(no_keys, monkeypatch):
+    from autoreel import llm_highlights
+
+    no_keys.setenv("GEMINI_API_KEY", "AIzaSyLooksRight")
+    monkeypatch.setattr(llm_highlights, "_post_detailed",
+                        lambda url, payload, headers: ({"candidates": []}, ""))
+
+    ok, detail = llm_highlights.check()
+
+    assert ok is True and "works" in detail
