@@ -247,13 +247,39 @@ def specs_from_segments(segments: Iterable[dict], count: int = DEFAULT_CLIP_COUN
                         max_seconds: float = DEFAULT_MAX_SECONDS,
                         skip_intro_seconds: float = 0.0,
                         skip_outro_seconds: float = 0.0,
-                        min_gap_seconds: float = DEFAULT_MIN_GAP) -> list:
-    """Pick clip windows from a transcript."""
+                        min_gap_seconds: float = DEFAULT_MIN_GAP,
+                        llm_rank: bool = True,
+                        llm_provider: str = "",
+                        llm_model: str = "") -> list:
+    """Pick clip windows from a transcript.
+
+    Two stages, and the second is optional. The scorer shortlists on what
+    a transcript looks like - reactions, density, shape - which is free
+    and gets the obvious dead ends out of the way. A language model then
+    reads the shortlist and says which of them a person would actually
+    post, because that is the part scoring cannot do. With no key
+    configured, or on any failure, the scorer's own order stands.
+    """
+    from .llm_highlights import CANDIDATE_MULTIPLIER, rank
+
     scorer = HighlightScorer(min_duration=min_seconds, max_duration=max_seconds,
                              skip_intro_seconds=skip_intro_seconds,
                              skip_outro_seconds=skip_outro_seconds)
-    highlights = scorer.select_clips(list(segments), count=count,
-                                     min_gap=min_gap_seconds)
+    pool = count * CANDIDATE_MULTIPLIER if llm_rank else count
+    shortlist = scorer.select_clips(list(segments), count=pool,
+                                    min_gap=min_gap_seconds)
+
+    highlights = rank(shortlist, count, llm_provider, llm_model) if llm_rank else None
+    if highlights is None:
+        # The scorer's own verdict: best first, then back into timeline
+        # order so clip 01 is the earliest.
+        highlights = sorted(shortlist, key=lambda h: h.score,
+                            reverse=True)[:count]
+        highlights.sort(key=lambda h: h.start)
+    else:
+        print(f"[Clips] A model read {len(shortlist)} candidates and chose "
+              f"{len(highlights)}.")
+
     return [
         ClipSpec(start=h.start, end=h.end, index=i,
                  title=(h.hook or h.text).strip(),
@@ -285,6 +311,9 @@ class ClipMaker:
     skip_intro_seconds: float = DEFAULT_SKIP_INTRO
     skip_outro_seconds: float = DEFAULT_SKIP_OUTRO
     min_gap_seconds: float = DEFAULT_MIN_GAP
+    llm_rank: bool = True
+    llm_provider: str = ""
+    llm_model: str = ""
 
     @property
     def strategy(self) -> str:
@@ -303,7 +332,9 @@ class ClipMaker:
                                     self.min_seconds, self.max_seconds,
                                     self.skip_intro_seconds,
                                     self.skip_outro_seconds,
-                                    self.min_gap_seconds)
+                                    self.min_gap_seconds,
+                                    self.llm_rank, self.llm_provider,
+                                    self.llm_model)
         if not specs:
             return []
 

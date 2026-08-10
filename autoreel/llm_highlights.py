@@ -1,0 +1,271 @@
+"""
+Optional second opinion on which windows are worth clipping.
+
+WHY THIS EXISTS
+---------------
+`highlights.py` scores what a transcript LOOKS like - reaction words,
+shouting, speech density, where the peak sits. That is a real signal and
+it is free, but it cannot read. It does not know that the funny part was
+the reply rather than the shout, or that the twenty seconds before were
+setup that the clip needs to make sense.
+
+Both open-source generators worth comparing against - AI-Youtube-Shorts-
+Generator and OpenShorts - reached the same conclusion and solved it the
+same way: hand the transcript to a language model and ask it which
+moments a person would clip. That is the one idea in either project that
+this pipeline did not already have, and it is the one that decides whether
+a clip makes sense.
+
+What is NOT taken from them: the rest. One routes every video through a
+paid credit API; the other is a Docker stack with Postgres, S3, a React
+dashboard and four vendor keys. Neither is an improvement on a folder and
+a GPU that already work.
+
+HOW IT FAILS
+------------
+Silently, into the local scorer. No key, no network, a bad response, a
+timeout - all of them return None and the caller uses the scores it
+already had. A clip pipeline that stops working because a model provider
+is down is worse than one that occasionally picks a duller clip.
+
+Nothing here is a dependency: it speaks HTTP with urllib, so `pip install`
+gains nothing new.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import re
+import urllib.error
+import urllib.request
+from typing import Optional
+
+GEMINI = "gemini"
+OPENAI = "openai"
+
+# Free tier at the time of writing, and fast enough that a stream's worth
+# of candidates comes back in a few seconds.
+DEFAULT_MODELS = {
+    GEMINI: "gemini-2.5-flash",
+    OPENAI: "gpt-4o-mini",
+}
+
+_KEY_NAMES = {
+    GEMINI: ("GEMINI_API_KEY", "GOOGLE_API_KEY"),
+    OPENAI: ("OPENAI_API_KEY",),
+}
+
+_TIMEOUT = 90
+
+# Each candidate's transcript, trimmed. The whole point is the model
+# reading what was said; a few hundred characters is a clip's worth of
+# speech, and sending more of sixty candidates only costs latency.
+_MAX_TEXT_CHARS = 700
+
+# How many candidates to offer per clip wanted. Enough that the model has
+# a real choice, few enough that the prompt stays small.
+CANDIDATE_MULTIPLIER = 4
+MAX_CANDIDATES = 60
+
+
+SYSTEM_PROMPT = """\
+You pick the moments worth cutting out of a live stream.
+
+The streamer is loud, funny and swears a lot; the audience is there for
+reactions and for the back-and-forth with whoever else is on the call.
+You are choosing for Reels and Shorts, where a viewer decides in two
+seconds whether to keep watching.
+
+Pick the candidates where SOMETHING HAPPENS - an argument, a punchline, a
+reaction, someone getting caught out, a story landing. Reject the ones
+that are only loud, only filler, or only make sense to somebody who
+watched the whole stream. If a candidate needs context it does not
+contain, it is not a clip.
+
+For each one you pick, write a TITLE:
+- what actually happens in it, in the streamer's own words where possible
+- no hashtags, no emoji, no "you won't believe", no ALL CAPS
+- under 70 characters, and a real phrase rather than a label
+- never "Funny Moment", "Epic Fail", "Clip 3" or anything that would fit
+  any other clip equally well
+
+Reply with JSON only:
+{"clips": [{"index": <candidate number>, "score": <0-100>, "title": "..."}]}
+
+Order does not matter. Return fewer than asked rather than padding with
+candidates you would not actually post.\
+"""
+
+
+def api_key(provider: str) -> str:
+    for name in _KEY_NAMES.get(provider, ()):
+        value = os.environ.get(name, "").strip()
+        if value:
+            return value
+    return ""
+
+
+def available(preferred: str = "") -> tuple:
+    """(provider, key) for whichever is configured, or ("", "").
+
+    Gemini first when neither is named: its free tier covers this
+    workload, so the default costs nothing to have switched on.
+    """
+    order = [preferred] if preferred in (GEMINI, OPENAI) else [GEMINI, OPENAI]
+    for provider in order:
+        key = api_key(provider)
+        if key:
+            return provider, key
+    return "", ""
+
+
+def _timestamp(seconds: float) -> str:
+    seconds = int(max(0.0, seconds))
+    return f"{seconds // 60}m{seconds % 60:02d}s"
+
+
+def build_prompt(candidates: list, count: int) -> str:
+    """The candidate list, as the model sees it."""
+    lines = [f"Pick the {count} best of these {len(candidates)} candidates.",
+             ""]
+    for number, highlight in enumerate(candidates, start=1):
+        text = " ".join((highlight.text or "").split())[:_MAX_TEXT_CHARS]
+        lines.append(
+            f"[{number}] at {_timestamp(highlight.start)}, "
+            f"{highlight.end - highlight.start:.0f}s\n{text}\n")
+    return "\n".join(lines)
+
+
+# ── Talking to a provider ────────────────────────────────────────────────
+
+def _post(url: str, payload: dict, headers: dict) -> Optional[dict]:
+    body = json.dumps(payload).encode("utf-8")
+    request = urllib.request.Request(url, data=body, headers={
+        "Content-Type": "application/json", **headers})
+    try:
+        with urllib.request.urlopen(request, timeout=_TIMEOUT) as response:
+            return json.loads(response.read().decode("utf-8", "replace"))
+    except (urllib.error.URLError, urllib.error.HTTPError, OSError,
+            ValueError, TimeoutError):
+        return None
+
+
+def _ask_gemini(key: str, model: str, prompt: str) -> str:
+    url = (f"https://generativelanguage.googleapis.com/v1beta/models/"
+           f"{model}:generateContent?key={key}")
+    payload = {
+        "systemInstruction": {"parts": [{"text": SYSTEM_PROMPT}]},
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {"responseMimeType": "application/json",
+                             "temperature": 0.4},
+    }
+    data = _post(url, payload, {})
+    if not isinstance(data, dict):
+        return ""
+    try:
+        return data["candidates"][0]["content"]["parts"][0]["text"]
+    except (KeyError, IndexError, TypeError):
+        return ""
+
+
+def _ask_openai(key: str, model: str, prompt: str) -> str:
+    payload = {
+        "model": model,
+        "messages": [{"role": "system", "content": SYSTEM_PROMPT},
+                     {"role": "user", "content": prompt}],
+        "response_format": {"type": "json_object"},
+        "temperature": 0.4,
+    }
+    data = _post("https://api.openai.com/v1/chat/completions", payload,
+                 {"Authorization": f"Bearer {key}"})
+    if not isinstance(data, dict):
+        return ""
+    try:
+        return data["choices"][0]["message"]["content"]
+    except (KeyError, IndexError, TypeError):
+        return ""
+
+
+def parse_reply(raw: str, candidate_count: int) -> list:
+    """[(index, score, title)] from the model's JSON. Junk is dropped.
+
+    Tolerant on purpose: a model that wraps its JSON in a code fence, or
+    returns a bare list instead of the documented object, has still done
+    the job asked of it and should not cost a whole stream's clips.
+    """
+    if not raw:
+        return []
+    text = raw.strip()
+    fence = re.search(r"```(?:json)?\s*(.+?)```", text, re.S)
+    if fence:
+        text = fence.group(1).strip()
+    try:
+        data = json.loads(text)
+    except ValueError:
+        return []
+
+    entries = data.get("clips") if isinstance(data, dict) else data
+    if not isinstance(entries, list):
+        return []
+
+    picked, seen = [], set()
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        try:
+            index = int(entry.get("index"))
+        except (TypeError, ValueError):
+            continue
+        if not 1 <= index <= candidate_count or index in seen:
+            continue
+        seen.add(index)
+        try:
+            score = float(entry.get("score", 0))
+        except (TypeError, ValueError):
+            score = 0.0
+        title = " ".join(str(entry.get("title") or "").split())
+        picked.append((index, score, title))
+    return picked
+
+
+def rank(candidates: list, count: int, provider: str = "",
+         model: str = "", ask=None) -> Optional[list]:
+    """The candidates a model would actually post, or None.
+
+    None means "no opinion" - no key, no network, nothing usable came
+    back - and the caller keeps its own ranking. It never means "none of
+    these are any good".
+    """
+    if not candidates or count <= 0:
+        return None
+
+    provider, key = available(provider)
+    if not provider:
+        return None
+    model = model or DEFAULT_MODELS[provider]
+
+    shortlist = candidates[:MAX_CANDIDATES]
+    prompt = build_prompt(shortlist, count)
+    ask = ask or (_ask_gemini if provider == GEMINI else _ask_openai)
+    try:
+        raw = ask(key, model, prompt)
+    except Exception:
+        return None
+
+    picked = parse_reply(raw, len(shortlist))
+    if not picked:
+        return None
+
+    picked.sort(key=lambda item: item[1], reverse=True)
+    chosen = []
+    for index, score, title in picked[:count]:
+        highlight = shortlist[index - 1]
+        if title:
+            # The model read the clip; its title beats the best sentence
+            # picked out of it by length and punctuation alone.
+            highlight.hook = title
+        highlight.score = score or highlight.score
+        chosen.append(highlight)
+    chosen.sort(key=lambda h: h.start)
+    return chosen

@@ -192,6 +192,12 @@ def make_clips(cfg, source_path: str, title: str,
         # Without this, one genuinely good minute produces every clip:
         # overlapping windows over the same moment all score highly.
         min_gap_seconds=float(clips_cfg.get("min_gap_seconds", 90)),
+        # A model reads the shortlist and says which of them a person
+        # would post - the one thing keyword scoring cannot do. Costs
+        # nothing without a key: it falls back to the scores silently.
+        llm_rank=bool(clips_cfg.get("llm_rank", True)),
+        llm_provider=str(clips_cfg.get("llm_provider", "")),
+        llm_model=str(clips_cfg.get("llm_model", "")),
     )
 
     base = os.path.splitext(os.path.basename(source_path))[0]

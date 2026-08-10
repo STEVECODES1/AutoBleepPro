@@ -128,6 +128,32 @@ def _deliver_clips(run, cfg) -> int:
     return moved
 
 
+def _report_clip_brain(cfg) -> None:
+    """Say out loud which pass will choose the clips.
+
+    Without this the difference between "a model read the stream" and
+    "keyword scoring guessed" is invisible until the clips come out, and
+    a missing API key looks exactly like a working one.
+    """
+    clips = cfg.clips or {}
+    if not clips.get("llm_rank", True):
+        print("  Clip picking         : scorer only (clips.llm_rank is off)")
+        return
+    from autoreel.llm_highlights import available
+
+    provider, _ = available(str(clips.get("llm_provider", "")))
+    if provider:
+        print(f"  Clip picking         : {provider} reads the shortlist and "
+              "picks + titles the clips")
+    else:
+        print("  Clip picking         : scorer only - no GEMINI_API_KEY or "
+              "OPENAI_API_KEY in .env")
+        print("                         (Gemini's free tier covers this: "
+              "aistudio.google.com/apikey, then")
+        print("                          python main.py --set-env "
+              "GEMINI_API_KEY=yourkey)")
+
+
 def _clip_config(cfg) -> dict:
     """The slice of config the clip publishers actually read."""
     return {"instagram": cfg.instagram, "facebook": cfg.facebook,
@@ -1165,6 +1191,7 @@ def main(argv=None) -> int:
         return 0
 
     if args.test_config:
+        _report_clip_brain(cfg)
         print(f"  Censor before upload : {cfg.general.censor_before_upload} "
               f"(method: {cfg.general.censor_bleep_method})")
         print(f"  YouTube censored     : {cfg.youtube.censor_uploads}")
