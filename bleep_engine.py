@@ -37,6 +37,12 @@ from better_profanity import profanity
 
 profanity.load_censor_words()
 
+try:
+    from autoreel.profanity_extra import contains_extra as _contains_extra
+except ImportError:  # pragma: no cover - autoreel/ absent in a bare copy
+    def _contains_extra(candidate: str) -> bool:
+        return False
+
 # ── Optional heavy dependencies ──────────────────────────────────────────────
 # Imported defensively so `import bleep_engine` works in CI (and in unit
 # tests) on a machine with none of the ML/audio stack installed.
@@ -349,7 +355,12 @@ def _is_bypass(raw_word: str) -> bool:
 
 
 def _profane(candidate: str) -> bool:
-    return bool(candidate) and profanity.contains_profanity(candidate)
+    if not candidate:
+        return False
+    # The base list plus the compound insults it does not carry - see
+    # autoreel/profanity_extra for where those came from and what was
+    # deliberately left out of them.
+    return profanity.contains_profanity(candidate) or _contains_extra(candidate)
 
 
 def _has_weak_context(clean_word: str, context_words: Sequence[str],

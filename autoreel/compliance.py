@@ -24,6 +24,8 @@ try:
 except ImportError:  # pragma: no cover - exercised in envs without the dep
     HAS_BETTER_PROFANITY = False
 
+from .profanity_extra import contains_extra
+
 # Non-explicit keyword phrases for kid-unfriendly topics beyond raw
 # profanity. Intentionally clinical/plain terms (drug names, phrasing
 # around violence or self-harm) rather than slurs, so the list itself is
@@ -151,7 +153,12 @@ class ComplianceEngine:
                 if any(phrase in candidate for phrase in phrases):
                     return category
 
-            if self.use_profanity_filter and HAS_BETTER_PROFANITY and _profanity.contains_profanity(candidate):
+            if self.use_profanity_filter and (
+                    (HAS_BETTER_PROFANITY and _profanity.contains_profanity(candidate))
+                    # Compound insults - "asshat", "dickweed",
+                    # "shitforbrains" - that the base list does not carry.
+                    # See profanity_extra for what was left out and why.
+                    or contains_extra(candidate)):
                 return "profanity"
 
         return None
