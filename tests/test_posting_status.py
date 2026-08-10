@@ -220,12 +220,14 @@ def test_posting_paths_are_absolute_so_state_follows_the_config():
 
 
 def test_load_config_keeps_the_clips_block():
-    from autoreel.crop_strategy import CROP_CENTER, resolve_crop_strategy
+    """The clips block survives loading, and never resolves to face."""
+    from autoreel.crop_strategy import CROP_FACE, resolve_crop_strategy
     from utils.config import load_config
 
     cfg = load_config(os.path.join(_UPLOADER, "config.json"),
                       os.path.join(_UPLOADER, ".env"))
-    assert resolve_crop_strategy({"clips": cfg.clips}) == CROP_CENTER
+    assert cfg.clips
+    assert resolve_crop_strategy({"clips": cfg.clips}) != CROP_FACE
 
 
 def test_a_platform_that_cannot_link_post_says_so_next_to_ALLOW(capsys):

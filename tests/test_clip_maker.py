@@ -374,3 +374,51 @@ def test_clip_maker_end_to_end(tmp_path, source_video):
     assert all(r.strategy == CROP_CENTER for r in results)
     # The .ass files are working files, not deliverables.
     assert not [p for p in os.listdir(tmp_path / "clips") if p.endswith(".ass")]
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# FIT: the re-frame that keeps the whole picture
+#
+# A centre crop of 16:9 keeps the middle third of the width. On a two-person
+# webcam call that is a tight shot of whoever is standing in the middle,
+# which is not a framing anybody chose - it is what was left over.
+# ═════════════════════════════════════════════════════════════════════════════
+
+def test_fit_is_a_valid_strategy():
+    from autoreel.crop_strategy import CROP_FIT, resolve_crop_strategy
+
+    assert resolve_crop_strategy({"clips": {"crop_strategy": "fit"}}) == CROP_FIT
+
+
+def test_center_is_still_the_default_for_gameplay():
+    """Changing the shipped config must not change the code default."""
+    from autoreel.crop_strategy import CROP_CENTER, resolve_crop_strategy
+
+    assert resolve_crop_strategy({}, "gameplay") == CROP_CENTER
+
+
+def test_fit_crops_nothing_away():
+    from autoreel.clip_maker import crop_filter
+
+    chain = crop_filter("fit")
+    # The frame is scaled to the canvas WIDTH and centred; the only crop
+    # in the chain belongs to the blurred background copy.
+    assert "scale=1080:-2" in chain
+    assert "overlay=(W-w)/2:(H-h)/2" in chain
+    assert "gblur" in chain
+
+
+def test_fit_is_one_input_and_one_output():
+    """Otherwise it needs -filter_complex, and render_clip passes -vf."""
+    from autoreel.clip_maker import crop_filter
+
+    chain = crop_filter("fit")
+    assert not chain.startswith("[")
+    assert not chain.endswith("]")
+
+
+def test_fit_still_takes_burned_captions_when_asked():
+    from autoreel.clip_maker import build_filter
+
+    chain = build_filter("fit", "/tmp/x.ass")
+    assert chain.endswith("subtitles='/tmp/x.ass'")

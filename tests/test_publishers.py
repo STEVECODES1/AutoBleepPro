@@ -246,12 +246,20 @@ def test_a_misspelled_strategy_is_an_error_not_a_silent_fallback(tmp_path):
         resolve_crop_strategy({"clips": {"crop_strategy": "centre"}})
 
 
-def test_shipped_config_uses_center_for_gameplay():
+def test_shipped_config_never_turns_face_tracking_on():
+    """The framing may change; face tracking may not turn itself on.
+
+    Pointed at this channel's footage it chases whoever is nearest the
+    lens and drifts off the thing that was clipped, so it has to stay an
+    explicit choice rather than something a content_kind can trigger.
+    The shipped file uses `fit`, which keeps the whole frame - see the
+    _crop_comment beside it.
+    """
     import json
     with open(os.path.join(_UPLOADER, "config.json")) as f:
         shipped = json.load(f)
-    from autoreel.crop_strategy import CROP_CENTER, resolve_crop_strategy
-    assert resolve_crop_strategy(shipped) == CROP_CENTER
+    from autoreel.crop_strategy import CROP_FACE, resolve_crop_strategy
+    assert resolve_crop_strategy(shipped) != CROP_FACE
     assert shipped["clips"]["content_kind"] == "gameplay"
 
 

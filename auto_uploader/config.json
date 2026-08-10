@@ -124,7 +124,8 @@
   },
 
   "clips": {
-    "crop_strategy": "center",
+    "_crop_comment": "How a 16:9 clip becomes 9:16. 'fit' keeps the WHOLE frame and fills the rest with a blurred copy of it - nothing is cut, so both people in a Monkey call stay in shot. 'center' keeps the middle third of the width, which on webcam footage is a tight shot of whoever happens to be in the middle. 'face' chases faces and is wrong for gameplay - it locks onto NPCs. 'center' remains the code default; this file chooses fit because the content is two people on camera.",
+    "crop_strategy": "fit",
     "content_kind": "gameplay",
     "route_clips_separately": true,
     "_length_comment": "treat_as_clip_under_seconds decides ROUTING (is this a clip or a stream). max_seconds is how long a RENDERED clip may be. Two different questions - sharing one key made every rendered clip three minutes long.",

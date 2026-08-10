@@ -23,6 +23,15 @@ IRL segments, where its assumptions actually hold.
 MOTION sits between them: it follows a smoothed centroid of frame-to-frame
 motion, which suits busy action but costs an extra pass over the video.
 It is opt-in for that reason, not because it is unreliable.
+
+FIT crops nothing at all. A centre crop of a 16:9 frame throws away about
+two thirds of the width, and on two-person webcam footage - a Monkey app
+call, say - what survives is a tight shot of whoever happens to be in the
+middle of the screen. That is not a framing choice anyone made; it is what
+is left over. FIT scales the whole frame to the width of a 9:16 canvas and
+fills the space above and below with a blurred, zoomed copy of the same
+frame, so both people stay in shot and the picture still reaches the edges
+instead of sitting between black bars.
 """
 
 from __future__ import annotations
@@ -32,8 +41,10 @@ from typing import Any, Dict, Optional
 CROP_CENTER = "center"
 CROP_MOTION = "motion"
 CROP_FACE = "face"
+# Not a crop at all: the whole frame is kept, on a blurred background.
+CROP_FIT = "fit"
 
-VALID_STRATEGIES = (CROP_CENTER, CROP_MOTION, CROP_FACE)
+VALID_STRATEGIES = (CROP_CENTER, CROP_MOTION, CROP_FACE, CROP_FIT)
 
 # The default for this project. Changing this constant changes the default
 # for every clip, which is why it is a named constant with a test on it

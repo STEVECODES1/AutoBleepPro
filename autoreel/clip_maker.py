@@ -37,6 +37,7 @@ from .captions import caption_file_for_clip
 from .crop_strategy import (
     CROP_CENTER,
     CROP_FACE,
+    CROP_FIT,
     CROP_MOTION,
     GAMEPLAY_CONTENT,
     resolve_crop_strategy,
@@ -100,8 +101,37 @@ def have_ffmpeg() -> bool:
 
 # ── Filter construction ──────────────────────────────────────────────────
 
+# How hard the background copy is blurred in the FIT layout. Enough that
+# it reads as texture rather than a second, smaller video competing with
+# the real one.
+FIT_BLUR_SIGMA = 24
+
+
+def fit_filter() -> str:
+    """The whole 16:9 frame on a blurred 9:16 canvas. Nothing cropped.
+
+    Two copies of the same input: one scaled up past the canvas, cropped
+    to it and blurred to make a background; the other scaled to the
+    canvas WIDTH and laid over the middle at its true shape. Both people
+    in a webcam call survive, which a centre crop cannot promise - it
+    keeps the middle third of the width and whoever is standing in it.
+
+    One input, one output, so this is still a valid -vf chain despite the
+    labels; it does not need -filter_complex.
+    """
+    return (
+        "split[fitbg][fitfg];"
+        f"[fitbg]scale={VERTICAL_WIDTH}:{VERTICAL_HEIGHT}:"
+        "force_original_aspect_ratio=increase,"
+        f"crop={VERTICAL_WIDTH}:{VERTICAL_HEIGHT},"
+        f"gblur=sigma={FIT_BLUR_SIGMA}[fitbg2];"
+        f"[fitfg]scale={VERTICAL_WIDTH}:-2:flags=bicubic[fitfg2];"
+        "[fitbg2][fitfg2]overlay=(W-w)/2:(H-h)/2,setsar=1"
+    )
+
+
 def crop_filter(strategy: str = CROP_CENTER) -> str:
-    """The 16:9 -> 9:16 crop, expressed for ffmpeg.
+    """The 16:9 -> 9:16 re-frame, expressed for ffmpeg.
 
     Written against iw/ih rather than fixed numbers so it is correct for
     1080p, 1440p and 4K sources without branching. The min() pair keeps it
@@ -112,6 +142,8 @@ def crop_filter(strategy: str = CROP_CENTER) -> str:
         # Face tracking needs a per-frame window, which a static filter
         # cannot express; the caller routes that to the moviepy renderer.
         raise ClipError("face tracking is not a static crop - use ClipRenderer")
+    if strategy == CROP_FIT:
+        return fit_filter()
     return ("crop='min(iw,ih*9/16)':'min(ih,iw*16/9)',"
             f"scale={VERTICAL_WIDTH}:{VERTICAL_HEIGHT}:flags=bicubic,"
             "setsar=1")
