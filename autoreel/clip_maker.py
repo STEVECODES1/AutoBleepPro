@@ -28,6 +28,7 @@ be the one carrying uncensored audio.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 from dataclasses import dataclass, field
@@ -62,6 +63,16 @@ DEFAULT_SKIP_INTRO = 120.0
 DEFAULT_SKIP_OUTRO = 60.0
 
 _TIMEOUT = 60 * 30
+
+# Noise patterns stripped from basenames before they become clip names.
+# Matches things like: "5-12-26", "2026-08-10", "howl ", "_CLEAN"
+_NOISE = re.compile(
+    r"\b\d{1,2}[-/]\d{1,2}[-/]\d{2,4}\b"  # dates: 5-12-26, 08/10/2026
+    r"|\b\d{4}[-/]\d{2}[-/]\d{2}\b"        # ISO dates: 2026-08-10
+    r"|\bhowl\b"                             # recorder prefix
+    r"|_CLEAN",                              # censor suffix
+    re.IGNORECASE,
+)
 
 
 class ClipError(RuntimeError):
@@ -130,13 +141,17 @@ def fit_filter() -> str:
     )
 
 
-def crop_filter(strategy: str = CROP_CENTER) -> str:
+def crop_filter(strategy: str = CROP_CENTER, region: Optional[dict] = None) -> str:
     """The 16:9 -> 9:16 re-frame, expressed for ffmpeg.
 
     Written against iw/ih rather than fixed numbers so it is correct for
     1080p, 1440p and 4K sources without branching. The min() pair keeps it
     valid for a source that is already tall - cropping to a width larger
     than the input is an ffmpeg error, not a no-op.
+
+    When *region* is supplied (a dict with fractional x/y/width/height
+    keys) the crop is applied to that specific rectangle instead of the
+    default centre.
     """
     if strategy == CROP_FACE:
         # Face tracking needs a per-frame window, which a static filter
@@ -144,6 +159,14 @@ def crop_filter(strategy: str = CROP_CENTER) -> str:
         raise ClipError("face tracking is not a static crop - use ClipRenderer")
     if strategy == CROP_FIT:
         return fit_filter()
+    if region:
+        x = f"iw*{region['x']:.4f}"
+        y = f"ih*{region['y']:.4f}"
+        w = f"iw*{region['width']:.4f}"
+        h = f"ih*{region['height']:.4f}"
+        return (f"crop={w}:{h}:{x}:{y},"
+                f"scale={VERTICAL_WIDTH}:{VERTICAL_HEIGHT}:flags=bicubic,"
+                "setsar=1")
     return ("crop='min(iw,ih*9/16)':'min(ih,iw*16/9)',"
             f"scale={VERTICAL_WIDTH}:{VERTICAL_HEIGHT}:flags=bicubic,"
             "setsar=1")
@@ -164,8 +187,9 @@ def escape_filter_path(path: str) -> str:
 
 
 def build_filter(strategy: str = CROP_CENTER,
-                 caption_path: Optional[str] = None) -> str:
-    chain = crop_filter(strategy)
+                 caption_path: Optional[str] = None,
+                 region: Optional[dict] = None) -> str:
+    chain = crop_filter(strategy, region)
     if caption_path:
         chain += f",subtitles='{escape_filter_path(caption_path)}'"
     return chain
@@ -186,7 +210,8 @@ def render_clip(source_path: str, spec: ClipSpec, output_path: str,
                 caption_path: Optional[str] = None,
                 encoder: str = "libx264",
                 preset: str = "fast",
-                crf: int = 20) -> str:
+                crf: int = 20,
+                region: Optional[dict] = None) -> str:
     """Cut, crop and (optionally) caption one clip. Returns the path."""
     if not have_ffmpeg():
         raise ClipError("ffmpeg is not on PATH - clip rendering needs it")
@@ -206,7 +231,7 @@ def render_clip(source_path: str, spec: ClipSpec, output_path: str,
         "-accurate_seek", "-ss", f"{spec.start:.3f}",
         "-i", source_path,
         "-t", f"{spec.duration:.3f}",
-        "-vf", build_filter(strategy, caption_path),
+        "-vf", build_filter(strategy, caption_path, region),
         *_encoder_args(encoder, preset, crf),
         "-c:a", "aac", "-b:a", "128k", "-ac", "2",
         # Vertical feeds are 30fps; leaving a 60fps source at 60 doubles
@@ -288,10 +313,35 @@ def specs_from_segments(segments: Iterable[dict], count: int = DEFAULT_CLIP_COUN
     ]
 
 
+def _clean_basename(raw: str) -> str:
+    """Strip dates, noise tokens and extra whitespace from a VOD basename.
+
+    Examples
+    --------
+    "howl 5-12-26 Stackswopo Stream"  ->  "Stackswopo Stream"
+    "Stackswopo_2026-08-10_CLEAN"     ->  "Stackswopo"
+    "stackswopo stream clip01"        ->  "Stackswopo Stream Clip01"
+    """
+    name = _NOISE.sub(" ", raw)          # remove dates / known noise
+    name = re.sub(r"[_]+", " ", name)   # underscores -> spaces
+    name = re.sub(r"\s{2,}", " ", name)  # collapse runs of spaces
+    name = name.strip(" -")              # trim leading/trailing dashes
+    return name.title() if name else "Clip"
+
+
 def clip_filename(basename: str, spec: ClipSpec) -> str:
-    safe = "".join(c if c.isalnum() or c in " -_" else "_"
-                   for c in basename).strip() or "clip"
-    return f"{safe}_clip{spec.index:02d}.mp4"
+    """Return a clean, human-readable filename for one clip.
+
+    Format: ``<Channel Name> - Clip 01.mp4``
+
+    The raw VOD basename is stripped of dates, recorder prefixes and
+    censor suffixes before it is used, so the result stays tidy regardless
+    of how the source file was named.
+    """
+    label = _clean_basename(basename)
+    # Filesystem-safe: keep letters, digits, spaces, hyphens, apostrophes.
+    label = re.sub(r"[^\w\s\-']", "", label).strip()
+    return f"{label} - Clip {spec.index:02d}.mp4"
 
 
 @dataclass
