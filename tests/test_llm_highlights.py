@@ -254,3 +254,106 @@ def test_check_confirms_a_working_key(no_keys, monkeypatch):
     ok, detail = llm_highlights.check()
 
     assert ok is True and "works" in detail
+
+
+# ── Model discovery ──────────────────────────────────────────────────────
+#
+# Pinning a model name in code was a real bug: "gemini-2.5-flash is no
+# longer available to new users" is a 404, and a 404 reads exactly like a
+# broken key. Providers retire models on their own schedule, so the name
+# has to come from the provider.
+
+def test_a_retired_pin_is_not_what_gets_called(no_keys, monkeypatch):
+    from autoreel import llm_highlights
+
+    no_keys.setenv("GEMINI_API_KEY", "k")
+    monkeypatch.setattr(llm_highlights, "list_models",
+                        lambda provider, key: ["gemini-3-flash",
+                                               "gemini-2.5-flash"])
+    assert llm_highlights.resolve_model("gemini", "k") == "gemini-3-flash"
+
+
+def test_a_configured_model_is_never_second_guessed(no_keys, monkeypatch):
+    from autoreel import llm_highlights
+
+    monkeypatch.setattr(llm_highlights, "list_models",
+                        lambda provider, key: ["gemini-3-flash"])
+    assert llm_highlights.resolve_model(
+        "gemini", "k", "gemini-4-pro") == "gemini-4-pro"
+
+
+def test_an_unreachable_model_list_still_leaves_a_name(no_keys, monkeypatch):
+    from autoreel import llm_highlights
+
+    monkeypatch.setattr(llm_highlights, "list_models", lambda p, k: [])
+    assert llm_highlights.resolve_model("gemini", "k")
+
+
+def test_models_that_cannot_read_text_are_never_chosen():
+    from autoreel.llm_highlights import usable_models
+
+    chosen = usable_models([
+        "text-embedding-004", "imagen-4.0-generate", "veo-3.0",
+        "gemini-3-flash", "gemini-live-2.5-flash",
+    ])
+    assert chosen[0] == "gemini-3-flash"
+    assert not any("embedding" in n or "imagen" in n or "veo" in n
+                   for n in chosen)
+
+
+def test_a_newer_version_wins():
+    from autoreel.llm_highlights import usable_models
+
+    assert usable_models(["gemini-2.5-flash", "gemini-3-flash"])[0] == \
+        "gemini-3-flash"
+
+
+def test_a_preview_loses_to_a_stable_release():
+    """A preview name can disappear mid-week; a stable one cannot."""
+    from autoreel.llm_highlights import usable_models
+
+    assert usable_models(["gemini-4-flash-preview-06-01",
+                          "gemini-3-flash"])[0] == "gemini-3-flash"
+
+
+def test_flash_is_preferred_over_lite_and_over_pro():
+    """Reading a few thousand words and returning a short list does not
+    need a reasoning model, and lite is the weaker sibling."""
+    from autoreel.llm_highlights import usable_models
+
+    order = usable_models(["gemini-3-pro", "gemini-3-flash-lite",
+                           "gemini-3-flash"])
+    assert order[0] == "gemini-3-flash"
+
+
+def test_list_models_drops_anything_that_cannot_generate(monkeypatch):
+    from autoreel import llm_highlights
+
+    class Fake:
+        def read(self):
+            return json.dumps({"models": [
+                {"name": "models/gemini-3-flash",
+                 "supportedGenerationMethods": ["generateContent"]},
+                {"name": "models/text-embedding-004",
+                 "supportedGenerationMethods": ["embedContent"]},
+            ]}).encode()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    monkeypatch.setattr(llm_highlights.urllib.request, "urlopen",
+                        lambda *a, **k: Fake())
+    assert llm_highlights.list_models("gemini", "k") == ["gemini-3-flash"]
+
+
+def test_listing_failures_are_silent(monkeypatch):
+    from autoreel import llm_highlights
+
+    def explode(*a, **k):
+        raise OSError("no network")
+
+    monkeypatch.setattr(llm_highlights.urllib.request, "urlopen", explode)
+    assert llm_highlights.list_models("gemini", "k") == []

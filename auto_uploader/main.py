@@ -24,7 +24,7 @@ from datetime import datetime
 # Bump when shipping user-visible changes, so --test-config can prove
 # which build is actually running (stale extracts have silently caused
 # several confusing "the fix did nothing" runs).
-BUILD = "2026-08-10.2 clips that cannot post yet are queued, not dropped"
+BUILD = "2026-08-10.3 clips are queued not dropped; the model is discovered, not pinned"
 
 # How often --watch checks whether a deferred clip's wait is up. A minute
 # is fine: the waits themselves are 25 to 80 minutes, so the resolution
@@ -1192,9 +1192,21 @@ def main(argv=None) -> int:
         if not ok:
             print("[LLM] Clips will still be cut - the scorer picks them "
                   "instead. It is the model pass that adds the judgement.")
-            print("[LLM] A Gemini key from aistudio.google.com/apikey looks "
-                  "like AIzaSy... - anything else is a different Google "
-                  "credential and will not work here.")
+            # Which models the key CAN reach is the one thing that turns a
+            # 404 on a model name into something actionable.
+            from autoreel.llm_highlights import available, list_models, usable_models
+
+            provider, key = available(str(clips.get("llm_provider", "")))
+            reachable = usable_models(list_models(provider, key)) if key else []
+            if reachable:
+                print("[LLM] This key CAN reach: "
+                      + ", ".join(reachable[:6]))
+                print("[LLM] Pin one with clips.llm_model in config.json if "
+                      "the automatic choice is wrong.")
+            elif key:
+                print("[LLM] The key could not list any models either - it is "
+                      "the credential rather than the model name. Get one at "
+                      "aistudio.google.com/apikey.")
         return 0 if ok else 1
 
     if args.post_queue:

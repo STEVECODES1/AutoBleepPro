@@ -44,12 +44,18 @@ from typing import Optional
 GEMINI = "gemini"
 OPENAI = "openai"
 
-# Free tier at the time of writing, and fast enough that a stream's worth
-# of candidates comes back in a few seconds.
+# Last resort only. Model names are retired faster than a pinned default
+# can be maintained - the first key tried against this hit "gemini-2.5-flash
+# is no longer available to new users" - so the real answer is to ASK the
+# provider what it has and take the best of it. See resolve_model().
 DEFAULT_MODELS = {
-    GEMINI: "gemini-2.5-flash",
+    GEMINI: "gemini-flash-latest",
     OPENAI: "gpt-4o-mini",
 }
+
+# Model families that cannot do this job, whatever they are called.
+_NOT_TEXT = ("embedding", "aqa", "imagen", "veo", "image", "tts", "audio",
+             "vision", "live", "realtime", "whisper", "dall-e", "moderation")
 
 _KEY_NAMES = {
     GEMINI: ("GEMINI_API_KEY", "GOOGLE_API_KEY"),
@@ -118,6 +124,82 @@ def available(preferred: str = "") -> tuple:
         if key:
             return provider, key
     return "", ""
+
+
+# ── Which model to use ───────────────────────────────────────────────────
+
+def _model_rank(name: str) -> tuple:
+    """Sort key for a model name, best first (use with reverse=True).
+
+    Ordered on what this job wants: a current, general-purpose, fast
+    model. Flash-class first because the work is reading a few thousand
+    words and returning a short list - a reasoning-heavy model would cost
+    more and take longer to reach the same answer.
+    """
+    name = name.lower().rsplit("/", 1)[-1]
+    version = 0.0
+    match = re.search(r"(\d+(?:\.\d+)?)", name)
+    if match:
+        try:
+            version = float(match.group(1))
+        except ValueError:
+            version = 0.0
+    family = 2 if ("flash" in name and "lite" not in name) else \
+        1 if ("flash" in name or "mini" in name) else 0
+    # A stable name outranks a dated snapshot of the same thing, and
+    # anything outranks a preview that can disappear mid-week.
+    stable = 0 if any(tag in name for tag in ("preview", "exp", "beta")) else 1
+    return (stable, family, version)
+
+
+def usable_models(names: list) -> list:
+    """The named models that could do this, best first."""
+    keep = [n for n in names
+            if n and not any(bad in n.lower() for bad in _NOT_TEXT)]
+    return sorted(keep, key=_model_rank, reverse=True)
+
+
+def list_models(provider: str, key: str) -> list:
+    """What this key can actually reach. Empty on any failure."""
+    if provider != GEMINI:
+        # OpenAI's list is large and mostly irrelevant here, and its
+        # small-model names have been stable for years.
+        return []
+    url = ("https://generativelanguage.googleapis.com/v1beta/models"
+           f"?key={key}&pageSize=200")
+    request = urllib.request.Request(url)
+    try:
+        with urllib.request.urlopen(request, timeout=_TIMEOUT) as response:
+            data = json.loads(response.read().decode("utf-8", "replace"))
+    except Exception:
+        return []
+    if not isinstance(data, dict):
+        return []
+    names = []
+    for entry in data.get("models") or []:
+        if not isinstance(entry, dict):
+            continue
+        methods = entry.get("supportedGenerationMethods") or []
+        if "generateContent" not in methods:
+            continue
+        name = str(entry.get("name") or "").rsplit("/", 1)[-1]
+        if name:
+            names.append(name)
+    return names
+
+
+def resolve_model(provider: str, key: str, configured: str = "") -> str:
+    """The model to call: whatever was configured, else the best on offer.
+
+    Pinning a name in code was the bug. Providers retire models on their
+    own schedule and a pinned default fails with a 404 that reads like a
+    broken key - which is exactly how this was found. Asking costs one
+    request and survives the next retirement without an edit.
+    """
+    if configured:
+        return configured
+    available_names = usable_models(list_models(provider, key))
+    return available_names[0] if available_names else DEFAULT_MODELS[provider]
 
 
 def _timestamp(seconds: float) -> str:
@@ -189,7 +271,7 @@ def check(provider: str = "", model: str = "") -> tuple:
     provider, key = available(provider)
     if not provider:
         return False, ("no GEMINI_API_KEY or OPENAI_API_KEY in .env")
-    model = model or DEFAULT_MODELS[provider]
+    model = resolve_model(provider, key, model)
 
     if provider == GEMINI:
         url = (f"https://generativelanguage.googleapis.com/v1beta/models/"
@@ -303,7 +385,7 @@ def rank(candidates: list, count: int, provider: str = "",
     provider, key = available(provider)
     if not provider:
         return None
-    model = model or DEFAULT_MODELS[provider]
+    model = resolve_model(provider, key, model)
 
     shortlist = candidates[:MAX_CANDIDATES]
     prompt = build_prompt(shortlist, count)
