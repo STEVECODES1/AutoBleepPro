@@ -31,6 +31,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 from dataclasses import dataclass, field
 from typing import Iterable, Optional
 
@@ -108,6 +109,35 @@ def watermark_filter() -> str:
         f"y=h-th-{WATERMARK_MARGIN_Y}:"
         f"font=monospace"
     )
+
+
+def _ffmpeg_env() -> dict:
+    """A copy of the current env with FONTCONFIG_FILE set for Windows.
+
+    ffmpeg's subtitles/ass filter (and drawtext) call fontconfig to
+    locate fonts.  On Windows there is no system fontconfig.conf, so
+    every render that touches text dies with:
+
+        Fontconfig error: Cannot load default config file: File not found
+
+    Pointing FONTCONFIG_FILE at the Windows font directory is the
+    minimal fix: fontconfig accepts a bare directory path and will scan
+    it for fonts instead of looking for a config file that doesn't exist.
+    FC_FONT_PATH is set to the same path as a belt-and-suspenders measure
+    for older fontconfig builds that ignore FONTCONFIG_FILE on Windows.
+
+    The override is only applied when the variable is not already set
+    (the user may have a real fontconfig install), and only on Windows.
+    On Linux/macOS the system fontconfig is present and no override is
+    needed.
+    """
+    env = os.environ.copy()
+    if sys.platform == "win32" and not env.get("FONTCONFIG_FILE"):
+        win_fonts = os.environ.get(
+            "WINDIR", "C:/Windows").replace("\\", "/") + "/Fonts"
+        env["FONTCONFIG_FILE"] = win_fonts
+        env.setdefault("FC_FONT_PATH", win_fonts)
+    return env
 
 
 class ClipError(RuntimeError):
@@ -286,7 +316,8 @@ def render_clip(source_path: str, spec: ClipSpec, output_path: str,
     try:
         completed = subprocess.run(
             args, timeout=_TIMEOUT,
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            env=_ffmpeg_env())
     except subprocess.TimeoutExpired:
         _remove(partial)
         raise ClipError(f"clip {spec.index} timed out after {_TIMEOUT}s")
@@ -498,7 +529,8 @@ def make_vertical(source_path: str, output_path: str,
             "-c:a", "copy", "-movflags", "+faststart", output_path]
     try:
         completed = subprocess.run(args, stdout=subprocess.PIPE,
-                                   stderr=subprocess.PIPE)
+                                   stderr=subprocess.PIPE,
+                                   env=_ffmpeg_env())
     except (FileNotFoundError, OSError):
         return None
     if completed.returncode != 0 or not os.path.exists(output_path) \
