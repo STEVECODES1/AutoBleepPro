@@ -7,6 +7,7 @@ in environments where moviepy/ffmpeg aren't installed.
 """
 
 import os
+import sys
 from dataclasses import dataclass
 
 from .face_tracking import FaceTracker, interpolate_center, smooth_centers
@@ -14,6 +15,31 @@ from .highlights import Highlight
 
 VERTICAL_WIDTH = 1080
 VERTICAL_HEIGHT = 1920
+
+
+def _suppress_fontconfig() -> None:
+    """On Windows, ffmpeg/moviepy emit a noisy 'Fontconfig error: Cannot load
+    default config file' warning because fontconfig isn't installed.  This
+    doesn't affect rendering at all - it's purely cosmetic - but moviepy
+    treats any stderr output from ffmpeg as a failure and marks every clip
+    as failed.
+
+    The fix is to point FONTCONFIG_FILE at a valid (even empty) config file
+    before the first ffmpeg call. We write a minimal one into the system
+    temp folder if it doesn't already exist.
+    """
+    if sys.platform != "win32":
+        return
+    if os.environ.get("FONTCONFIG_FILE"):
+        return
+    import tempfile
+    cfg_path = os.path.join(tempfile.gettempdir(), "autoreel_fontconfig.conf")
+    if not os.path.exists(cfg_path):
+        with open(cfg_path, "w") as f:
+            f.write('<?xml version="1.0"?>\n'
+                    '<!DOCTYPE fontconfig SYSTEM "fonts.dtd">\n'
+                    '<fontconfig>\n</fontconfig>\n')
+    os.environ["FONTCONFIG_FILE"] = cfg_path
 
 
 @dataclass
@@ -91,6 +117,8 @@ class ClipRenderer:
     def render(self, source_path: str, highlight: Highlight, filename: str) -> str:
         """Cut and reframe one highlight to vertical; returns the output path."""
         from moviepy import VideoFileClip
+
+        _suppress_fontconfig()
 
         os.makedirs(self.output_dir, exist_ok=True)
         output_path = os.path.join(self.output_dir, filename)
