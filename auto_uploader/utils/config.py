@@ -93,6 +93,11 @@ class AppConfig:
     # falls back to Instagram's so the same clip does not read two
     # different ways across two accounts.
     facebook: dict = field(default_factory=dict)
+    # The SECOND YouTube channel, the one Shorts go to. Separate from
+    # `youtube` because a YouTube OAuth token is bound to the channel
+    # chosen on the consent screen, not to the Google account - so the
+    # two channels cannot share a token however much else they share.
+    youtube_shorts: dict = field(default_factory=dict)
 
 
 def _resolve_path(project_root: str, path: str) -> str:
@@ -199,7 +204,8 @@ def load_config(config_path: str = "config.json", env_path: str = ".env") -> App
                      posting=posting,
                      clips=raw.get("clips", {}),
                      instagram=raw.get("instagram", {}),
-                     facebook=raw.get("facebook", {}))
+                     facebook=raw.get("facebook", {}),
+                     youtube_shorts=raw.get("youtube_shorts", {}))
 
 
 def validate_config(cfg: AppConfig) -> list:

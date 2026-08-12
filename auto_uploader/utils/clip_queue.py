@@ -37,7 +37,11 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # Platforms that can carry a video clip. Reddit and X take links, which
 # is a different path (announce_to_platforms) with a different cadence.
-CLIP_PLATFORMS = ("instagram", "facebook")
+# YouTube is last on purpose. It is the strictest destination here about
+# volume and repetition, and a channel is far harder to get back than a
+# post is to delete - so it posts only after the others have, and only
+# once its own guard, cap and spacing allow it.
+CLIP_PLATFORMS = ("instagram", "facebook", "youtube_shorts")
 
 # A blocked clip is worth keeping for about a day. Past that the stream it
 # came from is stale and posting it is worse than not.
@@ -100,10 +104,30 @@ def publish(platform: str, video_path: str, caption: str,
         return False
 
     publisher = _publisher(platform, config)
-    if publisher is None or not getattr(publisher, "supports_reels", False):
+    if publisher is None:
         return False
     ready = getattr(publisher, "ready", None)
     if ready is not None and not ready():
+        return False
+
+    # YouTube takes the clip as an ordinary upload and works out that it
+    # is a Short from the aspect and the length. There is no Reels
+    # container to start, and no re-encode: the file this pipeline makes
+    # is already 1080x1920, which is the only thing YouTube is looking
+    # at.
+    if hasattr(publisher, "post_clip"):
+        try:
+            posted = publisher.post_clip(video_path, caption, dry_run)
+        except NotConfigured:
+            raise
+        except Exception as exc:
+            print(f"[Clips] {platform}: {exc}")
+            return False
+        if posted:
+            print(f"[Clips] {platform}: {posted}")
+        return bool(posted)
+
+    if not getattr(publisher, "supports_reels", False):
         return False
 
     if dry_run:

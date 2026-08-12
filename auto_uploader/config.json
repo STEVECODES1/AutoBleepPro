@@ -1,6 +1,5 @@
 {
   "_comment": "Non-secret settings only. Credentials live in .env (see .env.example) so this file is safe to back up/share. Placeholders in title_format ({title}, {date}) and description_template ([DATE], [STREAM TITLE]) get filled in automatically at upload time.",
-
   "youtube": {
     "channel": "@StackswopoGames",
     "_privacy_comment": "private = uploads land unlisted-to-the-public so you can review the censor risk report before publishing. Set to \"public\" to publish immediately.",
@@ -9,7 +8,19 @@
     "made_for_kids": false,
     "title_format": "\"{title}\" {date} Stackswopo Stream",
     "description_template": "This stream first aired on [DATE] with the title \"[STREAM TITLE]\" on the Stackswopo channel.\n\n📌 Also on Rumble (BinScripts): https://rumble.com/user/BinScripts\n🎮 Main channel: https://www.youtube.com/@stackswopo_\n📺 Twitch: https://www.twitch.tv/stackswopo\n\nThis is a replay of one of my own past streams, archived here so it stays available.\n\nThe stream contains live reactions, jokes, and real-life conversations in my usual unfiltered style.\n\n🔥 Missed the original broadcast? Enjoy the full replay with every moment, from the funny bits to the wild reactions.\n🎥 Want more? Check the channel for additional past streams, full VODs, and highlights.\n\n👍 If you enjoy these replays, consider subscribing!\n\nTags: #StacksWopo #StreamReplay #FullVOD #GamingHighlights #FunnyMoments #GTA5 #GTAOnline #Roleplay #StreamerMoments #UncutReplay #Entertainment",
-    "tags": ["StacksWopo", "StreamReplay", "FullVOD", "GamingHighlights", "FunnyMoments", "GTA5", "GTAOnline", "Roleplay", "StreamerMoments", "UncutReplay", "Entertainment"],
+    "tags": [
+      "StacksWopo",
+      "StreamReplay",
+      "FullVOD",
+      "GamingHighlights",
+      "FunnyMoments",
+      "GTA5",
+      "GTAOnline",
+      "Roleplay",
+      "StreamerMoments",
+      "UncutReplay",
+      "Entertainment"
+    ],
     "_censor_comment": "true = upload the profanity-censored copy (YouTube age-restricts/demonetizes over spoken language).",
     "censor_uploads": true,
     "_chunk_comment": "Resumable-upload chunk size in MB. Bigger = fewer HTTP round-trips on a fast connection; smaller = less re-sent data after a dropped connection. 8 is conservative; 32-64 is reasonable on a solid line.",
@@ -17,7 +28,6 @@
     "playlist_id": "",
     "thumbnail_path": "./thumbnails/default.jpg"
   },
-
   "rumble": {
     "channel": "BinScripts",
     "privacy": "public",
@@ -30,7 +40,19 @@
     "secondary_category": "Grand Theft Auto V",
     "title_format": "\"{title}\" {date} Stackswopo Stream",
     "description_template": "My YouTube Channel: https://www.youtube.com/@StackswopoGames\nInstagram: https://www.instagram.com/stackswopomanz/\nMonkeyAPP Content: https://www.youtube.com/@BinScript\nStack's Channel: https://www.youtube.com/@stackswopo_\nStack's Twitch Channel: https://www.twitch.tv/stackswopo\nOnlyThaGuys Channel: https://www.youtube.com/@OnlyThaGuys26\n\nThis stream first aired on [DATE] with the title \"[STREAM TITLE]\" on the Stackswopo channel.\n\nThis is a replay of one of my own past streams, archived here so it stays available.\n\nThe stream contains live reactions, jokes, and real-life conversations in my usual unfiltered style.\n\n🔥 Missed the original broadcast? Enjoy the full replay with every moment, from the funny bits to the wild reactions.\n🎥 Want more? Check the channel for additional past streams, full VODs, and highlights.\n\n👍 If you enjoy these replays, consider subscribing!\n\nTags: #StacksWopo #StreamReplay #FullVOD #GamingHighlights #FunnyMoments #GTA5 #GTAOnline #Roleplay #StreamerMoments #UncutReplay #Entertainment",
-    "tags": ["StacksWopo", "StreamReplay", "FullVOD", "GamingHighlights", "FunnyMoments", "GTA5", "GTAOnline", "Roleplay", "StreamerMoments", "UncutReplay", "Entertainment"],
+    "tags": [
+      "StacksWopo",
+      "StreamReplay",
+      "FullVOD",
+      "GamingHighlights",
+      "FunnyMoments",
+      "GTA5",
+      "GTAOnline",
+      "Roleplay",
+      "StreamerMoments",
+      "UncutReplay",
+      "Entertainment"
+    ],
     "thumbnail_path": "./thumbnails/default.jpg",
     "_dedup_comment": "skip_if_exists: skip videos already on Rumble. NOTE: Rumble publishes no RSS feed - not <page>/index.xml, not <page>/rss - so rss_url below cannot work and the check runs on local upload history alone. That covers everything this tool uploaded; the only gap is a video posted to Rumble by hand.",
     "skip_if_exists": true,
@@ -38,7 +60,6 @@
     "_censor_comment": "false = upload the ORIGINAL uncensored audio to Rumble.",
     "censor_uploads": false
   },
-
   "general": {
     "_watch_folder_comment": "Relative paths resolve next to this config file, so './watch_folder' = D:/AutoBleepPro-main/auto_uploader/watch_folder and keeps working if you re-extract the ZIP somewhere else. Set an absolute path (e.g. 'D:/videos stizz') to watch a different folder instead.",
     "watch_folder": "./watch_folder",
@@ -47,16 +68,32 @@
     "duplicate_store_path": "./uploaded_hashes.json",
     "date_style": "M/D/YY",
     "max_retries": 3,
-    "retry_delays": [60, 300, 900],
+    "retry_delays": [
+      60,
+      300,
+      900
+    ],
     "_title_comment": "filename_channel_prefixes strips a leading \"<channel> - \" from yt-dlp downloads, so \"Stackswopo - LOL NO -YdH8jO6Vjs.mp4\" becomes the title \"LOL NO\". --watch never prompts (nobody's at the keyboard); it falls back to default_title, or use a .txt sidecar.",
-    "filename_channel_prefixes": ["Stackswopo", "StacksWopo", "StackswopoGames", "BinScripts"],
+    "filename_channel_prefixes": [
+      "Stackswopo",
+      "StacksWopo",
+      "StackswopoGames",
+      "BinScripts"
+    ],
     "ask_for_title": true,
     "default_title": "Gaming Stream",
-    "supported_formats": [".mp4", ".mov", ".avi", ".mkv", ".flv", ".wmv", ".ts"],
+    "supported_formats": [
+      ".mp4",
+      ".mov",
+      ".avi",
+      ".mkv",
+      ".flv",
+      ".wmv",
+      ".ts"
+    ],
     "enable_desktop_notifications": true,
     "dry_run_mode": false,
     "stability_check_seconds": 5,
-
     "_censor_comment": "Bleeps profanity before upload (reuses the AutoReel censoring engine) so YouTube doesn't age-restrict/demonetize over spoken language. censor_device: null = auto-detect GPU/CPU, or set 'cuda'/'cpu'. censor_bleep_method: 'silence' mutes flagged words, 'beep' overlays a tone.",
     "_model_comment": "censor_model is THE thing that decides how much profanity slips through: a word the transcript never contains cannot be muted. 'base' is tiny and misses a lot of fast, noisy gameplay speech - that is why words got through. tiny < base < small < medium < large-v3, slower and far more accurate as you go right. 'medium' is the sensible default with faster-whisper. Use 'large-v3' for the cleanest result if you have an NVIDIA GPU or can leave it running overnight; drop to 'small' if a stream takes too long on CPU. censor_device 'cuda' forces the GPU; if it cannot load the model (missing cuDNN, old driver, not enough VRAM) it says so and falls back to CPU rather than failing the run. Needs: pip install nvidia-cublas-cu12 nvidia-cudnn-cu12",
     "censor_before_upload": true,
@@ -65,11 +102,9 @@
     "censor_device": "cuda",
     "censor_custom_words": [],
     "censored_folder": "./censored",
-
     "_hate_speech_comment": "censor_padding_ms widens every mute by this many ms on each side - Whisper's word timings are 100-300ms out, so muting the exact span leaves the first syllable audible, which for a slur defeats the point. censor_mute_whole_segment false (default) removes ONLY the flagged word and leaves the sentence around it intact - the padding is clamped to the words either side, so it expands into the silence around the word and stops when it reaches speech. Set it true to mute the whole sentence containing a slur instead, which is blunter but is what YouTube's hate speech policy acts on, since that policy reads context rather than the single audible word. Raise padding to 400+ if a first syllable still gets through.",
     "censor_padding_ms": 250,
     "censor_mute_whole_segment": false,
-
     "_speed_comment": "stream_copy_video: the censor pass only changes AUDIO, so the video stream is copied instead of re-encoded - much faster and lossless. Set false to force a re-encode. hardware_encode ('auto'|'nvenc'|'cpu') only applies to that fallback re-encode; 'auto' uses NVIDIA NVENC when it genuinely works. reuse_model keeps the Whisper model loaded across files in a batch. stage_timings prints how long each stage took.",
     "speed": {
       "stream_copy_video": true,
@@ -81,7 +116,6 @@
       "_parallel_comment": "YouTube and Rumble upload at the same time instead of one after the other. Both are network-bound and independent, and Rumble spends minutes on login, the form and the category dropdowns that overlap with YouTube s transfer for free. Set false to go back to one at a time.",
       "parallel_uploads": true
     },
-
     "_cleanup_comment": "Frees disk after each successful upload. The censored copy is a full re-encode (roughly the size of the source video) - that's what actually costs gigabytes; logs are kilobytes, so they're trimmed rather than deleted so failures stay diagnosable. source_video: 'move' keeps the original in uploaded/ (default), 'delete' frees it once BOTH platforms succeeded (the original is gone - only use this if the video exists elsewhere), 'keep' leaves it where it was. keep_uploaded_videos: 0 = off; set e.g. 3 to keep only the 3 newest in uploaded/.",
     "cleanup": {
       "enabled": true,
@@ -93,7 +127,6 @@
       "keep_uploaded_videos": 3
     }
   },
-
   "_platform_limits_comment": "What each platform ITSELF allows in 24h, so a cap above it is not a policy choice but posts that will fail: Instagram 50 (Content Publishing API rejects the 51st), X ~16/day on the free tier's 500/month, Reddit and Facebook have no published hard number but act on burst rate rather than volume. Rumble has no API cap - clips.count is what decides how many go there, currently 10 per stream. Caps below sit at or under those.",
   "_posting_comment": "Short-form clip publishing. Instagram and Facebook are ENABLED — credentials confirmed live. X stays disabled until the 401 Unauthorized is fixed (go to developer.twitter.com → your app → User authentication settings → set Read+Write → regenerate Access Token+Secret → update .env). Reddit is manual-only until a separate account is configured. Create the kill_switch_file to halt ALL posting immediately. For one run, `python main.py --announce-all` turns announcing on everywhere it can actually run (and prints why the rest stay manual); `--no-announce` turns it off everywhere. Neither edits this file.",
   "posting": {
@@ -103,16 +136,46 @@
     "queue_path": "./clip_jobs.json",
     "manual_queue_path": "./logs/manual_posts.txt",
     "platforms": {
-      "instagram":      { "enabled": true,  "daily_cap": 50, "min_minutes_between": 25, "_note": "No spacing and no self-imposed cap: every clip goes out as a Reel the moment it is ready. 50 is Instagram's OWN limit - the Content Publishing API rejects the 51st post in any 24h window - so it is set to that rather than to 0, because a cap of 0 would mean unlimited here and the 51st would fail as a real error and trip the circuit breaker. Raise the spacing above 0 if the account ever starts looking automated." },
-      "facebook":       { "enabled": true,  "daily_cap": 10, "min_minutes_between": 80 },
-      "x":              { "enabled": false,  "daily_cap": 8, "min_minutes_between": 100, "_note": "OFF: X now answers 402 Payment Required - credits depleted. The free tier no longer covers posting, so every attempt fails and counts toward the circuit breaker for nothing. Turn back on only with a paid X API plan. The older note below was true when it was written and is not any more. Historically: X's FREE API tier did allow posting - roughly 500 posts a month, write-only. 8/day is 240/month, comfortably inside it. The 401 you hit was the app being Read-only: developer.twitter.com -> your app -> User authentication settings -> set Read+Write -> then REGENERATE the Access Token+Secret, because the existing one keeps the old permission. Needs: pip install tweepy" },
-      "reddit":         { "enabled": false, "daily_cap": 8, "min_minutes_between": 100, "_note": "Needs praw, the REDDIT_*_2 credentials, and features.social_promoter.reddit_subreddit. READ THE SUBREDDIT RULES FIRST: most cap self-promotion (roughly 1 in 10 posts is the common convention) and several ban links to your own channel outright. The cap and spacing here keep the ACCOUNT safe; they cannot keep you inside a subreddit rule you have not read. OFF by choice right now, not because it is broken - set enabled back to true once the credentials and a subreddit are in place." },
-      "facebook_group": { "enabled": false, "daily_cap": 1, "manual_approval_only": true }
+      "instagram": {
+        "enabled": true,
+        "daily_cap": 50,
+        "min_minutes_between": 25,
+        "_note": "No spacing and no self-imposed cap: every clip goes out as a Reel the moment it is ready. 50 is Instagram's OWN limit - the Content Publishing API rejects the 51st post in any 24h window - so it is set to that rather than to 0, because a cap of 0 would mean unlimited here and the 51st would fail as a real error and trip the circuit breaker. Raise the spacing above 0 if the account ever starts looking automated."
+      },
+      "facebook": {
+        "enabled": true,
+        "daily_cap": 10,
+        "min_minutes_between": 80
+      },
+      "x": {
+        "enabled": false,
+        "daily_cap": 8,
+        "min_minutes_between": 100,
+        "_note": "OFF: X now answers 402 Payment Required - credits depleted. The free tier no longer covers posting, so every attempt fails and counts toward the circuit breaker for nothing. Turn back on only with a paid X API plan. The older note below was true when it was written and is not any more. Historically: X's FREE API tier did allow posting - roughly 500 posts a month, write-only. 8/day is 240/month, comfortably inside it. The 401 you hit was the app being Read-only: developer.twitter.com -> your app -> User authentication settings -> set Read+Write -> then REGENERATE the Access Token+Secret, because the existing one keeps the old permission. Needs: pip install tweepy"
+      },
+      "reddit": {
+        "enabled": false,
+        "daily_cap": 8,
+        "min_minutes_between": 100,
+        "_note": "Needs praw, the REDDIT_*_2 credentials, and features.social_promoter.reddit_subreddit. READ THE SUBREDDIT RULES FIRST: most cap self-promotion (roughly 1 in 10 posts is the common convention) and several ban links to your own channel outright. The cap and spacing here keep the ACCOUNT safe; they cannot keep you inside a subreddit rule you have not read. OFF by choice right now, not because it is broken - set enabled back to true once the credentials and a subreddit are in place."
+      },
+      "facebook_group": {
+        "enabled": false,
+        "daily_cap": 1,
+        "manual_approval_only": true
+      },
+      "youtube_shorts": {
+        "_comment": "OFF until you have reviewed a private batch. Caps are deliberately low: twenty clips from one VOD posted in an afternoon is what 'repetitious content' means in YouTube's policy, whoever made them.",
+        "enabled": false,
+        "max_per_day": 3,
+        "min_minutes_between": 180
+      }
     },
     "_spacing_comment": "min_minutes_between is what spreads posts through the day rather than firing them in a burst. 8 posts at 100 minutes apart covers about 13 hours, so a day of clips goes out steadily instead of all at once - which is the pattern every platform's spam detection actually keys on.",
-    "circuit_breaker": { "consecutive_failures": 3 }
+    "circuit_breaker": {
+      "consecutive_failures": 3
+    }
   },
-
   "_clips_comment": "Short-form clip rendering. crop_strategy turns a 16:9 source into a 9:16 vertical clip: 'center' (default) takes a fixed centre crop - GTA puts the crosshair, HUD and action centre-screen, so it keeps all three and cannot drift. 'motion' follows a smoothed centroid of frame movement (costs an extra pass). 'face' uses the face tracker and is for FACE-CAM/IRL footage ONLY - on gameplay it locks onto NPC faces and the crop jitters around the scene. 'auto' = pick from content_kind. Leave this on center for gaming content.",
   "_clip_routing_comment": "route_clips_separately: a video at or under max_seconds is a CLIP, not a stream, so it goes to Rumble (which takes shorts) and the social announcement instead of the main YouTube channel - a channel of full VODs should not fill up with 30-second Twitch highlights. Twitch clips top out around 90s; 180 leaves margin for a hand-exported highlight. Set route_clips_separately false to upload everything the same way. --only overrides this.",
   "_instagram_comment": "How a clip is posted as a Reel. caption_template takes {title} (the clip's own name, cleaned up). vertical: re-frame 16:9 to full-bleed 9:16 before uploading - Instagram otherwise letterboxes a landscape clip into black bars with the picture a third of the height, which is what a raw Twitch clip looks like posted straight through. share_to_feed also puts it on the grid, not only the Reels tab.",
@@ -122,16 +185,20 @@
     "vertical": true,
     "share_to_feed": true,
     "_link_comment": "Instagram captions NEVER make URLs clickable - not on the app, not on the web. Only the profile bio link is tappable. So the caption points at the bio instead of printing a URL nobody can tap, and the URLs are kept short and readable for anyone typing them. Put the monkey channel in your IG bio link for this to pay off.",
-    "caption_template": "{title} \ud83e\udd23\ud83e\udd23\ud83e\udd23\ud83d\udc80\ud83d\udc80\ud83d\udc80#stackswopo\n\n\ud83d\udc46 Monkey vids + full stream - LINK IN BIO\n\nYouTube: @BinScript\nRumble: rumble.com/user/BinScripts"
+    "caption_template": "{title} 🤣🤣🤣💀💀💀#stackswopo\n\n👆 Monkey vids + full stream - LINK IN BIO\n\nYouTube: @BinScript\nRumble: rumble.com/user/BinScripts"
   },
-
   "clips": {
     "_profile_comment": "WHICH KIND OF CONTENT this stream is, which decides the framing. 'monkey' = two people on camera in a window beside a browser: the clip is the call, so it cuts out that rectangle and fills the phone with it. 'gta' = GTA RP gameplay: crosshair, HUD and action are centre-screen, so a centre crop keeps all three. 'whole' = layout unknown: keeps the entire frame on a blurred background, losing nothing. Switch this per stream type. Aim the monkey rectangle with: python main.py --preview-crop \"path\\to\\stream.mp4\"",
     "profile": "monkey",
     "_region_comment": "The rectangle the 'monkey' profile keeps, in FRACTIONS of the frame (0-1), so it is correct at 1080p and 4K alike. x/y are the top-left corner. These are a starting guess - run --preview-crop, look at the red box in logs/crop_preview/, and nudge until the call window is inside it.",
     "profiles": {
       "monkey": {
-        "crop_region": { "x": 0.50, "y": 0.04, "width": 0.37, "height": 0.92 }
+        "crop_region": {
+          "x": 0.5,
+          "y": 0.04,
+          "width": 0.37,
+          "height": 0.92
+        }
       }
     },
     "_crop_comment": "How a 16:9 clip becomes 9:16. 'fit' keeps the WHOLE frame and fills the rest with a blurred copy of it - nothing is cut, so both people in a Monkey call stay in shot. 'center' keeps the middle third of the width, which on webcam footage is a tight shot of whoever happens to be in the middle. 'face' chases faces and is wrong for gameplay - it locks onto NPCs. 'center' remains the code default; this file chooses fit because the content is two people on camera.",
@@ -169,12 +236,43 @@
     "caption_style": "word",
     "caption_uppercase": true
   },
-
   "features": {
     "_comment": "Optional extras. self_healing: python main.py --health. social_promoter posts AFTER a successful new upload (Discord needs DISCORD_WEBHOOK_URL in .env; twitter/reddit need their API keys + pip install tweepy/praw). content_optimizer writes an SEO/chapters report next to each uploaded video, reusing the censor pass's transcript.",
-    "self_healing": { "enabled": true, "min_free_gb": 10, "cleanup_age_days": 7 },
+    "self_healing": {
+      "enabled": true,
+      "min_free_gb": 10,
+      "cleanup_age_days": 7
+    },
     "_reddit_account_comment": "Which Reddit account to post as. '2' reads REDDIT_CLIENT_ID_2/REDDIT_USERNAME_2/... from .env, keeping this entirely separate from the plain REDDIT_* variables. Set it to '' to use those primary ones instead, or '3' etc. for a further account.",
-    "social_promoter": { "enabled": true, "discord": true, "twitter": false, "reddit": false, "reddit_account": "2", "reddit_subreddit": "" },
-    "content_optimizer": { "enabled": true, "transcribe_if_missing": false }
+    "social_promoter": {
+      "enabled": true,
+      "discord": true,
+      "twitter": false,
+      "reddit": false,
+      "reddit_account": "2",
+      "reddit_subreddit": ""
+    },
+    "content_optimizer": {
+      "enabled": true,
+      "transcribe_if_missing": false
+    }
+  },
+  "youtube_shorts": {
+    "_comment": "Posts finished clips to a SECOND YouTube channel as Shorts. A YouTube OAuth token is bound to the channel picked during sign-in, not to the Google account - so this needs its own token file, made with `python main.py --setup-shorts`. Sign in and pick the Shorts channel, not the VOD one. client_secrets.json is shared; it identifies the app, not the channel.",
+    "channel": "@STACKSWOPO10K",
+    "token_path": "./youtube_shorts_token.json",
+    "_privacy_comment": "private until you have watched a batch. YouTube is stricter than the other destinations about volume and repetition, and a channel is far harder to get back than a post is to delete. Switch to 'public' once you are happy with what it is producing.",
+    "privacy": "private",
+    "category_id": "20",
+    "made_for_kids": false,
+    "max_title_chars": 90,
+    "description_template": "[CAPTION]\n\nFull streams: https://rumble.com/user/BinScripts\nMain channel: https://www.youtube.com/@stackswopo_",
+    "tags": [
+      "stackswopo",
+      "shorts",
+      "funny",
+      "gaming",
+      "clips"
+    ]
   }
 }

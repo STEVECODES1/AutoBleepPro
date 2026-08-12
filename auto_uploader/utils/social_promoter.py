@@ -325,6 +325,9 @@ def _publisher_for(platform: str, config: dict):
     if platform == "reddit":
         from publishers.reddit import RedditPublisher
         return RedditPublisher(config)
+    if platform == "youtube_shorts":
+        from publishers.youtube_shorts import YouTubeShortsPublisher
+        return YouTubeShortsPublisher(config)
     return None
 
 

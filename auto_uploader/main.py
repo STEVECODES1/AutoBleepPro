@@ -27,7 +27,7 @@ from datetime import datetime
 # Bump when shipping user-visible changes, so --test-config can prove
 # which build is actually running (stale extracts have silently caused
 # several confusing "the fix did nothing" runs).
-BUILD = "2026-08-13.0 gameplay crop follows the action"
+BUILD = "2026-08-13.1 post clips to the Shorts channel"
 
 # How often --watch checks whether a deferred clip's wait is up. A minute
 # is fine: the waits themselves are 25 to 80 minutes, so the resolution
@@ -1012,6 +1012,12 @@ def main(argv=None) -> int:
                              "full transcription, so start small.")
     parser.add_argument("--clip-count", type=int, default=None,
                         help="How many clips to make with --clips (default 3).")
+    parser.add_argument("--setup-shorts", action="store_true",
+                        help="Sign in to the YouTube channel that Shorts go "
+                             "to. A YouTube token is bound to the CHANNEL "
+                             "picked on the consent screen, not the account - "
+                             "so pick the Shorts channel here, not the VOD "
+                             "one, or Shorts will land on the wrong channel.")
     parser.add_argument("--tidy-vods", action="store_true",
                         help="After clipping, delete the VODs this run "
                              "DOWNLOADED. Only ever applies to a --clips-from "
@@ -1420,6 +1426,43 @@ def main(argv=None) -> int:
                          transcribe_if_needed=True)
         print_run(run)
         _deliver_clips(run, cfg)
+        return 0
+
+    if args.setup_shorts:
+        from publishers.youtube_shorts import YouTubeShortsPublisher
+
+        publisher = YouTubeShortsPublisher({"youtube": cfg.youtube.__dict__
+                                            if hasattr(cfg.youtube, "__dict__")
+                                            else dict(cfg.youtube or {}),
+                                            "youtube_shorts": cfg.youtube_shorts})
+        secrets = publisher.client_secrets_path()
+        token = publisher.token_path()
+        if not secrets or not os.path.isfile(secrets):
+            print(f"[Shorts] client_secrets.json not found at "
+                  f"{secrets or '(not set)'}")
+            print("         It is the same file the VOD uploader uses.")
+            return 1
+        if os.path.isfile(token):
+            print(f"[Shorts] Already signed in ({token}).")
+            print("         Delete that file and re-run to switch channel.")
+            return 0
+
+        print(f"[Shorts] A browser will open. Sign in and pick "
+              f"{cfg.youtube_shorts.get('channel', 'the Shorts channel')}.")
+        print("[Shorts] The token remembers whichever channel you choose, so "
+              "picking the VOD channel here sends Shorts there instead.")
+        from utils.youtube_uploader import YouTubeUploader
+
+        try:
+            YouTubeUploader(secrets, token)._client()
+        except Exception as exc:
+            print(f"[Shorts] Sign-in failed: {exc}")
+            return 1
+        print(f"[Shorts] Signed in. Token saved to {token}")
+        print("[Shorts] Uploads are PRIVATE until you set "
+              "youtube_shorts.privacy to \"public\" in config.json.")
+        print("[Shorts] Turn posting on with posting.platforms."
+              "youtube_shorts.enabled = true")
         return 0
 
     if args.clip_report:

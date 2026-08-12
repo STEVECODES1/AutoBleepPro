@@ -1,0 +1,159 @@
+"""
+Posts a finished clip to a YouTube channel as a Short.
+
+WHY A SEPARATE TOKEN
+--------------------
+A YouTube OAuth token is bound to the CHANNEL that was picked during the
+consent screen, not to the Google account. The token this project
+already has belongs to the VOD channel that full streams go to, and
+uploading a Short with it would put the Short there. So this has its own
+token file, made by signing in again and choosing the Shorts channel.
+The client_secrets.json is shared - that identifies the app, not the
+channel.
+
+WHAT MAKES IT A SHORT
+---------------------
+Nothing in the API. YouTube decides after the fact: vertical, and 3
+minutes or under. Every clip this pipeline makes is 1080x1920 and capped
+at 60 seconds, so they qualify without anything special being sent. The
+#Shorts tag is not required any more and is added to the description
+only because it is still how the channel page groups them.
+
+ON YOUTUBE'S RULES
+------------------
+YouTube is stricter than the other destinations here about volume and
+about repetition, and a channel is much harder to get back than a post
+is to delete. Two things follow from that, and both are deliberate:
+
+  * it is OFF until switched on, and posts PRIVATE until changed, so the
+    first batch is reviewed by a person rather than discovered by the
+    channel's audience;
+  * the daily cap and the spacing live in PublishGuard with everything
+    else, and they are set low. Twenty clips from one VOD posted in an
+    afternoon is what "repetitious content" means in the policy, whoever
+    made them.
+
+The clips are the channel owner's own footage, which is the part that
+matters most - this is not reposting.
+"""
+
+from __future__ import annotations
+
+import os
+from typing import Optional
+
+from .errors import NotConfigured
+
+# YouTube counts anything at or under three minutes as a Short. This
+# pipeline caps clips at 60s, so this is a guard against a mis-set config
+# rather than an expected limit.
+MAX_SHORT_SECONDS = 180
+
+# Appended to the description. Not required by YouTube any more - it
+# classifies by aspect and length - but it is still how the channel page
+# and search group them.
+SHORTS_TAG = "#Shorts"
+
+
+class YouTubeShortsPublisher:
+    """Uploads one clip to the Shorts channel."""
+
+    def __init__(self, config: dict):
+        self.config = config or {}
+        self.settings = dict(self.config.get("youtube_shorts", {}) or {})
+
+    # ── configuration ────────────────────────────────────────────────
+
+    def token_path(self) -> str:
+        return str(self.settings.get("token_path", "")).strip()
+
+    def client_secrets_path(self) -> str:
+        """Shared with the VOD uploader - it identifies the app, not the
+        channel."""
+        configured = str(self.settings.get("client_secrets_path", "")).strip()
+        if configured:
+            return configured
+        return str((self.config.get("youtube", {}) or {}).get(
+            "client_secrets_path", "")).strip()
+
+    def ready(self) -> bool:
+        """True only when this channel has been signed into.
+
+        Checked as a FILE rather than as a flag: a config that says yes
+        while the token is missing sends every clip into an interactive
+        OAuth prompt, and --watch has nobody at the keyboard to answer
+        it.
+        """
+        token = self.token_path()
+        return bool(token) and os.path.isfile(token)
+
+    def _raise_if_setup(self) -> None:
+        if not self.client_secrets_path():
+            raise NotConfigured(
+                "youtube_shorts: no client_secrets.json - the same file the "
+                "VOD uploader uses works here.")
+        if not self.token_path():
+            raise NotConfigured(
+                "youtube_shorts: token_path is not set in config.json.")
+        if not os.path.isfile(self.token_path()):
+            raise NotConfigured(
+                f"youtube_shorts: not signed in yet. Run:\n"
+                f"         python main.py --setup-shorts\n"
+                f"         Sign in and pick the SHORTS channel, not the VOD "
+                f"one - the token remembers whichever you choose.")
+
+    # ── posting ──────────────────────────────────────────────────────
+
+    def description_for(self, caption: str) -> str:
+        template = str(self.settings.get("description_template", "")).strip()
+        body = template.replace("[CAPTION]", caption) if template else caption
+        if SHORTS_TAG.lower() not in body.lower():
+            body = f"{body}\n\n{SHORTS_TAG}".strip()
+        return body
+
+    def title_for(self, caption: str, video_path: str) -> str:
+        """A Short's title is the first line of the caption, trimmed.
+
+        YouTube rejects a title over 100 characters outright, and one
+        that runs to the limit is truncated with an ellipsis in every
+        feed it appears in.
+        """
+        line = (caption or "").strip().splitlines()
+        title = (line[0] if line else "").strip()
+        if not title:
+            title = os.path.splitext(os.path.basename(video_path))[0]
+        limit = int(self.settings.get("max_title_chars", 90))
+        if len(title) > limit:
+            title = title[:limit].rsplit(" ", 1)[0].rstrip(" ,;:-")
+        return title or "Clip"
+
+    def post_clip(self, video_path: str, caption: str,
+                  dry_run: bool = False) -> Optional[str]:
+        """Upload one clip. Returns the watch URL, or None on failure."""
+        self._raise_if_setup()
+
+        if not os.path.isfile(video_path):
+            raise NotConfigured(f"youtube_shorts: no such file {video_path}")
+
+        if dry_run:
+            print(f"[YouTube Shorts] DRY RUN - would post "
+                  f"{os.path.basename(video_path)} as "
+                  f"'{self.title_for(caption, video_path)}'")
+            return "dry-run"
+
+        from utils.youtube_uploader import YouTubeUploader
+
+        uploader = YouTubeUploader(self.client_secrets_path(),
+                                   self.token_path())
+        return uploader.upload(
+            video_path,
+            title=self.title_for(caption, video_path),
+            description=self.description_for(caption),
+            tags=list(self.settings.get("tags", []) or []),
+            # Private by default. A channel is much harder to get back
+            # than a post is to delete, so the first batch is reviewed
+            # rather than discovered by the audience.
+            privacy=str(self.settings.get("privacy", "private")),
+            category_id=str(self.settings.get("category_id", "20")),
+            made_for_kids=bool(self.settings.get("made_for_kids", False)),
+        )
