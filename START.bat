@@ -44,12 +44,12 @@ echo ============================================================
 echo  Starting AutoBleepPro
 echo ============================================================
 echo.
-echo  Recorder : YouTube + Twitch + Kick live, plus new Twitch clips
+echo  Recorder : YouTube + Twitch + Kick + OnlyThaGuys live, plus new Twitch clips
 echo  Uploader : censor, upload, clip, announce
 echo  Folder   : %~dp0auto_uploader\watch_folder
 echo.
 
-start "AutoBleep RECORDER" cmd /k "cd /d "%~dp0tools" && python record_stream.py "https://www.youtube.com/@stackswopo_/live" "https://www.twitch.tv/stackswopo" "https://www.twitch.tv/stackswopo/clips?range=7d" "https://kick.com/stackswopo1k" --name "Stackswopo""
+start "AutoBleep RECORDER" cmd /k "cd /d "%~dp0tools" && python record_stream.py "https://www.youtube.com/@stackswopo_/live" "https://www.twitch.tv/stackswopo" "https://www.twitch.tv/stackswopo/clips?range=7d" "https://kick.com/stackswopo1k" "https://www.youtube.com/@OnlyThaGuys26/live" --name "Stackswopo""
 
 REM A moment apart so the two windows do not fight over the console while
 REM they start, and so the recorder's banner is readable.
