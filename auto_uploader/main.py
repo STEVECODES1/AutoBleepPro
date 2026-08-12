@@ -26,12 +26,25 @@ from datetime import datetime
 # Bump when shipping user-visible changes, so --test-config can prove
 # which build is actually running (stale extracts have silently caused
 # several confusing "the fix did nothing" runs).
-BUILD = "2026-08-12.4 confirm a page video is yours before taking it"
+BUILD = "2026-08-12.5 say what is actually wrong with the Rumble feed"
 
 # How often --watch checks whether a deferred clip's wait is up. A minute
 # is fine: the waits themselves are 25 to 80 minutes, so the resolution
 # that matters is "well under the shortest spacing", not "immediate".
 CLIP_DRAIN_SECONDS = 60
+
+# Notices that are true for the whole run and would otherwise print on
+# every pass. --batch followed by --watch is one process saying the same
+# paragraph twice before it has done anything, which trains you to skim
+# past the window that also carries the real failures.
+_SAID: set = set()
+
+
+def _say_once(key: str, message: str) -> None:
+    if key in _SAID:
+        return
+    _SAID.add(key)
+    print(message)
 
 from utils.censor import censor_video
 from utils.ffmpeg_tools import StageTimer, media_duration
@@ -1558,16 +1571,26 @@ def main(argv=None) -> int:
             print(f"[Rumble] Found {len(existing_rumble_videos)} existing video(s) via RSS for dedup checks.")
         except Exception as exc:
             # Not a warning: the local hash/title history is the primary
-            # defence and it is working. The feed only adds cover for
-            # videos put on Rumble outside this tool, so losing it to a
-            # Cloudflare challenge degrades nothing that was already
-            # protected. Said once, plainly, with the way to restore it.
-            print(f"[Rumble] Channel feed unavailable ({exc}).")
-            print("         Dedup falls back to local upload history, which already "
-                  "covers everything this tool uploaded.")
-            if cfg.rumble.cdp_url:
-                print(f"         To use the feed too, leave Chrome open with "
-                      f"--remote-debugging-port on {cfg.rumble.cdp_url}.")
+            # defence and it is working. The feed only ever added cover
+            # for videos put on Rumble by hand, so losing it degrades
+            # nothing that was already protected.
+            #
+            # It says "no feed exists" rather than "the fetch failed"
+            # because Rumble does not publish RSS at all - not
+            # <page>/index.xml, not <page>/rss. The configured address
+            # returns an ordinary web page with HTTP 200, which reads as
+            # a Cloudflare challenge from the outside. Blaming Cloudflare
+            # sent a whole evening chasing an impersonation problem that
+            # did not exist, and telling you to open Chrome on a
+            # debugging port cannot help fetch something that is not
+            # there. Said once per run.
+            _say_once("rumble-feed",
+                      f"[Rumble] No channel feed to check - Rumble does not "
+                      f"publish RSS, so the configured rss_url returns a web "
+                      f"page. ({exc})\n"
+                      f"         Dedup falls back to local upload history, "
+                      f"which already covers everything this tool uploaded. "
+                      f"The only gap is a video you put on Rumble by hand.")
 
     if batch_folder and existing_videos_fetch_failed and not dry_run:
         print(
