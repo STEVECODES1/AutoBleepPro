@@ -18,9 +18,21 @@ for _path in (_REPO, _UPLOADER, _TOOLS):
     if _path not in sys.path:
         sys.path.insert(0, _path)
 
-from utils.channel_vods import DEFAULT_LIMIT, download_args, fetch, is_url
+from utils.channel_vods import (DEFAULT_LIMIT, download_args, fetch,
+                                fetch_channel, fetch_via_feed, feed_url,
+                                feed_video_urls, is_url, short_id, video_args)
 
 CHANNEL = "https://rumble.com/user/stackswopo10k"
+
+FEED = b"""<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"><channel>
+  <item><title>Monkey app night</title>
+        <link>https://rumble.com/v6aaaaa-monkey-app-night.html</link></item>
+  <item><title>GTA RP</title>
+        <link>https://rumble.com/v6bbbbb-gta-rp.html</link></item>
+  <item><title>Older one</title>
+        <link>https://rumble.com/v6ccccc-older-one.html</link></item>
+</channel></rss>"""
 
 
 def test_a_url_is_told_apart_from_a_folder():
@@ -214,6 +226,198 @@ def test_the_advice_pins_the_version(tmp_path, monkeypatch):
 
     assert "0.15.0" in problem
     assert "-U curl_cffi" not in problem
+
+
+def test_the_feed_address_matches_the_one_config_already_uses():
+    """config.json's rumble.rss_url is <page>/index.xml. Inventing a
+    different shape here would be a guess where a known answer exists."""
+    assert feed_url(CHANNEL) == \
+        "https://rumble.com/user/stackswopo10k/index.xml"
+    assert feed_url("https://rumble.com/c/BinScripts") == \
+        "https://rumble.com/c/BinScripts/index.xml"
+
+
+def test_a_share_token_is_dropped_from_the_feed_address():
+    """The channel URL as pasted from the address bar carries ?e9s=..."""
+    assert feed_url(CHANNEL + "/?e9s=src_v1_upp") == \
+        "https://rumble.com/user/stackswopo10k/index.xml"
+
+
+def test_only_rumble_channel_pages_have_a_feed():
+    """Everything else must stay on the yt-dlp route unchanged."""
+    assert feed_url("https://www.youtube.com/@OnlyThaGuys26") == ""
+    assert feed_url("https://rumble.com/v6aaaaa-a-video.html") == ""
+    assert feed_url("") == ""
+
+
+def test_the_video_id_survives_a_retitle():
+    """Rumble's ID is the leading token; the rest of the slug is the
+    title at the time of posting and can change under you."""
+    assert short_id("https://rumble.com/v6aaaaa-monkey-app-night.html") == "v6aaaaa"
+    assert short_id("v6aaaaa-monkey-app-night") == "v6aaaaa"
+
+
+def test_the_feed_lists_videos_newest_first(monkeypatch):
+    from utils import channel_vods
+
+    monkeypatch.setattr(channel_vods, "_fetch_feed", lambda url: (FEED, ""))
+
+    links, why = feed_video_urls(CHANNEL, "", limit=2)
+
+    assert why == ""
+    assert links == ["https://rumble.com/v6aaaaa-monkey-app-night.html",
+                     "https://rumble.com/v6bbbbb-gta-rp.html"]
+
+
+def test_videos_already_taken_are_skipped(tmp_path, monkeypatch):
+    """The archive is what makes a daily run safe. It has to be honoured
+    on this route too, or the same VOD is re-downloaded every night."""
+    from utils import channel_vods
+
+    archive = tmp_path / "archive.txt"
+    archive.write_text("rumble v6aaaaa-monkey-app-night\n")
+    monkeypatch.setattr(channel_vods, "_fetch_feed", lambda url: (FEED, ""))
+
+    links, why = feed_video_urls(CHANNEL, str(archive), limit=5)
+
+    assert why == ""
+    assert links == ["https://rumble.com/v6bbbbb-gta-rp.html",
+                     "https://rumble.com/v6ccccc-older-one.html"]
+
+
+def test_each_feed_video_is_fetched_on_its_own(tmp_path, monkeypatch):
+    """Single Rumble videos always downloaded fine - it is only the
+    channel listing that yt-dlp cannot parse."""
+    from utils import channel_vods
+
+    asked = []
+
+    def fake_run(args, **kwargs):
+        asked.append(args[-1])
+        (tmp_path / f"vod {len(asked)}.mp4").write_bytes(b"x")
+
+        class Done:
+            returncode = 0
+            stdout = b""
+        return Done()
+
+    monkeypatch.setattr(channel_vods, "_fetch_feed", lambda url: (FEED, ""))
+    monkeypatch.setattr(channel_vods, "have_impersonation", lambda: False)
+    monkeypatch.setattr(channel_vods.subprocess, "run", fake_run)
+
+    paths, why = fetch_via_feed(CHANNEL, str(tmp_path), (".mp4",), limit=2)
+
+    assert why == ""
+    assert asked == ["https://rumble.com/v6aaaaa-monkey-app-night.html",
+                     "https://rumble.com/v6bbbbb-gta-rp.html"]
+    assert len(paths) == 2
+
+
+def test_a_single_video_download_never_walks_a_playlist():
+    """The listing has already been read out of the feed; letting yt-dlp
+    expand it again would take the whole channel."""
+    args = video_args("https://rumble.com/v6aaaaa-a.html", "/out", "/a.txt")
+
+    assert "--no-playlist" in args
+    assert "--playlist-end" not in args
+    assert "--download-archive" in args
+
+
+def test_a_page_that_parses_zero_videos_falls_through_to_the_feed(
+        tmp_path, monkeypatch):
+    """The bug this route exists for: yt-dlp reads five pages of a real
+    channel, parses zero videos and exits 0. From the outside that is
+    identical to "nothing new", so the feed has to be tried anyway."""
+    from utils import channel_vods
+
+    downloaded = []
+
+    def fake_run(args, **kwargs):
+        if args[-1] == CHANNEL:
+            # The channel page: success, and nothing to show for it.
+            class Done:
+                returncode = 0
+                stdout = b""
+            return Done()
+        downloaded.append(args[-1])
+        (tmp_path / f"vod {len(downloaded)}.mp4").write_bytes(b"x")
+
+        class Done:
+            returncode = 0
+            stdout = b""
+        return Done()
+
+    monkeypatch.setattr(channel_vods, "_fetch_feed", lambda url: (FEED, ""))
+    monkeypatch.setattr(channel_vods, "have_impersonation", lambda: False)
+    monkeypatch.setattr(channel_vods.subprocess, "run", fake_run)
+
+    paths, problem = fetch_channel(CHANNEL, str(tmp_path), (".mp4",), limit=1)
+
+    assert problem == ""
+    assert downloaded == ["https://rumble.com/v6aaaaa-monkey-app-night.html"]
+    assert len(paths) == 1
+
+
+def test_the_feed_is_not_consulted_when_the_page_worked(tmp_path, monkeypatch):
+    """One request is better than two, and the feed only exists as a
+    fallback for a listing that came back empty."""
+    from utils import channel_vods
+
+    def fake_run(args, **kwargs):
+        (tmp_path / "new stream [bbb].mp4").write_bytes(b"x")
+
+        class Done:
+            returncode = 0
+            stdout = b""
+        return Done()
+
+    def explode(url):
+        raise AssertionError("the feed was fetched despite a working page")
+
+    monkeypatch.setattr(channel_vods, "_fetch_feed", explode)
+    monkeypatch.setattr(channel_vods.subprocess, "run", fake_run)
+
+    paths, problem = fetch_channel(CHANNEL, str(tmp_path), (".mp4",))
+
+    assert problem == "" and len(paths) == 1
+
+
+def test_a_non_rumble_channel_never_reaches_the_feed(tmp_path, monkeypatch):
+    """YouTube channel listings work; there is nothing to fall back to
+    and nothing to fall back on."""
+    from utils import channel_vods
+
+    def explode(url):
+        raise AssertionError("looked for a Rumble feed on a YouTube channel")
+
+    monkeypatch.setattr(channel_vods, "_fetch_feed", explode)
+    monkeypatch.setattr(channel_vods.subprocess, "run",
+                        lambda *a, **k: type(
+                            "D", (), {"returncode": 0, "stdout": b""})())
+
+    paths, problem = fetch_channel("https://www.youtube.com/@OnlyThaGuys26",
+                                   str(tmp_path), (".mp4",))
+
+    assert paths == [] and problem == ""
+
+
+def test_both_routes_failing_says_both_were_tried(tmp_path, monkeypatch):
+    """Otherwise the advice reads "try the feed" when the feed was the
+    thing that just failed."""
+    from utils import channel_vods
+
+    monkeypatch.setattr(channel_vods, "_fetch_feed",
+                        lambda url: (None, "direct: 403; as a browser: 403"))
+    monkeypatch.setattr(channel_vods, "have_impersonation", lambda: False)
+    monkeypatch.setattr(channel_vods.subprocess, "run",
+                        lambda *a, **k: type(
+                            "D", (), {"returncode": 1, "stdout": b""})())
+
+    paths, problem = fetch_channel(CHANNEL, str(tmp_path), (".mp4",))
+
+    assert paths == []
+    assert "Cloudflare" in problem
+    assert "feed" in problem
 
 
 def test_the_recorder_advice_pins_it_too():

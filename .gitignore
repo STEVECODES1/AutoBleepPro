@@ -17,6 +17,9 @@ auto_uploader/client_secrets.json
 auto_uploader/youtube_token.json
 auto_uploader/uploaded_hashes.json
 auto_uploader/logs/*.log
+# Same for a run started from the repo root - clips.log got committed
+# once already, carrying 300 lines of test output into the repo.
+logs/*.log
 # Runtime output, not source: the manual-post queue and posting state
 auto_uploader/logs/manual_posts.txt
 auto_uploader/posting_state.json

@@ -27,10 +27,16 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import urllib.parse
 from typing import Optional
+
+from .rumble_checker import _fetch_plain, _looks_like_feed, _parse_rss
 
 # Long enough for a multi-hour VOD on a domestic line.
 _TIMEOUT = 60 * 180
+
+# Reading one XML file, not a video.
+_FEED_TIMEOUT = 30
 
 ARCHIVE_NAME = "channel_vods_archive.txt"
 
@@ -107,6 +113,204 @@ def download_args(url: str, output_dir: str, archive: str,
         "-o", os.path.join(output_dir, "%(title)s [%(id)s].%(ext)s"),
         url,
     ]
+
+
+def video_args(url: str, output_dir: str, archive: str,
+               impersonate: bool = False, browser: str = "") -> list:
+    """One single video, by its own URL. No playlist handling at all.
+
+    This is the same download as `download_args` minus everything that
+    walks a listing, because by the time this runs the listing has
+    already been read out of the feed.
+    """
+    return ytdlp_command() + ([
+        "--impersonate", "chrome",
+    ] if impersonate else []) + ([
+        "--cookies-from-browser", browser,
+    ] if browser else []) + [
+        "--no-playlist",
+        "--download-archive", archive,
+        "--restrict-filenames",
+        "--no-overwrites",
+        "--ignore-errors",
+        "--no-warnings",
+        "--retries", "10",
+        "--fragment-retries", "10",
+        "--socket-timeout", "30",
+        "-o", os.path.join(output_dir, "%(title)s [%(id)s].%(ext)s"),
+        url,
+    ]
+
+
+def feed_url(channel_url: str) -> str:
+    """The RSS address for a Rumble channel page, or "" if there isn't one.
+
+    Rumble publishes every channel as `<page>/index.xml`, which is the
+    same convention `rumble.rss_url` in config.json already uses for the
+    upload-dedup check. Both `/user/<name>` and `/c/<name>` pages have
+    one; anything else (YouTube, Twitch, a bare domain) returns "" and
+    the caller stays on the yt-dlp route.
+    """
+    try:
+        parts = urllib.parse.urlsplit(str(channel_url or "").strip())
+    except ValueError:
+        return ""
+    if not parts.netloc.lower().endswith("rumble.com"):
+        return ""
+
+    path = parts.path.strip("/")
+    if path.endswith("index.xml"):
+        # Already a feed - the query string is a share token and the
+        # feed does not want it.
+        return urllib.parse.urlunsplit((parts.scheme or "https", parts.netloc,
+                                        "/" + path, "", ""))
+
+    pieces = [piece for piece in path.split("/") if piece]
+    if len(pieces) != 2 or pieces[0] not in ("user", "c"):
+        return ""
+    return f"https://{parts.netloc}/{pieces[0]}/{pieces[1]}/index.xml"
+
+
+def _fetch_impersonated(url: str) -> tuple:
+    """(raw_bytes | None, why_not). The browser fingerprint, directly.
+
+    Same mechanism yt-dlp's --impersonate uses; borrowed here because the
+    feed is one plain GET and does not need yt-dlp at all.
+    """
+    try:
+        from curl_cffi import requests as cffi_requests
+    except Exception as exc:
+        return None, f"curl_cffi unavailable ({exc})"
+    try:
+        response = cffi_requests.get(url, impersonate="chrome",
+                                     timeout=_FEED_TIMEOUT)
+    except Exception as exc:
+        return None, str(exc)
+    if response.status_code != 200:
+        return None, f"HTTP {response.status_code}"
+    raw = response.content
+    if not _looks_like_feed(raw):
+        return None, "a challenge page came back instead of the feed"
+    return raw, ""
+
+
+def _fetch_feed(url: str) -> tuple:
+    """(raw_bytes | None, why_not). Plainest first, same as everything else."""
+    raw, why = _fetch_plain(url)
+    if raw is not None:
+        return raw, ""
+    first = why
+    raw, why = _fetch_impersonated(url)
+    if raw is not None:
+        return raw, ""
+    return None, f"direct: {first}; as a browser: {why}"
+
+
+def short_id(link: str) -> str:
+    """`https://rumble.com/v6abcde-some-title.html` -> `v6abcde`.
+
+    Rumble's own ID is the leading token; the rest of the slug is the
+    title at the time of posting and can change. Matching on the leading
+    token is what makes the archive check survive a rename.
+    """
+    tail = str(link or "").rstrip("/").rsplit("/", 1)[-1]
+    for cut in (".html", ".htm"):
+        if tail.endswith(cut):
+            tail = tail[: -len(cut)]
+    return tail.split("-", 1)[0].split(".", 1)[0]
+
+
+def _archived_ids(archive: str) -> set:
+    """Every video ID yt-dlp has already recorded, however it spelled it.
+
+    Lines look like `rumble v6abcde-some-title`, and the exact shape has
+    changed between yt-dlp versions, so only the leading token is
+    compared - see short_id.
+    """
+    taken = set()
+    try:
+        with open(archive, "r", encoding="utf-8", errors="replace") as handle:
+            for line in handle:
+                pieces = line.split()
+                if len(pieces) >= 2:
+                    taken.add(short_id(pieces[1]))
+    except OSError:
+        return set()
+    return taken
+
+
+def feed_video_urls(channel_url: str, archive: str = "",
+                    limit: int = DEFAULT_LIMIT) -> tuple:
+    """(video_urls_newest_first, why_not). Reads the channel's RSS feed.
+
+    This exists because yt-dlp's Rumble channel extractor currently walks
+    five pages of a real channel and parses zero videos out of them - it
+    reports success, so nothing looks broken, and no clip ever appears.
+    The feed lists the same videos in the same order and is one request.
+    Individual video downloads were never affected; only the listing was.
+    """
+    address = feed_url(channel_url)
+    if not address:
+        return [], "not a Rumble channel page"
+
+    raw, why = _fetch_feed(address)
+    if raw is None:
+        return [], why
+
+    try:
+        videos = _parse_rss(raw)
+    except Exception as exc:
+        return [], f"feed fetched but could not be parsed ({exc})"
+
+    taken = _archived_ids(archive) if archive else set()
+    fresh = []
+    for video in videos:
+        if not video.url:
+            continue
+        if short_id(video.url) in taken:
+            continue
+        fresh.append(video.url)
+        if len(fresh) >= max(1, limit):
+            break
+    return fresh, ""
+
+
+def fetch_via_feed(channel_url: str, output_dir: str, extensions: tuple,
+                   limit: int = DEFAULT_LIMIT, archive: str = "",
+                   browser: str = "") -> tuple:
+    """Download from the RSS listing instead of the channel page.
+
+    Returns (new_paths, why_not) with the same contract as `fetch`.
+    """
+    os.makedirs(output_dir, exist_ok=True)
+    archive = archive or os.path.join(output_dir, ARCHIVE_NAME)
+
+    links, why = feed_video_urls(channel_url, archive, limit)
+    if why:
+        return [], why
+    if not links:
+        return [], ""
+
+    print(f"[VODs] The channel feed lists {len(links)} video(s) to take.")
+    before = _videos_in(output_dir, extensions)
+    impersonate = have_impersonation()
+
+    for link in links:
+        try:
+            subprocess.run(video_args(link, output_dir, archive,
+                                      impersonate, browser),
+                           timeout=_TIMEOUT)
+        except FileNotFoundError:
+            return [], "yt-dlp is not installed (pip install -U yt-dlp)"
+        except subprocess.TimeoutExpired:
+            # One slow VOD should not throw away the ones already here.
+            print(f"[VODs] Gave up on {link} - it took too long.")
+            continue
+        except OSError as exc:
+            return [], str(exc)
+
+    arrived = sorted(_videos_in(output_dir, extensions) - before)
+    return [os.path.join(output_dir, name) for name in arrived], ""
 
 
 def _videos_in(folder: str, extensions: tuple) -> set:
@@ -187,3 +391,40 @@ def fetch(url: str, output_dir: str, extensions: tuple,
     return [], (hint + " Signed-in cookies did not work either. The channel "
                 "page may need a different browser, or Rumble is blocking "
                 "this machine for now - try again later.")
+
+
+def fetch_channel(url: str, output_dir: str, extensions: tuple,
+                  limit: int = DEFAULT_LIMIT,
+                  archive: str = "", browser: str = "") -> tuple:
+    """Get new videos off a channel by whichever route works.
+
+    The channel page first, because when it works it is one request and
+    it handles every site. The RSS feed second, because on Rumble the
+    page route currently succeeds while finding nothing: yt-dlp reads
+    five pages, parses zero videos, and exits 0. That is indistinguishable
+    from "nothing new" from the outside, so the feed is tried whenever
+    the page produced no files - it is a single cheap GET, and if it also
+    finds nothing new then nothing new is the honest answer.
+    """
+    grabbed, problem = fetch(url, output_dir, extensions, limit,
+                             archive, browser)
+    if grabbed:
+        return grabbed, ""
+
+    if not feed_url(url):
+        # No feed to fall back to - whatever fetch said is the answer.
+        return grabbed, problem
+
+    print("[VODs] The channel page listed nothing. Trying the channel feed...")
+    from_feed, why = fetch_via_feed(url, output_dir, extensions, limit,
+                                    archive, browser)
+    if from_feed:
+        return from_feed, ""
+    if problem:
+        # The page failed outright; lead with that, and say the feed was
+        # tried so the next step is not "try the feed".
+        return [], f"{problem}\n         The channel feed did not work either: {why or 'it listed nothing new'}."
+    if why:
+        return [], (f"the channel page listed nothing and the feed could not "
+                    f"be read: {why}")
+    return [], ""
