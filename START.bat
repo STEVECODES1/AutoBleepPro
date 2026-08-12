@@ -22,6 +22,23 @@ REM ============================================================================
 
 cd /d "%~dp0"
 
+REM ---------------------------------------------------------------------------
+REM  Turn OFF console QuickEdit before opening anything.
+REM
+REM  QuickEdit is on by default in Windows, and it means that clicking in a
+REM  console window starts a text selection - which FREEZES that program the
+REM  moment it next tries to print. The title bar gains a "Select" prefix and
+REM  nothing else happens. No error, no crash, no hint.
+REM
+REM  This cost a full day once: a VOD run sat paused mid-remux from 4am to
+REM  4pm because of one stray click, while the recorder in the next window
+REM  kept running and made it look like everything was fine.
+REM
+REM  Applies to console windows opened from now on. To put it back:
+REM    reg add "HKCU\Console" /v QuickEdit /t REG_DWORD /d 1 /f
+REM ---------------------------------------------------------------------------
+reg add "HKCU\Console" /v QuickEdit /t REG_DWORD /d 0 /f >nul 2>&1
+
 echo ============================================================
 echo  Pulling latest code from GitHub...
 echo ============================================================
