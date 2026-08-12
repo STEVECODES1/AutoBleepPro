@@ -409,6 +409,76 @@ def channel_video_urls(channel_url: str, archive: str = "",
     return [], problems
 
 
+def channel_slug(channel_url: str) -> str:
+    """`https://rumble.com/user/stackswopo10k` -> `stackswopo10k`."""
+    try:
+        parts = urllib.parse.urlsplit(str(channel_url or "").strip())
+    except ValueError:
+        return ""
+    pieces = [piece for piece in parts.path.strip("/").split("/") if piece]
+    return pieces[1] if len(pieces) == 2 and pieces[0] in ("user", "c") else ""
+
+
+def _channel_of(link: str, impersonate: bool = False,
+                browser: str = "") -> str:
+    """Who posted this video, as yt-dlp reports it. "" if it cannot say.
+
+    Metadata only - no video is downloaded to answer this.
+    """
+    args = ytdlp_command() + ([
+        "--impersonate", "chrome",
+    ] if impersonate else []) + ([
+        "--cookies-from-browser", browser,
+    ] if browser else []) + [
+        "--skip-download", "--no-warnings", "--no-playlist",
+        "--print", "%(channel_url)s %(uploader_url)s %(channel)s %(uploader)s",
+        link,
+    ]
+    try:
+        done = subprocess.run(args, stdout=subprocess.PIPE,
+                              stderr=subprocess.DEVNULL, timeout=120)
+    except Exception:
+        return ""
+    return done.stdout.decode("utf-8", "replace").strip()
+
+
+def owned_only(links: list, channel_url: str, impersonate: bool = False,
+               browser: str = "") -> list:
+    """Drop anything on the page that belongs to someone else.
+
+    A channel page carries recommended and related videos from OTHER
+    creators, and matching on the video path alone cannot tell those
+    apart from yours. Downloading one would put another creator's video
+    through your clipper and out to your accounts under your name, which
+    is the one thing this project does not do - so each link is checked
+    against the channel it came from before anything is fetched.
+
+    Uncertainty keeps the video, a clear mismatch drops it. If yt-dlp
+    cannot name the channel, that is a gap in yt-dlp rather than
+    evidence of anything, and refusing on it would mean an unreadable
+    field silently stopped the whole run - the exact failure that cost
+    this evening. It says so out loud instead.
+    """
+    slug = channel_slug(channel_url)
+    if not slug:
+        return list(links)
+
+    kept = []
+    for link in links:
+        described = _channel_of(link, impersonate, browser)
+        if not described:
+            print(f"[VODs] Could not confirm who posted {link} - taking it "
+                  f"anyway. Check it before it goes out.")
+            kept.append(link)
+        elif slug.lower() in described.lower():
+            kept.append(link)
+        else:
+            print(f"[VODs] Skipping {link} - posted by someone else "
+                  f"({described.split()[-1] if described.split() else '?'}), "
+                  f"not {slug}.")
+    return kept
+
+
 def fetch_via_listing(channel_url: str, output_dir: str, extensions: tuple,
                       limit: int = DEFAULT_LIMIT, archive: str = "",
                       browser: str = "") -> tuple:
@@ -428,6 +498,10 @@ def fetch_via_listing(channel_url: str, output_dir: str, extensions: tuple,
     print(f"[VODs] Read {len(links)} video(s) off the channel page.")
     before = _videos_in(output_dir, extensions)
     impersonate = have_impersonation()
+    links = owned_only(links, channel_url, impersonate, browser)
+    if not links:
+        return [], ("none of the videos on that page belong to that channel - "
+                    "the page layout may have changed again")
 
     for link in links:
         print(f"[VODs] {link}")

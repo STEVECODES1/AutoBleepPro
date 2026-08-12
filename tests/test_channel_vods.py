@@ -20,8 +20,9 @@ for _path in (_REPO, _UPLOADER, _TOOLS):
 
 from utils.channel_vods import (DEFAULT_LIMIT, channel_video_urls,
                                 download_args, fetch, fetch_channel,
-                                describe_page, fetch_via_listing, is_url,
-                                listing_url, short_id, video_args,
+                                channel_slug, describe_page,
+                                fetch_via_listing, is_url, listing_url,
+                                owned_only, short_id, video_args,
                                 video_links_on)
 
 CHANNEL = "https://rumble.com/user/stackswopo10k"
@@ -431,6 +432,8 @@ def test_each_video_is_fetched_on_its_own(tmp_path, monkeypatch):
     monkeypatch.setattr(channel_vods, "_fetch_html",
                         lambda url: (PAGE_ONE, ""))
     monkeypatch.setattr(channel_vods, "have_impersonation", lambda: False)
+    monkeypatch.setattr(channel_vods, "_channel_of",
+                        lambda *a, **k: "https://rumble.com/user/stackswopo10k")
     monkeypatch.setattr(channel_vods.subprocess, "run", fake_run)
 
     paths, why = fetch_via_listing(CHANNEL, str(tmp_path), (".mp4",), limit=2)
@@ -439,6 +442,51 @@ def test_each_video_is_fetched_on_its_own(tmp_path, monkeypatch):
     assert asked == ["https://rumble.com/v6aaaaa-monkey-app-night.html",
                      "https://rumble.com/v6bbbbb-gta-rp.html"]
     assert len(paths) == 2
+
+
+def test_another_creators_video_on_the_page_is_not_taken(capsys):
+    """A channel page carries recommended videos from OTHER creators,
+    and a path match cannot tell those from yours. Downloading one would
+    put someone else's video through the clipper and out to your
+    accounts under your name."""
+    mine = "https://rumble.com/v6aaaaa-mine.html"
+    theirs = "https://rumble.com/v6zzzzz-theirs.html"
+    who = {mine: "https://rumble.com/user/stackswopo10k Stackswopo",
+           theirs: "https://rumble.com/user/someoneelse SomeoneElse"}
+
+    import utils.channel_vods as channel_vods
+    original = channel_vods._channel_of
+    channel_vods._channel_of = lambda link, *a, **k: who[link]
+    try:
+        kept = owned_only([mine, theirs], CHANNEL)
+    finally:
+        channel_vods._channel_of = original
+
+    assert kept == [mine]
+    assert "someone else" in capsys.readouterr().out
+
+
+def test_an_unreadable_channel_keeps_the_video_and_says_so(capsys):
+    """Refusing on a field yt-dlp could not fill would mean an
+    unreadable value silently stopped the whole run - the exact failure
+    that cost this evening. Say it out loud instead."""
+    import utils.channel_vods as channel_vods
+
+    original = channel_vods._channel_of
+    channel_vods._channel_of = lambda link, *a, **k: ""
+    try:
+        kept = owned_only(["https://rumble.com/v6aaaaa-x.html"], CHANNEL)
+    finally:
+        channel_vods._channel_of = original
+
+    assert len(kept) == 1
+    assert "Could not confirm" in capsys.readouterr().out
+
+
+def test_the_channel_slug_is_read_off_the_url():
+    assert channel_slug(CHANNEL) == "stackswopo10k"
+    assert channel_slug("https://rumble.com/c/BinScripts") == "BinScripts"
+    assert channel_slug("https://www.youtube.com/@OnlyThaGuys26") == ""
 
 
 def test_a_single_video_download_never_walks_a_playlist():
@@ -472,6 +520,8 @@ def test_a_listing_that_parses_zero_videos_falls_through(tmp_path, monkeypatch):
     monkeypatch.setattr(channel_vods, "_fetch_html",
                         lambda url: (PAGE_ONE, ""))
     monkeypatch.setattr(channel_vods, "have_impersonation", lambda: False)
+    monkeypatch.setattr(channel_vods, "_channel_of",
+                        lambda *a, **k: "https://rumble.com/user/stackswopo10k")
     monkeypatch.setattr(channel_vods.subprocess, "run", fake_run)
 
     paths, problem = fetch_channel(CHANNEL, str(tmp_path), (".mp4",), limit=1)
