@@ -26,7 +26,7 @@ from datetime import datetime
 # Bump when shipping user-visible changes, so --test-config can prove
 # which build is actually running (stale extracts have silently caused
 # several confusing "the fix did nothing" runs).
-BUILD = "2026-08-12.6 daily clip run, per-run framing, tidy downloaded VODs"
+BUILD = "2026-08-12.7 --clips transcribes and delivers, so per-file framing works"
 
 # How often --watch checks whether a deferred clip's wait is up. A minute
 # is fine: the waits themselves are 25 to 80 minutes, so the resolution
@@ -1374,7 +1374,16 @@ def main(argv=None) -> int:
                 print(f"        Did you mean: {path}")
             return 1
         title = get_stream_title(args.clips, args.title, cfg, allow_prompt=False)
-        print_run(make_clips(cfg, args.clips, title, count=args.clip_count))
+        # transcribe_if_needed, because --clips is now also how ONE video
+        # gets its own framing: a folder of mixed VODs needs a run per
+        # kind, and each of those videos is a fresh download with no
+        # transcript beside it yet. Without this it failed on a raw VOD
+        # while --clips-from over the same file worked, which reads as
+        # the file being broken.
+        run = make_clips(cfg, args.clips, title, count=args.clip_count,
+                         transcribe_if_needed=True)
+        print_run(run)
+        _deliver_clips(run, cfg)
         return 0
 
     if args.clip_report:
