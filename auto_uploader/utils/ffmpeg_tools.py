@@ -218,3 +218,47 @@ def media_duration(path: str) -> Optional[float]:
         return float(completed.stdout.decode().strip().splitlines()[0])
     except (ValueError, IndexError):
         return None
+
+
+def video_dimensions(path: str):
+    """(width, height), or None if they cannot be read.
+
+    None rather than a guess: callers use this to decide whether a file
+    already has the shape they want, and guessing wrong means either a
+    needless re-encode or a video posted in the wrong aspect.
+    """
+    try:
+        completed = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "v:0",
+             "-show_entries", "stream=width,height", "-of", "csv=p=0:s=x",
+             path],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=120)
+    except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
+        return None
+    try:
+        width, height = completed.stdout.decode().strip().splitlines()[0].split("x")[:2]
+        return int(width), int(height)
+    except (ValueError, IndexError):
+        return None
+
+
+# How far from 9:16 a video can be and still count as vertical. Loose
+# enough to cover a platform's own re-encode rounding a dimension by a
+# pixel or two, tight enough that a square or a 16:9 never passes.
+VERTICAL_TOLERANCE = 0.02
+
+
+def is_already_vertical(path: str) -> bool:
+    """True when this file is already the 9:16 shape a Reel wants.
+
+    Every clip out of ClipMaker is 1080x1920 already. Re-framing one is a
+    second full encode that costs time and a generation of quality to
+    produce a file the same shape as the one it started from.
+    """
+    size = video_dimensions(path)
+    if not size:
+        return False
+    width, height = size
+    if not width or not height:
+        return False
+    return abs((width / height) - (9 / 16)) <= VERTICAL_TOLERANCE

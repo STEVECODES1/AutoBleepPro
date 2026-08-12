@@ -683,7 +683,11 @@ def make_vertical(source_path: str, output_path: str,
         return None
     # Watermark is applied here too so standalone vertical conversions
     # are branded the same as clips produced by ClipMaker.
-    vf = f"{crop_filter(strategy)},{watermark_filter()}"
+    # Same trap as build_filter: an empty watermark appended after a
+    # comma is a filter-chain syntax error, and a machine with no font
+    # file would fail every conversion at the last step.
+    mark = watermark_filter()
+    vf = crop_filter(strategy) + (f",{mark}" if mark else "")
     args = ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
             "-i", source_path, "-vf", vf,
             *_encoder_args(encoder, preset),

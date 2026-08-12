@@ -678,3 +678,41 @@ def test_no_sidecar_is_not_an_error(tmp_path):
     assert main.downloaded_title(str(video)) == ""
     (tmp_path / "broken.info.json").write_text("not json", encoding="utf-8")
     assert main.downloaded_title(str(tmp_path / "broken.mp4")) == ""
+
+
+def test_no_function_shadows_a_module_level_import():
+    """`from x import Y` inside a function binds Y as a local for the
+    WHOLE function, so a module-level Y stops resolving everywhere in it
+    - including hundreds of lines ABOVE the inner import.
+
+    This is not theoretical. Adding `from utils.youtube_uploader import
+    YouTubeUploader` inside main() broke the YouTube dedup check that
+    runs much earlier in the same function, with UnboundLocalError, and
+    aborted the whole --batch run.
+    """
+    import ast
+
+    main_py = os.path.join(_UPLOADER, "main.py")
+    with open(main_py, encoding="utf-8") as handle:
+        tree = ast.parse(handle.read())
+
+    top_level = {alias.asname or alias.name.split(".")[0]
+                 for node in tree.body
+                 if isinstance(node, (ast.Import, ast.ImportFrom))
+                 for alias in node.names}
+
+    clashes = {}
+    for function in [n for n in ast.walk(tree)
+                     if isinstance(n, ast.FunctionDef)]:
+        inner = {alias.asname or alias.name.split(".")[0]
+                 for node in ast.walk(function)
+                 if isinstance(node, (ast.Import, ast.ImportFrom))
+                 for alias in node.names}
+        shadowed = inner & top_level
+        if shadowed:
+            clashes[function.name] = sorted(shadowed)
+
+    assert not clashes, (
+        f"these functions re-import a module-level name, which makes it a "
+        f"local for the whole function: {clashes}. Import it under a "
+        f"different name, or drop the inner import.")

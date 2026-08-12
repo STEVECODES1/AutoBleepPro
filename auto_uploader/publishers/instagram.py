@@ -46,6 +46,34 @@ _PUBLISH_POLL_INTERVAL = 5   # seconds between status checks
 _PUBLISH_TIMEOUT      = 120  # give up after 2 minutes
 
 
+def _why(response) -> str:
+    """The reason out of a Meta error response, in one readable line.
+
+    Meta nests it as {"error": {"message": ..., "error_user_title": ...,
+    "error_user_msg": ...}}. The user-facing pair is usually the plain
+    English one and is often absent, so both are tried before falling
+    back to the raw body.
+    """
+    try:
+        payload = response.json()
+    except Exception:
+        body = (getattr(response, "text", "") or "").strip()
+        return body[:400] or "no body"
+
+    error = payload.get("error", payload) if isinstance(payload, dict) else {}
+    if not isinstance(error, dict):
+        return str(payload)[:400]
+
+    parts = [str(error.get(key, "")).strip() for key in
+             ("error_user_title", "error_user_msg", "message")]
+    said = " - ".join(part for part in parts if part)
+    code = error.get("code")
+    subcode = error.get("error_subcode")
+    if code:
+        said = f"{said} (code {code}" + (f"/{subcode}" if subcode else "") + ")"
+    return said or str(payload)[:400]
+
+
 class InstagramPublisher:
     # Instagram has NO text or link post. Every Content Publishing call
     # builds a media container - IMAGE, VIDEO, REELS, CAROUSEL, STORIES -
@@ -173,9 +201,22 @@ class InstagramPublisher:
             with open(video_path, "rb") as f:
                 r = requests.post(url, data=f.read(), headers=headers,
                                   timeout=_UPLOAD_TIMEOUT)
-            r.raise_for_status()
         except Exception as exc:
             log.error("Instagram: upload failed: %s", exc)
+            return False
+
+        # Read off status_code rather than .ok so this is true of any
+        # response-shaped object, not only a requests.Response.
+        status = getattr(r, "status_code", 0)
+        if not 200 <= status < 300:
+            # raise_for_status() throws away the only useful part. Meta
+            # answers a rejected upload with a JSON body naming the
+            # reason - wrong codec, bad aspect, expired token - and
+            # without it the message is "400 Bad Request for url: ..."
+            # with a container ID in it, which says nothing at all and
+            # cost an evening.
+            log.error("Instagram: upload rejected (HTTP %s): %s",
+                      status, _why(r))
             return False
         log.info("Instagram: uploaded %.1f MB for container %s",
                  size / 1e6, container_id)

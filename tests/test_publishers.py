@@ -832,3 +832,88 @@ def test_expiry_is_asked_before_the_first_post_not_after_a_failure(monkeypatch):
     monkeypatch.setattr(meta_setup, "_get",
                         lambda path, params: {"data": {"expires_at": 0}})
     assert meta_setup.token_expiry("tok") == 0
+
+
+def test_a_rejected_upload_says_what_meta_actually_said(monkeypatch, tmp_path):
+    """raise_for_status() throws away the only useful part. "400 Bad
+    Request for url: https://rupload.facebook.com/.../18422598229146676"
+    names a container ID and nothing else, and cost an evening."""
+    from auto_uploader.publishers import instagram as ig
+
+    clip = tmp_path / "clip.mp4"
+    clip.write_bytes(b"x" * 512)
+
+    class Rejected:
+        status_code = 400
+
+        def json(self):
+            return {"error": {"message": "Unsupported video format",
+                              "code": 352, "error_subcode": 2207026}}
+
+    class Created:
+        status_code = 200
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"id": "container-1"}
+
+    calls = {"n": 0}
+
+    def post(url, **kw):
+        calls["n"] += 1
+        return Created() if calls["n"] == 1 else Rejected()
+
+    monkeypatch.setattr(ig.requests, "post", post)
+    monkeypatch.setenv("IG_PAGE_TOKEN", "tok")
+    monkeypatch.setenv("IG_BUSINESS_ACCOUNT_ID", "123")
+
+    messages = []
+    monkeypatch.setattr(ig.log, "error",
+                        lambda msg, *a: messages.append(msg % a if a else msg))
+
+    assert ig.InstagramPublisher({}).post_reel_from_file(str(clip), "hi") is False
+    said = " ".join(messages)
+    assert "Unsupported video format" in said
+    assert "352" in said
+
+
+def test_the_reason_survives_a_non_json_error_body():
+    """A gateway or a proxy answers with HTML, and "no body" is still
+    more use than a stack trace."""
+    from auto_uploader.publishers.instagram import _why
+
+    class Html:
+        text = "<html>502 Bad Gateway</html>"
+
+        def json(self):
+            raise ValueError("not json")
+
+    assert "502" in _why(Html())
+
+
+def test_an_already_vertical_clip_is_not_re_encoded(monkeypatch, tmp_path):
+    """Every clip out of ClipMaker is 1080x1920 already. Re-framing one
+    is a second full encode that costs time and a generation of quality
+    to produce the same shape it started from."""
+    import sys
+
+    sys.path.insert(0, os.path.join(_REPO, "auto_uploader"))
+    from utils import social_promoter
+
+    clip = tmp_path / "clip.mp4"
+    clip.write_bytes(b"x")
+
+    monkeypatch.setattr("utils.ffmpeg_tools.is_already_vertical",
+                        lambda path: True)
+
+    def explode(*a, **k):
+        raise AssertionError("it re-encoded a clip that was already 9:16")
+
+    monkeypatch.setattr("autoreel.clip_maker.make_vertical", explode)
+
+    path, temp = social_promoter._vertical_copy(str(clip), {}, {})
+
+    assert path == str(clip)
+    assert temp == ""

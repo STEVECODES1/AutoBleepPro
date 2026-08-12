@@ -509,6 +509,15 @@ def _vertical_copy(video_path: str, instagram_cfg: dict, clips_cfg: dict):
     except Exception:
         return video_path, ""
 
+    # A clip out of ClipMaker is already 1080x1920. Re-framing it is a
+    # second full encode that costs time and a generation of quality to
+    # produce a file the same shape as the one it started from - and it
+    # re-runs the crop, so a region profile would crop the crop.
+    from utils.ffmpeg_tools import is_already_vertical
+
+    if is_already_vertical(video_path):
+        return video_path, ""
+
     strategy = resolve_crop_strategy(
         {"clips": clips_cfg or {}},
         (clips_cfg or {}).get("content_kind", "gameplay"))

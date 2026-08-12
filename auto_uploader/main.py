@@ -27,7 +27,7 @@ from datetime import datetime
 # Bump when shipping user-visible changes, so --test-config can prove
 # which build is actually running (stale extracts have silently caused
 # several confusing "the fix did nothing" runs).
-BUILD = "2026-08-13.1 post clips to the Shorts channel"
+BUILD = "2026-08-13.2 fix the batch crash I caused; say why Instagram refused"
 
 # How often --watch checks whether a deferred clip's wait is up. A minute
 # is fine: the waits themselves are 25 to 80 minutes, so the resolution
@@ -231,8 +231,6 @@ def _find_clips(cfg, limit: int = 15) -> list:
     Duration rather than filename: clips arrive named after whatever the
     streamer called them, so there is no prefix to match on.
     """
-    from utils.ffmpeg_tools import media_duration
-
     found, seen = [], set()
     for folder in (cfg.general.watch_folder, cfg.general.uploaded_folder):
         folder = os.path.abspath(folder or "")
@@ -1149,7 +1147,6 @@ def main(argv=None) -> int:
 
     if args.post_reel:
         from publishers.instagram import InstagramPublisher
-        from utils.ffmpeg_tools import media_duration
 
         if not os.path.isfile(args.post_reel):
             print(f"[ERROR] File not found: {args.post_reel}")
@@ -1451,8 +1448,11 @@ def main(argv=None) -> int:
               f"{cfg.youtube_shorts.get('channel', 'the Shorts channel')}.")
         print("[Shorts] The token remembers whichever channel you choose, so "
               "picking the VOD channel here sends Shorts there instead.")
-        from utils.youtube_uploader import YouTubeUploader
-
+        # NOT `from ... import YouTubeUploader` - that binds the name as a
+        # local for the WHOLE of main(), so the module-level import at the
+        # top stops resolving and the YouTube dedup check hundreds of lines
+        # above this dies with UnboundLocalError. It did exactly that, and
+        # took the whole --batch run down with it.
         try:
             YouTubeUploader(secrets, token)._client()
         except Exception as exc:
@@ -1855,8 +1855,6 @@ def main(argv=None) -> int:
         )
         watcher.start()
         try:
-            import time
-
             # Clips deferred by a platform's spacing wait here, not in
             # the bin. Checked on a timer rather than only when a new
             # video arrives, because the whole point is that the wait
