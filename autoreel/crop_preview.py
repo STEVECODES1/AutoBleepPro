@@ -49,6 +49,24 @@ def outline_filter(region: dict) -> str:
     )
 
 
+def _duration(source: str) -> float:
+    """Length in seconds, or 0. Best-effort: the samples fall back to
+    fixed intervals when this cannot be answered."""
+    try:
+        from .utils import media_duration
+        return float(media_duration(source) or 0.0)
+    except Exception:
+        pass
+    try:
+        done = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+             "-of", "default=nw=1:nk=1", source],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60)
+        return float(done.stdout.decode().strip() or 0)
+    except Exception:
+        return 0.0
+
+
 def _still(source: str, at_seconds: float, output: str, chain: str) -> bool:
     """Extract one JPEG frame from *source* at *at_seconds*, applying *chain*.
 
@@ -114,8 +132,7 @@ def preview(
     region = region or resolve_region({})
 
     if duration is None:
-        from .utils import media_duration  # local import keeps startup cheap
-        duration = media_duration(source) or 0.0
+        duration = _duration(source)
 
     os.makedirs(output_dir, exist_ok=True)
 

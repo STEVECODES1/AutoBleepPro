@@ -428,3 +428,105 @@ def test_fit_still_takes_burned_captions_when_asked():
     # The watermark goes on after the captions, so this is no longer the
     # end of the chain - only that the captions are in it.
     assert "subtitles='/tmp/x.ass'" in chain
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Content profiles
+#
+# This channel records two different things that want opposite framing: a
+# Monkey app call, where the clip is entirely the call window, and GTA RP,
+# where the action is centre-screen. One project-wide crop setting cannot
+# serve both, and picking either one wrecks the other.
+# ═════════════════════════════════════════════════════════════════════════════
+
+def test_the_monkey_profile_cuts_out_the_call_window():
+    from autoreel.crop_strategy import (CROP_REGION, resolve_crop_strategy,
+                                        resolve_region)
+
+    config = {"clips": {"profile": "monkey"}}
+    assert resolve_crop_strategy(config) == CROP_REGION
+    region = resolve_region(config)
+    assert 0 < region["width"] < 1 and 0 < region["height"] <= 1
+
+
+def test_the_gta_profile_stays_a_centre_crop():
+    """Standing rule: gameplay is centre-cropped and face tracking is off.
+    A profile must not be a way to smuggle either of those changes in."""
+    from autoreel.crop_strategy import CROP_CENTER, resolve_crop_strategy
+
+    assert resolve_crop_strategy({"clips": {"profile": "gta"}}) == CROP_CENTER
+
+
+def test_no_profile_can_turn_face_tracking_on():
+    from autoreel.crop_strategy import (CROP_FACE, PROFILES,
+                                        resolve_crop_strategy)
+
+    for name in PROFILES:
+        assert resolve_crop_strategy({"clips": {"profile": name}}) != CROP_FACE
+
+
+def test_an_explicit_setting_still_beats_the_profile():
+    """A one-off override should not require inventing a profile."""
+    from autoreel.crop_strategy import CROP_FIT, resolve_crop_strategy
+
+    assert resolve_crop_strategy(
+        {"clips": {"profile": "monkey", "crop_strategy": "fit"}}) == CROP_FIT
+
+
+def test_a_region_measured_in_config_is_what_gets_cut():
+    from autoreel.crop_strategy import resolve_region
+
+    region = resolve_region({"clips": {
+        "profile": "monkey",
+        "profiles": {"monkey": {"crop_region": {
+            "x": 0.25, "y": 0.10, "width": 0.40, "height": 0.80}}}}})
+
+    assert region == {"x": 0.25, "y": 0.10, "width": 0.40, "height": 0.80}
+
+
+def test_a_rectangle_running_off_the_edge_is_pulled_back():
+    """crop past the frame is an ffmpeg error, not a crop that clips."""
+    from autoreel.crop_strategy import resolve_region
+
+    region = resolve_region({"clips": {
+        "profile": "monkey",
+        "profiles": {"monkey": {"crop_region": {
+            "x": 0.80, "y": 0.90, "width": 0.90, "height": 0.90}}}}})
+
+    assert region["x"] + region["width"] <= 1.0
+    assert region["y"] + region["height"] <= 1.0
+
+
+def test_nonsense_in_the_region_falls_back_instead_of_crashing():
+    from autoreel.crop_strategy import resolve_region
+
+    region = resolve_region({"clips": {
+        "profile": "monkey",
+        "profiles": {"monkey": {"crop_region": {"x": "left", "width": None}}}}})
+
+    assert all(isinstance(v, float) for v in region.values())
+
+
+def test_an_unknown_profile_name_does_not_crash_the_run():
+    from autoreel.crop_strategy import resolve_crop_strategy
+
+    assert resolve_crop_strategy({"clips": {"profile": "does-not-exist"}})
+
+
+def test_the_region_filter_crops_before_it_frames():
+    """Order matters: crop the call window out, THEN fit it to 9:16.
+    The other way round frames the whole desktop and crops the result."""
+    from autoreel.clip_maker import crop_filter
+    from autoreel.crop_strategy import resolve_region
+
+    chain = crop_filter("region", resolve_region({"clips": {"profile": "monkey"}}))
+    assert chain.startswith("crop=iw*")
+    assert chain.index("crop=iw*") < chain.index("scale=1080")
+
+
+def test_the_shipped_config_uses_a_profile_that_exists():
+    import json
+    with open(os.path.join(_REPO, "auto_uploader", "config.json")) as f:
+        clips = json.load(f)["clips"]
+    from autoreel.crop_strategy import PROFILES
+    assert clips.get("profile") in PROFILES

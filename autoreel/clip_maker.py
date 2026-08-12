@@ -41,8 +41,10 @@ from .crop_strategy import (
     CROP_FACE,
     CROP_FIT,
     CROP_MOTION,
+    CROP_REGION,
     GAMEPLAY_CONTENT,
     resolve_crop_strategy,
+    resolve_region,
 )
 from .highlights import Highlight, HighlightScorer
 
@@ -505,6 +507,11 @@ class ClipMaker:
     def strategy(self) -> str:
         return resolve_crop_strategy(self.config, self.content_kind)
 
+    @property
+    def region(self) -> dict:
+        """The rectangle REGION cuts, from the configured profile."""
+        return resolve_region(self.config)
+
     def make(self, source_path: str, segments: Iterable[dict],
              basename: str = "") -> list:
         """Render clips for one video. Returns ClipResults, newest last.
@@ -549,7 +556,8 @@ class ClipMaker:
                     segments, spec.start, spec.end)
             try:
                 render_clip(source_path, spec, output_path, strategy,
-                            caption_path, self.encoder, self.preset, self.crf)
+                            caption_path, self.encoder, self.preset,
+                            self.crf, self.region)
             except ClipError as exc:
                 failures.append(str(exc))
                 continue

@@ -31,7 +31,24 @@ middle of the screen. That is not a framing choice anyone made; it is what
 is left over. FIT scales the whole frame to the width of a 9:16 canvas and
 fills the space above and below with a blurred, zoomed copy of the same
 frame, so both people stay in shot and the picture still reaches the edges
-instead of sitting between black bars.
+instead of sitting between black bars. It is the safe answer for footage
+whose layout is unknown, and the wrong answer when the layout IS known:
+a whole desktop shrunk to a strip puts two faces in a postage stamp.
+
+REGION is that known case. This channel records two different things and
+they want opposite framing:
+
+  - a Monkey app call, where a browser and the call window share the
+    screen and the clip is entirely about the call
+  - GTA RP gameplay, where the action is centre-screen and a centre crop
+    is exactly right
+
+So the framing is chosen per PROFILE rather than per project. REGION cuts
+out the rectangle a named profile points at and frames that, which is how
+the call fills a phone screen instead of sitting in the corner of one.
+Where that rectangle is depends on how the windows were arranged, so it
+is written in fractions of the frame and checked against a real still
+with --preview-crop rather than guessed.
 """
 
 from __future__ import annotations
@@ -43,8 +60,32 @@ CROP_MOTION = "motion"
 CROP_FACE = "face"
 # Not a crop at all: the whole frame is kept, on a blurred background.
 CROP_FIT = "fit"
+# Crop to a named rectangle of the source, then frame that.
+CROP_REGION = "region"
 
-VALID_STRATEGIES = (CROP_CENTER, CROP_MOTION, CROP_FACE, CROP_FIT)
+VALID_STRATEGIES = (CROP_CENTER, CROP_MOTION, CROP_FACE, CROP_FIT, CROP_REGION)
+
+# The rectangle REGION keeps, as fractions of the source width and
+# height. The default points at the right-hand third, full height, which
+# is where a call window usually sits beside a browser - but the whole
+# point is that it gets MEASURED from a real frame, not inherited.
+DEFAULT_REGION = {"x": 0.50, "y": 0.04, "width": 0.37, "height": 0.92}
+
+# Named framings for the kinds of content this channel actually records.
+# A profile is a whole answer - strategy AND rectangle - because those
+# two settings are meaningless apart: a region with a centre crop ignores
+# the region, and a region strategy with no rectangle crops nothing.
+PROFILES: Dict[str, Dict[str, Any]] = {
+    # Two people on camera, in a window beside a browser. The clip is the
+    # call; the browser is not in it.
+    "monkey": {"crop_strategy": CROP_REGION, "crop_region": DEFAULT_REGION},
+    # Crosshair, HUD and action are all centre-screen, and a centre crop
+    # keeps all three without ever drifting.
+    "gta": {"crop_strategy": CROP_CENTER},
+    # Layout unknown: keep everything, lose nothing.
+    "whole": {"crop_strategy": CROP_FIT},
+}
+DEFAULT_PROFILE = "monkey"
 
 # The default for this project. Changing this constant changes the default
 # for every clip, which is why it is a named constant with a test on it
@@ -63,6 +104,54 @@ _CONTENT_DEFAULTS = {
 
 class CropStrategyError(ValueError):
     """An unrecognised crop strategy was configured."""
+
+
+def resolve_profile(config: Optional[Dict[str, Any]] = None) -> dict:
+    """The named profile's settings, merged over anything set directly.
+
+    `clips.profile` names one of PROFILES; `clips.crop_strategy` and
+    `clips.crop_region` still win when set, so a one-off override does
+    not require inventing a profile for it.
+    """
+    config = config or {}
+    clips = config.get("clips", config) if isinstance(config, dict) else {}
+    name = str(clips.get("profile") or DEFAULT_PROFILE).strip().lower()
+    settings = dict(PROFILES.get(name) or PROFILES[DEFAULT_PROFILE])
+    # A profile can be overridden per key without redefining the profile.
+    custom = dict((clips.get("profiles") or {}).get(name) or {})
+    settings.update(custom)
+    for key in ("crop_strategy", "crop_region"):
+        if clips.get(key):
+            settings[key] = clips[key]
+    return settings
+
+
+def resolve_region(config: Optional[Dict[str, Any]] = None) -> dict:
+    """The crop rectangle, clamped to something ffmpeg can actually cut.
+
+    Fractions rather than pixels so one setting is correct whether the
+    source is 1080p or 4K, and so a rectangle measured on one recording
+    still means the same thing on the next.
+    """
+    raw = dict(DEFAULT_REGION)
+    raw.update({k: v for k, v in (resolve_profile(config).get("crop_region")
+                                  or {}).items() if k in DEFAULT_REGION})
+
+    def fraction(key: str, lowest: float = 0.0) -> float:
+        try:
+            value = float(raw[key])
+        except (TypeError, ValueError):
+            value = DEFAULT_REGION[key]
+        return min(1.0, max(lowest, value))
+
+    region = {"x": fraction("x"), "y": fraction("y"),
+              "width": fraction("width", 0.05),
+              "height": fraction("height", 0.05)}
+    # A rectangle running off the right or bottom edge is an ffmpeg
+    # error, not a crop that gets quietly clipped.
+    region["width"] = min(region["width"], 1.0 - region["x"])
+    region["height"] = min(region["height"], 1.0 - region["y"])
+    return region
 
 
 def default_for_content(content_kind: str = GAMEPLAY_CONTENT) -> str:
@@ -88,6 +177,11 @@ def resolve_crop_strategy(config: Optional[Dict[str, Any]] = None,
     clips = config.get("clips", config) if isinstance(config, dict) else {}
     configured = (clips.get("crop_strategy") or "").strip().lower()
     if not configured or configured == "auto":
+        # A profile is a fuller answer than a content kind, so it wins
+        # when one is named.
+        if clips.get("profile"):
+            return str(resolve_profile(config).get(
+                "crop_strategy", DEFAULT_CROP_STRATEGY))
         return default_for_content(content_kind)
     if configured not in VALID_STRATEGIES:
         raise CropStrategyError(

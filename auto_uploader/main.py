@@ -26,7 +26,7 @@ from datetime import datetime
 # Bump when shipping user-visible changes, so --test-config can prove
 # which build is actually running (stale extracts have silently caused
 # several confusing "the fix did nothing" runs).
-BUILD = "2026-08-10.6 a missing permission no longer trips the breaker"
+BUILD = "2026-08-11.1 framing profiles: monkey call vs GTA gameplay"
 
 # How often --watch checks whether a deferred clip's wait is up. A minute
 # is fine: the waits themselves are 25 to 80 minutes, so the resolution
@@ -891,6 +891,10 @@ def main(argv=None) -> int:
     parser.add_argument("--verify", action="store_true",
                         help="With --posting-status, also ask each API who your token "
                              "belongs to. Read-only - creates and publishes nothing.")
+    parser.add_argument("--preview-crop", metavar="FILE",
+                        help="Write before/after stills showing exactly what "
+                             "the clip framing will keep, so the rectangle can "
+                             "be aimed in seconds instead of after ten renders.")
     parser.add_argument("--check-llm", action="store_true",
                         help="Ask the configured model provider one question, "
                              "to prove the key in .env actually works. A wrong "
@@ -1249,6 +1253,38 @@ def main(argv=None) -> int:
             "reddit_account", "")
         report({"posting": cfg.posting}, guard, account, live=args.verify)
         print(f"\n  {summary(cfg.posting)}")
+        return 0
+
+    if args.preview_crop:
+        from autoreel.crop_preview import describe, preview
+        from autoreel.crop_strategy import resolve_crop_strategy, resolve_region
+
+        source = args.preview_crop
+        if not os.path.isfile(source):
+            found = _suggest_paths(cfg, os.path.basename(source))
+            if not found:
+                print(f"[Crop] File not found: {source}")
+                return 1
+            source = found[0]
+
+        clips = cfg.clips or {}
+        strategy = resolve_crop_strategy({"clips": clips},
+                                         clips.get("content_kind", "gameplay"))
+        region = resolve_region({"clips": clips})
+        out_dir = os.path.join(cfg.general.logs_folder, "crop_preview")
+        print(f"[Crop] profile={clips.get('profile', 'monkey')} "
+              f"strategy={strategy}")
+        if strategy == "region":
+            print(f"[Crop] keeping {describe(region)}")
+        written = preview(source, out_dir, region, strategy=strategy)
+        if not written:
+            print("[Crop] Could not read that video (is ffmpeg on PATH?)")
+            return 1
+        print(f"[Crop] {len(written)} still(s) -> {out_dir}")
+        print("[Crop] *_source.jpg shows the red box on the original; "
+              "*_result.jpg is what the clip will look like.")
+        print("[Crop] Adjust clips.crop_region in config.json (fractions of "
+              "the frame) and run this again.")
         return 0
 
     if args.check_llm:
