@@ -79,9 +79,15 @@ PROFILES: Dict[str, Dict[str, Any]] = {
     # Two people on camera, in a window beside a browser. The clip is the
     # call; the browser is not in it.
     "monkey": {"crop_strategy": CROP_REGION, "crop_region": DEFAULT_REGION},
-    # Crosshair, HUD and action are all centre-screen, and a centre crop
-    # keeps all three without ever drifting.
-    "gta": {"crop_strategy": CROP_CENTER},
+    # Centred on the action, drifting slowly toward it when something
+    # happens off to one side. A locked centre crop keeps the crosshair
+    # and the HUD and misses the fight that made the clip.
+    #
+    # This is MOTION, never faces. GTA is full of NPC faces and a
+    # detector locks onto whichever is nearest the lens - which is why
+    # face tracking stays off for gameplay everywhere in this project.
+    # Frame-to-frame change has no such opinion.
+    "gta": {"crop_strategy": CROP_MOTION},
     # Layout unknown: keep everything, lose nothing.
     "whole": {"crop_strategy": CROP_FIT},
 }

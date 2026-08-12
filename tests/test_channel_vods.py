@@ -613,7 +613,7 @@ def test_the_framing_flag_beats_a_leftover_crop_strategy():
 
     assert resolve_crop_strategy(
         {"clips": {"profile": "gta", "crop_strategy": ""}},
-        "gameplay") == "center"
+        "gameplay") == "motion"
     assert resolve_crop_strategy(
         {"clips": {"profile": "monkey", "crop_strategy": ""}},
         "gameplay") == "region"

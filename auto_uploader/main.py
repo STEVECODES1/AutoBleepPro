@@ -27,7 +27,7 @@ from datetime import datetime
 # Bump when shipping user-visible changes, so --test-config can prove
 # which build is actually running (stale extracts have silently caused
 # several confusing "the fix did nothing" runs).
-BUILD = "2026-08-12.9 censor captions; frame on the people, not a guess"
+BUILD = "2026-08-13.0 gameplay crop follows the action"
 
 # How often --watch checks whether a deferred clip's wait is up. A minute
 # is fine: the waits themselves are 25 to 80 minutes, so the resolution
@@ -1024,7 +1024,8 @@ def main(argv=None) -> int:
                         choices=("monkey", "gta", "whole"),
                         help="Framing for THIS run, ignoring config.json: "
                              "monkey = two people on camera beside a browser, "
-                             "keep that rectangle; gta = gameplay, centre crop; "
+                             "keep that rectangle; gta = gameplay, crop follows "
+                             "the action; "
                              "whole = keep the entire frame on a blurred "
                              "background. A folder of mixed VODs needs one run "
                              "per kind - a single profile crops the other kind "

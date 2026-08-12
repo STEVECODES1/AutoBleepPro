@@ -36,7 +36,7 @@ from dataclasses import dataclass, field
 from typing import Iterable, Optional
 
 from .captions import caption_file_for_clip
-from . import face_region
+from . import face_region, motion_region
 from .crop_strategy import (
     CROP_CENTER,
     CROP_FACE,
@@ -289,15 +289,39 @@ def escape_filter_path(path: str) -> str:
     return path.replace("'", r"\'").replace("[", r"\[").replace("]", r"\]")
 
 
+# The crop width for a 9:16 cut out of any source, as an ffmpeg
+# expression. Named because the motion path has to compute its left edge
+# from the same value the crop uses, and the two drifting apart would
+# put the pan half a crop off.
+CROP_WIDTH_EXPR = "min(iw,ih*9/16)"
+
+
+def motion_crop_filter(commands_path: str) -> str:
+    """A 9:16 crop whose x is driven along a path by sendcmd.
+
+    The height and width are fixed - only the horizontal position moves,
+    because a 16:9 source cut to 9:16 has no vertical slack to pan into.
+    """
+    return (f"sendcmd=f='{escape_filter_path(commands_path)}',"
+            f"crop={CROP_WIDTH_EXPR}:'min(ih,iw*16/9)':"
+            f"(iw-{CROP_WIDTH_EXPR})/2:0,"
+            f"scale={VERTICAL_WIDTH}:{VERTICAL_HEIGHT}:flags=bicubic,"
+            "setsar=1")
+
+
 def build_filter(strategy: str = CROP_CENTER,
                  caption_path: Optional[str] = None,
                  region: Optional[dict] = None,
-                 watermark: bool = True) -> str:
+                 watermark: bool = True,
+                 motion_commands: str = "") -> str:
     """Compose the full ffmpeg -vf filter chain for one clip.
 
     Order: crop/fit  ->  captions (optional)  ->  watermark.
     """
-    chain = crop_filter(strategy, region)
+    if motion_commands:
+        chain = motion_crop_filter(motion_commands)
+    else:
+        chain = crop_filter(strategy, region)
     if caption_path:
         chain += f",subtitles='{escape_filter_path(caption_path)}'"
     if watermark:
@@ -328,7 +352,8 @@ def render_clip(source_path: str, spec: ClipSpec, output_path: str,
                 preset: str = "fast",
                 crf: int = 20,
                 region: Optional[dict] = None,
-                watermark: bool = True) -> str:
+                watermark: bool = True,
+                motion_commands: str = "") -> str:
     """Cut, crop and (optionally) caption one clip. Returns the path."""
     if not have_ffmpeg():
         raise ClipError("ffmpeg is not on PATH - clip rendering needs it")
@@ -348,7 +373,8 @@ def render_clip(source_path: str, spec: ClipSpec, output_path: str,
         "-accurate_seek", "-ss", f"{spec.start:.3f}",
         "-i", source_path,
         "-t", f"{spec.duration:.3f}",
-        "-vf", build_filter(strategy, caption_path, region, watermark),
+        "-vf", build_filter(strategy, caption_path, region, watermark,
+                            motion_commands),
         *_encoder_args(encoder, preset, crf),
         "-c:a", "aac", "-b:a", "128k", "-ac", "2",
         # Vertical feeds are 30fps; leaving a 60fps source at 60 doubles
@@ -379,7 +405,8 @@ def render_clip(source_path: str, spec: ClipSpec, output_path: str,
                   f"watermark ({detail.splitlines()[-1][:120] if detail else 'no detail'})")
             return render_clip(source_path, spec, output_path, strategy,
                                caption_path, encoder, preset, crf, region,
-                               watermark=False)
+                               watermark=False,
+                               motion_commands=motion_commands)
         # An empty stderr with a non-zero exit is what "suppressing" the
         # fontconfig message produced last time: ten clips failed and the
         # reason printed was ";". Say the exit code and the filter chain
@@ -388,7 +415,7 @@ def render_clip(source_path: str, spec: ClipSpec, output_path: str,
             f"ffmpeg failed on clip {spec.index} (exit {completed.returncode}): "
             + (detail[-800:] if detail
                else f"no output from ffmpeg. Filter chain was: "
-                    f"{build_filter(strategy, caption_path, region, watermark)[:300]}"))
+                    f"{build_filter(strategy, caption_path, region, watermark, motion_commands)[:300]}"))
 
     os.replace(partial, output_path)
     return output_path
@@ -562,10 +589,9 @@ class ClipMaker:
                 "crop_strategy is 'face', which needs the per-frame "
                 "ClipRenderer. Set clips.crop_strategy to 'center' for "
                 "gameplay, or call ClipRenderer directly for face-cam.")
-        if strategy == CROP_MOTION:
-            # Not built yet; centre is the honest fallback rather than
-            # pretending motion tracking happened.
-            strategy = CROP_CENTER
+        # CROP_MOTION is handled per clip below - it needs a path
+        # measured from that clip's own frames, and falls back to centre
+        # on its own when there is nothing moving.
 
         basename = basename or os.path.splitext(os.path.basename(source_path))[0]
         os.makedirs(self.output_dir, exist_ok=True)
@@ -581,13 +607,32 @@ class ClipMaker:
                     segments, spec.start, spec.end,
                     style=self.caption_style,
                     uppercase=self.caption_uppercase)
+            # Gameplay that follows the action: measure where the frame
+            # is CHANGING and walk the crop toward it, slowly. Faces are
+            # the wrong signal here - GTA is full of NPC faces and none
+            # of them are the point.
+            motion_commands = ""
+            if strategy == CROP_MOTION:
+                path = motion_region.path_for(source_path, spec.start,
+                                              spec.end - spec.start)
+                if motion_region.is_worth_moving(path):
+                    motion_commands = os.path.join(
+                        self.output_dir,
+                        f".{basename}_clip{spec.index:02d}.cmds")
+                    with open(motion_commands, "w", encoding="utf-8") as f:
+                        f.write(motion_region.commands_file(
+                            path, CROP_WIDTH_EXPR))
+                # Anything else - a static scene, no numpy, a read that
+                # failed - renders as a plain centre crop, which is what
+                # it would have been anyway.
+
             # A region typed into config.json is a guess, and it goes
             # stale the moment the call window moves - which is how
             # twenty clips came out framed on a browser showing a slots
             # game while the two people talking were off-crop. Measuring
             # per clip cannot go stale that way. None means no faces in
-            # this stretch, which is normal, and the configured
-            # rectangle stands.
+            # this stretch, which is normal, and the configured rectangle
+            # stands.
             region = self.region
             if strategy == CROP_REGION and self.find_faces:
                 measured = face_region.region_for(
@@ -598,9 +643,11 @@ class ClipMaker:
                     print(f"[Clips] Clip {spec.index:02d}: no faces found, "
                           f"using the configured rectangle.")
             try:
-                render_clip(source_path, spec, output_path, strategy,
+                render_clip(source_path, spec, output_path,
+                            CROP_CENTER if strategy == CROP_MOTION else strategy,
                             caption_path, self.encoder, self.preset,
-                            self.crf, region)
+                            self.crf, region,
+                            motion_commands=motion_commands)
             except ClipError as exc:
                 failures.append(str(exc))
                 continue

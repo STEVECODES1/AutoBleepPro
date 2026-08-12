@@ -454,12 +454,33 @@ def test_the_monkey_profile_cuts_out_the_call_window():
     assert 0 < region["width"] < 1 and 0 < region["height"] <= 1
 
 
-def test_the_gta_profile_stays_a_centre_crop():
-    """Standing rule: gameplay is centre-cropped and face tracking is off.
-    A profile must not be a way to smuggle either of those changes in."""
-    from autoreel.crop_strategy import CROP_CENTER, resolve_crop_strategy
+def test_the_gta_profile_follows_motion_and_never_faces():
+    """The standing rule has two halves and only one of them moved.
 
-    assert resolve_crop_strategy({"clips": {"profile": "gta"}}) == CROP_CENTER
+    Gameplay must NEVER get face tracking - GTA is full of NPC faces and
+    a detector locks onto whichever is nearest the lens. That half is
+    permanent and is asserted below and again in the next test.
+
+    The other half, "gameplay is a locked centre crop", was overridden
+    on request: a locked crop keeps the crosshair and the HUD and misses
+    the fight that made the clip. Motion is frame-to-frame CHANGE, which
+    has no opinion about faces at all, and it is speed-capped and
+    deadzoned so it drifts rather than chases."""
+    from autoreel.crop_strategy import (CROP_FACE, CROP_MOTION,
+                                        resolve_crop_strategy)
+
+    resolved = resolve_crop_strategy({"clips": {"profile": "gta"}})
+
+    assert resolved == CROP_MOTION
+    assert resolved != CROP_FACE
+
+
+def test_gameplay_still_defaults_to_centre_without_a_profile():
+    """Only the explicitly chosen gta profile moves. A config that names
+    no profile gets the same locked crop it always did."""
+    from autoreel.crop_strategy import CROP_CENTER, default_for_content
+
+    assert default_for_content("gameplay") == CROP_CENTER
 
 
 def test_no_profile_can_turn_face_tracking_on():
