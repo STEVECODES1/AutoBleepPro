@@ -26,7 +26,7 @@ from datetime import datetime
 # Bump when shipping user-visible changes, so --test-config can prove
 # which build is actually running (stale extracts have silently caused
 # several confusing "the fix did nothing" runs).
-BUILD = "2026-08-12.5 say what is actually wrong with the Rumble feed"
+BUILD = "2026-08-12.6 daily clip run, per-run framing, tidy downloaded VODs"
 
 # How often --watch checks whether a deferred clip's wait is up. A minute
 # is fine: the waits themselves are 25 to 80 minutes, so the resolution
@@ -167,6 +167,53 @@ def _report_clip_brain(cfg) -> None:
               "aistudio.google.com/apikey, then")
         print("                          python main.py --set-env "
               "GEMINI_API_KEY=yourkey)")
+
+
+DOWNLOADED_VODS = "downloaded_vods"
+
+
+def tidy_downloaded_vods(paths: list, folder: str, project_root: str) -> str:
+    """Delete VODs this tool downloaded, once they have been clipped.
+
+    Left alone, a daily run is three VODs a day at three to five
+    gigabytes each and the drive is full inside a week. The download
+    archive still remembers them, so nothing is ever fetched twice.
+
+    THE FOLDER IS CHECKED HERE, not by the caller. --clips-from is also
+    how a library folder gets clipped - "D:\\videos stizz" - and the
+    promise made about those is that they are only ever read. A caller
+    that forgets to check would break that promise silently and there
+    would be no way to get the files back, so the refusal lives next to
+    the delete rather than one level up from it.
+    """
+    expected = os.path.abspath(os.path.join(project_root, DOWNLOADED_VODS))
+    if os.path.abspath(folder) != expected:
+        return ("[Clips] Not deleting anything: that folder is yours, not "
+                "this tool's download folder. Only " + expected + " is "
+                "tidied.")
+
+    freed, removed = 0, 0
+    problems = []
+    for path in paths:
+        # A file outside the folder cannot be reached by way of a name
+        # in it; checked per file so a crafted name cannot walk out.
+        if os.path.dirname(os.path.abspath(path)) != expected:
+            continue
+        try:
+            size = os.path.getsize(path)
+            os.remove(path)
+        except OSError as exc:
+            problems.append(f"{os.path.basename(path)}: {exc}")
+            continue
+        freed += size
+        removed += 1
+
+    told = (f"[Clips] Removed {removed} clipped VOD(s), "
+            f"{freed / (1024 ** 3):.1f} GB. The archive still remembers "
+            f"them, so they will not be downloaded again.")
+    for problem in problems:
+        told += f"\n[Clips] Could not remove {problem}"
+    return told
 
 
 def _clip_config(cfg) -> dict:
@@ -930,6 +977,24 @@ def main(argv=None) -> int:
                              "full transcription, so start small.")
     parser.add_argument("--clip-count", type=int, default=None,
                         help="How many clips to make with --clips (default 3).")
+    parser.add_argument("--tidy-vods", action="store_true",
+                        help="After clipping, delete the VODs this run "
+                             "DOWNLOADED. Only ever applies to a --clips-from "
+                             "URL: a folder you pointed at is your library and "
+                             "is never touched. For the daily task, where "
+                             "three VODs a day at 3-5 GB each fills a drive in "
+                             "a week. The archive still remembers them, so "
+                             "nothing is fetched twice.")
+    parser.add_argument("--profile", metavar="KIND", default=None,
+                        choices=("monkey", "gta", "whole"),
+                        help="Framing for THIS run, ignoring config.json: "
+                             "monkey = two people on camera beside a browser, "
+                             "keep that rectangle; gta = gameplay, centre crop; "
+                             "whole = keep the entire frame on a blurred "
+                             "background. A folder of mixed VODs needs one run "
+                             "per kind - a single profile crops the other kind "
+                             "wrong, and that is invisible until the clips are "
+                             "already posted.")
     parser.add_argument("--gpu-check", action="store_true",
                         help="Report whether the censor pass will use the GPU, and "
                              "load the configured model to prove it. No upload.")
@@ -1019,6 +1084,14 @@ def main(argv=None) -> int:
 
     # Applied to the loaded config only - config.json is never rewritten, so
     # the flag governs this run and nothing after it.
+    if args.profile:
+        cfg.clips = dict(cfg.clips or {})
+        cfg.clips["profile"] = args.profile
+        # An explicit crop_strategy outranks a profile, so a leftover one
+        # in config.json would quietly win over the flag just typed.
+        cfg.clips["crop_strategy"] = ""
+        print(f"[Clips] Framing for this run: {args.profile}")
+
     if args.announce_all or args.no_announce:
         from utils.social_promoter import (
             disable_all_announcements, enable_all_announcements)
@@ -1366,6 +1439,7 @@ def main(argv=None) -> int:
         print(f"[Clips] Reading only - nothing in that folder is moved, "
               f"renamed or deleted.")
         total = 0
+        clipped = []
         for index, path in enumerate(videos, start=1):
             name = os.path.basename(path)
             print(f"\n[Clips] ({index}/{len(videos)}) {name}")
@@ -1377,9 +1451,15 @@ def main(argv=None) -> int:
                 print(f"[Clips] skipped {name}: {exc}")
                 continue
             print_run(run)
-            total += _deliver_clips(run, cfg)
+            delivered = _deliver_clips(run, cfg)
+            total += delivered
+            if delivered:
+                clipped.append(path)
         print(f"\n[Clips] {total} clip(s) delivered to "
               f"{cfg.general.watch_folder}.")
+
+        if args.tidy_vods and clipped:
+            print(tidy_downloaded_vods(clipped, folder, cfg.project_root))
         print("[Clips] Start the uploader to post them on each platform's "
               "spacing:  python main.py --watch")
         return 0

@@ -596,3 +596,53 @@ def test_clips_from_a_folder_never_writes_to_it():
     for destructive in ("os.remove", "shutil.move", "os.replace", "os.rename"):
         assert destructive not in block, \
             f"--clips-from calls {destructive} on the source folder"
+
+
+def test_tidy_only_ever_touches_the_tools_own_download_folder(tmp_path):
+    """--clips-from is also how a library folder gets clipped, and the
+    promise about those is that they are only ever read. The refusal has
+    to live next to the delete: a caller that forgets to check would
+    break that promise silently and the files do not come back."""
+    import main
+
+    library = tmp_path / "videos stizz"
+    library.mkdir()
+    keep = library / "my vod.mp4"
+    keep.write_bytes(b"x")
+
+    told = main.tidy_downloaded_vods([str(keep)], str(library), str(tmp_path))
+
+    assert keep.exists(), "it deleted from a folder the user pointed at"
+    assert "Not deleting anything" in told
+
+
+def test_tidy_removes_the_vods_it_downloaded(tmp_path):
+    """Three a day at 3-5 GB each fills a drive in a week."""
+    import main
+
+    downloads = tmp_path / main.DOWNLOADED_VODS
+    downloads.mkdir()
+    vod = downloads / "stream [v6abc].mp4"
+    vod.write_bytes(b"x" * 2048)
+
+    told = main.tidy_downloaded_vods([str(vod)], str(downloads), str(tmp_path))
+
+    assert not vod.exists()
+    assert "Removed 1" in told
+    assert "archive still remembers" in told, \
+        "it has to say the video will not be re-downloaded"
+
+
+def test_tidy_will_not_walk_out_of_the_download_folder(tmp_path):
+    """Checked per file, so a name that points elsewhere cannot reach a
+    file outside the folder."""
+    import main
+
+    downloads = tmp_path / main.DOWNLOADED_VODS
+    downloads.mkdir()
+    outside = tmp_path / "precious.mp4"
+    outside.write_bytes(b"x")
+
+    main.tidy_downloaded_vods([str(outside)], str(downloads), str(tmp_path))
+
+    assert outside.exists()

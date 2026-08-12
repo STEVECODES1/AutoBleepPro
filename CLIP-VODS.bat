@@ -47,6 +47,13 @@ if "%LIMIT%"=="" set LIMIT=3
 set SOURCE=%~2
 if "%SOURCE%"=="" set SOURCE=https://rumble.com/user/stackswopo10k
 
+REM  INSTALL-DAILY.bat sets these two. Unattended means: do not wait for a
+REM  keypress at the end (a scheduled task would sit on that forever), and
+REM  delete the VODs after clipping them, because three a day at 3-5 GB
+REM  each fills the drive inside a week.
+set EXTRA=
+if "%AUTOBLEEP_UNATTENDED%"=="1" set EXTRA=--tidy-vods
+
 echo ============================================================
 echo  Pulling latest code from GitHub...
 echo ============================================================
@@ -64,11 +71,11 @@ echo  Do NOT click inside this window while it runs - see the note at the
 echo  top of this file. If the title bar ever says "Select", press Esc.
 echo.
 
-python "%~dp0auto_uploader\main.py" --clips-from "%SOURCE%" --limit %LIMIT%
+python "%~dp0auto_uploader\main.py" --clips-from "%SOURCE%" --limit %LIMIT% %EXTRA%
 
 echo.
 echo ============================================================
 echo  Finished. Clips are in auto_uploader\watch_folder.
 echo  START.bat's uploader window posts them on each platform's spacing.
 echo ============================================================
-pause
+if not "%AUTOBLEEP_UNATTENDED%"=="1" pause

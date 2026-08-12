@@ -603,3 +603,20 @@ def test_the_recorder_advice_pins_it_too():
     assert commands, "it has to print a command"
     for command in commands:
         assert "curl_cffi==0.15.0" in command or "curl_cffi" not in command
+
+
+def test_the_framing_flag_beats_a_leftover_crop_strategy():
+    """crop_strategy outranks a profile, so a leftover one in config.json
+    would quietly win over the profile just typed on the command line -
+    and a wrongly-cropped clip is invisible until it is already posted."""
+    from autoreel.crop_strategy import resolve_crop_strategy
+
+    assert resolve_crop_strategy(
+        {"clips": {"profile": "gta", "crop_strategy": ""}},
+        "gameplay") == "center"
+    assert resolve_crop_strategy(
+        {"clips": {"profile": "monkey", "crop_strategy": ""}},
+        "gameplay") == "region"
+    assert resolve_crop_strategy(
+        {"clips": {"profile": "whole", "crop_strategy": ""}},
+        "gameplay") == "fit"
