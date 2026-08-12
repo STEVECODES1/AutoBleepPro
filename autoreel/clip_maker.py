@@ -69,14 +69,31 @@ DEFAULT_SKIP_OUTRO = 60.0
 _TIMEOUT = 60 * 30
 
 # Noise patterns stripped from basenames before they become clip names.
-# Matches things like: "5-12-26", "2026-08-10", "howl ", "_CLEAN"
+# Matches things like: "5-12-26", "2026-08-10", "howl ", "_CLEAN",
+# "[v70rbpc]"
+#
+# The bracketed ID is the platform's own key for the video. It has to be
+# in the DOWNLOAD filename - it is what tells two streams with the same
+# title apart, and what the archive matches on - but nothing downstream
+# reads it, and it survived into clip names and from there into titles:
+# "Monkey N Gamble Howl V70Rbpc - Clip 01". Nobody writes that. It reads
+# as a database key that escaped, which is exactly the tell that a human
+# did not make this.
 _NOISE = re.compile(
-    r"\b\d{1,2}[-/]\d{1,2}[-/]\d{2,4}\b"  # dates: 5-12-26, 08/10/2026
+    r"\[[^\]]{1,32}\]"                     # platform IDs: [v70rbpc]
+    r"|\b\d{1,2}[-/]\d{1,2}[-/]\d{2,4}\b"  # dates: 5-12-26, 08/10/2026
     r"|\b\d{4}[-/]\d{2}[-/]\d{2}\b"        # ISO dates: 2026-08-10
-    r"|\bhowl\b"                             # recorder prefix
-    r"|_CLEAN",                              # censor suffix
+    r"|\bCLEAN\b",                          # censor suffix
     re.IGNORECASE,
 )
+
+# The recorder's own prefix, and ONLY when it leads and a date follows:
+# "howl 5-12-26 Stackswopo Stream". A bare \bhowl\b used to be stripped
+# anywhere, which is wrong here - howl.gg is what the streamer is
+# actually playing, so "Yoo Howl" and "Monkey N Gamble Howl" are the real
+# titles and losing the word makes the clip name say less, not more.
+_RECORDER_PREFIX = re.compile(r"^howl\b(?=\s+\d)", re.IGNORECASE)
+
 
 # ── Watermark ────────────────────────────────────────────────────────────
 
@@ -489,8 +506,13 @@ def _clean_basename(raw: str) -> str:
     "Stackswopo_2026-08-10_CLEAN"     ->  "Stackswopo"
     "stackswopo stream clip01"        ->  "Stackswopo Stream Clip01"
     """
-    name = _NOISE.sub(" ", raw)          # remove dates / known noise
-    name = re.sub(r"[_]+", " ", name)   # underscores -> spaces
+    # Underscores FIRST. The date and suffix patterns are anchored on
+    # word boundaries, and an underscore is a word character - so
+    # "Stackswopo_2026-08-10_CLEAN" had no boundary before the date and
+    # kept it, which the docstring above claimed it did not.
+    name = re.sub(r"[_]+", " ", raw)
+    name = _RECORDER_PREFIX.sub(" ", name)
+    name = _NOISE.sub(" ", name)
     name = re.sub(r"\s{2,}", " ", name)  # collapse runs of spaces
     name = name.strip(" -")              # trim leading/trailing dashes
     return name.title() if name else "Clip"

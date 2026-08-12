@@ -638,3 +638,45 @@ def test_a_phrase_with_no_word_timings_still_renders():
 
     out = build_ass([Phrase(0.0, 2.0, "no timings here")])
     assert "NO TIMINGS HERE" in out
+
+
+def test_the_platform_id_never_reaches_a_clip_name():
+    """"Monkey N Gamble Howl V70Rbpc - Clip 01" reads as a database key
+    that escaped, which is exactly the tell that no human made it. The
+    ID has to be in the DOWNLOAD filename - it tells two streams with
+    the same title apart - and nothing downstream reads it."""
+    from autoreel.clip_maker import ClipSpec, clip_filename
+
+    name = clip_filename("monkey_n_gamble_howl [v70rbpc]", ClipSpec(0, 10, 1))
+
+    assert "v70rbpc" not in name.lower()
+    assert name == "Monkey N Gamble Howl - Clip 01.mp4"
+
+
+def test_howl_survives_because_it_is_the_content():
+    """howl.gg is what the streamer is actually playing, so "Yoo Howl"
+    and "Monkey N Gamble Howl" are the real titles. A bare \\bhowl\\b
+    strip made the clip name say less, not more."""
+    from autoreel.clip_maker import ClipSpec, clip_filename
+
+    assert clip_filename("yoo_howl [v70vqym]", ClipSpec(0, 10, 1)) == \
+        "Yoo Howl - Clip 01.mp4"
+
+
+def test_the_recorder_prefix_still_goes_when_it_leads_a_date():
+    """"howl 5-12-26 Stackswopo Stream" is the recorder's naming, not a
+    title - the date right after it is what tells them apart."""
+    from autoreel.clip_maker import ClipSpec, clip_filename
+
+    assert clip_filename("howl 5-12-26 Stackswopo Stream",
+                         ClipSpec(0, 10, 1)) == "Stackswopo Stream - Clip 01.mp4"
+
+
+def test_an_underscored_date_is_stripped():
+    """An underscore is a word character, so \\b never matched before the
+    date in "Stackswopo_2026-08-10_CLEAN" and it survived - while the
+    docstring claimed it did not."""
+    from autoreel.clip_maker import ClipSpec, clip_filename
+
+    assert clip_filename("Stackswopo_2026-08-10_CLEAN",
+                         ClipSpec(0, 10, 1)) == "Stackswopo - Clip 01.mp4"
