@@ -12,6 +12,7 @@ Usage:
 """
 
 import argparse
+import json
 import os
 import shutil
 import sys
@@ -26,7 +27,7 @@ from datetime import datetime
 # Bump when shipping user-visible changes, so --test-config can prove
 # which build is actually running (stale extracts have silently caused
 # several confusing "the fix did nothing" runs).
-BUILD = "2026-08-12.7 --clips transcribes and delivers, so per-file framing works"
+BUILD = "2026-08-12.8 keep the published title; say which chip transcribed"
 
 # How often --watch checks whether a deferred clip's wait is up. A minute
 # is fine: the waits themselves are 25 to 80 minutes, so the resolution
@@ -250,6 +251,30 @@ def _find_clips(cfg, limit: int = 15) -> list:
     return found
 
 
+def downloaded_title(video_path: str) -> str:
+    """The title the platform published, from yt-dlp's info sidecar.
+
+    yt-dlp writes `<name>.info.json` beside the video when asked, and its
+    "title" field is the exact text as posted - emoji, casing, the stream
+    date, all of it. Nothing else here has access to that: by the time
+    the file is on disk, --restrict-filenames has flattened the title
+    into `monkey_n_gamble_howl`, and no amount of reading that back
+    recovers what it said.
+
+    Returns "" when there is no sidecar, which is every video that
+    arrived any other way - the caller falls through to its other
+    sources exactly as before.
+    """
+    info = os.path.splitext(video_path)[0] + ".info.json"
+    try:
+        with open(info, "r", encoding="utf-8", errors="replace") as handle:
+            data = json.load(handle)
+    except (OSError, ValueError):
+        return ""
+    title = data.get("title") if isinstance(data, dict) else ""
+    return str(title or "").strip()
+
+
 def get_stream_title(video_path: str, cli_title: str, cfg, allow_prompt: bool = True) -> str:
     """Work out the stream title, most-explicit source first.
 
@@ -266,6 +291,16 @@ def get_stream_title(video_path: str, cli_title: str, cfg, allow_prompt: bool = 
             text = f.read().strip()
         if text:
             return text.splitlines()[0].strip()
+
+    # The real title as the platform published it, saved beside the video
+    # when it was downloaded. This beats reading the filename back,
+    # because --restrict-filenames has already flattened the title into
+    # something like monkey_n_gamble_howl - punctuation gone, spaces
+    # turned to underscores, casing lost. Guessing a title back out of
+    # that is how a clip ends up called "Gaming Stream".
+    published = downloaded_title(video_path)
+    if published:
+        return published
 
     # Filenames often already carry a usable title (quoted, the text before
     # the date, or a yt-dlp "<channel> - <title>-<id>" name) - use it

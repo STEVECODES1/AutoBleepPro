@@ -646,3 +646,35 @@ def test_tidy_will_not_walk_out_of_the_download_folder(tmp_path):
     main.tidy_downloaded_vods([str(outside)], str(downloads), str(tmp_path))
 
     assert outside.exists()
+
+
+def test_the_published_title_is_read_from_the_info_sidecar(tmp_path):
+    """--restrict-filenames flattens the title into monkey_n_gamble_howl
+    before it ever reaches disk, so reading the filename back cannot
+    recover what it said. Without the sidecar the clip is titled
+    "Gaming Stream"."""
+    import json as _json
+
+    import main
+
+    video = tmp_path / "monkey_n_gamble_howl [v70rbpc].mp4"
+    video.write_bytes(b"x")
+    (tmp_path / "monkey_n_gamble_howl [v70rbpc].info.json").write_text(
+        _json.dumps({"title": '"Monkey n Gamble" 8/11/26 Stackswopo Stream'}),
+        encoding="utf-8")
+
+    assert main.downloaded_title(str(video)) == \
+        '"Monkey n Gamble" 8/11/26 Stackswopo Stream'
+
+
+def test_no_sidecar_is_not_an_error(tmp_path):
+    """Every video that arrived any other way has none, and the caller
+    falls through to its other sources exactly as before."""
+    import main
+
+    video = tmp_path / "recorded stream.mp4"
+    video.write_bytes(b"x")
+
+    assert main.downloaded_title(str(video)) == ""
+    (tmp_path / "broken.info.json").write_text("not json", encoding="utf-8")
+    assert main.downloaded_title(str(tmp_path / "broken.mp4")) == ""

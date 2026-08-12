@@ -120,6 +120,11 @@ def download_args(url: str, output_dir: str, archive: str,
         # Emoji and punctuation in a stream title become a filename that
         # Windows cannot open; the recorder learned this the hard way.
         "--restrict-filenames",
+        # ...which is exactly why the real title has to be kept beside
+        # the video. The sidecar holds it as published; without it a
+        # clip gets titled off `monkey_n_gamble_howl`, or off nothing,
+        # and comes out called "Gaming Stream".
+        "--write-info-json",
         "--no-overwrites",
         "--no-playlist-reverse",
         "--ignore-errors",
@@ -148,6 +153,8 @@ def video_args(url: str, output_dir: str, archive: str,
         "--no-playlist",
         "--download-archive", archive,
         "--restrict-filenames",
+        # The title as published - see download_args.
+        "--write-info-json",
         "--no-overwrites",
         "--ignore-errors",
         "--no-warnings",

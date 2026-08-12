@@ -25,6 +25,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import time
 from dataclasses import dataclass
 from typing import Optional
 
@@ -105,7 +106,21 @@ def transcribe_for_clips(cfg, source_path: str) -> Optional[list]:
         transcriber = _get_transcriber(cfg.general.censor_model,
                                        cfg.general.censor_device,
                                        reuse=bool(speed.get("reuse_model", True)))
+        started = time.time()
         result = transcriber.transcribe(audio_path)
+        # Say which chip actually did it. censor_device is a REQUEST: if
+        # cuDNN is missing or the driver is old, faster-whisper falls
+        # back to CPU and the only difference is that a VOD takes hours
+        # instead of minutes. Without this line, a silent fallback looks
+        # exactly like a slow computer.
+        device = getattr(transcriber, "_resolved_device", "") or "?"
+        precision = getattr(transcriber, "_resolved_compute", "") or "default"
+        print(f"[Clips] Transcribed on {device.upper()} ({precision}) in "
+              f"{time.time() - started:.0f}s.")
+        if device != "cuda":
+            print("        That was the CPU. For the GPU:  pip install "
+                  "nvidia-cublas-cu12 nvidia-cudnn-cu12")
+            print("        Check it with:  python main.py --gpu-check")
     except Exception as exc:
         print(f"[Clips] transcription failed: {exc}")
         return None
