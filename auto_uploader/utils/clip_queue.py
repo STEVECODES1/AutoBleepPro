@@ -44,6 +44,18 @@ CLIP_PLATFORMS = ("instagram", "facebook")
 MAX_DEFERRED_AGE_S = 36 * 3600
 
 
+def _journal(config: dict, status: str, platform: str, clip_path: str,
+             detail: str = "") -> None:
+    """One line in logs/clips.log. Never raises, never blocks a post."""
+    try:
+        from utils.clip_log import record
+
+        record((config or {}).get("logs_folder", "logs"), platform, status,
+               os.path.splitext(os.path.basename(clip_path))[0], detail)
+    except Exception:
+        pass
+
+
 def _queue(posting: dict):
     from job_queue import JobQueue
 
@@ -160,6 +172,7 @@ def offer(posting: dict, config: dict, video_path: str,
             # of these would all fire at once the day it was fixed.
             outcome[platform] = f"skipped: {decision.reason}"
             print(f"[Clips] {platform}: skipped - {decision.reason}")
+            _journal(config, "skip", platform, video_path, decision.reason)
             continue
 
         publisher = _publisher(platform, config)
@@ -167,6 +180,8 @@ def offer(posting: dict, config: dict, video_path: str,
         if publisher is None or (ready is not None and not ready()):
             outcome[platform] = "skipped: not configured"
             print(f"[Clips] {platform}: skipped - not configured yet.")
+            _journal(config, "skip", platform, video_path,
+                     "credentials not set - see --posting-status")
             continue
 
         # Recorded before the attempt, so the queue is also the ledger of
@@ -179,6 +194,9 @@ def offer(posting: dict, config: dict, video_path: str,
             outcome[platform] = "queued"
             print(f"[Clips] {platform}: {decision.reason} - queued, back in "
                   f"{decision.retry_after_s / 60:.0f} min.")
+            _journal(config, "wait", platform, video_path,
+                     f"{decision.reason} - back in "
+                     f"{decision.retry_after_s / 60:.0f} min")
             continue
 
         try:
@@ -187,6 +205,7 @@ def offer(posting: dict, config: dict, video_path: str,
             queue.block(job_id, str(exc), MAX_DEFERRED_AGE_S)
             outcome[platform] = "skipped: not configured"
             print(f"[Clips] {platform}: skipped - {exc}")
+            _journal(config, "FAIL", platform, video_path, str(exc))
             continue
         if dry_run:
             queue.block(job_id, "dry run", 300)
@@ -197,12 +216,15 @@ def offer(posting: dict, config: dict, video_path: str,
             queue.complete(job_id)
             outcome[platform] = "posted"
             print(f"[Clips] {platform}: posted a Reel.")
+            _journal(config, "ok", platform, video_path, "posted")
         else:
             # Worth one more go later; the queue's attempt ceiling stops
             # it becoming a loop.
             queue.fail(job_id, "first attempt failed")
             outcome[platform] = "queued"
             print(f"[Clips] {platform}: Reel failed - queued to retry.")
+            _journal(config, "FAIL", platform, video_path,
+                     "upload rejected - see logs/publishers.log")
     return outcome
 
 
@@ -235,6 +257,8 @@ def drain(posting: dict, config: dict, limit: int = 0,
 
         if now - (job.created_at or now) > MAX_DEFERRED_AGE_S:
             queue.abandon(job.id, "too old to be worth posting", now=now)
+            _journal(config, "skip", job.platform, job.clip_path,
+                     "over a day old - not worth posting now")
             if not quiet:
                 print(f"[Clips] {job.platform}: dropped "
                       f"{os.path.basename(job.clip_path)} - over a day old.")
@@ -242,6 +266,8 @@ def drain(posting: dict, config: dict, limit: int = 0,
 
         if not os.path.isfile(job.clip_path):
             queue.abandon(job.id, "the clip is no longer on disk", now=now)
+            _journal(config, "FAIL", job.platform, job.clip_path,
+                     "the clip file is gone")
             continue
 
         decision = guard.check(job.platform)
@@ -277,8 +303,12 @@ def drain(posting: dict, config: dict, limit: int = 0,
             posted[job.platform] = posted.get(job.platform, 0) + 1
             print(f"[Clips] {job.platform}: posted a queued Reel "
                   f"({os.path.basename(job.clip_path)}).")
+            _journal(config, "ok", job.platform, job.clip_path,
+                     "posted from the queue")
         else:
             queue.fail(job.id, "Reel upload failed")
+            _journal(config, "FAIL", job.platform, job.clip_path,
+                     "upload rejected - see logs/publishers.log")
 
         sent += 1
         if limit and sent >= limit:

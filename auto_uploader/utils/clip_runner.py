@@ -56,6 +56,18 @@ def _load_segments(cfg, source_path: str) -> Optional[list]:
     return None
 
 
+def _journal_for(cfg):
+    """A record() bound to this config's logs folder, or a no-op."""
+    def write(_cfg, status: str, stage: str, name: str, detail: str = "") -> None:
+        try:
+            from utils.clip_log import record
+
+            record(cfg.general.logs_folder, stage, status, name, detail)
+        except Exception:
+            pass
+    return write
+
+
 def transcribe_for_clips(cfg, source_path: str) -> Optional[list]:
     """Segments for a video that has never been through the censor pass.
 
@@ -242,6 +254,7 @@ def make_clips(cfg, source_path: str, title: str,
     if not os.path.isfile(source_path):
         return ClipRun([], [], output_dir, f"no such file: {source_path}")
 
+    _journal = _journal_for(cfg)
     segments = _load_segments(cfg, source_path)
     if not segments and transcribe_if_needed:
         print(f"[Clips] No transcript for {os.path.basename(source_path)} - "
@@ -249,10 +262,11 @@ def make_clips(cfg, source_path: str, title: str,
               "the slow part; it is cached afterwards.")
         segments = transcribe_for_clips(cfg, source_path)
     if not segments:
-        return ClipRun(
-            [], [], output_dir,
-            "no cached transcript for this video - run the censor pass first "
-            "(a normal upload does it), or the words cache has been cleaned up")
+        reason = ("no transcript - the censor pass has not run on this video "
+                  "(use --clips-from to transcribe it)")
+        _journal(cfg, "FAIL", "cut", title or os.path.basename(source_path),
+                 reason)
+        return ClipRun([], [], output_dir, reason)
 
     speed = dict(getattr(cfg.general, "speed", {}) or {})
     maker = ClipMaker(
@@ -290,7 +304,11 @@ def make_clips(cfg, source_path: str, title: str,
     try:
         results = maker.make(source_path, segments, basename=base)
     except ClipError as exc:
+        _journal(cfg, "FAIL", "cut", title or base, str(exc))
         return ClipRun([], [], output_dir, str(exc))
+    _journal(cfg, "ok" if results else "FAIL", "cut", title or base,
+             f"{len(results)} clips" if results
+             else "no clip-worthy moments found")
 
     tags = list(getattr(cfg.youtube, "tags", []) or [])
     caption_paths = []

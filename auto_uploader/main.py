@@ -26,7 +26,7 @@ from datetime import datetime
 # Bump when shipping user-visible changes, so --test-config can prove
 # which build is actually running (stale extracts have silently caused
 # several confusing "the fix did nothing" runs).
-BUILD = "2026-08-11.3 Facebook tokens that stop expiring overnight"
+BUILD = "2026-08-11.4 clips.log: one line per clip, with the reason"
 
 # How often --watch checks whether a deferred clip's wait is up. A minute
 # is fine: the waits themselves are 25 to 80 minutes, so the resolution
@@ -159,7 +159,9 @@ def _report_clip_brain(cfg) -> None:
 def _clip_config(cfg) -> dict:
     """The slice of config the clip publishers actually read."""
     return {"instagram": cfg.instagram, "facebook": cfg.facebook,
-            "clips": cfg.clips, "features": cfg.features}
+            "clips": cfg.clips, "features": cfg.features,
+            # So every posting outcome lands in logs/clips.log.
+            "logs_folder": cfg.general.logs_folder}
 
 
 def _find_clips(cfg, limit: int = 15) -> list:
@@ -896,6 +898,10 @@ def main(argv=None) -> int:
     parser.add_argument("--clips", metavar="FILE",
                         help="Render vertical clips with burned-in captions from "
                              "an already-uploaded video, ready to post by hand.")
+    parser.add_argument("--clip-report", action="store_true",
+                        help="What happened to every clip: cut, posted, "
+                             "waiting, or failed and why. Reads "
+                             "logs/clips.log.")
     parser.add_argument("--keep-source", action="store_true",
                         help="Never move or delete the source video, whatever "
                              "cleanup.source_video says. For uploading out of "
@@ -1278,6 +1284,13 @@ def main(argv=None) -> int:
             return 1
         title = get_stream_title(args.clips, args.title, cfg, allow_prompt=False)
         print_run(make_clips(cfg, args.clips, title, count=args.clip_count))
+        return 0
+
+    if args.clip_report:
+        from utils.clip_log import report
+
+        print()
+        print(report(cfg.general.logs_folder))
         return 0
 
     if args.clips_from:
