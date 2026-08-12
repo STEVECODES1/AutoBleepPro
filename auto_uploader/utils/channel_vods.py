@@ -58,12 +58,22 @@ def have_impersonation() -> bool:
     Rumble sits behind Cloudflare, which answers a plain Python request
     with 403 however correct the URL is. curl_cffi is what makes the
     request look like a browser; without it, no channel page can be read.
+
+    Importable is NOT the test. curl_cffi 0.16 imports perfectly and
+    yt-dlp still reports every impersonate target as unavailable, so
+    `pip install -U curl_cffi` silently breaks a working setup. Asking
+    yt-dlp what it can actually do is the only answer that means
+    anything.
     """
     try:
-        import curl_cffi  # noqa: F401
+        done = subprocess.run(ytdlp_command() + ["--list-impersonate-targets"],
+                              stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                              timeout=60)
     except Exception:
         return False
-    return True
+    listed = done.stdout.decode("utf-8", "replace").lower()
+    # A target line that says "unavailable" is the 0.16 symptom exactly.
+    return "chrome" in listed and "(unavailable)" not in listed
 
 
 def download_args(url: str, output_dir: str, archive: str,
@@ -165,8 +175,10 @@ def fetch(url: str, output_dir: str, extensions: tuple,
     hint = ("nothing downloaded - Rumble answered 403, which is Cloudflare "
             "refusing the request rather than a wrong URL.")
     if not have_impersonation():
-        return [], (hint + " Install the browser fingerprint it wants:\n"
-                    "         python -m pip install -U curl_cffi yt-dlp")
+        return [], (hint + " Install the browser fingerprint it wants - "
+                    "PINNED, because 0.16 imports fine and still reports "
+                    "every impersonate target unavailable:\n"
+                    "         python -m pip install \"curl_cffi==0.15.0\"")
     if not browser:
         return [], (hint + " The browser fingerprint did not get past it "
                     "either, so try it signed in - add --browser chrome "

@@ -291,8 +291,11 @@ def is_recording_line(line: str) -> bool:
 # the raw error to be searched for.
 _CURL_CFFI_FIX = (
     "Kick sits behind Cloudflare, and yt-dlp needs a browser TLS "
-    "fingerprint to get past it:\n"
-    "        python -m pip install -U curl_cffi yt-dlp\n"
+    "fingerprint to get past it. THE VERSION MATTERS - 0.16 installs and "
+    "imports fine while yt-dlp reports every impersonate target as "
+    "unavailable, so `pip install -U curl_cffi` makes a working setup stop "
+    "working:\n"
+    "        python -m pip install \"curl_cffi==0.15.0\"\n"
     "    If curl_cffi is ALREADY installed and this still fails, the yt-dlp "
     "being run is the standalone .exe, which bundles its own Python and "
     "cannot see it. Check with:\n"

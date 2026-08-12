@@ -40,3 +40,9 @@ tqdm==4.66.4
 #   Windows: winget install ffmpeg
 #   Mac:     brew install ffmpeg
 #   Linux:   sudo apt install ffmpeg
+
+# Browser TLS fingerprint, for the sites behind Cloudflare (Kick, Rumble).
+# PINNED deliberately: 0.16 installs and imports perfectly while yt-dlp
+# reports every impersonate target as unavailable, so `pip install -U`
+# on this package silently breaks a working setup.
+curl_cffi==0.15.0
