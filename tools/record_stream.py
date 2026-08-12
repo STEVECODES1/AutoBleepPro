@@ -45,7 +45,7 @@ import shutil
 import subprocess
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 
 # A stream that ends and restarts within this window is treated as one
@@ -304,8 +304,23 @@ _CURL_CFFI_FIX = (
 # Ordered most specific first: a Kick 403 and a generic mid-recording 403
 # have completely different fixes, and the generic one matching first
 # would send you looking in the wrong place.
+_CLOCK_FIX = (
+    "This PC's clock is wrong. \"Certificate is not yet valid\" means the "
+    "clock is BEHIND the date the site's certificate was issued, so every "
+    "HTTPS connection fails - this will break YouTube, Rumble and Meta too, "
+    "not just Kick. Nothing in this project can work around it.\n"
+    "        Right-click the clock -> Adjust date and time -> turn \"Set "
+    "time automatically\" off and back on -> Sync now.\n"
+    "    Check the time zone while you are there.")
+
 KNOWN_FIXES = (
     ("no impersonate target is available", _CURL_CFFI_FIX),
+    # Before the Kick rule: this arrives on a Kick URL but has nothing to
+    # do with Cloudflare, and the curl_cffi advice sends you to install a
+    # package that can never fix a clock.
+    ("certificate is not yet valid", _CLOCK_FIX),
+    ("certificate has expired", _CLOCK_FIX),
+    ("certificate verify failed", _CLOCK_FIX),
     ("kick", _CURL_CFFI_FIX),
     ("HTTP Error 403",
      "A 403 mid-recording usually means the fragment URLs expired. If this "
@@ -326,6 +341,11 @@ def known_fix(line: str) -> str:
     lowered = line.lower()
     if "no impersonate target is available" in lowered:
         return _CURL_CFFI_FIX
+    # A TLS date failure is not a site problem and is worth naming even
+    # when the line does not read as an error.
+    for marker in ("certificate is not yet valid", "certificate has expired"):
+        if marker in lowered:
+            return _CLOCK_FIX
     if not is_worth_saying(line):
         return ""
     for marker, advice in KNOWN_FIXES:
@@ -358,6 +378,11 @@ def _remove(path: str) -> None:
 # treated as having lost something. Each seam costs a fraction of a second,
 # so an exact match is not the test; two seconds a segment is.
 JOIN_TOLERANCE_S = 2.0
+
+# How long before the same problem is worth repeating. Long enough that a
+# stuck channel does not fill the window; short enough that a problem
+# still present in an hour says so again.
+REPEAT_AFTER_S = 30 * 60
 
 
 def join_lost_material(joined: Optional[float], parts: list,
@@ -553,8 +578,30 @@ class Recorder:
     # nothing once the stream has ended.
     title: str = ""
 
+    # What has already been said, and when. Kept on the recorder rather
+    # than inside one attempt because the attempt is what repeats: a
+    # channel that is not live restarts yt-dlp every poll, and a problem
+    # that survives the restart was printing its whole explanation every
+    # sixty seconds. Ten hours of that buries everything else.
+    _said: dict = field(default_factory=dict, repr=False)
+
     def say(self, message: str) -> None:
         print(f"[{time.strftime('%H:%M:%S')}] {message}", flush=True)
+
+    def say_once(self, key: str, message: str,
+                 every_seconds: float = REPEAT_AFTER_S) -> bool:
+        """Say this only if it has not been said recently. True if said.
+
+        A problem that persists is still worth a reminder eventually -
+        silence forever would look like it had cleared - so the same
+        message comes back every half hour rather than every minute.
+        """
+        now = time.time()
+        if now - self._said.get(key, 0.0) < every_seconds:
+            return False
+        self._said[key] = now
+        self.say(message)
+        return True
 
     # ── The yt-dlp invocation ────────────────────────────────────────────
 
@@ -650,11 +697,13 @@ class Recorder:
                             if self.title:
                                 self.say(f'Title: "{self.title}"')
                     elif is_worth_saying(line):
-                        print(line, flush=True)
+                        # Deduplicated on the error itself, not the whole
+                        # line: yt-dlp restates the same failure with a
+                        # different URL fragment every attempt.
                         advice = known_fix(line)
-                        if advice and advice not in said_fixes:
+                        key = advice or " ".join(line.split()[:12])
+                        if self.say_once(key, line.strip()) and advice:
                             self.say(f"FIX: {advice}")
-                            said_fixes.add(advice)
                         continue
                     else:
                         now = time.time()
@@ -682,9 +731,13 @@ class Recorder:
             if log:
                 log.close()
             if tail and process.returncode not in (0, None):
-                self.say("Last thing yt-dlp said before stopping:")
-                for line in tail[-6:]:
-                    self.say(f"    {line}")
+                # Same dedup: a channel that is not live fails this way
+                # every poll, and the tail is identical every time.
+                signature = " ".join(" ".join(tail[-3:]).split()[:14])
+                if self.say_once(f"tail:{signature}",
+                                 "Last thing yt-dlp said before stopping:"):
+                    for line in tail[-6:]:
+                        self.say(f"    {line}")
                 # The line naming the missing dependency appears HERE and
                 # nowhere else - yt-dlp prints it as a warning on its way
                 # out, after the error that actually stopped it. Checking
@@ -693,7 +746,7 @@ class Recorder:
                 for line in tail:
                     advice = known_fix(line)
                     if advice:
-                        self.say(f"FIX: {advice}")
+                        self.say_once(f"fix:{advice[:40]}", f"FIX: {advice}")
                         break
 
     # ── Assembling and delivering ────────────────────────────────────────

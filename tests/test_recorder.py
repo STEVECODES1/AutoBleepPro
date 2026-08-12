@@ -962,3 +962,77 @@ def test_every_command_starts_with_the_resolved_yt_dlp(recorder):
                  vod_args("u", "/tmp/o.mp4"),
                  clips_args("u", "/tmp/o.mp4", "/tmp/a.txt")):
         assert args[:len(YTDLP)] == YTDLP
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# A repeating problem is stated once, not every sixty seconds
+#
+# A channel that is not live restarts yt-dlp every poll. A failure that
+# survives the restart printed its whole multi-line explanation each time -
+# ten hours of that buries everything else in the window.
+# ═════════════════════════════════════════════════════════════════════════════
+
+CLOCK_ERROR = ("ERROR: [kick:live] stackswopo1k: Unable to download JSON "
+               "metadata: Failed to perform, curl: (60) SSL certificate "
+               "problem: certificate is not yet valid.")
+
+
+def test_a_tls_date_failure_is_not_blamed_on_cloudflare():
+    """The regression: ANY error mentioning kick matched the curl_cffi
+    advice, so a wrong system clock told you to install a package that
+    can never fix it."""
+    from record_stream import known_fix
+
+    advice = known_fix(CLOCK_ERROR)
+
+    assert "clock" in advice.lower()
+    assert "curl_cffi" not in advice
+
+
+def test_a_real_cloudflare_failure_still_gets_the_curl_fix():
+    from record_stream import known_fix
+
+    advice = known_fix("ERROR: [kick:live] no impersonate target is available")
+    assert "curl_cffi" in advice
+
+
+def test_the_clock_fix_says_it_affects_more_than_kick():
+    """It arrives on a Kick URL but breaks every HTTPS call, and acting on
+    it as a Kick problem is how it stays broken."""
+    from record_stream import known_fix
+
+    advice = known_fix(CLOCK_ERROR)
+    assert "YouTube" in advice or "every HTTPS" in advice
+
+
+def test_the_same_problem_is_only_said_once(capsys):
+    from record_stream import Recorder
+
+    recorder = Recorder(url="u", staging="s", watch_folder="w")
+    assert recorder.say_once("clock", "the clock is wrong") is True
+    assert recorder.say_once("clock", "the clock is wrong") is False
+    assert recorder.say_once("clock", "the clock is wrong") is False
+
+    assert capsys.readouterr().out.count("the clock is wrong") == 1
+
+
+def test_a_problem_that_persists_comes_back_eventually():
+    """Silence forever would look like it had cleared."""
+    from record_stream import REPEAT_AFTER_S, Recorder
+
+    recorder = Recorder(url="u", staging="s", watch_folder="w")
+    recorder.say_once("clock", "the clock is wrong")
+    recorder._said["clock"] -= REPEAT_AFTER_S + 1
+
+    assert recorder.say_once("clock", "the clock is wrong") is True
+
+
+def test_different_problems_are_each_said(capsys):
+    from record_stream import Recorder
+
+    recorder = Recorder(url="u", staging="s", watch_folder="w")
+    recorder.say_once("a", "the clock is wrong")
+    recorder.say_once("b", "the disk is full")
+
+    out = capsys.readouterr().out
+    assert "clock" in out and "disk" in out
