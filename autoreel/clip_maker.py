@@ -493,8 +493,11 @@ def specs_from_segments(segments: Iterable[dict], count: int = DEFAULT_CLIP_COUN
                             reverse=True)[:count]
         highlights.sort(key=lambda h: h.start)
     else:
-        print(f"[Clips] A model read {len(shortlist)} candidates and chose "
-              f"{len(highlights)}.")
+        # Not "read N candidates" - the vision pass narrows the list to
+        # the ones it attaches frames to and prints its own count, so
+        # claiming the full shortlist here contradicted the line above
+        # it: "watched 24 candidates" then "read 72".
+        print(f"[Clips] The model chose {len(highlights)} clips.")
 
     return [
         ClipSpec(start=h.start, end=h.end, index=i,
