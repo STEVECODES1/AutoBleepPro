@@ -295,6 +295,9 @@ def make_clips(cfg, source_path: str, title: str,
         # A model reads the shortlist and says which of them a person
         # would post - the one thing keyword scoring cannot do. Costs
         # nothing without a key: it falls back to the scores silently.
+        # Laughter and shouting are invisible in a transcript; this is
+        # the signal that catches them.
+        use_audio_energy=bool(clips_cfg.get("use_audio_energy", True)),
         llm_rank=bool(clips_cfg.get("llm_rank", True)),
         llm_provider=str(clips_cfg.get("llm_provider", "")),
         llm_model=str(clips_cfg.get("llm_model", "")),

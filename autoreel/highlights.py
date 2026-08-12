@@ -138,6 +138,11 @@ class HighlightScorer:
     # a clip. 0 disables, which is what a already-trimmed video wants.
     skip_intro_seconds: float = 0.0
     skip_outro_seconds: float = 0.0
+    # dB-per-second for the whole video, from audio_energy.measure().
+    # Empty means "no opinion" and every window scores as it did before -
+    # the words decide on their own, which is the correct fallback for a
+    # file whose audio could not be read.
+    energy: list = field(default_factory=list)
 
     # ── Segment scoring ──────────────────────────────────────────────────
 
@@ -278,11 +283,21 @@ class HighlightScorer:
         words_per_second = words / duration
         density = 1.0 + min(0.2, max(0.0, (words_per_second - 2.0) * 0.1))
 
+        # How loud the room got. Applied LAST and capped small: it can
+        # promote a moment the words already liked above another the
+        # words also liked, and it can never carry a window on its own.
+        # The other ordering would clip every gunshot.
+        loud = 1.0
+        if self.energy:
+            from .audio_energy import energy_bonus
+
+            loud = energy_bonus(self.energy, start, end)
+
         # Divided by the root of the length so a long window has to earn
         # its extra seconds instead of winning by accumulating them.
         intensity = base / (duration ** 0.5)
         score = (intensity * placement * boundary * conversation * density
-                 * (0.6 + 0.4 * speech_ratio))
+                 * (0.6 + 0.4 * speech_ratio) * loud)
 
         text = _clean(" ".join(t for t in (s.get("text", "") for s in segments) if t))
         hook = self.best_line([ordered[peak].get("text", "")]) \

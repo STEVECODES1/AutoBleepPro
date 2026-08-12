@@ -408,6 +408,7 @@ def specs_from_segments(segments: Iterable[dict], count: int = DEFAULT_CLIP_COUN
                         skip_intro_seconds: float = 0.0,
                         skip_outro_seconds: float = 0.0,
                         min_gap_seconds: float = DEFAULT_MIN_GAP,
+                        energy: Optional[list] = None,
                         llm_rank: bool = True,
                         llm_provider: str = "",
                         llm_model: str = "") -> list:
@@ -424,7 +425,8 @@ def specs_from_segments(segments: Iterable[dict], count: int = DEFAULT_CLIP_COUN
 
     scorer = HighlightScorer(min_duration=min_seconds, max_duration=max_seconds,
                              skip_intro_seconds=skip_intro_seconds,
-                             skip_outro_seconds=skip_outro_seconds)
+                             skip_outro_seconds=skip_outro_seconds,
+                             energy=list(energy or []))
     pool = count * CANDIDATE_MULTIPLIER if llm_rank else count
     shortlist = scorer.select_clips(list(segments), count=pool,
                                     min_gap=min_gap_seconds)
@@ -498,6 +500,7 @@ class ClipMaker:
     crf: int = 20
     caption_style: str = "word"
     caption_uppercase: bool = True
+    use_audio_energy: bool = True
     skip_intro_seconds: float = DEFAULT_SKIP_INTRO
     skip_outro_seconds: float = DEFAULT_SKIP_OUTRO
     min_gap_seconds: float = DEFAULT_MIN_GAP
@@ -523,11 +526,23 @@ class ClipMaker:
         failure is raised only if every clip failed.
         """
         segments = list(segments or ())
+        energy = []
+        if self.use_audio_energy:
+            from .audio_energy import measure
+
+            print("[Clips] Listening for where the room got loud...")
+            energy = measure(source_path)
+            print(f"[Clips] {len(energy)}s of audio measured."
+                  if energy else
+                  "[Clips] Could not measure the audio - going on the words "
+                  "alone.")
+
         specs = specs_from_segments(segments, self.count,
                                     self.min_seconds, self.max_seconds,
                                     self.skip_intro_seconds,
                                     self.skip_outro_seconds,
                                     self.min_gap_seconds,
+                                    energy,
                                     self.llm_rank, self.llm_provider,
                                     self.llm_model)
         if not specs:
