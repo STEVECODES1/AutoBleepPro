@@ -143,6 +143,9 @@ class HighlightScorer:
     # the words decide on their own, which is the correct fallback for a
     # file whose audio could not be read.
     energy: list = field(default_factory=list)
+    # Messages-per-second from chat_energy.rates_for_url(). Numbers only -
+    # no text, no usernames; the log is deleted before it gets here.
+    chat: list = field(default_factory=list)
 
     # ── Segment scoring ──────────────────────────────────────────────────
 
@@ -293,11 +296,21 @@ class HighlightScorer:
 
             loud = energy_bonus(self.energy, start, end)
 
+        # Chat is the only signal here that is not inference: a few
+        # hundred people saying, at a timestamp, that something happened.
+        # It gets a wider cap than loudness for that reason - and still
+        # only adjusts windows the words already put forward.
+        reaction = 1.0
+        if self.chat:
+            from .chat_energy import chat_bonus
+
+            reaction = chat_bonus(self.chat, start, end)
+
         # Divided by the root of the length so a long window has to earn
         # its extra seconds instead of winning by accumulating them.
         intensity = base / (duration ** 0.5)
         score = (intensity * placement * boundary * conversation * density
-                 * (0.6 + 0.4 * speech_ratio) * loud)
+                 * (0.6 + 0.4 * speech_ratio) * loud * reaction)
 
         text = _clean(" ".join(t for t in (s.get("text", "") for s in segments) if t))
         hook = self.best_line([ordered[peak].get("text", "")]) \

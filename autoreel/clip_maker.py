@@ -409,6 +409,7 @@ def specs_from_segments(segments: Iterable[dict], count: int = DEFAULT_CLIP_COUN
                         skip_outro_seconds: float = 0.0,
                         min_gap_seconds: float = DEFAULT_MIN_GAP,
                         energy: Optional[list] = None,
+                        chat: Optional[list] = None,
                         llm_rank: bool = True,
                         llm_provider: str = "",
                         llm_model: str = "") -> list:
@@ -426,7 +427,8 @@ def specs_from_segments(segments: Iterable[dict], count: int = DEFAULT_CLIP_COUN
     scorer = HighlightScorer(min_duration=min_seconds, max_duration=max_seconds,
                              skip_intro_seconds=skip_intro_seconds,
                              skip_outro_seconds=skip_outro_seconds,
-                             energy=list(energy or []))
+                             energy=list(energy or []),
+                             chat=list(chat or []))
     pool = count * CANDIDATE_MULTIPLIER if llm_rank else count
     shortlist = scorer.select_clips(list(segments), count=pool,
                                     min_gap=min_gap_seconds)
@@ -518,7 +520,7 @@ class ClipMaker:
         return resolve_region(self.config)
 
     def make(self, source_path: str, segments: Iterable[dict],
-             basename: str = "") -> list:
+             basename: str = "", chat: Optional[list] = None) -> list:
         """Render clips for one video. Returns ClipResults, newest last.
 
         A clip that fails to render does not abort the rest: three clips
@@ -542,7 +544,7 @@ class ClipMaker:
                                     self.skip_intro_seconds,
                                     self.skip_outro_seconds,
                                     self.min_gap_seconds,
-                                    energy,
+                                    energy, chat,
                                     self.llm_rank, self.llm_provider,
                                     self.llm_model)
         if not specs:

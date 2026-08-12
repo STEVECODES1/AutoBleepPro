@@ -26,7 +26,7 @@ from datetime import datetime
 # Bump when shipping user-visible changes, so --test-config can prove
 # which build is actually running (stale extracts have silently caused
 # several confusing "the fix did nothing" runs).
-BUILD = "2026-08-11.6 clip your own Rumble back catalogue"
+BUILD = "2026-08-11.7 clips follow chat; the log is never kept"
 
 # How often --watch checks whether a deferred clip's wait is up. A minute
 # is fine: the waits themselves are 25 to 80 minutes, so the resolution
@@ -1310,6 +1310,7 @@ def main(argv=None) -> int:
             print(f"[VODs] Fetching up to {limit} recent video(s) from "
                   f"{args.clips_from}")
             print(f"[VODs] Into {folder} - already-taken videos are skipped.")
+            source_channel = args.clips_from
             grabbed, problem = fetch(args.clips_from, folder,
                                      cfg.general.supported_formats, limit)
             if problem:
@@ -1321,6 +1322,7 @@ def main(argv=None) -> int:
                 return 0
             print(f"[VODs] {len(grabbed)} new video(s) downloaded.")
         else:
+            source_channel = ""
             folder = os.path.abspath(os.path.expanduser(args.clips_from))
         if not os.path.isdir(folder):
             print(f"[ERROR] --clips-from folder does not exist: {folder}")

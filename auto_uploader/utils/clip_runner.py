@@ -243,7 +243,8 @@ def caption_for(clip, title: str, tags: list) -> str:
 def make_clips(cfg, source_path: str, title: str,
                count: Optional[int] = None,
                notify: bool = True,
-               transcribe_if_needed: bool = False) -> ClipRun:
+               transcribe_if_needed: bool = False,
+               source_url: str = "") -> ClipRun:
     """Render clips for one video and write each caption beside it."""
     from autoreel.clip_maker import ClipError, ClipMaker
 
@@ -303,9 +304,22 @@ def make_clips(cfg, source_path: str, title: str,
         llm_model=str(clips_cfg.get("llm_model", "")),
     )
 
+    # Chat replay, when the video came from a URL that serves it. The
+    # log is downloaded, counted per second and deleted before this
+    # returns - see autoreel/chat_energy. Nothing textual is kept.
+    chat: list = []
+    if source_url and bool(clips_cfg.get("use_chat", True)):
+        from autoreel.chat_energy import rates_for_url
+
+        print("[Clips] Reading chat for where it went off (not stored)...")
+        chat = rates_for_url(source_url)
+        print(f"[Clips] {sum(chat)} messages counted, log deleted." if chat
+              else "[Clips] No chat replay on this one - the other signals "
+                   "decide.")
+
     base = os.path.splitext(os.path.basename(source_path))[0]
     try:
-        results = maker.make(source_path, segments, basename=base)
+        results = maker.make(source_path, segments, basename=base, chat=chat)
     except ClipError as exc:
         _journal(cfg, "FAIL", "cut", title or base, str(exc))
         return ClipRun([], [], output_dir, str(exc))
