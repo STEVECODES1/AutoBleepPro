@@ -26,7 +26,7 @@ from datetime import datetime
 # Bump when shipping user-visible changes, so --test-config can prove
 # which build is actually running (stale extracts have silently caused
 # several confusing "the fix did nothing" runs).
-BUILD = "2026-08-11.1 framing profiles: monkey call vs GTA gameplay"
+BUILD = "2026-08-11.2 clip the VOD before retiring it; 20 clips; --clips-from"
 
 # How often --watch checks whether a deferred clip's wait is up. A minute
 # is fine: the waits themselves are 25 to 80 minutes, so the resolution
@@ -691,14 +691,28 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
             job(False)
 
     fully_uploaded = dup_checker.is_fully_uploaded(file_hash, platforms=active_platforms)
-    if fully_uploaded:
+
+    def retire_source() -> None:
+        """Move or delete the uploaded video - AFTER the clips are cut.
+
+        This used to run here, before clipping, and with
+        cleanup.source_video set to 'delete' that meant the VOD was gone
+        by the time anything tried to clip it. A stream is the source of
+        the next day's clips; deleting it the moment it uploads throws
+        that away, and there is no getting it back.
+        """
+        if not fully_uploaded:
+            print(f"[INFO] {filename} left in place (not every platform "
+                  "succeeded yet) - rerun --file or --batch on it later to "
+                  "retry just what's still missing.")
+            return
         action = resolve_source_action(cfg)
         if action == SOURCE_DELETE:
             # Only reachable when BOTH platforms already succeeded - the
             # video is published, and the user has opted into losing the
             # local copy.
-            size_mb = os.path.getsize(video_path) / (1024 ** 2)
             try:
+                size_mb = os.path.getsize(video_path) / (1024 ** 2)
                 os.remove(video_path)
                 print(f"[Cleanup] Deleted source video ({size_mb:.0f} MB) - "
                       f"cleanup.source_video is 'delete'.")
@@ -713,9 +727,6 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
                 shutil.move(video_path, dest)
             except Exception as exc:
                 print(f"[WARN] Could not move {filename} to uploaded/: {exc}")
-    else:
-        print(f"[INFO] {filename} left in place (not every platform succeeded yet) - "
-              f"rerun --file or --batch on it later to retry just what's still missing.")
 
     # Post-upload extras - strictly best-effort, only for uploads that
     # actually happened THIS run (never for pre-existing skips), and never
@@ -775,10 +786,10 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
             try:
                 from utils.clip_runner import make_clips, print_run
 
-                    # The source has usually been MOVED to uploaded/ by now -
-                # cleanup runs before this - so the path that was valid
-                # at the top of the function is not any more. Clipping
-                # silently produced nothing every time because of it.
+                # The source is still where it was: retire_source() now
+                # runs after this. The fallback stays for a re-run over a
+                # video that was already moved to uploaded/ on an earlier
+                # pass.
                 source = video_path
                 if not os.path.isfile(source):
                     moved = _suggest_paths(cfg, os.path.basename(video_path))
@@ -816,6 +827,10 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
     if newly_uploaded:
         stage_timer.mark("metadata/optimizer")
 
+    # Only now is the VOD finished with. It had two jobs - the upload and
+    # the clips - and this used to run between them.
+    retire_source()
+
     # Disk cleanup LAST: the optimizer above reads the cached transcript,
     # so removing it any earlier would break the report.
     try:
@@ -823,9 +838,10 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
             cfg, video_path, _censored.get("path"),
             results=results, since_ts=run_started_at,
             active_platforms=active_platforms,
-            # Clips are cut AFTER this runs and are scored from the
-            # transcript, so deleting it here left every stream with
-            # "no cached transcript for this video".
+            # Clips are scored from the cached transcript. They are cut
+            # above now rather than after this, but the cache is still
+            # kept when clipping is on: a re-run over the same stream
+            # would otherwise pay for a second transcription.
             keep_transcript=bool(
                 not is_clip and (cfg.clips or {}).get("auto_from_streams")))
         freed = report.freed_mb
@@ -880,6 +896,14 @@ def main(argv=None) -> int:
     parser.add_argument("--clips", metavar="FILE",
                         help="Render vertical clips with burned-in captions from "
                              "an already-uploaded video, ready to post by hand.")
+    parser.add_argument("--keep-source", action="store_true",
+                        help="Never move or delete the source video, whatever "
+                             "cleanup.source_video says. For uploading out of "
+                             "a library folder you want left exactly as it is.")
+    parser.add_argument("--clips-from", metavar="FOLDER",
+                        help="Cut clips from every video in a folder of old "
+                             "VODs. The folder is only ever READ - nothing in "
+                             "it is moved, renamed or deleted.")
     parser.add_argument("--clip-count", type=int, default=None,
                         help="How many clips to make with --clips (default 3).")
     parser.add_argument("--gpu-check", action="store_true",
@@ -1243,6 +1267,55 @@ def main(argv=None) -> int:
         print_run(make_clips(cfg, args.clips, title, count=args.clip_count))
         return 0
 
+    if args.clips_from:
+        from utils.clip_runner import make_clips, print_run
+
+        folder = os.path.abspath(os.path.expanduser(args.clips_from))
+        if not os.path.isdir(folder):
+            print(f"[ERROR] --clips-from folder does not exist: {folder}")
+            return 1
+
+        try:
+            names = sorted(os.listdir(folder))
+        except OSError as exc:
+            print(f"[ERROR] Could not read {folder}: {exc}")
+            return 1
+
+        videos = [
+            os.path.join(folder, name) for name in names
+            if os.path.splitext(name)[1].lower() in cfg.general.supported_formats
+            and os.path.isfile(os.path.join(folder, name))
+            # .part / .ytdl leftovers from an interrupted download are not
+            # videos, and a half-file transcribes to nonsense.
+            and not is_intermediate_download(os.path.join(folder, name))
+        ]
+        if not videos:
+            print(f"[Clips] No finished videos in {folder}.")
+            return 0
+
+        wanted = args.clip_count or (cfg.clips or {}).get("count", 10)
+        print(f"[Clips] {len(videos)} video(s) in {folder}")
+        print(f"[Clips] Reading only - nothing in that folder is moved, "
+              f"renamed or deleted.")
+        total = 0
+        for index, path in enumerate(videos, start=1):
+            name = os.path.basename(path)
+            print(f"\n[Clips] ({index}/{len(videos)}) {name}")
+            title = get_stream_title(path, "", cfg, allow_prompt=False)
+            try:
+                run = make_clips(cfg, path, title, count=wanted,
+                                 notify=False, transcribe_if_needed=True)
+            except Exception as exc:
+                print(f"[Clips] skipped {name}: {exc}")
+                continue
+            print_run(run)
+            total += _deliver_clips(run, cfg)
+        print(f"\n[Clips] {total} clip(s) delivered to "
+              f"{cfg.general.watch_folder}.")
+        print("[Clips] Start the uploader to post them on each platform's "
+              "spacing:  python main.py --watch")
+        return 0
+
     if args.posting_status:
         from publish_guard import PublishGuard
         from utils.clip_queue import summary
@@ -1346,6 +1419,14 @@ def main(argv=None) -> int:
 
     validate_config(cfg)  # ensures folders exist even outside --test-config
     dry_run = args.dry_run or cfg.general.dry_run_mode
+
+    if args.keep_source:
+        # Applied to the loaded config rather than threaded through every
+        # call: "leave the originals alone" is a property of the whole
+        # run, not of one file in it.
+        cfg.general.cleanup = dict(cfg.general.cleanup or {})
+        cfg.general.cleanup["source_video"] = "keep"
+        print("[Cleanup] --keep-source: originals stay exactly where they are.")
 
     # None = flag not passed at all; "" = bare `--batch` (use the config's
     # watch folder); anything else = an explicit folder for this run only.

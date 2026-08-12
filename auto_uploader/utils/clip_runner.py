@@ -56,6 +56,64 @@ def _load_segments(cfg, source_path: str) -> Optional[list]:
     return None
 
 
+def transcribe_for_clips(cfg, source_path: str) -> Optional[list]:
+    """Segments for a video that has never been through the censor pass.
+
+    A stream the uploader handled already has its transcript cached, and
+    clipping it is nearly free. An old VOD sitting in a folder does not,
+    so the words have to be produced - and then cached in exactly the
+    place the censor pass would have put them, so a later censor run over
+    the same file costs nothing.
+
+    The source file is only ever READ. Nothing here writes to, moves or
+    deletes it.
+    """
+    import json
+
+    from utils.censor import _get_transcriber, words_cache_path
+    from utils.ffmpeg_tools import extract_audio
+
+    work_dir = cfg.general.censored_folder
+    os.makedirs(work_dir, exist_ok=True)
+    base = os.path.splitext(os.path.basename(source_path))[0]
+    words_path = words_cache_path(work_dir, base)
+
+    speed = dict(getattr(cfg.general, "speed", {}) or {})
+    audio_path = os.path.join(work_dir, f"{base}_clipaudio.wav")
+    try:
+        extracted = extract_audio(source_path, audio_path)
+    except Exception as exc:
+        print(f"[Clips] could not read the audio: {exc}")
+        return None
+    if not extracted:
+        print("[Clips] no audio track to transcribe.")
+        return None
+
+    try:
+        transcriber = _get_transcriber(cfg.general.censor_model,
+                                       cfg.general.censor_device,
+                                       reuse=bool(speed.get("reuse_model", True)))
+        result = transcriber.transcribe(audio_path)
+    except Exception as exc:
+        print(f"[Clips] transcription failed: {exc}")
+        return None
+    finally:
+        try:
+            os.remove(audio_path)
+        except OSError:
+            pass
+
+    segments = (result or {}).get("segments") or []
+    if not segments:
+        return None
+    try:
+        with open(words_path, "w", encoding="utf-8") as f:
+            json.dump({"segments": segments}, f)
+    except OSError:
+        pass  # a failed cache write must not cost the clips
+    return segments
+
+
 # Words a clip's first line often opens with that say nothing about it.
 _FILLER = ("uh", "um", "like", "so", "and", "but", "okay", "ok", "yeah",
            "yo", "bro", "i mean", "you know")
@@ -172,7 +230,8 @@ def caption_for(clip, title: str, tags: list) -> str:
 
 def make_clips(cfg, source_path: str, title: str,
                count: Optional[int] = None,
-               notify: bool = True) -> ClipRun:
+               notify: bool = True,
+               transcribe_if_needed: bool = False) -> ClipRun:
     """Render clips for one video and write each caption beside it."""
     from autoreel.clip_maker import ClipError, ClipMaker
 
@@ -184,6 +243,11 @@ def make_clips(cfg, source_path: str, title: str,
         return ClipRun([], [], output_dir, f"no such file: {source_path}")
 
     segments = _load_segments(cfg, source_path)
+    if not segments and transcribe_if_needed:
+        print(f"[Clips] No transcript for {os.path.basename(source_path)} - "
+              f"transcribing it now (model={cfg.general.censor_model}). This is "
+              "the slow part; it is cached afterwards.")
+        segments = transcribe_for_clips(cfg, source_path)
     if not segments:
         return ClipRun(
             [], [], output_dir,

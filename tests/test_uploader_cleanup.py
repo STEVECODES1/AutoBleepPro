@@ -549,3 +549,50 @@ def test_the_transcript_survives_when_clips_are_still_to_be_cut(tmp_path):
     import inspect
     assert "keep_transcript" in inspect.signature(
         cleanup_after_upload).parameters
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# The VOD is not finished when the upload is
+#
+# A stream has two jobs: the upload, and being the source of the next
+# day's clips. Retiring it between the two - which is what used to happen -
+# meant `cleanup.source_video: delete` destroyed the video before anything
+# clipped it, with no way to get it back.
+# ═════════════════════════════════════════════════════════════════════════════
+
+def test_clips_are_cut_before_the_source_is_retired():
+    """Read the order out of main.py itself: this is a sequencing bug and
+    the sequence is the thing to pin."""
+    import re
+
+    main_py = os.path.join(_UPLOADER, "main.py")
+    with open(main_py, encoding="utf-8") as f:
+        body = f.read()
+
+    make_clips_at = body.index("run = make_clips(cfg, source, stream_title")
+    retire_at = body.rindex("\n    retire_source()")
+    assert make_clips_at < retire_at, \
+        "the source is retired before the clips are cut from it"
+
+
+def test_keep_source_is_offered_as_a_flag():
+    """A library folder of old VODs has to survive being uploaded from."""
+    main_py = os.path.join(_UPLOADER, "main.py")
+    with open(main_py, encoding="utf-8") as f:
+        body = f.read()
+    assert '"--keep-source"' in body
+    assert 'cfg.general.cleanup["source_video"] = "keep"' in body
+
+
+def test_clips_from_a_folder_never_writes_to_it():
+    """--clips-from reads a library folder. Nothing in it may be moved,
+    renamed or deleted - the user's originals live there."""
+    main_py = os.path.join(_UPLOADER, "main.py")
+    with open(main_py, encoding="utf-8") as f:
+        body = f.read()
+
+    start = body.index("if args.clips_from:")
+    block = body[start:body.index("if args.posting_status:", start)]
+    for destructive in ("os.remove", "shutil.move", "os.replace", "os.rename"):
+        assert destructive not in block, \
+            f"--clips-from calls {destructive} on the source folder"
