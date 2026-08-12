@@ -364,8 +364,14 @@ def _ask_gemini(key: str, model: str, prompt: str) -> str:
         return ""
 
 
-def _ask_gemini_vision(key: str, model: str, parts: list) -> str:
-    """Same call as _ask_gemini, with images among the parts."""
+def _ask_gemini_vision(key: str, model: str, parts: list) -> tuple:
+    """(reply_text, why_not). Same call as _ask_gemini, with images.
+
+    Returns the reason rather than swallowing it. A vision request can
+    fail for reasons the text one never does - a model that takes no
+    images, a body too large, a quota that counts images differently -
+    and "came back empty" is not something anyone can act on.
+    """
     url = (f"https://generativelanguage.googleapis.com/v1beta/models/"
            f"{model}:generateContent?key={key}")
     payload = {
@@ -374,13 +380,18 @@ def _ask_gemini_vision(key: str, model: str, parts: list) -> str:
         "generationConfig": {"responseMimeType": "application/json",
                              "temperature": 0.4},
     }
-    data = _post(url, payload, {})
+    images = sum(1 for part in parts if "inline_data" in part)
+    megabytes = len(json.dumps(payload)) / 1e6
+    data, problem = _post_detailed(url, payload, {})
+    if problem:
+        return "", f"{problem} ({images} images, {megabytes:.1f} MB)"
     if not isinstance(data, dict):
-        return ""
+        return "", f"no response ({images} images, {megabytes:.1f} MB)"
     try:
-        return data["candidates"][0]["content"]["parts"][0]["text"]
+        return data["candidates"][0]["content"]["parts"][0]["text"], ""
     except (KeyError, IndexError, TypeError):
-        return ""
+        blocked = str(data.get("promptFeedback", "")) or str(data)[:200]
+        return "", f"reply had no text: {blocked}"
 
 
 def _ask_openai(key: str, model: str, prompt: str) -> str:
@@ -468,20 +479,25 @@ def rank(candidates: list, count: int, provider: str = "",
     raw = ""
     if source_path and provider == GEMINI and ask is None:
         looking = shortlist[:VISION_MAX_CANDIDATES]
+        why = ""
         try:
             parts = build_vision_contents(looking, count, source_path)
-            raw = _ask_gemini_vision(key, model, parts)
-        except Exception:
-            raw = ""
+            images = sum(1 for part in parts if "inline_data" in part)
+            if not images:
+                why = "no frames could be read from the video"
+            else:
+                raw, why = _ask_gemini_vision(key, model, parts)
+        except Exception as exc:
+            why = f"{type(exc).__name__}: {exc}"
         if raw:
             shortlist = looking
             print(f"[Clips] A model watched {len(looking)} candidates.")
         else:
-            # Say so. A silent fall-through here is indistinguishable
-            # from the model having no opinion, and that is exactly how
-            # a broken vision pass would go unnoticed for a week.
-            print("[Clips] The vision pass came back empty - going on the "
-                  "words instead.")
+            # Say WHY. A silent fall-through is indistinguishable from
+            # the model having no opinion, and "came back empty" is not
+            # something anyone can act on either.
+            print(f"[Clips] The vision pass failed ({why}) - going on the "
+                  f"words instead.")
 
     if not raw:
         prompt = build_prompt(shortlist, count)

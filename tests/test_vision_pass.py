@@ -131,6 +131,21 @@ def test_a_failed_vision_call_falls_back_to_the_words(monkeypatch):
     assert chosen and chosen[0].hook == "words"
 
 
+def test_no_readable_frames_is_named_as_that(monkeypatch, capsys):
+    """Different from a rejected request, and fixed a different way."""
+    import autoreel.llm_highlights as llm
+
+    monkeypatch.setattr(llm, "available", lambda p="": ("gemini", "key"))
+    monkeypatch.setattr(llm, "resolve_model", lambda *a, **k: "gemini-x")
+    monkeypatch.setattr(llm, "build_vision_contents", lambda *a, **k: [])
+    monkeypatch.setattr(llm, "_ask_gemini",
+                        lambda *a: '{"clips":[{"index":1,"score":9,"title":"t"}]}')
+
+    rank(_candidates(2), 1, source_path="/in.mp4")
+
+    assert "no frames could be read" in capsys.readouterr().out
+
+
 def test_a_failed_vision_pass_says_so(monkeypatch, capsys):
     """Silence here is indistinguishable from the model having no
     opinion, which is how a broken vision pass goes unnoticed."""
@@ -138,14 +153,18 @@ def test_a_failed_vision_pass_says_so(monkeypatch, capsys):
 
     monkeypatch.setattr(llm, "available", lambda p="": ("gemini", "key"))
     monkeypatch.setattr(llm, "resolve_model", lambda *a, **k: "gemini-x")
-    monkeypatch.setattr(llm, "build_vision_contents", lambda *a, **k: [])
-    monkeypatch.setattr(llm, "_ask_gemini_vision", lambda *a: "")
+    monkeypatch.setattr(llm, "build_vision_contents",
+                        lambda *a, **k: [{"inline_data": {"data": "x"}}])
+    monkeypatch.setattr(llm, "_ask_gemini_vision",
+                        lambda *a: ("", "HTTP 400: request too large"))
     monkeypatch.setattr(llm, "_ask_gemini",
                         lambda *a: '{"clips":[{"index":1,"score":9,"title":"t"}]}')
 
     rank(_candidates(2), 1, source_path="/in.mp4")
 
-    assert "vision pass came back empty" in capsys.readouterr().out
+    told = capsys.readouterr().out
+    assert "vision pass failed" in told
+    assert "request too large" in told, "the reason has to survive"
 
 
 def test_the_image_count_is_capped(monkeypatch):
