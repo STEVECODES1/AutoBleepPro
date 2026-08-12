@@ -179,6 +179,19 @@ _TRAILING_STAMP = re.compile(
 )
 
 
+def _fill(title_format: str, stream_title: str, date_str: str) -> str:
+    """Substitute the two placeholders, literally.
+
+    str.format() would read braces in the DATA as placeholders of its
+    own: a stream called "drop the {beat}" raises KeyError and takes the
+    whole upload with it, and any other token someone puts in the format
+    string does the same. Nothing here needs format()'s power.
+    """
+    return (title_format
+            .replace("{title}", stream_title)
+            .replace("{date}", date_str))
+
+
 def strip_trailing_stamp(stream_title: str) -> str:
     """Drop a date/time the stream name already ends with.
 
@@ -202,14 +215,14 @@ def build_title(stream_title: str, date_str: str, title_format: str) -> str:
     the end, on a title that was nothing but the raw stream name.
     """
     stream_title = strip_trailing_stamp(stream_title)
-    title = title_format.format(title=stream_title, date=date_str)
+    title = _fill(title_format, stream_title, date_str)
     if len(title) <= MAX_TITLE_CHARS:
         return title
 
     # How much room the name actually has, once the format has taken its
     # share. Measured rather than assumed, so editing title_format in
     # config cannot silently break this.
-    overhead = len(title_format.format(title="", date=date_str))
+    overhead = len(_fill(title_format, "", date_str))
     budget = MAX_TITLE_CHARS - overhead
     if budget < 12:
         # A format with no room left for a name at all: nothing sensible
@@ -219,7 +232,7 @@ def build_title(stream_title: str, date_str: str, title_format: str) -> str:
     shortened = stream_title[:budget].rsplit(" ", 1)[0].rstrip(" ,-+|")
     if not shortened:
         shortened = stream_title[:budget].rstrip(" ,-+|")
-    return title_format.format(title=shortened, date=date_str)
+    return _fill(title_format, shortened, date_str)
 
 
 def build_description(template: str, date_str: str, stream_title: str) -> str:

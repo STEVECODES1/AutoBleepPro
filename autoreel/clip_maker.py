@@ -593,8 +593,13 @@ def make_vertical(source_path: str, output_path: str,
     try:
         completed = subprocess.run(args, stdout=subprocess.PIPE,
                                    stderr=subprocess.PIPE,
+                                   # Without this a wedged ffmpeg holds the
+                                   # watcher thread forever, and nothing
+                                   # else in the folder ever gets processed.
+                                   timeout=_TIMEOUT,
                                    env=_ffmpeg_env())
-    except (FileNotFoundError, OSError):
+    except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
+        _remove(output_path)
         return None
     if completed.returncode != 0 or not os.path.exists(output_path) \
             or os.path.getsize(output_path) == 0:

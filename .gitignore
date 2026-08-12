@@ -33,3 +33,15 @@ auto_uploader/recording/*
 !auto_uploader/recording/.gitkeep
 auto_uploader/clips/*
 !auto_uploader/clips/.gitkeep
+
+# Browser cookie exports. These are session tokens - a leaked cookies.txt
+# is account access without a password - and they are untracked today
+# only because nobody has run `git add -A` yet.
+cookies.txt
+*cookies.txt
+*_cookies.txt
+
+# Editor/manual backups. Git is the version history; a .backup beside the
+# real file just diverges from it silently.
+*.backup
+*.bak

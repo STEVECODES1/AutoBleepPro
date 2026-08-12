@@ -282,3 +282,20 @@ def test_the_cap_is_still_respected_by_an_unusual_format():
 
     out = build_title("a" * 200, "8/11/26", "{title} " + "x" * 95)
     assert len(out) <= 100
+
+
+def test_braces_in_a_stream_name_do_not_crash_the_upload():
+    """str.format() reads braces in the DATA as placeholders: a stream
+    called "drop the {beat}" raised KeyError and took the upload with
+    it."""
+    assert _title("drop the {beat} now") == \
+        '"drop the {beat} now" 8/11/26 Stackswopo Stream'
+
+
+def test_an_unknown_token_in_the_format_is_left_alone():
+    import sys
+    sys.path.insert(0, _UPLOADER)
+    from utils.templating import build_title
+
+    out = build_title("shadows", "8/4/26", '"{title}" {date} {mystery}')
+    assert out.startswith('"shadows" 8/4/26')

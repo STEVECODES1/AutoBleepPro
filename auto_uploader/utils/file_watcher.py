@@ -100,6 +100,10 @@ class _NewVideoHandler(FileSystemEventHandler):
         without needing OS-specific file-lock APIs."""
         last_size = -1
         stable_since = None
+        # A file being written very slowly - a network drive, a stalled
+        # download - would otherwise hold this thread for days, and the
+        # path stays in _pending so it can never be re-queued either.
+        deadline = time.time() + MAX_STABILITY_WAIT_S
         while True:
             try:
                 size = os.path.getsize(path)
@@ -111,11 +115,25 @@ class _NewVideoHandler(FileSystemEventHandler):
                 stable_since = now
             elif stable_since and (now - stable_since) >= self.stability_seconds:
                 break
+            if now >= deadline:
+                print(f"[Watch] {os.path.basename(path)} is still growing "
+                      f"after {MAX_STABILITY_WAIT_S / 60:.0f} min - giving up "
+                      "on it for now. It will be picked up by --batch once "
+                      "it has finished.")
+                with self._lock:
+                    self._pending.discard(path)
+                return
             time.sleep(1)
 
         with self._lock:
             self._pending.discard(path)
         self.on_ready(path)
+
+
+# How long a file may keep growing before the watcher stops waiting on
+# it. Long enough for a slow copy of a multi-GB stream, short enough that
+# a stalled one does not block the folder forever.
+MAX_STABILITY_WAIT_S = 30 * 60
 
 
 class FolderWatcher:

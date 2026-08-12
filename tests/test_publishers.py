@@ -699,14 +699,17 @@ def test_a_missing_scope_raises_not_configured_rather_than_failing(monkeypatch):
         "the message must say what to actually do about it"
 
 
-def test_a_reel_refused_for_a_scope_says_the_same_thing(monkeypatch):
+def test_a_reel_refused_for_a_scope_says_the_same_thing(monkeypatch, tmp_path):
     from auto_uploader.publishers import facebook as fb
     from auto_uploader.publishers.errors import NotConfigured
 
     monkeypatch.setattr(fb.requests, "post", _raise_graph(200, PERMISSION_MESSAGE))
     monkeypatch.setenv("FB_PAGE_TOKEN", "tok")
     monkeypatch.setenv("FB_PAGE_ID", "999")
-    clip = "/tmp/does-not-matter.mp4"
+    # tmp_path, not /tmp: this project runs on Windows, where a test
+    # that hardcodes a Unix path fails for a reason that has nothing to
+    # do with what it is testing.
+    clip = str(tmp_path / "does-not-matter.mp4")
     with open(clip, "wb") as f:
         f.write(b"x")
 
