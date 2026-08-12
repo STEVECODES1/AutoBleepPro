@@ -92,7 +92,9 @@ def test_nothing_new_is_not_an_error(tmp_path, monkeypatch):
     assert paths == [] and problem == ""
 
 
-def test_an_unreadable_channel_says_so(tmp_path, monkeypatch):
+def test_a_403_is_named_as_cloudflare_not_a_wrong_url(tmp_path, monkeypatch):
+    """Rumble answers a plain Python request with 403 however correct the
+    URL is. "check the URL" sends you looking in the wrong place."""
     from utils import channel_vods
 
     def fake_run(args, **kwargs):
@@ -105,7 +107,55 @@ def test_an_unreadable_channel_says_so(tmp_path, monkeypatch):
     paths, problem = fetch(CHANNEL, str(tmp_path), (".mp4",))
 
     assert paths == []
-    assert "could not read" in problem
+    assert "Cloudflare" in problem
+    assert "curl_cffi" in problem or "--browser" in problem, \
+        "a refusal has to say what to do next"
+
+
+def test_it_escalates_rather_than_impersonating_by_default(tmp_path, monkeypatch):
+    """A curl_cffi that is present but unusable makes yt-dlp fail on
+    channels a plain request would have read."""
+    from utils import channel_vods
+
+    seen = []
+
+    def fake_run(args, **kwargs):
+        seen.append("--impersonate" in args)
+
+        class Done:
+            returncode = 1
+        return Done()
+
+    monkeypatch.setattr(channel_vods.subprocess, "run", fake_run)
+    monkeypatch.setattr(channel_vods, "have_impersonation", lambda: True)
+
+    fetch(CHANNEL, str(tmp_path), (".mp4",))
+
+    assert seen[0] is False, "the first try must be the plain one"
+    assert True in seen, "it never escalated"
+
+
+def test_a_page_read_with_nothing_new_is_not_retried(tmp_path, monkeypatch):
+    """Every recent video already taken is the normal daily outcome -
+    hammering Cloudflare over it would be the wrong lesson."""
+    from utils import channel_vods
+
+    calls = []
+
+    def fake_run(args, **kwargs):
+        calls.append(1)
+
+        class Done:
+            returncode = 0
+        return Done()
+
+    monkeypatch.setattr(channel_vods.subprocess, "run", fake_run)
+    monkeypatch.setattr(channel_vods, "have_impersonation", lambda: True)
+
+    paths, problem = fetch(CHANNEL, str(tmp_path), (".mp4",))
+
+    assert paths == [] and problem == ""
+    assert len(calls) == 1
 
 
 def test_a_missing_yt_dlp_is_reported_not_raised(tmp_path, monkeypatch):

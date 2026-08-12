@@ -26,7 +26,7 @@ from datetime import datetime
 # Bump when shipping user-visible changes, so --test-config can prove
 # which build is actually running (stale extracts have silently caused
 # several confusing "the fix did nothing" runs).
-BUILD = "2026-08-11.7 clips follow chat; the log is never kept"
+BUILD = "2026-08-11.8 get past Cloudflare on a Rumble channel"
 
 # How often --watch checks whether a deferred clip's wait is up. A minute
 # is fine: the waits themselves are 25 to 80 minutes, so the resolution
@@ -1312,7 +1312,8 @@ def main(argv=None) -> int:
             print(f"[VODs] Into {folder} - already-taken videos are skipped.")
             source_channel = args.clips_from
             grabbed, problem = fetch(args.clips_from, folder,
-                                     cfg.general.supported_formats, limit)
+                                     cfg.general.supported_formats, limit,
+                                     browser=args.browser or "")
             if problem:
                 print(f"[VODs] {problem}")
                 return 1

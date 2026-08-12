@@ -52,10 +52,32 @@ def is_url(value: str) -> bool:
     return str(value or "").strip().lower().startswith(("http://", "https://"))
 
 
+def have_impersonation() -> bool:
+    """Whether yt-dlp can present a browser TLS fingerprint.
+
+    Rumble sits behind Cloudflare, which answers a plain Python request
+    with 403 however correct the URL is. curl_cffi is what makes the
+    request look like a browser; without it, no channel page can be read.
+    """
+    try:
+        import curl_cffi  # noqa: F401
+    except Exception:
+        return False
+    return True
+
+
 def download_args(url: str, output_dir: str, archive: str,
-                  limit: int = DEFAULT_LIMIT) -> list:
+                  limit: int = DEFAULT_LIMIT, impersonate: bool = False,
+                  browser: str = "") -> list:
     """Newest `limit` videos from the channel, each fetched once ever."""
-    return ytdlp_command() + [
+    return ytdlp_command() + ([
+        # Cloudflare rejects the default fingerprint outright. Only added
+        # on the retry, because a target that is unavailable makes yt-dlp
+        # fail on sites that would have worked without it.
+        "--impersonate", "chrome",
+    ] if impersonate else []) + ([
+        "--cookies-from-browser", browser,
+    ] if browser else []) + [
         # Newest first: a channel page lists them that way, and the recent
         # ones are the ones worth clipping.
         "--playlist-end", str(max(1, limit)),
@@ -85,9 +107,27 @@ def _videos_in(folder: str, extensions: tuple) -> set:
         return set()
 
 
+def _attempts(browser: str) -> list:
+    """How to try, in order. Plainest first.
+
+    Impersonation is not the default because a curl_cffi that is present
+    but unusable makes yt-dlp fail on channels that plain requests would
+    have read. Escalating only after a refusal keeps the common case
+    simple and still gets past Cloudflare.
+    """
+    tries = [{"impersonate": False, "browser": "", "note": ""}]
+    if have_impersonation():
+        tries.append({"impersonate": True, "browser": "",
+                      "note": "as a browser (Cloudflare refused the first try)"})
+    if browser:
+        tries.append({"impersonate": have_impersonation(), "browser": browser,
+                      "note": f"signed in from {browser}"})
+    return tries
+
+
 def fetch(url: str, output_dir: str, extensions: tuple,
           limit: int = DEFAULT_LIMIT,
-          archive: str = "") -> tuple:
+          archive: str = "", browser: str = "") -> tuple:
     """Download up to `limit` new videos. Returns (new_paths, error).
 
     `new_paths` is what arrived on THIS run, worked out by comparing the
@@ -97,20 +137,41 @@ def fetch(url: str, output_dir: str, extensions: tuple,
     os.makedirs(output_dir, exist_ok=True)
     archive = archive or os.path.join(output_dir, ARCHIVE_NAME)
     before = _videos_in(output_dir, extensions)
+    failed = 0
 
-    try:
-        done = subprocess.run(download_args(url, output_dir, archive, limit),
-                              timeout=_TIMEOUT)
-    except FileNotFoundError:
-        return [], "yt-dlp is not installed (pip install -U yt-dlp)"
-    except subprocess.TimeoutExpired:
-        return [], "the download took too long and was stopped"
-    except OSError as exc:
-        return [], str(exc)
+    for attempt in _attempts(browser):
+        if attempt["note"]:
+            print(f"[VODs] Retrying {attempt['note']}...")
+        try:
+            done = subprocess.run(
+                download_args(url, output_dir, archive, limit,
+                              attempt["impersonate"], attempt["browser"]),
+                timeout=_TIMEOUT)
+        except FileNotFoundError:
+            return [], "yt-dlp is not installed (pip install -U yt-dlp)"
+        except subprocess.TimeoutExpired:
+            return [], "the download took too long and was stopped"
+        except OSError as exc:
+            return [], str(exc)
 
-    arrived = sorted(_videos_in(output_dir, extensions) - before)
-    paths = [os.path.join(output_dir, name) for name in arrived]
-    if not paths and done.returncode != 0:
-        return [], ("nothing downloaded - yt-dlp could not read that channel "
-                    "page. Check the URL opens in a browser.")
-    return paths, ""
+        arrived = sorted(_videos_in(output_dir, extensions) - before)
+        if arrived:
+            return [os.path.join(output_dir, name) for name in arrived], ""
+        if done.returncode == 0:
+            # Read the page fine, nothing new on it.
+            return [], ""
+        failed += 1
+
+    hint = ("nothing downloaded - Rumble answered 403, which is Cloudflare "
+            "refusing the request rather than a wrong URL.")
+    if not have_impersonation():
+        return [], (hint + " Install the browser fingerprint it wants:\n"
+                    "         python -m pip install -U curl_cffi yt-dlp")
+    if not browser:
+        return [], (hint + " The browser fingerprint did not get past it "
+                    "either, so try it signed in - add --browser chrome "
+                    "(or firefox/edge), using a browser you are logged into "
+                    "Rumble on.")
+    return [], (hint + " Signed-in cookies did not work either. The channel "
+                "page may need a different browser, or Rumble is blocking "
+                "this machine for now - try again later.")
