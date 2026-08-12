@@ -129,3 +129,42 @@ def test_a_failed_vision_call_falls_back_to_the_words(monkeypatch):
     chosen = rank(_candidates(3), 1, source_path="/in.mp4")
 
     assert chosen and chosen[0].hook == "words"
+
+
+def test_a_failed_vision_pass_says_so(monkeypatch, capsys):
+    """Silence here is indistinguishable from the model having no
+    opinion, which is how a broken vision pass goes unnoticed."""
+    import autoreel.llm_highlights as llm
+
+    monkeypatch.setattr(llm, "available", lambda p="": ("gemini", "key"))
+    monkeypatch.setattr(llm, "resolve_model", lambda *a, **k: "gemini-x")
+    monkeypatch.setattr(llm, "build_vision_contents", lambda *a, **k: [])
+    monkeypatch.setattr(llm, "_ask_gemini_vision", lambda *a: "")
+    monkeypatch.setattr(llm, "_ask_gemini",
+                        lambda *a: '{"clips":[{"index":1,"score":9,"title":"t"}]}')
+
+    rank(_candidates(2), 1, source_path="/in.mp4")
+
+    assert "vision pass came back empty" in capsys.readouterr().out
+
+
+def test_the_image_count_is_capped(monkeypatch):
+    """A request that grows past the limit is refused for its SIZE, and
+    that arrives as an empty reply - identical to no opinion."""
+    from autoreel.llm_highlights import VISION_MAX_IMAGES
+
+    parts = build_vision_contents(_candidates(40), 20, "/in.mp4",
+                                  grab=lambda *a: [b"a", b"b"])
+
+    assert len([p for p in parts if "inline_data" in p]) <= VISION_MAX_IMAGES
+
+
+def test_an_unusable_reply_is_reported(monkeypatch, capsys):
+    import autoreel.llm_highlights as llm
+
+    monkeypatch.setattr(llm, "available", lambda p="": ("gemini", "key"))
+    monkeypatch.setattr(llm, "resolve_model", lambda *a, **k: "gemini-x")
+    monkeypatch.setattr(llm, "_ask_gemini", lambda *a: "not json at all")
+
+    assert rank(_candidates(2), 1) is None
+    assert "nothing usable" in capsys.readouterr().out

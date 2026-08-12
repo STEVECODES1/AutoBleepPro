@@ -484,6 +484,9 @@ def specs_from_segments(segments: Iterable[dict], count: int = DEFAULT_CLIP_COUN
                       source_path=source_path if use_vision else "") \
         if llm_rank else None
     if highlights is None:
+        if llm_rank:
+            print("[Clips] No model opinion - picking on the transcript "
+                  "score alone. Check the key with --check-llm.")
         # The scorer's own verdict: best first, then back into timeline
         # order so clip 01 is the earliest.
         highlights = sorted(shortlist, key=lambda h: h.score,

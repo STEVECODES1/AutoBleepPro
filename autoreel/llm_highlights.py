@@ -80,6 +80,12 @@ MAX_CANDIDATES = 60
 # twenty-clip run with room to reject.
 VISION_MAX_CANDIDATES = 24
 
+# Total images in one request. Two per candidate times twenty-four is
+# forty-eight, and a request that grows past this starts being refused
+# for its size rather than its content - which arrives as an empty reply
+# and looks exactly like the model having no opinion.
+VISION_MAX_IMAGES = 48
+
 
 SYSTEM_PROMPT = """\
 You pick the moments worth cutting out of a live stream.
@@ -248,6 +254,8 @@ def build_vision_contents(candidates: list, count: int, source_path: str,
         except Exception:
             frames = []
         for jpeg in frames:
+            if sum(1 for part in parts if "inline_data" in part) >= VISION_MAX_IMAGES:
+                break
             parts.append(vision_frames.as_inline_data(jpeg))
     return parts
 
@@ -468,6 +476,12 @@ def rank(candidates: list, count: int, provider: str = "",
         if raw:
             shortlist = looking
             print(f"[Clips] A model watched {len(looking)} candidates.")
+        else:
+            # Say so. A silent fall-through here is indistinguishable
+            # from the model having no opinion, and that is exactly how
+            # a broken vision pass would go unnoticed for a week.
+            print("[Clips] The vision pass came back empty - going on the "
+                  "words instead.")
 
     if not raw:
         prompt = build_prompt(shortlist, count)
@@ -479,6 +493,8 @@ def rank(candidates: list, count: int, provider: str = "",
 
     picked = parse_reply(raw, len(shortlist))
     if not picked:
+        print("[Clips] The model returned nothing usable - the scorer's own "
+              "ranking stands.")
         return None
 
     picked.sort(key=lambda item: item[1], reverse=True)

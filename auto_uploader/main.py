@@ -11,9 +11,20 @@ Usage:
     python main.py --test-config                   # validate config.json/.env without uploading anything
 """
 
+import os
+
+# BEFORE anything imports mediapipe. These are read by the C++ logging
+# layer when the shared library loads, not when Python imports it, so
+# setting them next to the import was too late and the "Feedback manager
+# requires a model with a single signature" block kept printing - six
+# lines per clip in the window that also carries the real failures.
+os.environ.setdefault("GLOG_minloglevel", "2")
+os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "3")
+os.environ.setdefault("GRPC_VERBOSITY", "ERROR")
+os.environ.setdefault("ABSL_MIN_LOG_LEVEL", "2")
+
 import argparse
 import json
-import os
 import shutil
 import sys
 import threading
@@ -27,7 +38,7 @@ from datetime import datetime
 # Bump when shipping user-visible changes, so --test-config can prove
 # which build is actually running (stale extracts have silently caused
 # several confusing "the fix did nothing" runs).
-BUILD = "2026-08-13.5 the model watches the clips now"
+BUILD = "2026-08-13.6 say when the model gave no opinion"
 
 # How often --watch checks whether a deferred clip's wait is up. A minute
 # is fine: the waits themselves are 25 to 80 minutes, so the resolution
