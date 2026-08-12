@@ -26,7 +26,7 @@ from datetime import datetime
 # Bump when shipping user-visible changes, so --test-config can prove
 # which build is actually running (stale extracts have silently caused
 # several confusing "the fix did nothing" runs).
-BUILD = "2026-08-11.5 clips hear the room, not just the words"
+BUILD = "2026-08-11.6 clip your own Rumble back catalogue"
 
 # How often --watch checks whether a deferred clip's wait is up. A minute
 # is fine: the waits themselves are 25 to 80 minutes, so the resolution
@@ -906,10 +906,15 @@ def main(argv=None) -> int:
                         help="Never move or delete the source video, whatever "
                              "cleanup.source_video says. For uploading out of "
                              "a library folder you want left exactly as it is.")
-    parser.add_argument("--clips-from", metavar="FOLDER",
+    parser.add_argument("--clips-from", metavar="FOLDER_OR_URL",
                         help="Cut clips from every video in a folder of old "
-                             "VODs. The folder is only ever READ - nothing in "
-                             "it is moved, renamed or deleted.")
+                             "VODs, or from your own channel's recent uploads "
+                             "if given a URL. A folder is only ever READ - "
+                             "nothing in it is moved, renamed or deleted.")
+    parser.add_argument("--limit", type=int, default=None,
+                        help="With a --clips-from URL: how many recent videos "
+                             "to take (default 3). Each is a download plus a "
+                             "full transcription, so start small.")
     parser.add_argument("--clip-count", type=int, default=None,
                         help="How many clips to make with --clips (default 3).")
     parser.add_argument("--gpu-check", action="store_true",
@@ -1294,9 +1299,29 @@ def main(argv=None) -> int:
         return 0
 
     if args.clips_from:
+        from utils.channel_vods import DEFAULT_LIMIT, fetch, is_url
         from utils.clip_runner import make_clips, print_run
 
-        folder = os.path.abspath(os.path.expanduser(args.clips_from))
+        if is_url(args.clips_from):
+            # Your own channel's uploads, downloaded once each and kept.
+            # The archive beside them is what makes this safe to re-run.
+            folder = os.path.join(cfg.project_root, "downloaded_vods")
+            limit = args.limit or DEFAULT_LIMIT
+            print(f"[VODs] Fetching up to {limit} recent video(s) from "
+                  f"{args.clips_from}")
+            print(f"[VODs] Into {folder} - already-taken videos are skipped.")
+            grabbed, problem = fetch(args.clips_from, folder,
+                                     cfg.general.supported_formats, limit)
+            if problem:
+                print(f"[VODs] {problem}")
+                return 1
+            if not grabbed:
+                print("[VODs] Nothing new - every recent video has been "
+                      "taken before. Raise --limit to reach further back.")
+                return 0
+            print(f"[VODs] {len(grabbed)} new video(s) downloaded.")
+        else:
+            folder = os.path.abspath(os.path.expanduser(args.clips_from))
         if not os.path.isdir(folder):
             print(f"[ERROR] --clips-from folder does not exist: {folder}")
             return 1
