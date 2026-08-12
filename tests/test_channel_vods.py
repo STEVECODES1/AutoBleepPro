@@ -20,8 +20,9 @@ for _path in (_REPO, _UPLOADER, _TOOLS):
 
 from utils.channel_vods import (DEFAULT_LIMIT, channel_video_urls,
                                 download_args, fetch, fetch_channel,
-                                fetch_via_listing, is_url, listing_url,
-                                short_id, video_args, video_links_on)
+                                describe_page, fetch_via_listing, is_url,
+                                listing_url, short_id, video_args,
+                                video_links_on)
 
 CHANNEL = "https://rumble.com/user/stackswopo10k"
 
@@ -283,6 +284,38 @@ def test_videos_are_read_off_the_page_in_order_and_deduped():
 def test_the_videos_listing_link_is_not_mistaken_for_a_video():
     """/videos starts with a v too."""
     assert video_links_on('<a href="/videos">All</a>') == []
+
+
+def test_a_video_is_found_however_the_page_writes_the_link():
+    """Betting on one markup shape lost twice in one evening. Rumble's
+    page is React-rendered and the markup moves; the video PATH is the
+    part that cannot change without breaking every link they have ever
+    published, so that is what gets matched."""
+    root = '<a href="/v6aaaaa-monkey-app-night.html">x</a>'
+    absolute = '<a href="https://rumble.com/v6aaaaa-monkey-app-night.html">x</a>'
+    in_json = '{"videoUrl":"https:\\/\\/rumble.com\\/v6aaaaa-monkey-app-night.html"}'
+    wanted = ["https://rumble.com/v6aaaaa-monkey-app-night.html"]
+
+    assert video_links_on(root) == wanted
+    assert video_links_on(absolute) == wanted, "absolute hrefs missed"
+    assert video_links_on(in_json) == wanted, "escaped JSON missed"
+
+
+def test_something_that_merely_ends_in_html_is_not_a_video():
+    """A Rumble ID is short. A long slug before the first dash is some
+    other page that happens to start with a v."""
+    assert video_links_on(
+        '<a href="/verylongidentifierthatisnotanid-x.html">x</a>') == []
+
+
+def test_a_page_that_parses_nothing_hands_over_the_evidence():
+    """This route exists because a parser went stale silently. When this
+    one goes stale it has to say what it saw, in one go, rather than
+    costing a round of diagnostic commands."""
+    told = describe_page('<html><a href="/something">x</a></html>')
+
+    assert "characters:" in told
+    assert "href" in told
 
 
 def test_the_listing_stops_as_soon_as_it_has_enough(monkeypatch):

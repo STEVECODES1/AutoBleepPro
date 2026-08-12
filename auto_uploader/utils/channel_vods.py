@@ -192,9 +192,23 @@ def listing_url(channel_url: str, page: int = 1) -> str:
     return address if page <= 1 else f"{address}?page={int(page)}"
 
 
-# href="/v6abcde-some-title.html". The negative lookahead keeps /videos
-# out; it is the same guard yt-dlp's own Rumble matcher uses.
-_VIDEO_HREF = re.compile(r'href="(/v(?!ideos)[\w.-]+\.html)"')
+# Any Rumble video path, wherever it appears: href="/v6abc-x.html",
+# href="https://rumble.com/v6abc-x.html", or inside a JSON blob as
+# "url":"https:\/\/rumble.com\/v6abc-x.html".
+#
+# Matching the PATH rather than a particular attribute is deliberate. An
+# href="..." pattern is a bet on one specific markup shape, and that bet
+# has now lost twice in one evening - Rumble's page is React-rendered and
+# the markup moves. The path itself is the part that cannot change
+# without breaking every link Rumble has ever published.
+#
+# The lookahead keeps /videos out; it is the same guard yt-dlp's own
+# Rumble matcher uses.
+_VIDEO_PATH = re.compile(r'/(v(?!ideos)[0-9a-zA-Z][\w.-]*?\.html)')
+
+# A Rumble ID is short - "v6abcde". Anything longer than this before the
+# first dash is not an ID and the match is something else.
+_MAX_ID_CHARS = 16
 
 # A challenge page is served as HTTP 200, so the status code proves
 # nothing and the body has to be looked at.
@@ -256,17 +270,50 @@ def video_links_on(html: str, netloc: str = "rumble.com") -> list:
     """Every video URL on a channel page, in the order the page lists them.
 
     Page order is newest first, which is the order worth clipping in.
-    Deduplicated because a channel page links the same video from the
-    thumbnail and the title.
+    Deduplicated because a page links the same video from the thumbnail,
+    the title and again from the JSON the app is built from.
     """
+    # Rumble embeds the same URLs inside escaped JSON as well as in the
+    # markup; unescaping first means one pattern reads both.
+    text = (html or "").replace("\\/", "/")
+
     seen = set()
     links = []
-    for path in _VIDEO_HREF.findall(html or ""):
+    for match in _VIDEO_PATH.finditer(text):
+        path = match.group(1)
+        if len(short_id(path)) > _MAX_ID_CHARS or len(short_id(path)) < 2:
+            continue
         if path in seen:
             continue
         seen.add(path)
-        links.append(f"https://{netloc}{path}")
+        links.append(f"https://{netloc}/{path}")
     return links
+
+
+def describe_page(html: str) -> str:
+    """What the page actually contains, for when nothing parsed out of it.
+
+    Printed instead of leaving you to guess. The whole reason this route
+    exists is that a parser went stale without saying so, so when this
+    one goes stale it has to hand over the evidence needed to fix it in
+    one go rather than one command at a time.
+    """
+    text = html or ""
+    lines = [f"characters: {len(text)}"]
+
+    for label, needle in (("rumble.com/v", "rumble.com/v"),
+                          ('href="/v', 'href="/v'),
+                          (".html links", ".html"),
+                          ("videostream", "videostream"),
+                          ("__NEXT_DATA__", "__NEXT_DATA__"),
+                          ("sign in wall", "sign in")):
+        lines.append(f"{label}: {text.lower().count(needle.lower())}")
+
+    sample = re.findall(r'<a\b[^>]{0,160}?href="[^"]{1,120}"', text)[:5]
+    if sample:
+        lines.append("first links on the page:")
+        lines.extend(f"  {piece}" for piece in sample)
+    return "\n".join(f"         {line}" for line in lines)
 
 
 def short_id(link: str) -> str:
@@ -339,6 +386,10 @@ def channel_video_urls(channel_url: str, archive: str = "",
                 problems = ("the channel page loaded but no videos could be "
                             "read out of it - Rumble's page layout has "
                             "changed")
+                # Hand over the evidence rather than making you run a
+                # diagnostic command to get it.
+                print("[VODs] What came back instead:")
+                print(describe_page(html))
             break
 
         for link in found:
