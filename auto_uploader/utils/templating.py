@@ -167,13 +167,59 @@ def format_date(dt: datetime, date_style: str) -> str:
     return dt.strftime(date_style)
 
 
+# YouTube hard-caps video titles here, and Rumble is not far off.
+MAX_TITLE_CHARS = 100
+
+# A timestamp the streamer left on the end of their own stream name. It
+# is already going to appear as {date}, and carrying it twice is what
+# pushed a title past the cap.
+_TRAILING_STAMP = re.compile(
+    r"[\s\-|]*\(?\b\d{4}[-/]\d{1,2}[-/]\d{1,2}\b"      # 2026-08-11
+    r"(?:[\s,]+\d{1,2}[:_.]\d{2}(?::\d{2})?)?\)?\s*$"     # 14:00 / 06_16
+)
+
+
+def strip_trailing_stamp(stream_title: str) -> str:
+    """Drop a date/time the stream name already ends with.
+
+    The recorder names a stream after what the platform called it, and
+    that is often "<name> 2026-08-11 14:00". The template adds the date
+    itself, so keeping this means saying it twice AND spending twenty of
+    the hundred characters a title gets.
+    """
+    trimmed = _TRAILING_STAMP.sub("", (stream_title or "").strip())
+    return trimmed.strip(" -|,") or (stream_title or "").strip()
+
+
 def build_title(stream_title: str, date_str: str, title_format: str) -> str:
-    """Fill `title_format` (e.g. '"{title}" {date} Stackswopo Stream')."""
+    """Fill `title_format` (e.g. '"{title}" {date} Stackswopo Stream').
+
+    The STREAM NAME is what gets shortened when the result is too long,
+    never the format around it. Truncating the finished string instead
+    published `"stackswopo + gta D10 johnny cox + Lifestyle RP + Windy
+    City + Cuffem + Adin Ross 2026-08-11 14:00"` - the date and the
+    "Stackswopo Stream" that identifies the channel both cut clean off
+    the end, on a title that was nothing but the raw stream name.
+    """
+    stream_title = strip_trailing_stamp(stream_title)
     title = title_format.format(title=stream_title, date=date_str)
-    if len(title) > 100:
-        # YouTube hard-caps video titles at 100 characters.
-        title = title[:100]
-    return title
+    if len(title) <= MAX_TITLE_CHARS:
+        return title
+
+    # How much room the name actually has, once the format has taken its
+    # share. Measured rather than assumed, so editing title_format in
+    # config cannot silently break this.
+    overhead = len(title_format.format(title="", date=date_str))
+    budget = MAX_TITLE_CHARS - overhead
+    if budget < 12:
+        # A format with no room left for a name at all: nothing sensible
+        # to shorten, so cut the whole thing and keep it valid.
+        return title[:MAX_TITLE_CHARS]
+
+    shortened = stream_title[:budget].rsplit(" ", 1)[0].rstrip(" ,-+|")
+    if not shortened:
+        shortened = stream_title[:budget].rstrip(" ,-+|")
+    return title_format.format(title=shortened, date=date_str)
 
 
 def build_description(template: str, date_str: str, stream_title: str) -> str:

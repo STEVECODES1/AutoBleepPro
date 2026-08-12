@@ -91,53 +91,88 @@ WATERMARK_MARGIN_Y = 22
 WATERMARK_ALPHA = 0.55
 
 
-def watermark_filter() -> str:
-    """Return an ffmpeg drawtext filter string for the BinScripts watermark.
+# Font files to try, most-preferred first. An EXPLICIT file is the whole
+# point: `font=monospace` asks fontconfig to resolve a name, and Windows
+# ships no fontconfig config, so every render that touched text died with
+# "Fontconfig error: Cannot load default config file: File not found".
+# With fontfile= the resolver is never consulted at all.
+_FONT_CANDIDATES = (
+    # Windows
+    "C:/Windows/Fonts/consola.ttf",
+    "C:/Windows/Fonts/arial.ttf",
+    "C:/Windows/Fonts/segoeui.ttf",
+    # Linux
+    "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    "/usr/share/fonts/TTF/DejaVuSans.ttf",
+    # macOS
+    "/System/Library/Fonts/Menlo.ttc",
+    "/Library/Fonts/Arial.ttf",
+)
 
-    Uses the built-in ffmpeg monospace font so no font file needs to
-    be bundled with the repo.  The text sits in the bottom-left corner,
-    slightly inset from the edge, at half-opacity so it does not compete
-    with the content.
+
+def font_file() -> str:
+    """A real font file on this machine, or "" if there is none.
+
+    Checked rather than assumed, because the failure mode of guessing is
+    a render that dies at the very end of the pipeline - after the cut,
+    the crop and the encode have all been paid for.
     """
-    # y expression: H - line height - margin  (H/h are ffmpeg's canvas/text vars)
+    override = os.environ.get("AUTOREEL_FONT_FILE", "").strip()
+    if override and os.path.isfile(override):
+        return override
+    windir = os.environ.get("WINDIR", "").replace("\\", "/")
+    for candidate in _FONT_CANDIDATES:
+        if windir and candidate.startswith("C:/Windows"):
+            candidate = candidate.replace("C:/Windows", windir, 1)
+        if os.path.isfile(candidate):
+            return candidate
+    return ""
+
+
+def escape_font_path(path: str) -> str:
+    """A font path as drawtext will accept it.
+
+    The drive colon in C:/Windows/... reads as the start of the next
+    filter option unless it is escaped, which is the same trap the
+    subtitles filter sets - see escape_filter_path.
+    """
+    return path.replace("\\", "/").replace(":", r"\:").replace("'", r"\'")
+
+
+def watermark_filter() -> str:
+    """The channel watermark, bottom-left. "" when no font file exists.
+
+    Returning empty rather than a best-effort chain is deliberate: a
+    watermark is a nice-to-have and a clip is not, so a machine with no
+    usable font ships the clip without the text instead of shipping
+    nothing.
+    """
+    path = font_file()
+    if not path:
+        return ""
     return (
         f"drawtext="
+        f"fontfile='{escape_font_path(path)}':"
         f"text='{WATERMARK_TEXT}':"
         f"fontsize={WATERMARK_FONTSIZE}:"
         f"fontcolor=white@{WATERMARK_ALPHA:.2f}:"
         f"x={WATERMARK_MARGIN_X}:"
-        f"y=h-th-{WATERMARK_MARGIN_Y}:"
-        f"font=monospace"
+        f"y=h-th-{WATERMARK_MARGIN_Y}"
     )
 
 
 def _ffmpeg_env() -> dict:
-    """A copy of the current env with FONTCONFIG_FILE set for Windows.
+    """The environment ffmpeg runs in.
 
-    ffmpeg's subtitles/ass filter (and drawtext) call fontconfig to
-    locate fonts.  On Windows there is no system fontconfig.conf, so
-    every render that touches text dies with:
-
-        Fontconfig error: Cannot load default config file: File not found
-
-    Pointing FONTCONFIG_FILE at the Windows font directory is the
-    minimal fix: fontconfig accepts a bare directory path and will scan
-    it for fonts instead of looking for a config file that doesn't exist.
-    FC_FONT_PATH is set to the same path as a belt-and-suspenders measure
-    for older fontconfig builds that ignore FONTCONFIG_FILE on Windows.
-
-    The override is only applied when the variable is not already set
-    (the user may have a real fontconfig install), and only on Windows.
-    On Linux/macOS the system fontconfig is present and no override is
-    needed.
+    FONTCONFIG_FILE names a fonts.conf FILE, not a directory - an earlier
+    fix pointed it at C:/Windows/Fonts and fontconfig kept failing,
+    because a directory is what FONTCONFIG_PATH takes. The real fix is
+    upstream of this: watermark_filter passes an explicit fontfile=, so
+    fontconfig is never asked to resolve anything. Any value the user has
+    genuinely set is left alone.
     """
-    env = os.environ.copy()
-    if sys.platform == "win32" and not env.get("FONTCONFIG_FILE"):
-        win_fonts = os.environ.get(
-            "WINDIR", "C:/Windows").replace("\\", "/") + "/Fonts"
-        env["FONTCONFIG_FILE"] = win_fonts
-        env.setdefault("FC_FONT_PATH", win_fonts)
-    return env
+    return os.environ.copy()
 
 
 class ClipError(RuntimeError):
@@ -253,17 +288,23 @@ def escape_filter_path(path: str) -> str:
 
 def build_filter(strategy: str = CROP_CENTER,
                  caption_path: Optional[str] = None,
-                 region: Optional[dict] = None) -> str:
+                 region: Optional[dict] = None,
+                 watermark: bool = True) -> str:
     """Compose the full ffmpeg -vf filter chain for one clip.
 
-    Order: crop/fit  →  captions (optional)  →  watermark.
-    The watermark goes on last so it sits above every other layer.
+    Order: crop/fit  ->  captions (optional)  ->  watermark.
     """
     chain = crop_filter(strategy, region)
     if caption_path:
         chain += f",subtitles='{escape_filter_path(caption_path)}'"
-    # Watermark always applied last — sits on top of captions too.
-    chain += f",{watermark_filter()}"
+    if watermark:
+        # Last, so it sits on top of captions too. Skipped entirely when
+        # there is no font file - an empty filter appended after a comma
+        # is a syntax error, and losing ten clips to a watermark is not a
+        # trade anyone would make.
+        mark = watermark_filter()
+        if mark:
+            chain += f",{mark}"
     return chain
 
 
@@ -283,7 +324,8 @@ def render_clip(source_path: str, spec: ClipSpec, output_path: str,
                 encoder: str = "libx264",
                 preset: str = "fast",
                 crf: int = 20,
-                region: Optional[dict] = None) -> str:
+                region: Optional[dict] = None,
+                watermark: bool = True) -> str:
     """Cut, crop and (optionally) caption one clip. Returns the path."""
     if not have_ffmpeg():
         raise ClipError("ffmpeg is not on PATH - clip rendering needs it")
@@ -303,7 +345,7 @@ def render_clip(source_path: str, spec: ClipSpec, output_path: str,
         "-accurate_seek", "-ss", f"{spec.start:.3f}",
         "-i", source_path,
         "-t", f"{spec.duration:.3f}",
-        "-vf", build_filter(strategy, caption_path, region),
+        "-vf", build_filter(strategy, caption_path, region, watermark),
         *_encoder_args(encoder, preset, crf),
         "-c:a", "aac", "-b:a", "128k", "-ac", "2",
         # Vertical feeds are 30fps; leaving a 60fps source at 60 doubles
@@ -325,7 +367,25 @@ def render_clip(source_path: str, spec: ClipSpec, output_path: str,
     if completed.returncode != 0 or not os.path.exists(partial):
         _remove(partial)
         detail = (completed.stderr or b"").decode("utf-8", "replace").strip()
-        raise ClipError(f"ffmpeg failed on clip {spec.index}: {detail[-400:]}")
+        if watermark:
+            # A whole stream's clips were lost to a watermark once: the
+            # drawtext filter needs a font, and a machine without one
+            # failed every render at the last step. The text is a
+            # nice-to-have; the clip is the thing.
+            print(f"[Clips] clip {spec.index}: retrying without the "
+                  f"watermark ({detail.splitlines()[-1][:120] if detail else 'no detail'})")
+            return render_clip(source_path, spec, output_path, strategy,
+                               caption_path, encoder, preset, crf, region,
+                               watermark=False)
+        # An empty stderr with a non-zero exit is what "suppressing" the
+        # fontconfig message produced last time: ten clips failed and the
+        # reason printed was ";". Say the exit code and the filter chain
+        # so there is always something to work from.
+        raise ClipError(
+            f"ffmpeg failed on clip {spec.index} (exit {completed.returncode}): "
+            + (detail[-800:] if detail
+               else f"no output from ffmpeg. Filter chain was: "
+                    f"{build_filter(strategy, caption_path, region, watermark)[:300]}"))
 
     os.replace(partial, output_path)
     return output_path
@@ -413,7 +473,10 @@ def clip_filename(basename: str, spec: ClipSpec) -> str:
     """
     label = _clean_basename(basename)
     # Filesystem-safe: keep letters, digits, spaces, hyphens, apostrophes.
-    label = re.sub(r"[^\w\s\-']", "", label).strip()
+    label = re.sub(r"[^\w\s\-']", "", label)
+    # Stripping a date out of the middle leaves the gap it was sitting
+    # in - "Damn  Stream" rather than "Damn Stream".
+    label = " ".join(label.split()) or "Clip"
     return f"{label} - Clip {spec.index:02d}.mp4"
 
 

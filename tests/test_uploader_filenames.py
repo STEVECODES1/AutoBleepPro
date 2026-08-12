@@ -208,3 +208,77 @@ def test_a_valid_flag_still_parses():
     parser = argparse.ArgumentParser()
     parser.add_argument("--watch", nargs="?", const="")
     assert _parse_args_helpfully(parser, ["--watch"]).watch == ""
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Stream titles: "<name>" <date> Stackswopo Stream
+#
+# The channel's own convention. It was being broken by the length cap,
+# which cut the finished string and so removed the date and the channel
+# name - the two parts that are not negotiable - leaving nothing but a
+# raw stream name in quotes.
+# ═════════════════════════════════════════════════════════════════════════════
+
+TITLE_FORMAT = '"{title}" {date} Stackswopo Stream'
+
+
+def _title(name, date="8/11/26"):
+    import sys
+    sys.path.insert(0, _UPLOADER)
+    from utils.templating import build_title
+    return build_title(name, date, TITLE_FORMAT)
+
+
+def test_a_short_name_reads_exactly_as_the_channel_titles_them():
+    assert _title("shadows", "8/4/26") == '"shadows" 8/4/26 Stackswopo Stream'
+
+
+def test_a_long_name_loses_the_name_not_the_channel():
+    """The regression: this published as a bare quoted stream name with
+    the date and "Stackswopo Stream" chopped off the end."""
+    long_name = ("stackswopo + gta D10 johnny cox + Lifestyle RP + Windy "
+                 "City + Cuffem + Adin Ross")
+
+    out = _title(long_name)
+
+    assert len(out) <= 100
+    assert out.endswith(" 8/11/26 Stackswopo Stream")
+    assert out.startswith('"stackswopo + gta')
+
+
+def test_a_long_name_is_cut_at_a_word():
+    out = _title("one two three four five six seven eight nine ten eleven "
+                 "twelve thirteen fourteen fifteen sixteen seventeen")
+    quoted = out.split('"')[1]
+    assert quoted.split()[-1] in out
+    assert not quoted.endswith(" ")
+
+
+def test_a_date_the_streamer_left_on_the_name_is_not_said_twice():
+    """The recorder names a stream after what the platform called it, and
+    that often already ends in a timestamp."""
+    out = _title("OMG 2026-08-10 13:56")
+    assert out == '"OMG" 8/11/26 Stackswopo Stream'
+
+
+def test_an_underscore_time_is_stripped_too():
+    """yt-dlp writes 06_16 rather than 06:16 - colons are illegal in a
+    Windows filename, so that is the shape the recorder produces."""
+    out = _title("Stackswopo kick live 2026-08-11 06_16")
+    assert out == '"Stackswopo kick live" 8/11/26 Stackswopo Stream'
+
+
+def test_a_name_that_is_only_a_date_is_left_alone():
+    """Stripping everything would leave an empty title, which is worse
+    than a redundant one."""
+    out = _title("2026-08-11")
+    assert '""' not in out
+
+
+def test_the_cap_is_still_respected_by_an_unusual_format():
+    import sys
+    sys.path.insert(0, _UPLOADER)
+    from utils.templating import build_title
+
+    out = build_title("a" * 200, "8/11/26", "{title} " + "x" * 95)
+    assert len(out) <= 100

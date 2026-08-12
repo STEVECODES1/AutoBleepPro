@@ -262,7 +262,11 @@ def test_a_transcript_with_nothing_interesting_yields_no_clips():
 def test_clip_filenames_are_filesystem_safe():
     name = clip_filename('"DAMN" 8/3/26: stream', ClipSpec(0, 10, index=2))
     assert not any(c in name for c in '"/:*?<>|')
-    assert name.endswith("_clip02.mp4")
+    # The clip number has to survive whatever tidying the name gets:
+    # ten files that differ only by an index nobody can see are ten
+    # files nobody can tell apart.
+    assert "02" in name and name.endswith(".mp4")
+    assert "  " not in name, "double space from stripped noise"
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -421,4 +425,6 @@ def test_fit_still_takes_burned_captions_when_asked():
     from autoreel.clip_maker import build_filter
 
     chain = build_filter("fit", "/tmp/x.ass")
-    assert chain.endswith("subtitles='/tmp/x.ass'")
+    # The watermark goes on after the captions, so this is no longer the
+    # end of the chain - only that the captions are in it.
+    assert "subtitles='/tmp/x.ass'" in chain
