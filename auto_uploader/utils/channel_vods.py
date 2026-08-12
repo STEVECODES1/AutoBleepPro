@@ -27,16 +27,33 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import re
 import urllib.parse
+import urllib.request
 from typing import Optional
-
-from .rumble_checker import _fetch_plain, _looks_like_feed, _parse_rss
 
 # Long enough for a multi-hour VOD on a domestic line.
 _TIMEOUT = 60 * 180
 
-# Reading one XML file, not a video.
+# Reading one HTML page, not a video.
 _FEED_TIMEOUT = 30
+
+# A channel page holds dozens of videos, so one page covers any sane
+# --limit. The cap stops a bad parse from walking a channel forever.
+MAX_LISTING_PAGES = 5
+
+# Cloudflare fingerprints the whole header set, not just User-Agent: a
+# request claiming to be Chrome while sending none of the headers Chrome
+# always sends is a stronger bot signal than an honest urllib one.
+_BROWSER_HEADERS = {
+    "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                   "AppleWebKit/537.36 (KHTML, like Gecko) "
+                   "Chrome/129.0.0.0 Safari/537.36"),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Accept-Encoding": "identity",
+    "Connection": "close",
+}
 
 ARCHIVE_NAME = "channel_vods_archive.txt"
 
@@ -142,14 +159,21 @@ def video_args(url: str, output_dir: str, archive: str,
     ]
 
 
-def feed_url(channel_url: str) -> str:
-    """The RSS address for a Rumble channel page, or "" if there isn't one.
+def listing_url(channel_url: str, page: int = 1) -> str:
+    """A Rumble channel page address, or "" if this is not one.
 
-    Rumble publishes every channel as `<page>/index.xml`, which is the
-    same convention `rumble.rss_url` in config.json already uses for the
-    upload-dedup check. Both `/user/<name>` and `/c/<name>` pages have
-    one; anything else (YouTube, Twitch, a bare domain) returns "" and
-    the caller stays on the yt-dlp route.
+    THERE IS NO RSS FEED. Rumble does not publish one - not
+    `<page>/index.xml`, not `<page>/rss`, nothing. (config.json's
+    `rumble.rss_url` is set to an index.xml address, which means the
+    upload-dedup check has been quietly falling back to local history
+    this whole time.) Every RSS "solution" for Rumble is a third-party
+    site scraping the same HTML this reads directly, and routing your
+    channel through someone else's server to get data Rumble already
+    serves you is not an improvement.
+
+    Only `/user/<name>` and `/c/<name>` pages have listings. Anything
+    else - YouTube, Twitch, a single video - returns "" and the caller
+    stays on the yt-dlp route, which works fine everywhere else.
     """
     try:
         parts = urllib.parse.urlsplit(str(channel_url or "").strip())
@@ -158,25 +182,59 @@ def feed_url(channel_url: str) -> str:
     if not parts.netloc.lower().endswith("rumble.com"):
         return ""
 
-    path = parts.path.strip("/")
-    if path.endswith("index.xml"):
-        # Already a feed - the query string is a share token and the
-        # feed does not want it.
-        return urllib.parse.urlunsplit((parts.scheme or "https", parts.netloc,
-                                        "/" + path, "", ""))
-
-    pieces = [piece for piece in path.split("/") if piece]
+    pieces = [piece for piece in parts.path.strip("/").split("/") if piece]
     if len(pieces) != 2 or pieces[0] not in ("user", "c"):
         return ""
-    return f"https://{parts.netloc}/{pieces[0]}/{pieces[1]}/index.xml"
+
+    # The share token from the address bar (?e9s=...) is dropped; page is
+    # the only query Rumble wants here.
+    address = f"https://{parts.netloc}/{pieces[0]}/{pieces[1]}"
+    return address if page <= 1 else f"{address}?page={int(page)}"
+
+
+# href="/v6abcde-some-title.html". The negative lookahead keeps /videos
+# out; it is the same guard yt-dlp's own Rumble matcher uses.
+_VIDEO_HREF = re.compile(r'href="(/v(?!ideos)[\w.-]+\.html)"')
+
+# A challenge page is served as HTTP 200, so the status code proves
+# nothing and the body has to be looked at.
+_CHALLENGE = ("just a moment", "cf-browser-verification", "challenge-platform",
+              "cf_chl_opt")
+
+
+def _fetch_html(url: str) -> tuple:
+    """(text | None, why_not). Plain first, then the browser fingerprint.
+
+    Impersonation is the same mechanism yt-dlp's --impersonate uses, and
+    on this machine it demonstrably gets past Cloudflare - it read five
+    channel pages. What it could not do was make sense of them, which is
+    what the parsing below is for.
+    """
+    problems = []
+    try:
+        request = urllib.request.Request(url, headers=_BROWSER_HEADERS)
+        with urllib.request.urlopen(request, timeout=_FEED_TIMEOUT) as response:
+            html = response.read().decode("utf-8", "replace")
+        if not _is_challenge(html):
+            return html, ""
+        problems.append("direct: Cloudflare served a challenge page")
+    except Exception as exc:
+        problems.append(f"direct: {exc}")
+
+    html, why = _fetch_impersonated(url)
+    if html is not None:
+        return html, ""
+    problems.append(f"as a browser: {why}")
+    return None, "; ".join(problems)
+
+
+def _is_challenge(html: str) -> bool:
+    head = html[:4000].lower()
+    return any(marker in head for marker in _CHALLENGE)
 
 
 def _fetch_impersonated(url: str) -> tuple:
-    """(raw_bytes | None, why_not). The browser fingerprint, directly.
-
-    Same mechanism yt-dlp's --impersonate uses; borrowed here because the
-    feed is one plain GET and does not need yt-dlp at all.
-    """
+    """(text | None, why_not). curl_cffi presenting a real browser's TLS."""
     try:
         from curl_cffi import requests as cffi_requests
     except Exception as exc:
@@ -188,30 +246,35 @@ def _fetch_impersonated(url: str) -> tuple:
         return None, str(exc)
     if response.status_code != 200:
         return None, f"HTTP {response.status_code}"
-    raw = response.content
-    if not _looks_like_feed(raw):
-        return None, "a challenge page came back instead of the feed"
-    return raw, ""
+    html = response.content.decode("utf-8", "replace")
+    if _is_challenge(html):
+        return None, "Cloudflare served a challenge page"
+    return html, ""
 
 
-def _fetch_feed(url: str) -> tuple:
-    """(raw_bytes | None, why_not). Plainest first, same as everything else."""
-    raw, why = _fetch_plain(url)
-    if raw is not None:
-        return raw, ""
-    first = why
-    raw, why = _fetch_impersonated(url)
-    if raw is not None:
-        return raw, ""
-    return None, f"direct: {first}; as a browser: {why}"
+def video_links_on(html: str, netloc: str = "rumble.com") -> list:
+    """Every video URL on a channel page, in the order the page lists them.
+
+    Page order is newest first, which is the order worth clipping in.
+    Deduplicated because a channel page links the same video from the
+    thumbnail and the title.
+    """
+    seen = set()
+    links = []
+    for path in _VIDEO_HREF.findall(html or ""):
+        if path in seen:
+            continue
+        seen.add(path)
+        links.append(f"https://{netloc}{path}")
+    return links
 
 
 def short_id(link: str) -> str:
     """`https://rumble.com/v6abcde-some-title.html` -> `v6abcde`.
 
     Rumble's own ID is the leading token; the rest of the slug is the
-    title at the time of posting and can change. Matching on the leading
-    token is what makes the archive check survive a rename.
+    title at the time of posting and can change under you. Matching on
+    the leading token is what makes the archive check survive a retitle.
     """
     tail = str(link or "").rstrip("/").rsplit("/", 1)[-1]
     for cut in (".html", ".htm"):
@@ -239,63 +302,84 @@ def _archived_ids(archive: str) -> set:
     return taken
 
 
-def feed_video_urls(channel_url: str, archive: str = "",
-                    limit: int = DEFAULT_LIMIT) -> tuple:
-    """(video_urls_newest_first, why_not). Reads the channel's RSS feed.
+def channel_video_urls(channel_url: str, archive: str = "",
+                       limit: int = DEFAULT_LIMIT,
+                       max_pages: int = MAX_LISTING_PAGES) -> tuple:
+    """(video_urls_newest_first, why_not). Reads the channel page itself.
 
     This exists because yt-dlp's Rumble channel extractor currently walks
     five pages of a real channel and parses zero videos out of them - it
     reports success, so nothing looks broken, and no clip ever appears.
-    The feed lists the same videos in the same order and is one request.
     Individual video downloads were never affected; only the listing was.
+
+    Pages are walked only until `limit` new videos are found, so the
+    common daily case is one request.
     """
-    address = feed_url(channel_url)
-    if not address:
+    if not listing_url(channel_url):
         return [], "not a Rumble channel page"
 
-    raw, why = _fetch_feed(address)
-    if raw is None:
-        return [], why
-
-    try:
-        videos = _parse_rss(raw)
-    except Exception as exc:
-        return [], f"feed fetched but could not be parsed ({exc})"
-
     taken = _archived_ids(archive) if archive else set()
+    netloc = urllib.parse.urlsplit(channel_url).netloc or "rumble.com"
     fresh = []
-    for video in videos:
-        if not video.url:
-            continue
-        if short_id(video.url) in taken:
-            continue
-        fresh.append(video.url)
-        if len(fresh) >= max(1, limit):
+    seen = set()
+    problems = ""
+
+    for page in range(1, max(1, max_pages) + 1):
+        html, why = _fetch_html(listing_url(channel_url, page))
+        if html is None:
+            problems = why
             break
-    return fresh, ""
+
+        found = video_links_on(html, netloc)
+        if not found:
+            # An empty page is the end of the channel, not a failure -
+            # unless it was the FIRST page, which means the layout
+            # changed again and this parser needs looking at.
+            if page == 1:
+                problems = ("the channel page loaded but no videos could be "
+                            "read out of it - Rumble's page layout has "
+                            "changed")
+            break
+
+        for link in found:
+            if link in seen:
+                continue
+            seen.add(link)
+            if short_id(link) in taken:
+                continue
+            fresh.append(link)
+            if len(fresh) >= max(1, limit):
+                return fresh, ""
+
+    if fresh:
+        # Some pages read, enough videos found: a later page failing is
+        # not worth throwing away what we have.
+        return fresh, ""
+    return [], problems
 
 
-def fetch_via_feed(channel_url: str, output_dir: str, extensions: tuple,
-                   limit: int = DEFAULT_LIMIT, archive: str = "",
-                   browser: str = "") -> tuple:
-    """Download from the RSS listing instead of the channel page.
+def fetch_via_listing(channel_url: str, output_dir: str, extensions: tuple,
+                      limit: int = DEFAULT_LIMIT, archive: str = "",
+                      browser: str = "") -> tuple:
+    """Download from the parsed channel page instead of yt-dlp's listing.
 
     Returns (new_paths, why_not) with the same contract as `fetch`.
     """
     os.makedirs(output_dir, exist_ok=True)
     archive = archive or os.path.join(output_dir, ARCHIVE_NAME)
 
-    links, why = feed_video_urls(channel_url, archive, limit)
+    links, why = channel_video_urls(channel_url, archive, limit)
     if why:
         return [], why
     if not links:
         return [], ""
 
-    print(f"[VODs] The channel feed lists {len(links)} video(s) to take.")
+    print(f"[VODs] Read {len(links)} video(s) off the channel page.")
     before = _videos_in(output_dir, extensions)
     impersonate = have_impersonation()
 
     for link in links:
+        print(f"[VODs] {link}")
         try:
             subprocess.run(video_args(link, output_dir, archive,
                                       impersonate, browser),
@@ -398,33 +482,35 @@ def fetch_channel(url: str, output_dir: str, extensions: tuple,
                   archive: str = "", browser: str = "") -> tuple:
     """Get new videos off a channel by whichever route works.
 
-    The channel page first, because when it works it is one request and
-    it handles every site. The RSS feed second, because on Rumble the
-    page route currently succeeds while finding nothing: yt-dlp reads
-    five pages, parses zero videos, and exits 0. That is indistinguishable
-    from "nothing new" from the outside, so the feed is tried whenever
-    the page produced no files - it is a single cheap GET, and if it also
-    finds nothing new then nothing new is the honest answer.
+    yt-dlp's own listing first, because when it works it is one command
+    and it handles every site. Reading the channel page directly second,
+    because on Rumble yt-dlp's listing currently succeeds while finding
+    nothing: it walks five pages, parses zero videos, and exits 0. That
+    is indistinguishable from "nothing new" from the outside, so the
+    direct read is tried whenever the listing produced no files - it is
+    one cheap GET, and if it also finds nothing new then nothing new is
+    the honest answer.
     """
     grabbed, problem = fetch(url, output_dir, extensions, limit,
                              archive, browser)
     if grabbed:
         return grabbed, ""
 
-    if not feed_url(url):
-        # No feed to fall back to - whatever fetch said is the answer.
+    if not listing_url(url):
+        # Not a Rumble channel - there is nothing this route can add.
         return grabbed, problem
 
-    print("[VODs] The channel page listed nothing. Trying the channel feed...")
-    from_feed, why = fetch_via_feed(url, output_dir, extensions, limit,
-                                    archive, browser)
-    if from_feed:
-        return from_feed, ""
+    print("[VODs] yt-dlp listed nothing. Reading the channel page directly...")
+    directly, why = fetch_via_listing(url, output_dir, extensions, limit,
+                                      archive, browser)
+    if directly:
+        return directly, ""
     if problem:
-        # The page failed outright; lead with that, and say the feed was
-        # tried so the next step is not "try the feed".
-        return [], f"{problem}\n         The channel feed did not work either: {why or 'it listed nothing new'}."
+        # yt-dlp failed outright; lead with that, and say the page was
+        # read too so the next step is not "try reading the page".
+        return [], (f"{problem}\n         Reading the channel page directly "
+                    f"did not work either: "
+                    f"{why or 'it listed nothing new'}.")
     if why:
-        return [], (f"the channel page listed nothing and the feed could not "
-                    f"be read: {why}")
+        return [], f"yt-dlp listed nothing, and {why}"
     return [], ""
