@@ -45,9 +45,35 @@ PLAY_RES_Y = 1920
 MARGIN_V = 420
 
 DEFAULT_FONT = "Arial"
-DEFAULT_FONT_SIZE = 84
+
+# Sized so a full-length line FITS. The frame is 1080 wide with 80px
+# margins each side, leaving 920px. Arial Bold at this size averages
+# about 0.58em per uppercase character, so the char limit below is what
+# actually keeps a line inside the frame - the two numbers are a pair
+# and changing one without the other pushes text off both edges.
+#
+# It did exactly that: 28 characters at 84px is roughly 1400px of text
+# in a 920px space, and every clip went out with the first and last
+# words sliced off.
+DEFAULT_FONT_SIZE = 62
 DEFAULT_MAX_WORDS = 4
-DEFAULT_MAX_CHARS = 28
+DEFAULT_MAX_CHARS = 20
+
+# Width one uppercase character takes, as a fraction of font size, for
+# Arial Bold. Used by fits_in_frame below.
+_CHAR_WIDTH_EM = 0.58
+
+# Left plus right margin in the style line.
+_SIDE_MARGINS = 160
+
+
+def fits_in_frame(max_chars: int = DEFAULT_MAX_CHARS,
+                  font_size: int = DEFAULT_FONT_SIZE) -> bool:
+    """Whether the longest allowed line fits between the margins."""
+    return max_chars * font_size * _CHAR_WIDTH_EM <= (
+        PLAY_RES_X - _SIDE_MARGINS)
+
+
 # A phrase held longer than this reads as a stuck caption.
 DEFAULT_MAX_PHRASE_S = 3.0
 # A gap this long between words is a new thought, so break the phrase.

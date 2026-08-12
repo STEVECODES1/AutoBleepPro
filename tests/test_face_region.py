@@ -106,3 +106,19 @@ def test_a_value_the_user_set_is_left_alone():
         assert os.environ["GLOG_minloglevel"] == "0"
     finally:
         os.environ.pop("GLOG_minloglevel", None)
+
+
+def test_no_faces_falls_back_to_the_whole_frame_not_the_rectangle():
+    """The configured rectangle points wherever it was last aimed, and
+    when no face is on screen what sits there is the browser - which is
+    how clips went out framed on a slots game and a Scream mask instead
+    of the two people talking. Keeping the whole frame cannot be wrong
+    the same way: nothing is cut."""
+    import inspect
+
+    from autoreel import clip_maker
+
+    body = inspect.getsource(clip_maker.ClipMaker.make)
+
+    assert "CROP_FIT" in body, "the fallback has to keep the whole frame"
+    assert "no faces here" in body

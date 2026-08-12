@@ -672,17 +672,30 @@ class ClipMaker:
             # this stretch, which is normal, and the configured rectangle
             # stands.
             region = self.region
+            clip_strategy = strategy
             if strategy == CROP_REGION and self.find_faces:
                 measured = face_region.region_for(
                     source_path, spec.start, spec.end - spec.start)
                 if measured:
                     region = measured
                 else:
-                    print(f"[Clips] Clip {spec.index:02d}: no faces found, "
-                          f"using the configured rectangle.")
+                    # NOT the configured rectangle. That rectangle points
+                    # wherever it was last aimed, and when no face is on
+                    # screen what sits there is the browser - which is how
+                    # clips went out framed on a slots game and a Scream
+                    # mask instead of the two people talking.
+                    #
+                    # Keeping the whole frame cannot be wrong in the same
+                    # way: nothing is cut, so whatever the moment was, it
+                    # is still in the clip.
+                    clip_strategy = CROP_FIT
+                    region = None
+                    print(f"[Clips] Clip {spec.index:02d}: no faces here - "
+                          f"keeping the whole frame.")
             try:
                 render_clip(source_path, spec, output_path,
-                            CROP_CENTER if strategy == CROP_MOTION else strategy,
+                            CROP_CENTER if clip_strategy == CROP_MOTION
+                            else clip_strategy,
                             caption_path, self.encoder, self.preset,
                             self.crf, region,
                             motion_commands=motion_commands)

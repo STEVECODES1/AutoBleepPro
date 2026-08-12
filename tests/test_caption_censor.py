@@ -98,3 +98,27 @@ def test_a_broken_compliance_import_is_not_swallowed(monkeypatch):
         return
     raise AssertionError("a failed checker was swallowed and the word "
                          "would have been printed")
+
+
+def test_the_longest_allowed_line_fits_in_the_frame():
+    """28 characters at 84px is roughly 1400px of text in a 920px space.
+    Every clip went out with the first and last words sliced off - the
+    thumbnails read "VOULD HAVE BE" and "MEET HIM IN REA"."""
+    from autoreel.captions import (DEFAULT_FONT_SIZE, DEFAULT_MAX_CHARS,
+                                   fits_in_frame)
+
+    assert fits_in_frame(DEFAULT_MAX_CHARS, DEFAULT_FONT_SIZE), (
+        f"{DEFAULT_MAX_CHARS} chars at {DEFAULT_FONT_SIZE}px runs off the "
+        f"edge - the two numbers are a pair")
+    assert not fits_in_frame(28, 84), "the old pair has to stay a failure"
+
+
+def test_a_long_line_is_broken_into_phrases():
+    from autoreel.captions import group_words
+
+    words = [{"word": w, "start": i * 0.3, "end": i * 0.3 + 0.25}
+             for i, w in enumerate(
+                 "absolutely everybody watching this right now".split())]
+
+    for phrase in group_words(words):
+        assert len(phrase.text) <= 24, f"too wide: {phrase.text!r}"
