@@ -63,7 +63,20 @@ TARGET_ASPECT = 9 / 16
 _TIMEOUT = 120
 
 
+# mediapipe prints a block of TensorFlow Lite warnings per detector -
+# "Feedback manager requires a model with a single signature inference"
+# and friends. They are harmless and they are also six lines per clip in
+# the one window that carries the real failures, which is how a genuine
+# error gets skimmed past. Set before the first import; after it, the
+# loggers are already built and the values are ignored.
+def _quiet_tensorflow() -> None:
+    os.environ.setdefault("GLOG_minloglevel", "2")
+    os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "3")
+    os.environ.setdefault("GRPC_VERBOSITY", "ERROR")
+
+
 def have_mediapipe() -> bool:
+    _quiet_tensorflow()
     try:
         import mediapipe  # noqa: F401
 
@@ -180,6 +193,7 @@ def region_for(source: str, start: float, duration: float) -> Optional[dict]:
     """
     if not have_mediapipe() or not shutil.which("ffmpeg"):
         return None
+    _quiet_tensorflow()
 
     workspace = tempfile.mkdtemp(prefix="faces_")
     try:

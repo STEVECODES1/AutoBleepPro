@@ -81,3 +81,28 @@ def test_it_gives_up_quietly_without_mediapipe(monkeypatch):
     monkeypatch.setattr(face_region, "have_mediapipe", lambda: False)
 
     assert region_for("/nonexistent.mp4", 0.0, 30.0) is None
+
+
+def test_tensorflow_chatter_is_silenced_before_the_first_import():
+    """mediapipe prints six warning lines per detector into the one
+    window that also carries the real failures. Set after the import
+    they are ignored - the loggers are already built."""
+    import autoreel.face_region as face_region
+
+    face_region._quiet_tensorflow()
+
+    assert os.environ.get("GLOG_minloglevel") == "2"
+    assert os.environ.get("TF_CPP_MIN_LOG_LEVEL") == "3"
+
+
+def test_a_value_the_user_set_is_left_alone():
+    """setdefault, not assignment: someone debugging mediapipe has
+    turned these up on purpose."""
+    import autoreel.face_region as face_region
+
+    os.environ["GLOG_minloglevel"] = "0"
+    try:
+        face_region._quiet_tensorflow()
+        assert os.environ["GLOG_minloglevel"] == "0"
+    finally:
+        os.environ.pop("GLOG_minloglevel", None)
