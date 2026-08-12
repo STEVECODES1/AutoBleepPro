@@ -447,6 +447,23 @@ def _remove(path: str) -> None:
 
 # ── Choosing what to clip ────────────────────────────────────────────────
 
+def spread_gap_for(span: float, count: int, configured: float) -> float:
+    """How far apart two chosen clips must start, for this stream.
+
+    A fixed gap sounds generous until you ask for twenty clips: on a
+    stream where one guest is on camera for twenty minutes, six clips 90
+    seconds apart are six versions of the same shot. Scaling with the
+    number asked for makes the whole stream get used instead of one good
+    stretch of it.
+
+    The 0.8 leaves the chooser some slack - at exactly span/count the
+    windows have to be perfectly evenly spaced, and real moments are not.
+    """
+    if span <= 0 or count <= 0:
+        return configured
+    return max(configured, (span / count) * 0.8)
+
+
 def specs_from_segments(segments: Iterable[dict], count: int = DEFAULT_CLIP_COUNT,
                         min_seconds: float = DEFAULT_MIN_SECONDS,
                         max_seconds: float = DEFAULT_MAX_SECONDS,
@@ -476,9 +493,23 @@ def specs_from_segments(segments: Iterable[dict], count: int = DEFAULT_CLIP_COUN
                              skip_outro_seconds=skip_outro_seconds,
                              energy=list(energy or []),
                              chat=list(chat or []))
+    # Spread them out. A fixed 90s gap sounds generous until you ask for
+    # twenty clips: on a stream where one guest is on camera for twenty
+    # minutes, six clips 90 seconds apart are six versions of the same
+    # shot, which is exactly what came back - "why are the clips so
+    # close". The gap has to scale with how many are being asked for, so
+    # the whole stream gets used rather than one good stretch of it.
+    listed = list(segments)
+    span = max(0.0, (listed[-1].get("end", 0.0) if listed else 0.0)
+               - (listed[0].get("start", 0.0) if listed else 0.0))
+    effective_gap = spread_gap_for(span, count, min_gap_seconds)
+    if effective_gap > min_gap_seconds:
+        print(f"[Clips] Spacing clips {effective_gap / 60:.0f} min apart to "
+              f"cover the whole {span / 60:.0f} min.")
+
     pool = count * CANDIDATE_MULTIPLIER if llm_rank else count
-    shortlist = scorer.select_clips(list(segments), count=pool,
-                                    min_gap=min_gap_seconds)
+    shortlist = scorer.select_clips(listed, count=pool,
+                                    min_gap=effective_gap)
 
     highlights = rank(shortlist, count, llm_provider, llm_model,
                       source_path=source_path if use_vision else "") \

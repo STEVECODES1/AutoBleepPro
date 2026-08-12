@@ -111,8 +111,14 @@ For each one you pick, write a TITLE:
 Reply with JSON only:
 {"clips": [{"index": <candidate number>, "score": <0-100>, "title": "..."}]}
 
-Order does not matter. Return fewer than asked rather than padding with
-candidates you would not actually post.\
+Order does not matter.
+
+RETURN FEWER THAN ASKED. This matters more than any other instruction
+here. You are given far more candidates than there are good moments in a
+stream, and a list padded to the number requested is worse than a short
+list - every weak clip posted costs the channel more than a missing one
+would. If only six of forty are worth posting, return six. Score
+anything you are unsure about below 50 and leave it out.\
 """
 
 
@@ -242,8 +248,8 @@ def build_vision_contents(candidates: list, count: int, source_path: str,
     from . import vision_frames
 
     grab = grab or vision_frames.frames_for
-    parts = [{"text": f"Pick the {count} best of these {len(candidates)} "
-                      f"candidates.\n"}]
+    parts = [{"text": f"Pick AT MOST {count} of these {len(candidates)} "
+                      f"candidates - fewer if fewer are good.\n"}]
     for number, highlight in enumerate(candidates, start=1):
         text = " ".join((highlight.text or "").split())[:_MAX_TEXT_CHARS]
         parts.append({"text": (
@@ -262,8 +268,8 @@ def build_vision_contents(candidates: list, count: int, source_path: str,
 
 def build_prompt(candidates: list, count: int) -> str:
     """The candidate list, as the model sees it."""
-    lines = [f"Pick the {count} best of these {len(candidates)} candidates.",
-             ""]
+    lines = [f"Pick AT MOST {count} of these {len(candidates)} candidates - "
+             f"fewer if fewer are good.", ""]
     for number, highlight in enumerate(candidates, start=1):
         text = " ".join((highlight.text or "").split())[:_MAX_TEXT_CHARS]
         lines.append(

@@ -680,3 +680,36 @@ def test_an_underscored_date_is_stripped():
 
     assert clip_filename("Stackswopo_2026-08-10_CLEAN",
                          ClipSpec(0, 10, 1)) == "Stackswopo - Clip 01.mp4"
+
+
+def test_the_gap_scales_with_how_many_clips_are_asked_for():
+    """A fixed 90s gap sounds generous until you ask for twenty: on a
+    stream where one guest is on camera for twenty minutes, six clips 90
+    seconds apart are six versions of the same shot - which is exactly
+    what came back."""
+    from autoreel.clip_maker import spread_gap_for
+
+    # The real case: a 64-minute VOD, twenty clips wanted.
+    gap = spread_gap_for(3829.0, 20, 90.0)
+
+    assert gap > 90.0, "it kept the fixed gap and clustered the clips"
+    assert gap >= 150.0, f"{gap:.0f}s still lets six clips share one call"
+
+
+def test_a_short_video_keeps_the_configured_gap():
+    """Scaling must not make three clips out of a five-minute video
+    impossible - the configured value is a floor, not a target."""
+    from autoreel.clip_maker import spread_gap_for
+
+    assert spread_gap_for(300.0, 10, 90.0) == 90.0
+    assert spread_gap_for(0.0, 10, 90.0) == 90.0
+
+
+def test_the_model_is_told_to_return_fewer():
+    """Twenty clips out of a 64-minute VOD is one every three minutes.
+    There are not twenty good moments in an hour, and a padded list is
+    worse than a short one."""
+    from autoreel.llm_highlights import SYSTEM_PROMPT, build_prompt
+
+    assert "RETURN FEWER THAN ASKED" in SYSTEM_PROMPT
+    assert "AT MOST" in build_prompt([], 20)
