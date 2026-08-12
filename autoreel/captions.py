@@ -87,6 +87,68 @@ def _clean(word: str) -> str:
     return (word or "").strip()
 
 
+# The audio pass mutes flagged speech. The caption pass used to print the
+# transcript verbatim underneath it - so a word that was silenced in the
+# audio was rendered in yellow, forty-eight point, in the middle of the
+# frame, and auto-posted. Censoring one channel and broadcasting the
+# other is worse than doing neither, because the mute makes it look
+# handled.
+#
+# Masked rather than dropped: a missing word makes the line read wrong,
+# and "sh*t" is the convention short-form already uses - it is what this
+# channel's own titles do.
+_KEEP_LEADING = 1
+
+
+def mask_word(text: str) -> str:
+    """f*** - first letter kept, punctuation kept, the rest starred."""
+    leading = ""
+    trailing = ""
+    core = text
+    while core and not core[0].isalnum():
+        leading, core = leading + core[0], core[1:]
+    while core and not core[-1].isalnum():
+        trailing, core = core[-1] + trailing, core[:-1]
+    if not core:
+        return text
+    if len(core) <= _KEEP_LEADING:
+        return leading + "*" * len(core) + trailing
+    return leading + core[:_KEEP_LEADING] + "*" * (len(core) - _KEEP_LEADING) + trailing
+
+
+def censor_words(words: Iterable[dict], checker=None) -> list:
+    """The same word list, with anything the compliance pass flags masked.
+
+    `checker` is a ComplianceChecker; built with defaults when not given,
+    so a caller cannot forget to censor by omitting an argument. If the
+    compliance module cannot be loaded for any reason the words are
+    returned untouched - captions failing closed would mean no clips at
+    all, and the audio mute still stands.
+    """
+    words = list(words)
+    if checker is None:
+        from .compliance import ComplianceEngine
+
+        # Deliberately NOT wrapped in try/except. An import that fails
+        # here would mean captions render uncensored, and a silent
+        # fallback to "print it anyway" is how a slur reached a posted
+        # clip in the first place. Loud failure is the safe direction.
+        checker = ComplianceEngine()
+
+    censored = []
+    for word in words:
+        text = _clean(word.get("word"))
+        try:
+            flagged = bool(text) and checker._flag_reason(text) is not None
+        except Exception:
+            flagged = False
+        if flagged:
+            word = dict(word)
+            word["word"] = mask_word(text)
+        censored.append(word)
+    return censored
+
+
 def group_words(words: Iterable[dict],
                 max_words: int = DEFAULT_MAX_WORDS,
                 max_chars: int = DEFAULT_MAX_CHARS,
@@ -277,8 +339,13 @@ def write_ass(path: str, phrases: Iterable[Phrase], **style) -> str:
 def caption_file_for_clip(path: str, segments: Iterable[dict],
                           start: float, end: float,
                           **style) -> Optional[str]:
-    """Write captions for one clip window. None if there is nothing to say."""
-    phrases = group_words(words_in_range(segments, start, end))
+    """Write captions for one clip window. None if there is nothing to say.
+
+    Censoring happens HERE, not at the call site, so there is no way to
+    render a caption track without it. The audio pass already mutes this
+    speech; printing it underneath in yellow was the bug.
+    """
+    phrases = group_words(censor_words(words_in_range(segments, start, end)))
     if not phrases:
         return None
     return write_ass(path, phrases, **style)

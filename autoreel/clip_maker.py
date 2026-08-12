@@ -36,6 +36,7 @@ from dataclasses import dataclass, field
 from typing import Iterable, Optional
 
 from .captions import caption_file_for_clip
+from . import face_region
 from .crop_strategy import (
     CROP_CENTER,
     CROP_FACE,
@@ -509,6 +510,11 @@ class ClipMaker:
     llm_rank: bool = True
     llm_provider: str = ""
     llm_model: str = ""
+    # Measure where the people are, per clip, instead of trusting the
+    # rectangle in config.json. Only consulted by the region strategy -
+    # gameplay never goes near a face detector, which is the whole point
+    # of keeping face TRACKING off by default.
+    find_faces: bool = True
 
     @property
     def strategy(self) -> str:
@@ -575,10 +581,26 @@ class ClipMaker:
                     segments, spec.start, spec.end,
                     style=self.caption_style,
                     uppercase=self.caption_uppercase)
+            # A region typed into config.json is a guess, and it goes
+            # stale the moment the call window moves - which is how
+            # twenty clips came out framed on a browser showing a slots
+            # game while the two people talking were off-crop. Measuring
+            # per clip cannot go stale that way. None means no faces in
+            # this stretch, which is normal, and the configured
+            # rectangle stands.
+            region = self.region
+            if strategy == CROP_REGION and self.find_faces:
+                measured = face_region.region_for(
+                    source_path, spec.start, spec.end - spec.start)
+                if measured:
+                    region = measured
+                else:
+                    print(f"[Clips] Clip {spec.index:02d}: no faces found, "
+                          f"using the configured rectangle.")
             try:
                 render_clip(source_path, spec, output_path, strategy,
                             caption_path, self.encoder, self.preset,
-                            self.crf, self.region)
+                            self.crf, region)
             except ClipError as exc:
                 failures.append(str(exc))
                 continue
