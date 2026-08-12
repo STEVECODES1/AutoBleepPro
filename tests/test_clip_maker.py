@@ -201,7 +201,12 @@ def test_no_captions_for_a_silent_window(tmp_path):
 def test_caption_file_is_written_for_a_talky_window(tmp_path):
     path = caption_file_for_clip(str(tmp_path / "c.ass"), _segments(), 30.0, 40.0)
     assert path and os.path.exists(path)
-    assert "inside the clip" in open(path, encoding="utf-8").read()
+    # The words reached the file. Not as one contiguous string: each is
+    # wrapped in its own highlight tags as it is spoken, which is the
+    # whole point of the word style.
+    written = open(path, encoding="utf-8").read().lower()
+    for word in ("inside", "the", "clip"):
+        assert word in written
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -530,3 +535,85 @@ def test_the_shipped_config_uses_a_profile_that_exists():
         clips = json.load(f)["clips"]
     from autoreel.crop_strategy import PROFILES
     assert clips.get("profile") in PROFILES
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Word-by-word captions
+#
+# Captions were switched off here because they were a static white slab
+# that read like a subtitle track. The phrase now stays on screen and only
+# the colour moves, which is the format short-form settled on.
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _spoken(*words, step=0.4, hold=0.35):
+    return [{"word": w, "start": i * step, "end": i * step + hold}
+            for i, w in enumerate(words)]
+
+
+def test_each_word_lights_up_as_it_is_said():
+    from autoreel.captions import build_ass, group_words
+
+    out = build_ass(group_words(_spoken("bro", "he", "actually", "did")))
+    events = [l for l in out.splitlines() if l.startswith("Dialogue:")]
+
+    assert len(events) == 4, "one line per word, not one per phrase"
+    for line in events:
+        assert line.count("\\c&H0000FFFF&") == 1, "exactly one word highlighted"
+
+
+def test_the_whole_phrase_stays_on_screen():
+    """Only the colour moves - nothing has to be re-read."""
+    from autoreel.captions import build_ass, group_words
+
+    out = build_ass(group_words(_spoken("bro", "he", "actually", "did")))
+    for line in out.splitlines():
+        if line.startswith("Dialogue:"):
+            for word in ("BRO", "HE", "ACTUALLY", "DID"):
+                assert word in line
+
+
+def test_captions_do_not_blink_out_between_words():
+    """A word's slot runs to the START of the next: the silence after a
+    word belongs to it, and ending on its own end flickers every gap."""
+    from autoreel.captions import build_ass, group_words
+
+    out = build_ass(group_words(_spoken("one", "two", "three")))
+    times = []
+    for line in out.splitlines():
+        if line.startswith("Dialogue:"):
+            _, start, end = line.split(",", 3)[:3]
+            times.append((start, end))
+    for (_, ends), (starts, _) in zip(times, times[1:]):
+        assert ends == starts, "a gap between two caption lines"
+
+
+def test_the_static_style_is_still_available():
+    from autoreel.captions import build_ass, group_words
+
+    out = build_ass(group_words(_spoken("bro", "he", "did")), style="block")
+    events = [l for l in out.splitlines() if l.startswith("Dialogue:")]
+
+    assert len(events) == 1
+    assert "\\c&H0000FFFF&" not in out
+
+
+def test_casing_can_be_left_alone():
+    from autoreel.captions import build_ass, group_words
+
+    out = build_ass(group_words(_spoken("Bro", "he", "did")), uppercase=False)
+    assert "Bro" in out and "BRO" not in out
+
+
+def test_braces_in_speech_cannot_break_the_subtitle_file():
+    """A literal brace opens an ASS override block."""
+    from autoreel.captions import build_ass, group_words
+
+    out = build_ass(group_words(_spoken("what{", "the}", "hell")))
+    assert "\\{" in out and "\\}" in out
+
+
+def test_a_phrase_with_no_word_timings_still_renders():
+    from autoreel.captions import Phrase, build_ass
+
+    out = build_ass([Phrase(0.0, 2.0, "no timings here")])
+    assert "NO TIMINGS HERE" in out

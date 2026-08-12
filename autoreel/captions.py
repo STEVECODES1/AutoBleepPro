@@ -16,6 +16,19 @@ Words are grouped into short phrases rather than shown one at a time.
 One-word-at-a-time reads as a gimmick and forces the eye to re-fixate on
 every word; a 3-5 word phrase held for its own duration tracks how people
 actually read.
+
+TWO STYLES
+----------
+`block` holds the phrase, plain white. Correct, readable, and completely
+inert - which is why captions got turned off here: a static white slab
+over the picture looks like a subtitle track rather than part of the
+video.
+
+`word` holds the same phrase and lights up each word AS IT IS SAID. The
+phrase stays on screen the whole time, so nothing has to be re-read; only
+the colour moves. That is the format short-form has settled on, and the
+reason is retention rather than fashion - the highlight gives the eye a
+reason to stay on the frame between one sentence and the next.
 """
 
 from __future__ import annotations
@@ -41,11 +54,33 @@ DEFAULT_MAX_PHRASE_S = 3.0
 DEFAULT_GAP_S = 0.6
 
 
+# ASS colours are &HBBGGRR - byte-reversed from the hex everyone knows.
+# This is bright yellow (RGB 255,255,0), which holds up over both a
+# bright skybox and a dark room.
+HIGHLIGHT_COLOUR = "&H0000FFFF&"
+PLAIN_COLOUR = "&H00FFFFFF&"
+# The spoken word is drawn slightly larger as well as recoloured, so the
+# emphasis survives on a phone screen and for anyone colourblind.
+HIGHLIGHT_SCALE = 112
+
+STYLE_BLOCK = "block"
+STYLE_WORD = "word"
+DEFAULT_STYLE = STYLE_WORD
+
+
 @dataclass
 class Phrase:
     start: float
     end: float
     text: str
+    # (text, start, end) per word, for the highlighted style. Kept beside
+    # the joined text rather than re-split from it: punctuation and
+    # spacing make splitting back into timed words lossy.
+    words: list = None
+
+    def __post_init__(self):
+        if self.words is None:
+            self.words = []
 
 
 def _clean(word: str) -> str:
@@ -66,14 +101,17 @@ def group_words(words: Iterable[dict],
     """
     phrases: list = []
     current: list = []
+    timed: list = []
     start = 0.0
     last_end = 0.0
 
     def flush() -> None:
-        nonlocal current
+        nonlocal current, timed
         if current:
-            phrases.append(Phrase(start, last_end, " ".join(current)))
+            phrases.append(Phrase(start, last_end, " ".join(current),
+                                  list(timed)))
             current = []
+            timed = []
 
     for word in words:
         text = _clean(word.get("word"))
@@ -99,6 +137,7 @@ def group_words(words: Iterable[dict],
             start = w_start
 
         current.append(text)
+        timed.append((text, w_start, w_end))
         last_end = w_end
 
         # Sentence end: break here so a phrase never straddles two of them.
@@ -151,9 +190,46 @@ def _ass_escape(text: str) -> str:
                 .replace("\n", " "))
 
 
+def _word_lines(phrase: Phrase, uppercase: bool) -> list:
+    """One Dialogue per word: the whole phrase, that word lit up.
+
+    The phrase stays on screen for its full length and only the colour
+    moves, so nothing has to be re-read. Each word's slot runs to the
+    START of the next rather than to its own end - the silence between
+    two words belongs to the one just said, and ending on the word's own
+    end leaves the caption blinking out in every gap.
+    """
+    words = phrase.words or []
+    if not words:
+        text = phrase.text.upper() if uppercase else phrase.text
+        return [(phrase.start, phrase.end, _ass_escape(text))]
+
+    rendered = [(_ass_escape(w.upper() if uppercase else w), a, b)
+                for w, a, b in words]
+    lines = []
+    for index, (_text, w_start, _w_end) in enumerate(rendered):
+        stop = (rendered[index + 1][1] if index + 1 < len(rendered)
+                else max(phrase.end, _w_end))
+        if stop <= w_start:
+            continue
+        parts = []
+        for other, (text, _a, _b) in enumerate(rendered):
+            if other == index:
+                parts.append(
+                    f"{{\\c{HIGHLIGHT_COLOUR}\\fscx{HIGHLIGHT_SCALE}"
+                    f"\\fscy{HIGHLIGHT_SCALE}}}{text}"
+                    f"{{\\c{PLAIN_COLOUR}\\fscx100\\fscy100}}")
+            else:
+                parts.append(text)
+        lines.append((w_start, stop, " ".join(parts)))
+    return lines
+
+
 def build_ass(phrases: Iterable[Phrase], font: str = DEFAULT_FONT,
               font_size: int = DEFAULT_FONT_SIZE,
-              margin_v: int = MARGIN_V) -> str:
+              margin_v: int = MARGIN_V,
+              style: str = DEFAULT_STYLE,
+              uppercase: bool = True) -> str:
     """An ASS subtitle file: white text, heavy black outline, centred.
 
     Outline plus shadow rather than a background box: gameplay footage
@@ -178,9 +254,15 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     for phrase in phrases:
         if phrase.end <= phrase.start:
             continue
-        lines.append(
-            f"Dialogue: 0,{_ass_time(phrase.start)},{_ass_time(phrase.end)},"
-            f"Caption,,0,0,0,,{_ass_escape(phrase.text)}")
+        if style == STYLE_WORD:
+            events = _word_lines(phrase, uppercase)
+        else:
+            text = phrase.text.upper() if uppercase else phrase.text
+            events = [(phrase.start, phrase.end, _ass_escape(text))]
+        for begin, stop, text in events:
+            lines.append(
+                f"Dialogue: 0,{_ass_time(begin)},{_ass_time(stop)},"
+                f"Caption,,0,0,0,,{text}")
     return header + "\n".join(lines) + ("\n" if lines else "")
 
 

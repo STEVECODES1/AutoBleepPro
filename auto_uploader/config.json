@@ -160,8 +160,10 @@
     "skip_intro_seconds": 120,
     "skip_outro_seconds": 60,
     "min_gap_seconds": 90,
-    "_captions_comment": "Burned-in subtitles. Off: Whisper's line breaks land mid-phrase and the box sits over the picture, which reads worse than no captions at all. Instagram and Rumble both caption automatically anyway.",
-    "burn_captions": false
+    "_captions_comment": "Burned-in subtitles. Back ON, because the reason they were off is fixed: they were a static white slab that read like a subtitle track. caption_style 'word' holds the phrase and lights up each word as it is said - the format short-form has settled on, and the reason is retention rather than fashion. 'block' is the old static style. caption_uppercase false keeps the original casing.",
+    "burn_captions": true,
+    "caption_style": "word",
+    "caption_uppercase": true
   },
 
   "features": {

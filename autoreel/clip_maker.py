@@ -496,6 +496,8 @@ class ClipMaker:
     encoder: str = "libx264"
     preset: str = "fast"
     crf: int = 20
+    caption_style: str = "word"
+    caption_uppercase: bool = True
     skip_intro_seconds: float = DEFAULT_SKIP_INTRO
     skip_outro_seconds: float = DEFAULT_SKIP_OUTRO
     min_gap_seconds: float = DEFAULT_MIN_GAP
@@ -553,7 +555,9 @@ class ClipMaker:
             if self.captions:
                 caption_path = caption_file_for_clip(
                     os.path.join(self.output_dir, f".{basename}_clip{spec.index:02d}.ass"),
-                    segments, spec.start, spec.end)
+                    segments, spec.start, spec.end,
+                    style=self.caption_style,
+                    uppercase=self.caption_uppercase)
             try:
                 render_clip(source_path, spec, output_path, strategy,
                             caption_path, self.encoder, self.preset,
