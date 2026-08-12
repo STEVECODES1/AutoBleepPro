@@ -74,6 +74,12 @@ _MAX_TEXT_CHARS = 700
 CANDIDATE_MULTIPLIER = 4
 MAX_CANDIDATES = 60
 
+# How many candidates get FRAMES attached. Every image is tokens and
+# upload time, and the text pass has already sorted the list - so the
+# ones near the bottom are not worth looking at. Twenty-four covers a
+# twenty-clip run with room to reject.
+VISION_MAX_CANDIDATES = 24
+
 
 SYSTEM_PROMPT = """\
 You pick the moments worth cutting out of a live stream.
@@ -207,6 +213,45 @@ def _timestamp(seconds: float) -> str:
     return f"{seconds // 60}m{seconds % 60:02d}s"
 
 
+VISION_NOTE = """\
+
+You can SEE two frames from each candidate - one early, one near the end.
+Use them. On this channel the funniest moments are visual: a face
+reaction, someone walking up behind, a fight starting. The transcript
+misses all of it, and a candidate whose words are dull but whose frames
+show something happening is exactly the one worth picking.
+
+Say what you can see in the title where it helps. Do not describe the
+frames back to me.\
+"""
+
+
+def build_vision_contents(candidates: list, count: int, source_path: str,
+                          grab=None) -> list:
+    """Gemini `contents` parts: the prompt, then text+frames per candidate.
+
+    Falls back to text-only parts for any candidate whose frames could
+    not be read, so one unreadable stretch does not cost the whole pass.
+    """
+    from . import vision_frames
+
+    grab = grab or vision_frames.frames_for
+    parts = [{"text": f"Pick the {count} best of these {len(candidates)} "
+                      f"candidates.\n"}]
+    for number, highlight in enumerate(candidates, start=1):
+        text = " ".join((highlight.text or "").split())[:_MAX_TEXT_CHARS]
+        parts.append({"text": (
+            f"\n[{number}] at {_timestamp(highlight.start)}, "
+            f"{highlight.end - highlight.start:.0f}s\n{text}\n")})
+        try:
+            frames = grab(source_path, highlight.start, highlight.end)
+        except Exception:
+            frames = []
+        for jpeg in frames:
+            parts.append(vision_frames.as_inline_data(jpeg))
+    return parts
+
+
 def build_prompt(candidates: list, count: int) -> str:
     """The candidate list, as the model sees it."""
     lines = [f"Pick the {count} best of these {len(candidates)} candidates.",
@@ -311,6 +356,25 @@ def _ask_gemini(key: str, model: str, prompt: str) -> str:
         return ""
 
 
+def _ask_gemini_vision(key: str, model: str, parts: list) -> str:
+    """Same call as _ask_gemini, with images among the parts."""
+    url = (f"https://generativelanguage.googleapis.com/v1beta/models/"
+           f"{model}:generateContent?key={key}")
+    payload = {
+        "systemInstruction": {"parts": [{"text": SYSTEM_PROMPT + VISION_NOTE}]},
+        "contents": [{"parts": parts}],
+        "generationConfig": {"responseMimeType": "application/json",
+                             "temperature": 0.4},
+    }
+    data = _post(url, payload, {})
+    if not isinstance(data, dict):
+        return ""
+    try:
+        return data["candidates"][0]["content"]["parts"][0]["text"]
+    except (KeyError, IndexError, TypeError):
+        return ""
+
+
 def _ask_openai(key: str, model: str, prompt: str) -> str:
     payload = {
         "model": model,
@@ -372,7 +436,7 @@ def parse_reply(raw: str, candidate_count: int) -> list:
 
 
 def rank(candidates: list, count: int, provider: str = "",
-         model: str = "", ask=None) -> Optional[list]:
+         model: str = "", ask=None, source_path: str = "") -> Optional[list]:
     """The candidates a model would actually post, or None.
 
     None means "no opinion" - no key, no network, nothing usable came
@@ -388,12 +452,30 @@ def rank(candidates: list, count: int, provider: str = "",
     model = resolve_model(provider, key, model)
 
     shortlist = candidates[:MAX_CANDIDATES]
-    prompt = build_prompt(shortlist, count)
-    ask = ask or (_ask_gemini if provider == GEMINI else _ask_openai)
-    try:
-        raw = ask(key, model, prompt)
-    except Exception:
-        return None
+
+    # Vision is Gemini-only here and only when there is a file to sample.
+    # It is tried FIRST and falls back to the words on any failure: a
+    # model that cannot see is the behaviour this had all along, and it
+    # is much better than no clips.
+    raw = ""
+    if source_path and provider == GEMINI and ask is None:
+        looking = shortlist[:VISION_MAX_CANDIDATES]
+        try:
+            parts = build_vision_contents(looking, count, source_path)
+            raw = _ask_gemini_vision(key, model, parts)
+        except Exception:
+            raw = ""
+        if raw:
+            shortlist = looking
+            print(f"[Clips] A model watched {len(looking)} candidates.")
+
+    if not raw:
+        prompt = build_prompt(shortlist, count)
+        ask = ask or (_ask_gemini if provider == GEMINI else _ask_openai)
+        try:
+            raw = ask(key, model, prompt)
+        except Exception:
+            return None
 
     picked = parse_reply(raw, len(shortlist))
     if not picked:

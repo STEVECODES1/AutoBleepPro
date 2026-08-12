@@ -457,7 +457,9 @@ def specs_from_segments(segments: Iterable[dict], count: int = DEFAULT_CLIP_COUN
                         chat: Optional[list] = None,
                         llm_rank: bool = True,
                         llm_provider: str = "",
-                        llm_model: str = "") -> list:
+                        llm_model: str = "",
+                        source_path: str = "",
+                        use_vision: bool = True) -> list:
     """Pick clip windows from a transcript.
 
     Two stages, and the second is optional. The scorer shortlists on what
@@ -478,7 +480,9 @@ def specs_from_segments(segments: Iterable[dict], count: int = DEFAULT_CLIP_COUN
     shortlist = scorer.select_clips(list(segments), count=pool,
                                     min_gap=min_gap_seconds)
 
-    highlights = rank(shortlist, count, llm_provider, llm_model) if llm_rank else None
+    highlights = rank(shortlist, count, llm_provider, llm_model,
+                      source_path=source_path if use_vision else "") \
+        if llm_rank else None
     if highlights is None:
         # The scorer's own verdict: best first, then back into timeline
         # order so clip 01 is the earliest.
@@ -564,6 +568,11 @@ class ClipMaker:
     # gameplay never goes near a face detector, which is the whole point
     # of keeping face TRACKING off by default.
     find_faces: bool = True
+    # Send the model two frames per candidate as well as the words. On
+    # this channel the funniest moments are visual - a face reaction, a
+    # fight starting - and the transcript for those says "...what" or
+    # nothing at all.
+    use_vision: bool = True
 
     @property
     def strategy(self) -> str:
@@ -601,7 +610,8 @@ class ClipMaker:
                                     self.min_gap_seconds,
                                     energy, chat,
                                     self.llm_rank, self.llm_provider,
-                                    self.llm_model)
+                                    self.llm_model,
+                                    source_path, self.use_vision)
         if not specs:
             return []
 

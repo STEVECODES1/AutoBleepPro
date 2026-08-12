@@ -234,7 +234,9 @@
     "_captions_comment": "Burned-in subtitles. Back ON, because the reason they were off is fixed: they were a static white slab that read like a subtitle track. caption_style 'word' holds the phrase and lights up each word as it is said - the format short-form has settled on, and the reason is retention rather than fashion. 'block' is the old static style. caption_uppercase false keeps the original casing.",
     "burn_captions": true,
     "caption_style": "word",
-    "caption_uppercase": true
+    "caption_uppercase": true,
+    "_vision_comment": "Sends the model two frames from each shortlisted candidate as well as the transcript. This is the signal the words cannot carry: a face reaction transcribes as '...what' and someone getting run over transcribes as nothing. Free on the same Gemini key the text pass uses - an image costs a fixed small number of tokens, and only the top candidates get pictures. Any failure falls back to the transcript.",
+    "use_vision": true
   },
   "features": {
     "_comment": "Optional extras. self_healing: python main.py --health. social_promoter posts AFTER a successful new upload (Discord needs DISCORD_WEBHOOK_URL in .env; twitter/reddit need their API keys + pip install tweepy/praw). content_optimizer writes an SEO/chapters report next to each uploaded video, reusing the censor pass's transcript.",

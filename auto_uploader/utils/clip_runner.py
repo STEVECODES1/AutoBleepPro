@@ -312,6 +312,9 @@ def make_clips(cfg, source_path: str, title: str,
         # rectangle typed into config.json months ago. Only the region
         # strategy consults it, so gameplay never meets a face detector.
         find_faces=bool(clips_cfg.get("find_faces", True)),
+        # Frames alongside the transcript. Free on the same Gemini tier
+        # the text pass already uses.
+        use_vision=bool(clips_cfg.get("use_vision", True)),
         # A model reads the shortlist and says which of them a person
         # would post - the one thing keyword scoring cannot do. Costs
         # nothing without a key: it falls back to the scores silently.
