@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import os
 import sys
+import time
 
 import pytest
 
@@ -764,3 +765,70 @@ def test_the_announcer_skips_a_scope_problem_without_recording_it(monkeypatch, t
     assert guard.consecutive_failures("facebook") == 0, \
         "a permission problem tripped the circuit breaker"
     assert guard.check("facebook").allowed
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Facebook tokens that do not expire overnight
+#
+# A Page token inherits the lifetime of the user token it was read from.
+# Read from the ~1-hour token the Graph API Explorer hands out, it dies
+# within the hour - which is what "Session has expired" was every morning.
+# ═════════════════════════════════════════════════════════════════════════════
+
+def test_a_short_lived_token_is_traded_for_a_long_lived_one(monkeypatch, tmp_path):
+    from utils import meta_setup
+
+    calls = {}
+
+    def fake_get(path, params):
+        calls[path] = params
+        if path == "oauth/access_token":
+            return {"access_token": "LONG-LIVED"}
+        if path == "debug_token":
+            return {"data": {"expires_at": int(time.time()) + 3600}}
+        raise AssertionError(f"unexpected call: {path}")
+
+    monkeypatch.setattr(meta_setup, "_get", fake_get)
+
+    out = meta_setup.exchange_for_long_lived("SHORT", "app-id", "app-secret")
+
+    assert out == "LONG-LIVED"
+    sent = calls["oauth/access_token"]
+    assert sent["grant_type"] == "fb_exchange_token"
+    assert sent["fb_exchange_token"] == "SHORT"
+
+
+def test_the_exchange_says_what_is_missing_without_app_credentials():
+    from utils.meta_setup import MetaError, exchange_for_long_lived
+
+    with pytest.raises(MetaError) as caught:
+        exchange_for_long_lived("SHORT", "", "")
+
+    assert "FB_APP_ID" in str(caught.value)
+    assert "FB_APP_SECRET" in str(caught.value)
+
+
+@pytest.mark.parametrize("expires_in,expected", [
+    (None, "unknown"),
+    (0, "never expires"),
+    (-10, "ALREADY EXPIRED"),
+])
+def test_expiry_is_reported_in_words(expires_in, expected):
+    from utils.meta_setup import describe_expiry
+
+    if expires_in is None:
+        assert expected in describe_expiry(None)
+    elif expires_in == 0:
+        assert describe_expiry(0) == expected
+    else:
+        assert describe_expiry(int(time.time()) + expires_in) == expected
+
+
+def test_expiry_is_asked_before_the_first_post_not_after_a_failure(monkeypatch):
+    """"Session has expired" showing up in a failed post at 3am is the
+    worst moment to learn a token is short-lived."""
+    from utils import meta_setup
+
+    monkeypatch.setattr(meta_setup, "_get",
+                        lambda path, params: {"data": {"expires_at": 0}})
+    assert meta_setup.token_expiry("tok") == 0

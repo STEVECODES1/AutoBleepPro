@@ -26,7 +26,7 @@ from datetime import datetime
 # Bump when shipping user-visible changes, so --test-config can prove
 # which build is actually running (stale extracts have silently caused
 # several confusing "the fix did nothing" runs).
-BUILD = "2026-08-11.2 clip the VOD before retiring it; 20 clips; --clips-from"
+BUILD = "2026-08-11.3 Facebook tokens that stop expiring overnight"
 
 # How often --watch checks whether a deferred clip's wait is up. A minute
 # is fine: the waits themselves are 25 to 80 minutes, so the resolution
@@ -1171,6 +1171,19 @@ def main(argv=None) -> int:
             print(f"[Meta] NOTE: {warning}")
         if result["backup"]:
             print(f"[Meta] Previous .env saved as {os.path.basename(result['backup'])}")
+        if result.get("exchanged"):
+            print("[Meta] Traded the short-lived token for a long-lived one - "
+                  "this is the step that stops Facebook expiring overnight.")
+        expiry = result.get("page_token_expiry", "")
+        if expiry:
+            print(f"[Meta] Page token: {expiry}.")
+            if "never" not in expiry:
+                print("[Meta] It will expire. To make it permanent, set the "
+                      "app credentials once and run this again:")
+                print("[Meta]   python main.py --set-env FB_APP_ID=... "
+                      "FB_APP_SECRET=...")
+                print("[Meta]   (developers.facebook.com -> your app -> "
+                      "Settings -> Basic)")
         print("[Meta] Done. Check it with: python main.py --posting-status --verify")
         return 0
 

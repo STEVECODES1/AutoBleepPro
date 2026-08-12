@@ -179,6 +179,73 @@ def instagram_account(page_id: str, page_token: str) -> str:
 REQUIRED_SCOPES = ("pages_show_list", "pages_manage_posts")
 
 
+def token_expiry(token: str) -> Optional[int]:
+    """Unix seconds this token dies, 0 if it never does, None if unknown.
+
+    Worth asking BEFORE the first post rather than finding out from a
+    failed one at 3am: "Session has expired" is what a short-lived token
+    looks like the next morning.
+    """
+    try:
+        data = _get("debug_token", {"input_token": token,
+                                    "access_token": token})
+    except MetaError:
+        return None
+    info = (data or {}).get("data") or {}
+    if info.get("expires_at") is None:
+        return None
+    try:
+        return int(info["expires_at"])
+    except (TypeError, ValueError):
+        return None
+
+
+def describe_expiry(expires_at: Optional[int]) -> str:
+    """The expiry in words, for someone deciding whether to act."""
+    if expires_at is None:
+        return "unknown expiry"
+    if expires_at == 0:
+        return "never expires"
+    left = expires_at - time.time()
+    if left <= 0:
+        return "ALREADY EXPIRED"
+    if left < 3600:
+        return f"expires in {left / 60:.0f} minutes"
+    if left < 86400:
+        return f"expires in {left / 3600:.0f} hours"
+    return f"expires in {left / 86400:.0f} days"
+
+
+def exchange_for_long_lived(token: str, app_id: str, app_secret: str) -> str:
+    """Trade a short-lived user token for a 60-day one.
+
+    THIS is the step that was missing, and the reason Facebook kept
+    expiring overnight. A Page token inherits the lifetime of the user
+    token it was read from: taken from the ~1-hour token the Graph API
+    Explorer hands out, the Page token dies within the hour. Taken from a
+    long-lived user token, the Page token does not expire at all.
+
+    Needs the app id and secret, which is why they belong in .env - there
+    is no way to do this exchange without them.
+    """
+    if not (app_id and app_secret):
+        raise MetaError(
+            "FB_APP_ID and FB_APP_SECRET are needed to make a token that "
+            "does not expire. Both are at developers.facebook.com -> your "
+            "app -> Settings -> Basic. Then: python main.py --set-env "
+            "FB_APP_ID=... FB_APP_SECRET=...")
+    data = _get("oauth/access_token", {
+        "grant_type": "fb_exchange_token",
+        "client_id": app_id,
+        "client_secret": app_secret,
+        "fb_exchange_token": token,
+    })
+    long_lived = (data or {}).get("access_token", "")
+    if not long_lived:
+        raise MetaError("the exchange returned no token")
+    return long_lived
+
+
 def resolve(token: str, page_choice: str = "") -> dict:
     """Token -> everything needed, or raise MetaError explaining what is
     missing. Returns {values, page_name, scopes, warnings}."""
@@ -248,8 +315,13 @@ def resolve(token: str, page_choice: str = "") -> dict:
 
 def setup(env_path: str, token: str = "", page_choice: str = "",
           write: bool = True) -> dict:
-    """Resolve and (optionally) write. Returns the resolve() result plus
-    `backup` and `written`."""
+    """Resolve and (optionally) write.
+
+    The user token is upgraded to a long-lived one FIRST when the app
+    credentials are present, because the Page token is read from it and
+    inherits its lifetime. Skipping that step is what made Facebook stop
+    working every morning.
+    """
     env = read_env(env_path)
     if not token:
         name, token = find_token(env)
@@ -264,8 +336,25 @@ def setup(env_path: str, token: str = "", page_choice: str = "",
     else:
         result_source = "--meta-token"
 
+    exchanged = False
+    app_id = env.get("FB_APP_ID", "") or os.environ.get("FB_APP_ID", "")
+    app_secret = (env.get("FB_APP_SECRET", "")
+                  or os.environ.get("FB_APP_SECRET", ""))
+    expires_at = token_expiry(token)
+    if app_id and app_secret and expires_at:
+        # expires_at of 0 means it already never expires; None means the
+        # token would not say, and exchanging anyway is harmless.
+        try:
+            token = exchange_for_long_lived(token, app_id, app_secret)
+            exchanged = True
+        except MetaError as exc:
+            print(f"[Meta] Could not make the token long-lived: {exc}")
+
     result = resolve(token, page_choice)
     result["source"] = result_source
+    result["exchanged"] = exchanged
+    result["page_token_expiry"] = describe_expiry(
+        token_expiry(result["values"].get("FB_PAGE_TOKEN", "")))
     result["backup"] = ""
     result["written"] = False
     if write:
