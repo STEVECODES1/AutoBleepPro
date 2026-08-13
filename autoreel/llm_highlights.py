@@ -37,6 +37,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import time
 import urllib.error
 import urllib.request
 from typing import Optional
@@ -63,6 +64,10 @@ _KEY_NAMES = {
 }
 
 _TIMEOUT = 90
+
+# One wait, not a retry loop: a busy model clears in seconds and a
+# pipeline that hammers a rate limit gets a longer one.
+_BUSY_RETRY_SECONDS = 20
 
 # Each candidate's transcript, trimmed. The whole point is the model
 # reading what was said; a few hundred characters is a clip's worth of
@@ -388,7 +393,18 @@ def _ask_gemini_vision(key: str, model: str, parts: list) -> tuple:
     }
     images = sum(1 for part in parts if "inline_data" in part)
     megabytes = len(json.dumps(payload)) / 1e6
+
+    # 429 here is "this model is busy", not "you are over quota" - it is
+    # the free tier being shared and it clears in seconds. Falling
+    # straight back to the words threw away the whole vision pass over a
+    # spike that a single wait would have ridden out.
     data, problem = _post_detailed(url, payload, {})
+    if problem and "429" in str(problem):
+        print("[Clips] The model is busy - waiting 20s and trying once "
+              "more...")
+        time.sleep(_BUSY_RETRY_SECONDS)
+        data, problem = _post_detailed(url, payload, {})
+
     if problem:
         return "", f"{problem} ({images} images, {megabytes:.1f} MB)"
     if not isinstance(data, dict):

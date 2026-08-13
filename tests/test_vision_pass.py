@@ -187,3 +187,40 @@ def test_an_unusable_reply_is_reported(monkeypatch, capsys):
 
     assert rank(_candidates(2), 1) is None
     assert "nothing usable" in capsys.readouterr().out
+
+
+def test_a_busy_model_is_waited_out_once(monkeypatch):
+    """429 here is "this model is busy", not "you are over quota" - the
+    free tier is shared and it clears in seconds. Falling straight back
+    to the words threw away the whole vision pass over a spike."""
+    import autoreel.llm_highlights as llm
+
+    calls = []
+
+    def flaky(url, payload, headers):
+        calls.append(1)
+        if len(calls) == 1:
+            return None, "HTTP 429: high demand"
+        return {"candidates": [{"content": {"parts": [{"text": "{}"}]}}]}, ""
+
+    monkeypatch.setattr(llm, "_post_detailed", flaky)
+    monkeypatch.setattr(llm.time, "sleep", lambda s: None)
+
+    reply, why = llm._ask_gemini_vision("k", "m", [{"text": "x"}])
+
+    assert len(calls) == 2, "it gave up on the first 429"
+    assert reply == "{}" and why == ""
+
+
+def test_it_waits_once_not_in_a_loop(monkeypatch):
+    """A pipeline that hammers a rate limit gets a longer one."""
+    import autoreel.llm_highlights as llm
+
+    calls = []
+    monkeypatch.setattr(llm, "_post_detailed",
+                        lambda *a: (calls.append(1), (None, "HTTP 429"))[1])
+    monkeypatch.setattr(llm.time, "sleep", lambda s: None)
+
+    llm._ask_gemini_vision("k", "m", [{"text": "x"}])
+
+    assert len(calls) == 2
