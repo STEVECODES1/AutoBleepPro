@@ -38,7 +38,7 @@ from datetime import datetime
 # Bump when shipping user-visible changes, so --test-config can prove
 # which build is actually running (stale extracts have silently caused
 # several confusing "the fix did nothing" runs).
-BUILD = "2026-08-14.2 stack both people, the way the good edits do"
+BUILD = "2026-08-14.3 preview says how to aim the two panes"
 
 # How often --watch checks whether a deferred clip's wait is up. A minute
 # is fine: the waits themselves are 25 to 80 minutes, so the resolution
@@ -1596,15 +1596,34 @@ def main(argv=None) -> int:
               f"strategy={strategy}")
         if strategy == "region":
             print(f"[Crop] keeping {describe(region)}")
+        if strategy == "stack":
+            from autoreel.crop_strategy import resolve_stack
+
+            halves = resolve_stack({"clips": clips})
+            print(f"[Crop] top pane:    {describe(halves['top'])}")
+            print(f"[Crop] bottom pane: {describe(halves['bottom'])}")
         written = preview(source, out_dir, region, strategy=strategy)
         if not written:
             print("[Crop] Could not read that video (is ffmpeg on PATH?)")
             return 1
         print(f"[Crop] {len(written)} still(s) -> {out_dir}")
-        print("[Crop] *_source.jpg shows the red box on the original; "
-              "*_result.jpg is what the clip will look like.")
-        print("[Crop] Adjust clips.crop_region in config.json (fractions of "
-              "the frame) and run this again.")
+        if strategy == "stack":
+            # The preview renders a single crop, so *_result is not the
+            # stacked layout. Say so rather than letting a misleading
+            # picture be trusted - the *_source stills are the useful
+            # part here: they show the frame the two panes come out of.
+            print("[Crop] Open a *_source.jpg and find the two people. The "
+                  "panes are set in config.json under "
+                  "clips.profiles.monkey.stack, as fractions of the frame:")
+            print("[Crop]   x/y = top-left corner, 0.0 to 1.0 across and "
+                  "down; width/height = how much of the frame the pane is.")
+            print("[Crop]   'top' is whichever person you want on top of "
+                  "the finished clip.")
+        else:
+            print("[Crop] *_source.jpg shows the red box on the original; "
+                  "*_result.jpg is what the clip will look like.")
+            print("[Crop] Adjust clips.crop_region in config.json "
+                  "(fractions of the frame) and run this again.")
         return 0
 
     if args.check_llm:
