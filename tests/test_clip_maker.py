@@ -444,14 +444,29 @@ def test_fit_still_takes_burned_captions_when_asked():
 # serve both, and picking either one wrecks the other.
 # ═════════════════════════════════════════════════════════════════════════════
 
-def test_the_monkey_profile_cuts_out_the_call_window():
-    from autoreel.crop_strategy import (CROP_REGION, resolve_crop_strategy,
-                                        resolve_region)
+def test_the_monkey_profile_stacks_both_people():
+    """A crop keeps ONE rectangle, and a Monkey clip has two people in
+    two separate panes. Every rectangle tried looked wrong because the
+    format is a composite, not a crop: both faces, one above the other,
+    each filling half the height - which is what the channel's own
+    hand-made edits do."""
+    from autoreel.crop_strategy import CROP_STACK, resolve_crop_strategy, resolve_stack
 
-    config = {"clips": {"profile": "monkey"}}
-    assert resolve_crop_strategy(config) == CROP_REGION
-    region = resolve_region(config)
-    assert 0 < region["width"] < 1 and 0 < region["height"] <= 1
+    assert resolve_crop_strategy({"clips": {"profile": "monkey"}}) == CROP_STACK
+
+    halves = resolve_stack({"clips": {"profile": "monkey"}})
+    assert set(halves) == {"top", "bottom"}
+    for box in halves.values():
+        assert box["x"] + box["width"] <= 1.0001
+        assert box["y"] + box["height"] <= 1.0001
+
+
+def test_the_single_rectangle_version_is_still_available():
+    """For a stream where only one of the two is worth keeping."""
+    from autoreel.crop_strategy import CROP_REGION, resolve_crop_strategy
+
+    assert resolve_crop_strategy(
+        {"clips": {"profile": "monkey_solo"}}) == CROP_REGION
 
 
 def test_the_gta_profile_follows_motion_and_never_faces():
@@ -713,3 +728,57 @@ def test_the_model_is_told_to_return_fewer():
 
     assert "RETURN FEWER THAN ASKED" in SYSTEM_PROMPT
     assert "AT MOST" in build_prompt([], 20)
+
+
+def test_the_stack_reads_the_input_twice_and_joins_it():
+    """-vf is one stream in and one out, so it cannot express this. The
+    same input has to be cropped two different ways and stacked."""
+    from autoreel.clip_maker import stack_filter
+    from autoreel.crop_strategy import resolve_stack
+
+    chain = stack_filter(resolve_stack({"clips": {"profile": "monkey"}}),
+                         None, False)
+
+    assert chain.count("[0:v]") == 2, "it did not read the input twice"
+    assert "vstack=inputs=2" in chain
+    assert chain.endswith("[v]")
+
+
+def test_each_half_fills_its_slot_rather_than_letterboxing():
+    """A half whose rectangle is not exactly 9:8 would otherwise sit
+    inside its slot with black bars, putting a black band through the
+    middle of the clip."""
+    from autoreel.clip_maker import STACK_HALF_HEIGHT, stack_filter
+    from autoreel.crop_strategy import resolve_stack
+
+    chain = stack_filter(resolve_stack({"clips": {"profile": "monkey"}}),
+                         None, False)
+
+    assert chain.count("force_original_aspect_ratio=increase") == 2
+    assert chain.count(f"crop=1080:{STACK_HALF_HEIGHT}") == 2
+    assert STACK_HALF_HEIGHT * 2 == 1920
+
+
+def test_captions_go_on_after_the_two_halves_are_joined():
+    """Burned into each half separately, they would appear twice."""
+    from autoreel.clip_maker import stack_filter
+    from autoreel.crop_strategy import resolve_stack
+
+    chain = stack_filter(resolve_stack({"clips": {"profile": "monkey"}}),
+                         "/tmp/c.ass", False)
+
+    assert chain.count("subtitles=") == 1
+    assert chain.index("vstack") < chain.index("subtitles=")
+
+
+def test_the_stack_render_maps_the_composed_stream_and_the_audio():
+    """filter_complex output has to be mapped explicitly - without it
+    ffmpeg picks a stream itself and the audio goes missing."""
+    import inspect
+
+    from autoreel import clip_maker
+
+    body = inspect.getsource(clip_maker.render_clip)
+
+    assert '"-map", "[v]"' in body
+    assert '"-map", "0:a?"' in body

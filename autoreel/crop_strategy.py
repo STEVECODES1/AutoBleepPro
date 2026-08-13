@@ -62,14 +62,31 @@ CROP_FACE = "face"
 CROP_FIT = "fit"
 # Crop to a named rectangle of the source, then frame that.
 CROP_REGION = "region"
+# Two rectangles from the same frame, stacked one above the other and
+# filling 9:16 together. This is the Monkey-app format the channel's own
+# edits use: BOTH people on the call, one above the other, each filling
+# half the height. No single crop can produce it - a crop keeps one
+# rectangle - which is why every rectangle tried so far looked wrong.
+CROP_STACK = "stack"
 
-VALID_STRATEGIES = (CROP_CENTER, CROP_MOTION, CROP_FACE, CROP_FIT, CROP_REGION)
+VALID_STRATEGIES = (CROP_CENTER, CROP_MOTION, CROP_FACE, CROP_FIT,
+                    CROP_REGION, CROP_STACK)
 
 # The rectangle REGION keeps, as fractions of the source width and
 # height. The default points at the right-hand third, full height, which
 # is where a call window usually sits beside a browser - but the whole
 # point is that it gets MEASURED from a real frame, not inherited.
 DEFAULT_REGION = {"x": 0.50, "y": 0.04, "width": 0.37, "height": 0.92}
+
+# The two rectangles STACK keeps - one per person on the call.
+# These are the halves of a 16:9 frame that a two-window Monkey layout
+# usually puts them in - and like DEFAULT_REGION they are a starting
+# point to be checked against a real still with --preview-crop, not a
+# measurement. Getting them wrong frames the browser twice.
+DEFAULT_STACK = {
+    "top": {"x": 0.0, "y": 0.0, "width": 0.5, "height": 1.0},
+    "bottom": {"x": 0.5, "y": 0.0, "width": 0.5, "height": 1.0},
+}
 
 # Named framings for the kinds of content this channel actually records.
 # A profile is a whole answer - strategy AND rectangle - because those
@@ -78,7 +95,12 @@ DEFAULT_REGION = {"x": 0.50, "y": 0.04, "width": 0.37, "height": 0.92}
 PROFILES: Dict[str, Dict[str, Any]] = {
     # Two people on camera, in a window beside a browser. The clip is the
     # call; the browser is not in it.
-    "monkey": {"crop_strategy": CROP_REGION, "crop_region": DEFAULT_REGION},
+    # Both people on the call, one above the other - the layout the
+    # channel's own hand-made edits use.
+    "monkey": {"crop_strategy": CROP_STACK, "stack": DEFAULT_STACK},
+    # The single-rectangle version, for a stream where only one of the
+    # two is worth keeping.
+    "monkey_solo": {"crop_strategy": CROP_REGION, "crop_region": DEFAULT_REGION},
     # Centred on the action, drifting slowly toward it when something
     # happens off to one side. A locked centre crop keeps the crosshair
     # and the HUD and misses the fight that made the clip.
@@ -130,6 +152,39 @@ def resolve_profile(config: Optional[Dict[str, Any]] = None) -> dict:
         if clips.get(key):
             settings[key] = clips[key]
     return settings
+
+
+def resolve_stack(config: Optional[Dict[str, Any]] = None) -> dict:
+    """The two rectangles STACK composites, top first.
+
+    Same fractions-of-the-frame contract as resolve_region, and each half
+    is clamped the same way, because a rectangle running off an edge is
+    an ffmpeg error rather than a slightly wrong crop.
+    """
+    configured = dict(resolve_profile(config).get("stack") or DEFAULT_STACK)
+    halves = {}
+    for slot in ("top", "bottom"):
+        raw = dict(DEFAULT_STACK[slot])
+        raw.update({k: v for k, v in (configured.get(slot) or {}).items()
+                    if k in DEFAULT_REGION})
+        halves[slot] = _clamped(raw)
+    return halves
+
+
+def _clamped(raw: dict) -> dict:
+    def fraction(key: str, lowest: float = 0.0) -> float:
+        try:
+            value = float(raw[key])
+        except (TypeError, ValueError, KeyError):
+            value = DEFAULT_REGION[key]
+        return min(1.0, max(lowest, value))
+
+    region = {"x": fraction("x"), "y": fraction("y"),
+              "width": fraction("width", 0.05),
+              "height": fraction("height", 0.05)}
+    region["width"] = min(region["width"], 1.0 - region["x"])
+    region["height"] = min(region["height"], 1.0 - region["y"])
+    return region
 
 
 def resolve_region(config: Optional[Dict[str, Any]] = None) -> dict:

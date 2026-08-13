@@ -43,9 +43,11 @@ from .crop_strategy import (
     CROP_FIT,
     CROP_MOTION,
     CROP_REGION,
+    CROP_STACK,
     GAMEPLAY_CONTENT,
     resolve_crop_strategy,
     resolve_region,
+    resolve_stack,
 )
 from .highlights import Highlight, HighlightScorer
 
@@ -313,6 +315,45 @@ def escape_filter_path(path: str) -> str:
 CROP_WIDTH_EXPR = "min(iw,ih*9/16)"
 
 
+# Each half of the stack. Two halves of 1920 - the seam is invisible
+# because both are full width.
+STACK_HALF_HEIGHT = VERTICAL_HEIGHT // 2
+
+
+def stack_filter(halves: dict, caption_path: Optional[str] = None,
+                 watermark: bool = True) -> str:
+    """Two rectangles from one frame, stacked, filling 1080x1920.
+
+    This is a filter_complex rather than a -vf chain: -vf is one stream
+    in and one out, and this needs the SAME input read twice and joined.
+
+    Each half is cropped, then scaled to fill 1080x960 with
+    force_original_aspect_ratio=increase and cropped back - so a half
+    whose rectangle is not exactly 9:8 fills its slot instead of
+    letterboxing inside it, which would put black bars through the
+    middle of the clip.
+    """
+    parts = []
+    for slot, label in (("top", "t"), ("bottom", "b")):
+        box = halves[slot]
+        parts.append(
+            f"[0:v]crop=iw*{box['width']:.4f}:ih*{box['height']:.4f}:"
+            f"iw*{box['x']:.4f}:ih*{box['y']:.4f},"
+            f"scale={VERTICAL_WIDTH}:{STACK_HALF_HEIGHT}:"
+            f"force_original_aspect_ratio=increase,"
+            f"crop={VERTICAL_WIDTH}:{STACK_HALF_HEIGHT},setsar=1[{label}]")
+
+    chain = f"[t][b]vstack=inputs=2"
+    if caption_path:
+        chain += f",subtitles='{escape_filter_path(caption_path)}'"
+    if watermark:
+        mark = watermark_filter()
+        if mark:
+            chain += f",{mark}"
+    parts.append(chain + "[v]")
+    return ";".join(parts)
+
+
 def motion_crop_filter(commands_path: str) -> str:
     """A 9:16 crop whose x is driven along a path by sendcmd.
 
@@ -370,7 +411,8 @@ def render_clip(source_path: str, spec: ClipSpec, output_path: str,
                 crf: int = 20,
                 region: Optional[dict] = None,
                 watermark: bool = True,
-                motion_commands: str = "") -> str:
+                motion_commands: str = "",
+                stack: Optional[dict] = None) -> str:
     """Cut, crop and (optionally) caption one clip. Returns the path."""
     if not have_ffmpeg():
         raise ClipError("ffmpeg is not on PATH - clip rendering needs it")
@@ -390,8 +432,13 @@ def render_clip(source_path: str, spec: ClipSpec, output_path: str,
         "-accurate_seek", "-ss", f"{spec.start:.3f}",
         "-i", source_path,
         "-t", f"{spec.duration:.3f}",
-        "-vf", build_filter(strategy, caption_path, region, watermark,
-                            motion_commands),
+        # A stack reads the same input twice and joins the halves, which
+        # -vf cannot express - it is one stream in, one out.
+        *(["-filter_complex", stack_filter(stack, caption_path, watermark),
+           "-map", "[v]", "-map", "0:a?"]
+          if strategy == CROP_STACK and stack else
+          ["-vf", build_filter(strategy, caption_path, region, watermark,
+                               motion_commands)]),
         *_encoder_args(encoder, preset, crf),
         "-c:a", "aac", "-b:a", "128k", "-ac", "2",
         # Vertical feeds are 30fps; leaving a 60fps source at 60 doubles
@@ -423,7 +470,8 @@ def render_clip(source_path: str, spec: ClipSpec, output_path: str,
             return render_clip(source_path, spec, output_path, strategy,
                                caption_path, encoder, preset, crf, region,
                                watermark=False,
-                               motion_commands=motion_commands)
+                               motion_commands=motion_commands,
+                               stack=stack)
         # An empty stderr with a non-zero exit is what "suppressing" the
         # fontconfig message produced last time: ten clips failed and the
         # reason printed was ";". Say the exit code and the filter chain
@@ -620,6 +668,11 @@ class ClipMaker:
         """The rectangle REGION cuts, from the configured profile."""
         return resolve_region(self.config)
 
+    @property
+    def stack(self) -> dict:
+        """The two rectangles the stack layout composites, top first."""
+        return resolve_stack(self.config)
+
     def make(self, source_path: str, segments: Iterable[dict],
              basename: str = "", chat: Optional[list] = None) -> list:
         """Render clips for one video. Returns ClipResults, newest last.
@@ -729,7 +782,8 @@ class ClipMaker:
                             else clip_strategy,
                             caption_path, self.encoder, self.preset,
                             self.crf, region,
-                            motion_commands=motion_commands)
+                            motion_commands=motion_commands,
+                            stack=self.stack)
             except ClipError as exc:
                 failures.append(str(exc))
                 continue
