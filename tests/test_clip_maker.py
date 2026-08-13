@@ -444,29 +444,33 @@ def test_fit_still_takes_burned_captions_when_asked():
 # serve both, and picking either one wrecks the other.
 # ═════════════════════════════════════════════════════════════════════════════
 
-def test_the_monkey_profile_stacks_both_people():
-    """A crop keeps ONE rectangle, and a Monkey clip has two people in
-    two separate panes. Every rectangle tried looked wrong because the
-    format is a composite, not a crop: both faces, one above the other,
-    each filling half the height - which is what the channel's own
-    hand-made edits do."""
-    from autoreel.crop_strategy import CROP_STACK, resolve_crop_strategy, resolve_stack
+def test_the_monkey_profile_frames_the_call_not_the_browser():
+    """MEASURED from a real still: monkey.app fills the left half of the
+    screen and howl.gg sits on the right. The old rectangle - x 0.50,
+    width 0.37 - was the right-hand half, so it framed the slots browser
+    perfectly on every clip where no face was found."""
+    from autoreel.crop_strategy import (CROP_REGION, resolve_content_region,
+                                        resolve_crop_strategy, resolve_region)
 
-    assert resolve_crop_strategy({"clips": {"profile": "monkey"}}) == CROP_STACK
+    config = {"clips": {"profile": "monkey"}}
 
-    halves = resolve_stack({"clips": {"profile": "monkey"}})
-    assert set(halves) == {"top", "bottom"}
-    for box in halves.values():
-        assert box["x"] + box["width"] <= 1.0001
-        assert box["y"] + box["height"] <= 1.0001
+    assert resolve_crop_strategy(config) == CROP_REGION
+
+    box = resolve_region(config)
+    assert box["x"] + box["width"] <= 0.5, \
+        "the rectangle reaches into the right-hand half, which is the browser"
+
+    people = resolve_content_region(config)
+    assert people and people["x"] + people["width"] <= 0.5
 
 
-def test_the_single_rectangle_version_is_still_available():
-    """For a stream where only one of the two is worth keeping."""
-    from autoreel.crop_strategy import CROP_REGION, resolve_crop_strategy
+def test_the_stacked_layout_is_still_available():
+    """For a stream where the camera is a separate pane from the call -
+    the layout the hand-made CapCut edits use."""
+    from autoreel.crop_strategy import CROP_STACK, resolve_crop_strategy
 
     assert resolve_crop_strategy(
-        {"clips": {"profile": "monkey_solo"}}) == CROP_REGION
+        {"clips": {"profile": "monkey_stack"}}) == CROP_STACK
 
 
 def test_the_gta_profile_follows_motion_and_never_faces():

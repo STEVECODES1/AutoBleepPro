@@ -616,7 +616,7 @@ def test_the_framing_flag_beats_a_leftover_crop_strategy():
         "gameplay") == "motion"
     assert resolve_crop_strategy(
         {"clips": {"profile": "monkey", "crop_strategy": ""}},
-        "gameplay") == "stack"
+        "gameplay") == "region"
     assert resolve_crop_strategy(
         {"clips": {"profile": "whole", "crop_strategy": ""}},
         "gameplay") == "fit"

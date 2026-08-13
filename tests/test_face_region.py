@@ -122,3 +122,30 @@ def test_no_faces_falls_back_to_the_whole_frame_not_the_rectangle():
 
     assert "CROP_FIT" in body, "the fallback has to keep the whole frame"
     assert "no faces here" in body
+
+
+def test_faces_are_only_looked_for_inside_the_call_pane():
+    """A face on the browser beside the call - a thumbnail, a streamer
+    being reacted to, a face on a slots banner - must not be able to
+    decide the framing. The detector never sees that half."""
+    from autoreel.face_region import sample_args
+
+    pane = {"x": 0.03, "y": 0.05, "width": 0.46, "height": 0.90}
+    args = " ".join(sample_args("/in.mp4", 10.0, 30.0, "/tmp", within=pane))
+
+    assert "crop=iw*0.4600" in args and "iw*0.0300" in args
+
+
+def test_a_box_found_inside_the_pane_is_mapped_back_to_the_frame():
+    """Measured inside the crop, it means nothing against the whole
+    frame until it is offset by where the crop was."""
+    from autoreel.face_region import _to_whole_frame
+
+    pane = {"x": 0.03, "y": 0.05, "width": 0.46, "height": 0.90}
+    # Dead centre of the pane, a quarter of its size.
+    mapped = _to_whole_frame(
+        {"x": 0.375, "y": 0.375, "width": 0.25, "height": 0.25}, pane)
+
+    assert abs(mapped["x"] - (0.03 + 0.375 * 0.46)) < 1e-4
+    assert abs(mapped["width"] - 0.25 * 0.46) < 1e-4
+    assert mapped["x"] + mapped["width"] <= 0.5, "it escaped into the browser"

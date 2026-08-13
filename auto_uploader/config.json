@@ -188,25 +188,24 @@
     "caption_template": "{title} 🤣🤣🤣💀💀💀#stackswopo\n\n👆 Monkey vids + full stream - LINK IN BIO\n\nYouTube: @BinScript\nRumble: rumble.com/user/BinScripts"
   },
   "clips": {
-    "_profile_comment": "WHICH KIND OF CONTENT this stream is, which decides the framing. 'monkey' = a Monkey-app call: BOTH people stacked, one above the other, each filling half the height - the format the channel's own hand-made edits use. 'monkey_solo' = keep one rectangle only. 'gta' = gameplay: the crop follows the action, drifting slowly. 'whole' = layout unknown: keeps the entire frame on a blurred background, losing nothing. Aim the monkey panes with: python main.py --preview-crop \"path\\\\to\\\\stream.mp4\"",
+    "_profile_comment": "WHICH KIND OF CONTENT this stream is, which decides the framing. 'monkey' = a Monkey-app call beside the howl.gg browser: frames the CALL pane and never the browser. 'monkey_stack' = both people stacked one above the other, for a stream where the camera is a separate pane. 'gta' = gameplay: the crop follows the action, drifting slowly. 'whole' = layout unknown: keeps the entire frame on a blurred background. Check the panes against a real still: python main.py --preview-crop \"path\\\\to\\\\stream.mp4\"",
     "profile": "monkey",
     "_region_comment": "The rectangle the 'monkey' profile keeps, in FRACTIONS of the frame (0-1), so it is correct at 1080p and 4K alike. x/y are the top-left corner. These are a starting guess - run --preview-crop, look at the red box in logs/crop_preview/, and nudge until the call window is inside it.",
     "profiles": {
       "monkey": {
-        "_stack_comment": "The two panes, in FRACTIONS of the frame (0-1) so they are correct at 1080p and 4K alike. x/y are the top-left corner. 'top' is the pane that goes on top of the finished clip. These defaults split the frame left/right - check them against a real still and move them so each pane sits on one person.",
-        "stack": {
-          "top": {
-            "x": 0.0,
-            "y": 0.0,
-            "width": 0.5,
-            "height": 1.0
-          },
-          "bottom": {
-            "x": 0.5,
-            "y": 0.0,
-            "width": 0.5,
-            "height": 1.0
-          }
+        "_measured_comment": "MEASURED from a real still of this layout, not guessed: monkey.app fills the left half of the screen, howl.gg the right. The value before this was x 0.50 width 0.37 - the right-hand half - so it framed the slots browser on every clip where no face was found.",
+        "crop_region": {
+          "x": 0.03,
+          "y": 0.05,
+          "width": 0.46,
+          "height": 0.9
+        },
+        "_content_comment": "Where the people are. Face detection only looks inside this, and the crop falls back to it, so a clip can never be framed on the browser.",
+        "content_region": {
+          "x": 0.03,
+          "y": 0.05,
+          "width": 0.46,
+          "height": 0.9
         }
       }
     },

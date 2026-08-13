@@ -45,6 +45,7 @@ from .crop_strategy import (
     CROP_REGION,
     CROP_STACK,
     GAMEPLAY_CONTENT,
+    resolve_content_region,
     resolve_crop_strategy,
     resolve_region,
     resolve_stack,
@@ -669,6 +670,11 @@ class ClipMaker:
         return resolve_region(self.config)
 
     @property
+    def content_region(self) -> Optional[dict]:
+        """Where the people are - the only place faces are looked for."""
+        return resolve_content_region(self.config)
+
+    @property
     def stack(self) -> dict:
         """The two rectangles the stack layout composites, top first."""
         return resolve_stack(self.config)
@@ -759,9 +765,18 @@ class ClipMaker:
             clip_strategy = strategy
             if strategy == CROP_REGION and self.find_faces:
                 measured = face_region.region_for(
-                    source_path, spec.start, spec.end - spec.start)
+                    source_path, spec.start, spec.end - spec.start,
+                    within=self.content_region)
                 if measured:
                     region = measured
+                elif self.content_region:
+                    # The call pane. Not the whole frame and not a stale
+                    # rectangle: on this layout the whole frame is half
+                    # browser, and the old rectangle WAS the browser -
+                    # x 0.50 width 0.37 is the slots window exactly.
+                    region = self.content_region
+                    print(f"[Clips] Clip {spec.index:02d}: no faces here - "
+                          f"framing the call pane.")
                 else:
                     # NOT the configured rectangle. That rectangle points
                     # wherever it was last aimed, and when no face is on

@@ -76,7 +76,19 @@ VALID_STRATEGIES = (CROP_CENTER, CROP_MOTION, CROP_FACE, CROP_FIT,
 # height. The default points at the right-hand third, full height, which
 # is where a call window usually sits beside a browser - but the whole
 # point is that it gets MEASURED from a real frame, not inherited.
-DEFAULT_REGION = {"x": 0.50, "y": 0.04, "width": 0.37, "height": 0.92}
+# MEASURED from a real still of this channel's Monkey layout, not
+# guessed: monkey.app fills the left half of the screen and howl.gg sits
+# on the right. The previous value - x 0.50, width 0.37 - was the
+# RIGHT-hand half, which is the slots browser. It framed the gambling
+# window perfectly on every clip where no face was found.
+DEFAULT_REGION = {"x": 0.03, "y": 0.05, "width": 0.46, "height": 0.90}
+
+# Where the PEOPLE are, whatever else is on screen. Face detection only
+# looks inside this, and it is what the crop falls back to when no face
+# is found - so a clip can never be framed on the browser beside the
+# call, which is what happened when the fallback was the whole frame or
+# a stale rectangle.
+DEFAULT_CONTENT_REGION = {"x": 0.03, "y": 0.05, "width": 0.46, "height": 0.90}
 
 # The two rectangles STACK keeps - one per person on the call.
 # These are the halves of a 16:9 frame that a two-window Monkey layout
@@ -97,10 +109,15 @@ PROFILES: Dict[str, Dict[str, Any]] = {
     # call; the browser is not in it.
     # Both people on the call, one above the other - the layout the
     # channel's own hand-made edits use.
-    "monkey": {"crop_strategy": CROP_STACK, "stack": DEFAULT_STACK},
-    # The single-rectangle version, for a stream where only one of the
-    # two is worth keeping.
-    "monkey_solo": {"crop_strategy": CROP_REGION, "crop_region": DEFAULT_REGION},
+    # One call pane, framed on whoever is in it. This is the layout the
+    # channel actually records: monkey.app on the left of the screen,
+    # howl.gg on the right, and the clip is the call.
+    "monkey": {"crop_strategy": CROP_REGION, "crop_region": DEFAULT_REGION,
+               "content_region": DEFAULT_CONTENT_REGION},
+    # Both people stacked, for a stream where the camera is a separate
+    # pane from the call - the layout the hand-made CapCut edits use.
+    "monkey_stack": {"crop_strategy": CROP_STACK, "stack": DEFAULT_STACK,
+                     "content_region": DEFAULT_CONTENT_REGION},
     # Centred on the action, drifting slowly toward it when something
     # happens off to one side. A locked centre crop keeps the crosshair
     # and the HUD and misses the fight that made the clip.
@@ -152,6 +169,17 @@ def resolve_profile(config: Optional[Dict[str, Any]] = None) -> dict:
         if clips.get(key):
             settings[key] = clips[key]
     return settings
+
+
+def resolve_content_region(config: Optional[Dict[str, Any]] = None) -> Optional[dict]:
+    """Where the people are, or None when the profile does not say.
+
+    Face detection is confined to this and the crop falls back to it, so
+    whatever else shares the screen - a browser, a slots game, a chat
+    window - can never end up being the clip.
+    """
+    configured = resolve_profile(config).get("content_region")
+    return _clamped(dict(configured)) if configured else None
 
 
 def resolve_stack(config: Optional[Dict[str, Any]] = None) -> dict:

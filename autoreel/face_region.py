@@ -86,16 +86,37 @@ def have_mediapipe() -> bool:
 
 
 def sample_args(source: str, start: float, duration: float,
-                out_dir: str, count: int = SAMPLE_COUNT) -> list:
-    """ffmpeg pulling `count` stills spread across the window."""
+                out_dir: str, count: int = SAMPLE_COUNT,
+                within: Optional[dict] = None) -> list:
+    """ffmpeg pulling `count` stills spread across the window.
+
+    `within` restricts the stills to one rectangle of the frame, so the
+    detector never even sees the rest. That is what stops a face on the
+    browser beside the call - a thumbnail, a streamer being reacted to,
+    a face on a slots banner - from deciding the framing.
+    """
     every = max(0.5, duration / max(1, count))
+    crop = ""
+    if within:
+        crop = (f"crop=iw*{within['width']:.4f}:ih*{within['height']:.4f}:"
+                f"iw*{within['x']:.4f}:ih*{within['y']:.4f},")
     return [
         "ffmpeg", "-hide_banner", "-loglevel", "error",
         "-ss", f"{start:.2f}", "-t", f"{duration:.2f}", "-i", source,
-        "-vf", f"fps=1/{every:.3f},scale=960:-2",
+        "-vf", f"fps=1/{every:.3f},{crop}scale=960:-2",
         "-frames:v", str(count),
         os.path.join(out_dir, "frame_%02d.png"),
     ]
+
+
+def _to_whole_frame(box: dict, within: dict) -> dict:
+    """A box measured inside `within`, expressed against the whole frame."""
+    return {
+        "x": round(within["x"] + box["x"] * within["width"], 4),
+        "y": round(within["y"] + box["y"] * within["height"], 4),
+        "width": round(box["width"] * within["width"], 4),
+        "height": round(box["height"] * within["height"], 4),
+    }
 
 
 def _boxes_in(path: str, detector) -> list:
@@ -185,11 +206,14 @@ def _cover(boxes: list) -> Optional[dict]:
             "width": round(right - left, 4), "height": round(bottom - top, 4)}
 
 
-def region_for(source: str, start: float, duration: float) -> Optional[dict]:
+def region_for(source: str, start: float, duration: float,
+               within: Optional[dict] = None) -> Optional[dict]:
     """The rectangle the people are in, or None if none were found.
 
-    None is a normal answer - gameplay, a loading screen, everyone off
-    camera - and the caller keeps whatever rectangle it already had.
+    `within` confines the search to one part of the frame - the call
+    pane - so nothing outside it can be framed. None is a normal answer
+    (gameplay, a loading screen, everyone off camera) and the caller
+    keeps whatever rectangle it already had.
     """
     if not have_mediapipe() or not shutil.which("ffmpeg"):
         return None
@@ -198,7 +222,8 @@ def region_for(source: str, start: float, duration: float) -> Optional[dict]:
     workspace = tempfile.mkdtemp(prefix="faces_")
     try:
         try:
-            subprocess.run(sample_args(source, start, duration, workspace),
+            subprocess.run(sample_args(source, start, duration, workspace,
+                                       within=within),
                            timeout=_TIMEOUT, stdout=subprocess.DEVNULL,
                            stderr=subprocess.DEVNULL)
         except (OSError, subprocess.TimeoutExpired):
@@ -232,6 +257,9 @@ def region_for(source: str, start: float, duration: float) -> Optional[dict]:
             except Exception:
                 pass
 
-        return _cover(boxes)
+        found = _cover(boxes)
+        # Measured inside the crop, so it has to be mapped back before
+        # anyone uses it against the whole frame.
+        return _to_whole_frame(found, within) if (found and within) else found
     finally:
         shutil.rmtree(workspace, ignore_errors=True)
