@@ -218,3 +218,40 @@ def _rewind(posting, minutes):
         if job.not_before:
             job.not_before -= shift
     queue._save()
+
+
+def test_an_expired_token_is_a_wait_not_a_failure(tmp_path, monkeypatch):
+    """"FAIL 8" reads as eight broken clips. The true answer is one
+    expired credential and eight clips waiting on it, and which of those
+    it is decides whether you look at the code or at a token."""
+    import utils.clip_queue as clip_queue
+    from publishers.errors import NotConfigured
+
+    written = []
+    monkeypatch.setattr(clip_queue, "_journal",
+                        lambda cfg, status, platform, path, detail="":
+                        written.append(status))
+
+    def expired(*a, **k):
+        raise NotConfigured("Facebook cannot publish a Reel with this token: "
+                            "Session has expired")
+
+    monkeypatch.setattr(clip_queue, "publish", expired)
+    monkeypatch.setattr(clip_queue, "_publisher",
+                        lambda platform, config: type(
+                            "P", (), {"ready": lambda self: True,
+                                      "supports_reels": True})())
+
+    clip = tmp_path / "clip.mp4"
+    clip.write_bytes(b"x")
+    posting = {"enabled": True, "queue_path": str(tmp_path / "q.json"),
+               "state_path": str(tmp_path / "s.json"),
+               "platforms": {"facebook": {"enabled": True, "max_per_day": 10,
+                                          "min_minutes_between": 0}}}
+
+    clip_queue.offer(posting, {"logs_folder": str(tmp_path)}, str(clip),
+                     "cap", platforms=("facebook",))
+
+    assert "FAIL" not in written, \
+        "an expired credential was counted as a failed post"
+    assert "wait" in written

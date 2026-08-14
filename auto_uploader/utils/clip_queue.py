@@ -229,7 +229,13 @@ def offer(posting: dict, config: dict, video_path: str,
             queue.block(job_id, str(exc), MAX_DEFERRED_AGE_S)
             outcome[platform] = "skipped: not configured"
             print(f"[Clips] {platform}: skipped - {exc}")
-            _journal(config, "FAIL", platform, video_path, str(exc))
+            # "wait", not "FAIL". An expired token is a CONFIGURATION
+            # problem - nothing was attempted and nothing went wrong with
+            # the clip - and counting it as a failure makes the report
+            # read "FAIL 8" when the true answer is "one credential
+            # expired, eight clips are waiting on it". That difference is
+            # what tells you whether to look at the code or at a token.
+            _journal(config, "wait", platform, video_path, str(exc))
             continue
         if dry_run:
             queue.block(job_id, "dry run", 300)
