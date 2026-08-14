@@ -133,3 +133,72 @@ def test_a_stack_with_captions_renders(source, tmp_path):
                 stack=resolve_stack({"clips": {"profile": "monkey_stack"}}))
 
     assert _describe(out) == ("1080,1920", "aac")
+
+
+def test_a_quote_in_the_filename_does_not_break_the_caption_path(source, tmp_path):
+    """THE regression. `subtitles='...'` is a QUOTED filter argument, and
+    inside those quotes a backslash is not an escape - so an escaped \\'
+    ends the quote early and the rest of the path is read as filter
+    options. A real stream called
+
+        Stackswopo 'copyrighting all yall plug channels' 08.13.26
+
+    produced a caption path ffmpeg could not open, and all twenty clips
+    in that run failed on it. These files are internal, so the fix is to
+    never put such a character in one.
+    """
+    from autoreel.captions import STYLE_WORD, caption_file_for_clip
+    from autoreel.clip_maker import safe_stem
+
+    basename = "Stackswopo 'copyrighting all yall plug channels' 08.13.26"
+    assert "'" not in safe_stem(basename)
+
+    words = [{"word": w, "start": 1.0 + i * 0.3, "end": 1.0 + i * 0.3 + 0.25}
+             for i, w in enumerate("bro he said that".split())]
+    ass = caption_file_for_clip(
+        str(tmp_path / f".{safe_stem(basename)}_clip01.ass"),
+        [{"start": 1.0, "end": 4.0, "words": words}], 1.0, 4.0,
+        style=STYLE_WORD, uppercase=True)
+
+    out = str(tmp_path / "quoted.mp4")
+    render_clip(source, ClipSpec(1.0, 4.0, 1), out, "center", ass,
+                "libx264", "ultrafast", 32, watermark=False)
+
+    assert _describe(out) == ("1080,1920", "aac")
+
+
+def test_a_quote_in_the_OUTPUT_path_is_fine(source, tmp_path):
+    """The output is a plain argument, not a filter argument, so it needs
+    no sanitising - and stripping quotes from the clip NAME would lose
+    part of the stream's real title for no reason."""
+    out = str(tmp_path / "Stackswopo 'Plug Channels' - Clip 01.mp4")
+
+    render_clip(source, ClipSpec(1.0, 3.0, 1), out, "center", None,
+                "libx264", "ultrafast", 32, watermark=False)
+
+    assert os.path.exists(out)
+
+
+def test_the_safe_stem_keeps_something_readable():
+    """It ends up in a folder listing beside the clips; a hash would be
+    safe and useless."""
+    from autoreel.clip_maker import safe_stem
+
+    stem = safe_stem("Stackswopo 'copyrighting all yall' 08.13.26")
+
+    assert "Stackswopo" in stem
+    assert len(stem) <= 60
+    assert safe_stem("") and safe_stem("''''")
+
+
+def test_a_dotted_date_is_stripped_from_clip_names():
+    """08.13.26 lost its dots to the filesystem-safe pass and came out as
+    "081326" in the middle of every clip name."""
+    from autoreel.clip_maker import ClipSpec as Spec
+    from autoreel.clip_maker import clip_filename
+
+    name = clip_filename("Stackswopo 'Plug Channels' 08.13.26 Full Live Stream",
+                         Spec(0, 10, 1))
+
+    assert "081326" not in name and "08.13.26" not in name
+    assert name == "Stackswopo 'Plug Channels' Full Live Stream - Clip 01.mp4"

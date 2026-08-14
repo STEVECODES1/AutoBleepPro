@@ -84,8 +84,8 @@ _TIMEOUT = 60 * 30
 # did not make this.
 _NOISE = re.compile(
     r"\[[^\]]{1,32}\]"                     # platform IDs: [v70rbpc]
-    r"|\b\d{1,2}[-/]\d{1,2}[-/]\d{2,4}\b"  # dates: 5-12-26, 08/10/2026
-    r"|\b\d{4}[-/]\d{2}[-/]\d{2}\b"        # ISO dates: 2026-08-10
+    r"|\b\d{1,2}[-/.]\d{1,2}[-/.]\d{2,4}\b"  # dates: 5-12-26, 08/10/26, 08.13.26
+    r"|\b\d{4}[-/.]\d{2}[-/.]\d{2}\b"        # ISO dates: 2026-08-10
     r"|\bCLEAN\b",                          # censor suffix
     re.IGNORECASE,
 )
@@ -293,6 +293,28 @@ def crop_filter(strategy: str = CROP_CENTER, region: Optional[dict] = None) -> s
     return ("crop='min(iw,ih*9/16)':'min(ih,iw*16/9)',"
             f"scale={VERTICAL_WIDTH}:{VERTICAL_HEIGHT}:flags=bicubic,"
             "setsar=1")
+
+
+# Characters that survive on disk but break an ffmpeg filter argument.
+# A quote is the dangerous one: `subtitles='...'` is a QUOTED argument,
+# and inside those quotes a backslash is not an escape - so an escaped
+# \' ends the quote early and the rest of the path is parsed as filter
+# options. A real stream called
+#   Stackswopo 'copyrighting all yall plug channels' 08.13.26
+# produced a caption path ffmpeg could not open, and every clip in the
+# run failed on it.
+#
+# These files are internal and their names carry no meaning, so the fix
+# is to never put such a character in one rather than to escape harder.
+_UNSAFE_IN_FILTER = re.compile(r"[^A-Za-z0-9._-]+")
+
+
+def safe_stem(name: str, fallback: str = "clip") -> str:
+    """A filename stem that cannot break an ffmpeg filter argument."""
+    cleaned = _UNSAFE_IN_FILTER.sub("_", str(name or "")).strip("._-")
+    # Long paths are their own failure on Windows, and the stem is only
+    # here to make a temp file identifiable in a folder listing.
+    return (cleaned[:60] or fallback)
 
 
 def escape_filter_path(path: str) -> str:
@@ -736,7 +758,8 @@ class ClipMaker:
             caption_path = None
             if self.captions:
                 caption_path = caption_file_for_clip(
-                    os.path.join(self.output_dir, f".{basename}_clip{spec.index:02d}.ass"),
+                    os.path.join(self.output_dir,
+                                 f".{safe_stem(basename)}_clip{spec.index:02d}.ass"),
                     segments, spec.start, spec.end,
                     style=self.caption_style,
                     uppercase=self.caption_uppercase)
@@ -751,7 +774,7 @@ class ClipMaker:
                 if motion_region.is_worth_moving(path):
                     motion_commands = os.path.join(
                         self.output_dir,
-                        f".{basename}_clip{spec.index:02d}.cmds")
+                        f".{safe_stem(basename)}_clip{spec.index:02d}.cmds")
                     with open(motion_commands, "w", encoding="utf-8") as f:
                         f.write(motion_region.commands_file(
                             path, CROP_WIDTH_EXPR))
