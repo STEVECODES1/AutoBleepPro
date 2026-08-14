@@ -278,6 +278,27 @@ _RECORDING_MARKERS = (
 )
 
 
+# A run of these with no progress between them means the manifest is
+# dead rather than the network being flaky.
+MAX_FRAGMENT_REFUSALS = 40
+
+_REFUSAL = re.compile(r"HTTP Error (?:403|401|410)\b.*Retrying fragment",
+                      re.IGNORECASE)
+
+
+def is_fragment_refusal(line: str) -> bool:
+    """A fragment the server will not serve, however many times we ask."""
+    return bool(_REFUSAL.search(line or ""))
+
+
+def is_progress_line(line: str) -> bool:
+    """Evidence the download is actually moving."""
+    text = (line or "").strip()
+    return ("[download]" in text and "Retrying" not in text
+            and ("%" in text or "Destination" in text
+                 or "has already been" in text))
+
+
 def is_recording_line(line: str) -> bool:
     """True once bytes are actually being fetched."""
     if any(marker in line for marker in _RECORDING_MARKERS):
@@ -670,12 +691,40 @@ class Recorder:
             # every 60 seconds and would otherwise repeat the advice all
             # night.
             said_fixes: set = set()
+            # A 403 on a fragment is NOT a transient network error, and
+            # retrying it forever is why a recorder sat spinning on
+            # fragment 97 a hundred and eighty thousand times. It means
+            # the segment URL is dead - an expired token, a rotated CDN
+            # path, a stream that ended and took its manifest with it -
+            # and no number of retries can bring that fragment back. The
+            # recovery is a FRESH manifest, which is exactly what the
+            # outer loop does when this process exits, and which infinite
+            # retries prevent it from ever reaching.
+            #
+            # So: infinite retries stay, because they are right for a
+            # dropped connection. A RUN of refusals with no progress
+            # between them ends the process instead.
+            refusals = 0
             for line in process.stdout:
                 line = line.rstrip()
                 if not line:
                     continue
                 tail.append(line)
                 del tail[:-40]
+
+                if is_fragment_refusal(line):
+                    refusals += 1
+                    if refusals >= MAX_FRAGMENT_REFUSALS:
+                        self.say(f"The stream's segments are being refused "
+                                 f"({refusals} in a row) - the manifest has "
+                                 f"gone stale. Restarting with a fresh one.")
+                        process.terminate()
+                        break
+                elif is_progress_line(line):
+                    # Real progress clears the count: a handful of 403s
+                    # scattered through a long recording is normal and
+                    # must not end it.
+                    refusals = 0
                 if log:
                     # The log keeps EVERYTHING. Quietening the console is
                     # about being able to read it; throwing away the

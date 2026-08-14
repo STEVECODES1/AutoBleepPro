@@ -1036,3 +1036,52 @@ def test_different_problems_are_each_said(capsys):
 
     out = capsys.readouterr().out
     assert "clock" in out and "disk" in out
+
+
+def test_a_dead_fragment_is_told_from_a_flaky_connection():
+    """403 on a fragment means the segment URL is dead - expired token,
+    rotated CDN path, a stream that ended and took its manifest with it.
+    No number of retries brings it back."""
+    from record_stream import is_fragment_refusal
+
+    assert is_fragment_refusal(
+        "[download] Got error: HTTP Error 403: Forbidden. "
+        "Retrying fragment 97 (187724/inf)...")
+    assert is_fragment_refusal(
+        "[download] Got error: HTTP Error 410: Gone. Retrying fragment 3 (1/10)")
+    # A timeout IS transient and must keep the infinite retries.
+    assert not is_fragment_refusal(
+        "[download] Got error: The read operation timed out. "
+        "Retrying fragment 5 (2/inf)...")
+
+
+def test_real_progress_clears_the_count():
+    """A handful of 403s scattered through a long recording is normal
+    and must not end it - only an unbroken run means the manifest died."""
+    from record_stream import is_progress_line
+
+    assert is_progress_line("[download]  46.2% of ~ 2.79GiB at 5.48MiB/s")
+    assert is_progress_line("[download] Destination: stream.ts")
+    assert not is_progress_line(
+        "[download] Got error: HTTP Error 403: Forbidden. Retrying fragment 97")
+
+
+def test_the_run_of_refusals_has_a_finite_cap():
+    """The recorder sat on fragment 97 a hundred and eighty thousand
+    times. The recovery is a fresh manifest, which only happens when the
+    process exits."""
+    from record_stream import MAX_FRAGMENT_REFUSALS
+
+    assert 5 <= MAX_FRAGMENT_REFUSALS <= 200
+
+
+def test_infinite_retries_are_still_configured():
+    """They are right for a dropped connection, which is what they were
+    added for - the watchdog is about a DEAD manifest, not about giving
+    up on a bad line."""
+    import inspect
+
+    from record_stream import Recorder
+
+    body = inspect.getsource(Recorder.download_args)
+    assert '"--fragment-retries", "infinite"' in body
