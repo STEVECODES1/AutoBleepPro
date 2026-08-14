@@ -244,7 +244,10 @@
     "caption_style": "word",
     "caption_uppercase": true,
     "_vision_comment": "Sends the model two frames from each shortlisted candidate as well as the transcript. This is the signal the words cannot carry: a face reaction transcribes as '...what' and someone getting run over transcribes as nothing. Free on the same Gemini key the text pass uses - an image costs a fixed small number of tokens, and only the top candidates get pictures. Any failure falls back to the transcript.",
-    "use_vision": true
+    "use_vision": true,
+    "_trim_comment": "Remove dead air from the CENSORED export before upload. Only cuts stretches with no transcribed speech AND quiet audio, so laughter and game noise survive. Off by default; the mode above turns it on.",
+    "trim_silence": false,
+    "min_silence_seconds": 2.5
   },
   "features": {
     "_comment": "Optional extras. self_healing: python main.py --health. social_promoter posts AFTER a successful new upload (Discord needs DISCORD_WEBHOOK_URL in .env; twitter/reddit need their API keys + pip install tweepy/praw). content_optimizer writes an SEO/chapters report next to each uploaded video, reusing the censor pass's transcript.",
@@ -284,5 +287,17 @@
       "gaming",
       "clips"
     ]
+  },
+  "_mode_comment": "How a full stream is routed. \"\" (default) keeps the existing behaviour exactly. \"full_rumble_clean_youtube\" makes the split explicit: the UNCENSORED full VOD goes to Rumble under the FULL Stream title, the CENSORED (and optionally silence-trimmed) copy goes to YouTube, and highlight clips go to YouTube Shorts. It sets rumble.censor_uploads=false and youtube.censor_uploads=true for that run only - config.json is never rewritten. Dedup, PublishGuard, caps, spacing and the circuit breaker are untouched by it.",
+  "mode": "",
+  "modes": {
+    "full_rumble_clean_youtube": {
+      "_comment": "Uncensored full VOD -> Rumble. Censored copy -> YouTube. Clips -> YouTube Shorts.",
+      "rumble_censor_uploads": false,
+      "rumble_title_format": "\"{title}\" {date} Stackswopo FULL Stream",
+      "youtube_censor_uploads": true,
+      "trim_silence": true,
+      "clips_to_shorts": true
+    }
   }
 }

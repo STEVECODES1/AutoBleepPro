@@ -373,6 +373,20 @@ class AutoBleepPro:
                         variable=self.export_srt_var,
                         font=("Arial", 11)).pack(anchor="w", pady=(12, 2))
 
+        # Off by default, and it stays off unless ticked. The export is
+        # what gets published, so a pacing change is never a surprise.
+        self.trim_silence_var = ctk.BooleanVar(value=False)
+        ctk.CTkCheckBox(inner,
+                        text="Trim silences / dead air (loading screens, menus, long gaps)",
+                        variable=self.trim_silence_var,
+                        font=("Arial", 11)).pack(anchor="w", pady=(6, 0))
+        ctk.CTkLabel(inner,
+                     text="Only cuts stretches with no speech AND quiet audio, "
+                          "so laughter and game noise are kept.",
+                     font=("Arial", 10), text_color="gray",
+                     wraplength=520, justify="left").pack(anchor="w", padx=26,
+                                                          pady=(0, 2))
+
         ctk.CTkLabel(inner, text="Output Folder (optional):",
                      font=("Arial", 12)).pack(anchor="w", pady=(12, 2))
         out_row = ctk.CTkFrame(inner, fg_color="transparent")
@@ -463,6 +477,10 @@ class AutoBleepPro:
         self.batch_srt_var = ctk.BooleanVar(value=False)
         ctk.CTkCheckBox(bs, text="Export SRT in batch (full transcript beside each video)",
                         variable=self.batch_srt_var,
+                        font=("Arial", 11)).pack(anchor="w", padx=28, pady=(0, 4))
+        self.batch_trim_silence_var = ctk.BooleanVar(value=False)
+        ctk.CTkCheckBox(bs, text="Trim silences / dead air in every video",
+                        variable=self.batch_trim_silence_var,
                         font=("Arial", 11)).pack(anchor="w", padx=28, pady=(0, 10))
         self._refresh_batch_method_note()
 
@@ -587,7 +605,8 @@ class AutoBleepPro:
     # ── Settings snapshot ────────────────────────────────────────────────────
 
     def _snapshot_options(self, *, output_dir_override: str | None = None,
-                          write_srt: bool = False) -> ProcessOptions:
+                          write_srt: bool = False,
+                          trim_silence: bool | None = None) -> ProcessOptions:
         """Read every Tk variable ONCE, on the main thread."""
         raw = self.custom_words_var.get()
 
@@ -613,6 +632,10 @@ class AutoBleepPro:
             output_dir=output_dir_override if output_dir_override is not None
             else self.output_dir,
             write_srt=write_srt,
+            # Explicit argument wins so the Batch tab can use its own
+            # checkbox; otherwise the Single Video one applies.
+            trim_silence=bool(self.trim_silence_var.get())
+            if trim_silence is None else bool(trim_silence),
         )
 
     # ── Temp-file bookkeeping ────────────────────────────────────────────────
@@ -765,7 +788,9 @@ class AutoBleepPro:
                                 "All words were unchecked. No changes made.")
             return
 
-        options = self._snapshot_options(write_srt=bool(self.export_srt_var.get()))
+        options = self._snapshot_options(
+            write_srt=bool(self.export_srt_var.get()),
+            trim_silence=bool(self.trim_silence_var.get()))
         self.confirm_btn.configure(state="disabled")
         threading.Thread(
             target=self._export_video,
@@ -827,7 +852,8 @@ class AutoBleepPro:
         self._busy = True
         options = self._snapshot_options(          # main thread
             output_dir_override=self._batch_output_dir,
-            write_srt=bool(self.batch_srt_var.get()))
+            write_srt=bool(self.batch_srt_var.get()),
+            trim_silence=bool(self.batch_trim_silence_var.get()))
         in_dir = self._batch_input_dir
         self.batch_btn.configure(state="disabled")
         self.batch_log.delete("1.0", "end")

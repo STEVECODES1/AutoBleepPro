@@ -98,6 +98,9 @@ class AppConfig:
     # chosen on the consent screen, not to the Google account - so the
     # two channels cannot share a token however much else they share.
     youtube_shorts: dict = field(default_factory=dict)
+    # Named routing for a full stream. "" is the existing behaviour.
+    mode: str = ""
+    modes: dict = field(default_factory=dict)
 
 
 def _resolve_path(project_root: str, path: str) -> str:
@@ -205,7 +208,9 @@ def load_config(config_path: str = "config.json", env_path: str = ".env") -> App
                      clips=raw.get("clips", {}),
                      instagram=raw.get("instagram", {}),
                      facebook=raw.get("facebook", {}),
-                     youtube_shorts=raw.get("youtube_shorts", {}))
+                     youtube_shorts=raw.get("youtube_shorts", {}),
+                     mode=str(raw.get("mode", "") or ""),
+                     modes=raw.get("modes", {}))
 
 
 def validate_config(cfg: AppConfig) -> list:

@@ -89,6 +89,18 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--custom-words", default="", metavar='"a,b,c"',
                         help="Extra comma-separated words/phrases to censor.")
 
+    parser.add_argument("--trim-silence", action="store_true",
+                        help="Also cut long dead air out of the export - "
+                             "loading screens, menus, the gaps between bits. "
+                             "Only removes stretches that have BOTH no "
+                             "transcribed words AND quiet audio, so laughter "
+                             "and game noise survive. Off by default.")
+    parser.add_argument("--min-silence", type=float, default=2.5,
+                        metavar="SECONDS",
+                        help="With --trim-silence: how long a quiet stretch "
+                             "must be before it is cut (default 2.5). Below "
+                             "about 2s you start cutting the pauses that make "
+                             "speech sound human.")
     parser.add_argument("--srt", action="store_true",
                         help="Write a full-transcript .srt beside each output.")
     parser.add_argument("--txt", action="store_true",
@@ -168,6 +180,8 @@ def main(argv: list[str] | None = None) -> int:
         write_video=args.bleep_export,
         write_srt=args.srt,
         write_txt=args.txt,
+        trim_silence=args.trim_silence,
+        min_silence_s=args.min_silence,
     )
 
     say(f"Loading model '{options.model_name}' ({options.compute_pref})…")
@@ -191,6 +205,10 @@ def main(argv: list[str] | None = None) -> int:
             failures += 1
             print(f"error: {os.path.basename(video)}: {result.error}", file=sys.stderr)
             continue
+
+        if result.trimmed_cuts:
+            say(f"    Cut {result.trimmed_seconds / 60:.1f} min of dead air "
+                f"from {result.trimmed_cuts} stretch(es).")
 
         for path in (result.output_path, result.srt_path, result.txt_path):
             if path:

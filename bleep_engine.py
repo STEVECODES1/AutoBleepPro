@@ -24,7 +24,9 @@ import gc
 import itertools
 import os
 import re
+import shutil
 import subprocess
+import sys
 import tempfile
 import unicodedata
 import warnings
@@ -1352,6 +1354,13 @@ class ProcessOptions:
     write_video: bool = True
     write_srt: bool = False
     write_txt: bool = False
+    # Dead-air removal. OFF unless asked for: the export is what gets
+    # published, and a pacing threshold that suits one streamer ruins
+    # another's. See autoreel/silence_trim.py for why it needs BOTH a
+    # transcript gap and quiet audio before it cuts anything.
+    trim_silence: bool = False
+    min_silence_s: float = 2.5
+    silence_pad_s: float = 0.25
 
 
 @dataclass
@@ -1362,10 +1371,70 @@ class ProcessResult:
     srt_path: str | None = None
     txt_path: str | None = None
     error: str | None = None
+    # How much dead air came out, and how many stretches. Zero when the
+    # trim was off or found nothing worth cutting.
+    trimmed_seconds: float = 0.0
+    trimmed_cuts: int = 0
 
     @property
     def ok(self) -> bool:
         return self.error is None
+
+
+def _apply_silence_trim(result: "ProcessResult", out_path: str,
+                        transcript, options: "ProcessOptions",
+                        say: Callable[[str], None]) -> None:
+    """Remove dead air from a finished export, in place.
+
+    Never fatal. A trim that fails leaves the censored file exactly as it
+    was - which is a complete, publishable video - so a pacing feature
+    can never cost someone their export.
+    """
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    try:
+        from autoreel import silence_trim
+        from autoreel.audio_energy import measure
+    except Exception as exc:
+        say(f"Silence trim unavailable ({exc}) - keeping the full length.")
+        return
+
+    duration = media_seconds(out_path)
+    if duration <= 0:
+        say("Could not measure the video - keeping the full length.")
+        return
+
+    say("Looking for dead air…")
+    cuts = silence_trim.find_dead_air(
+        _flatten_words(transcript), duration,
+        levels=measure(out_path),
+        min_silence_s=options.min_silence_s,
+        pad_s=options.silence_pad_s)
+
+    say(silence_trim.describe(cuts, duration))
+    if not cuts:
+        return
+
+    try:
+        silence_trim.apply_trim(out_path, out_path, cuts, duration,
+                                preset=options.encode_preset)
+    except silence_trim.TrimError as exc:
+        say(f"Trim skipped: {exc}")
+        return
+
+    result.trimmed_seconds = silence_trim.removed_seconds(cuts)
+    result.trimmed_cuts = len(cuts)
+
+
+def media_seconds(path: str) -> float:
+    """Length of a media file in seconds, or 0.0 if it cannot be read."""
+    try:
+        done = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+             "-of", "csv=p=0", path],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=120)
+        return float(done.stdout.decode().strip().splitlines()[0])
+    except Exception:
+        return 0.0
 
 
 def process_video(
@@ -1418,27 +1487,43 @@ def process_video(
 
         if not options.write_video:
             return result
-        if not hits:
+        if not hits and not options.trim_silence:
             say("Clean - no video written.")
             return result
 
-        if AudioSegment is None:  # pragma: no cover
-            raise RuntimeError("pydub is required to censor audio")
-
-        cleaned_path = new_temp_wav()
-        censored = apply_bleeps(
-            AudioSegment.from_wav(audio_path), hits,
-            method=options.method, freq_hz=options.beep_freq,
-            custom_wav=options.custom_beep_wav, progress=progress,
-            # The whole transcript, not just the hits: padding is clamped
-            # to the words either side so the sentence survives.
-            all_words=_flatten_words(transcript))
-        censored.export(cleaned_path, format="wav")
-
         out_path = build_output_path(video_path, options.output_dir)
-        say(f"Encoding [{options.encode_preset}]…")
-        render_video(video_path, cleaned_path, out_path, options.encode_preset)
+
+        if hits:
+            if AudioSegment is None:  # pragma: no cover
+                raise RuntimeError("pydub is required to censor audio")
+
+            cleaned_path = new_temp_wav()
+            censored = apply_bleeps(
+                AudioSegment.from_wav(audio_path), hits,
+                method=options.method, freq_hz=options.beep_freq,
+                custom_wav=options.custom_beep_wav, progress=progress,
+                # The whole transcript, not just the hits: padding is clamped
+                # to the words either side so the sentence survives.
+                all_words=_flatten_words(transcript))
+            censored.export(cleaned_path, format="wav")
+
+            say(f"Encoding [{options.encode_preset}]…")
+            render_video(video_path, cleaned_path, out_path,
+                         options.encode_preset)
+        else:
+            # Nothing to censor but a trim was asked for. Copy rather
+            # than re-encode: the trim below re-encodes anyway, and
+            # doing it twice costs a generation of quality for nothing.
+            shutil.copy2(video_path, out_path)
+
         result.output_path = out_path
+
+        if options.trim_silence:
+            # Censor FIRST, then trim. The other order would move every
+            # word timing the censor pass depends on, and the bleeps
+            # would land on the wrong words.
+            _apply_silence_trim(result, out_path, transcript, options, say)
+
         say(f"Saved {os.path.basename(out_path)}")
     except Exception as exc:
         result.error = str(exc) or exc.__class__.__name__

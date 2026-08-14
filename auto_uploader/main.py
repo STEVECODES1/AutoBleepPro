@@ -38,7 +38,7 @@ from datetime import datetime
 # Bump when shipping user-visible changes, so --test-config can prove
 # which build is actually running (stale extracts have silently caused
 # several confusing "the fix did nothing" runs).
-BUILD = "2026-08-15.0 a placeholder title is not an identity"
+BUILD = "2026-08-15.1 silence trim + dual-upload mode"
 
 # How often --watch checks whether a deferred clip's wait is up. A minute
 # is fine: the waits themselves are 25 to 80 minutes, so the resolution
@@ -226,6 +226,108 @@ def tidy_downloaded_vods(paths: list, folder: str, project_root: str) -> str:
     for problem in problems:
         told += f"\n[Clips] Could not remove {problem}"
     return told
+
+
+def _trim_dead_air(path: str, cfg, words=None) -> str:
+    """Remove dead air from a censored copy. Returns the path to upload.
+
+    Never fatal, and never destructive: on any failure the untrimmed
+    file is returned untouched, because a complete video is always
+    better than a pacing feature.
+    """
+    try:
+        # media_duration is imported at module level - re-importing it
+        # here would bind it as a local for this whole function and
+        # break the module-level one everywhere else in the file.
+        from autoreel import silence_trim
+        from autoreel.audio_energy import measure
+    except Exception as exc:
+        print(f"[Trim] Unavailable ({exc}) - keeping the full length.")
+        return path
+
+    duration = media_duration(path) or 0.0
+    if duration <= 0:
+        print("[Trim] Could not measure the video - keeping the full length.")
+        return path
+
+    if not words:
+        # The censor pass caches word timings beside the video; without
+        # them there is no way to tell a pause from a laugh, and cutting
+        # on loudness alone would remove exactly the moments worth
+        # keeping. Skipping is the correct answer, not a fallback.
+        words = _cached_words(path, cfg)
+    if not words:
+        print("[Trim] No word timings for this video - keeping the full "
+              "length. (Loudness alone cannot tell a pause from a laugh.)")
+        return path
+
+    clips = cfg.clips or {}
+    cuts = silence_trim.find_dead_air(
+        words, duration, levels=measure(path),
+        min_silence_s=float(clips.get("min_silence_seconds", 2.5)))
+    print(f"[Trim] {silence_trim.describe(cuts, duration)}")
+    if not cuts:
+        return path
+
+    trimmed = os.path.join(
+        os.path.dirname(path),
+        os.path.splitext(os.path.basename(path))[0] + "_TRIMMED.mp4")
+    try:
+        return silence_trim.apply_trim(path, trimmed, cuts, duration)
+    except silence_trim.TrimError as exc:
+        print(f"[Trim] Skipped: {exc}")
+        return path
+
+
+def _cached_words(path: str, cfg) -> list:
+    """Word timings the censor pass already wrote for this video."""
+    try:
+        from utils.censor import _load_cached_words, words_cache_path
+
+        base = os.path.splitext(os.path.basename(path))[0]
+        for candidate in (base, base.split("_CENSORED_")[0]):
+            cached = _load_cached_words(
+                words_cache_path(cfg.general.censored_folder, candidate), path)
+            if cached:
+                return [w for seg in cached for w in (seg.get("words") or [])]
+    except Exception:
+        pass
+    return []
+
+
+def _apply_mode(cfg, name: str, settings: dict):
+    """Apply a named routing mode to the loaded config, loudly.
+
+    Every key here maps onto a setting that already exists. The mode is
+    a way of setting several of them together and having the run SAY so,
+    which matters because "uncensored to Rumble" and "censored to
+    YouTube" are two config values a long way apart in the file and
+    getting one of them wrong publishes the wrong audio.
+    """
+    print(f"[Mode] {name}")
+    if "rumble_censor_uploads" in settings:
+        cfg.rumble.censor_uploads = bool(settings["rumble_censor_uploads"])
+        print(f"       Rumble  <- {'censored' if cfg.rumble.censor_uploads else 'UNCENSORED'} full VOD")
+    if settings.get("rumble_title_format"):
+        cfg.rumble.title_format = str(settings["rumble_title_format"])
+    if "youtube_censor_uploads" in settings:
+        cfg.youtube.censor_uploads = bool(settings["youtube_censor_uploads"])
+        print(f"       YouTube <- {'censored' if cfg.youtube.censor_uploads else 'UNCENSORED'} copy")
+
+    clips = dict(cfg.clips or {})
+    if "trim_silence" in settings:
+        clips["trim_silence"] = bool(settings["trim_silence"])
+        if clips["trim_silence"]:
+            print("       Dead air trimmed from the YouTube copy")
+    if settings.get("clips_to_shorts"):
+        # Only a request. youtube_shorts still has to be enabled, signed
+        # in and inside its cap - the mode does not get to bypass the
+        # guard, and saying so here stops it looking broken when a clip
+        # does not appear.
+        clips["clips_to_shorts"] = True
+        print("       Clips   -> YouTube Shorts (if enabled and signed in)")
+    cfg.clips = clips
+    return cfg
 
 
 def _clip_config(cfg) -> dict:
@@ -648,6 +750,18 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
                 )
             else:
                 print("[Censor] No profanity/mature language detected - uploading original audio.")
+
+            # Dead air comes out AFTER censoring, never before: trimming
+            # first would move every word timing the censor pass depends
+            # on and the bleeps would land on the wrong words. Only the
+            # copy destined for YouTube is trimmed - the Rumble upload
+            # takes the untouched source, which is the whole point of
+            # the split.
+            if (cfg.clips or {}).get("trim_silence"):
+                _censored["path"] = _trim_dead_air(
+                    _censored["path"], cfg,
+                    getattr(censor_result, "words", None))
+
         return vertical_path(_censored["path"])
 
     run_started_at = time.time()
@@ -1052,6 +1166,21 @@ def main(argv=None) -> int:
                              "full transcription, so start small.")
     parser.add_argument("--clip-count", type=int, default=None,
                         help="How many clips to make with --clips (default 3).")
+    parser.add_argument("--mode", metavar="NAME", default=None,
+                        help="Routing for this run, overriding config.json. "
+                             "'full_rumble_clean_youtube' sends the UNCENSORED "
+                             "full VOD to Rumble and the CENSORED copy to "
+                             "YouTube, with clips going to Shorts. Omit to "
+                             "keep the behaviour already configured.")
+    parser.add_argument("--trim-silence", dest="trim_silence",
+                        action="store_true", default=None,
+                        help="Cut dead air out of the censored copy before it "
+                             "uploads. Only removes stretches with no speech "
+                             "AND quiet audio.")
+    parser.add_argument("--no-trim-silence", dest="trim_silence",
+                        action="store_false",
+                        help="Keep the full length even if the mode or config "
+                             "asks for a trim.")
     parser.add_argument("--setup-shorts", action="store_true",
                         help="Sign in to the YouTube channel that Shorts go "
                              "to. A YouTube token is bound to the CHANNEL "
@@ -1166,6 +1295,23 @@ def main(argv=None) -> int:
 
     # Applied to the loaded config only - config.json is never rewritten, so
     # the flag governs this run and nothing after it.
+    # A named mode is applied to the LOADED config only - config.json is
+    # never rewritten, so a one-off run cannot silently change what every
+    # later run does. Everything it touches is a value that already
+    # existed; the mode just sets several of them together and says so.
+    wanted_mode = args.mode if args.mode is not None else cfg.mode
+    if wanted_mode:
+        settings = (cfg.modes or {}).get(wanted_mode)
+        if settings is None:
+            print(f"[ERROR] Unknown mode '{wanted_mode}'. Known: "
+                  f"{', '.join(sorted(cfg.modes or {})) or '(none configured)'}")
+            return 1
+        cfg = _apply_mode(cfg, wanted_mode, settings)
+
+    if args.trim_silence is not None:
+        cfg.clips = dict(cfg.clips or {})
+        cfg.clips["trim_silence"] = bool(args.trim_silence)
+
     if args.profile:
         cfg.clips = dict(cfg.clips or {})
         cfg.clips["profile"] = args.profile
