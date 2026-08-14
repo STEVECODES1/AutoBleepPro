@@ -1085,3 +1085,46 @@ def test_infinite_retries_are_still_configured():
 
     body = inspect.getsource(Recorder.download_args)
     assert '"--fragment-retries", "infinite"' in body
+
+
+def test_old_logs_are_pruned(tmp_path):
+    """A recorder polling every 60 seconds for days writes thousands.
+    A real folder had 17,311 files and 6 GB in it."""
+    import time as _time
+
+    from record_stream import KEEP_LOGS, prune_logs
+
+    for i in range(KEEP_LOGS + 25):
+        path = tmp_path / f"log{i:04d}.log"
+        path.write_text("x")
+        os.utime(path, (i, i))
+
+    removed = prune_logs(str(tmp_path))
+
+    left = sorted(p.name for p in tmp_path.glob("*.log"))
+    assert removed == 25
+    assert len(left) == KEEP_LOGS
+    assert left[-1] == f"log{KEEP_LOGS + 24:04d}.log", "it kept the oldest"
+
+
+def test_pruning_leaves_videos_alone(tmp_path):
+    """The recordings are the whole point; only .log files go."""
+    from record_stream import prune_logs
+
+    (tmp_path / "stream.ts").write_text("video")
+    (tmp_path / "stream.mp4").write_text("video")
+    for i in range(200):
+        (tmp_path / f"n{i}.log").write_text("x")
+
+    prune_logs(str(tmp_path))
+
+    assert (tmp_path / "stream.ts").exists()
+    assert (tmp_path / "stream.mp4").exists()
+
+
+def test_a_runaway_log_has_a_ceiling():
+    """One log was 33 MB of the same 403 line. Past a point it is a loop
+    writing to disk, not a record of a recording."""
+    from record_stream import MAX_LOG_BYTES
+
+    assert 1_000_000 <= MAX_LOG_BYTES <= 50_000_000

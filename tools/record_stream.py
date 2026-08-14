@@ -282,6 +282,37 @@ _RECORDING_MARKERS = (
 # dead rather than the network being flaky.
 MAX_FRAGMENT_REFUSALS = 40
 
+# Logs are kept because "it just stopped" is unanswerable without them -
+# but they are kept FOREVER, one per poll, and a recorder that polls
+# every 60 seconds for days produces thousands. A real folder had 17,311
+# files and 6 GB in it, one log 33 MB of the same 403 repeated. Keep the
+# recent ones, which are the only ones anybody reads.
+KEEP_LOGS = 60
+
+# A single log past this is a loop writing to disk, not a record of a
+# recording. Truncated rather than deleted: the head says how it began.
+MAX_LOG_BYTES = 5 * 1024 * 1024
+
+
+def prune_logs(folder: str, keep: int = KEEP_LOGS) -> int:
+    """Delete all but the newest `keep` .log files. Returns how many went."""
+    try:
+        logs = [os.path.join(folder, name) for name in os.listdir(folder)
+                if name.endswith(".log")]
+    except OSError:
+        return 0
+    if len(logs) <= keep:
+        return 0
+    logs.sort(key=lambda path: os.path.getmtime(path), reverse=True)
+    removed = 0
+    for path in logs[keep:]:
+        try:
+            os.remove(path)
+            removed += 1
+        except OSError:
+            pass
+    return removed
+
 _REFUSAL = re.compile(r"HTTP Error (?:403|401|410)\b.*Retrying fragment",
                       re.IGNORECASE)
 
@@ -678,7 +709,18 @@ class Recorder:
         log = None
         try:
             if log_path:
-                os.makedirs(os.path.dirname(os.path.abspath(log_path)), exist_ok=True)
+                folder = os.path.dirname(os.path.abspath(log_path))
+                os.makedirs(folder, exist_ok=True)
+                gone = prune_logs(folder)
+                if gone:
+                    self.say(f"Cleared {gone} old log file(s).")
+                # A log that has already run away is not worth appending
+                # to - it is the same line a hundred thousand times.
+                try:
+                    if os.path.getsize(log_path) > MAX_LOG_BYTES:
+                        os.remove(log_path)
+                except OSError:
+                    pass
                 log = open(log_path, "a", encoding="utf-8")
                 log.write(f"\n=== {time.strftime('%Y-%m-%d %H:%M:%S')} "
                           f"{' '.join(args)}\n")
