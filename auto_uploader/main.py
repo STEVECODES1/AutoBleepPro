@@ -38,7 +38,7 @@ from datetime import datetime
 # Bump when shipping user-visible changes, so --test-config can prove
 # which build is actually running (stale extracts have silently caused
 # several confusing "the fix did nothing" runs).
-BUILD = "2026-08-14.9 an expired token is a wait, not a failure"
+BUILD = "2026-08-15.0 a placeholder title is not an identity"
 
 # How often --watch checks whether a deferred clip's wait is up. A minute
 # is fine: the waits themselves are 25 to 80 minutes, so the resolution
@@ -284,6 +284,20 @@ def downloaded_title(video_path: str) -> str:
     return str(title or "").strip()
 
 
+def is_placeholder_title(title: str, default_title: str) -> bool:
+    """True when this title names no particular stream.
+
+    A stream whose real title could not be read gets the configured
+    default, and EVERY such stream gets the same one - so matching on it
+    says "this stream was already uploaded" about a completely different
+    stream. Compared loosely because the generated title wraps it:
+    `"Gaming Stream" 8/14/26 Stackswopo Stream`.
+    """
+    text = " ".join(str(title or "").lower().split())
+    fallback = " ".join(str(default_title or "").lower().split())
+    return bool(fallback) and (not text or text == fallback)
+
+
 def get_stream_title(video_path: str, cli_title: str, cfg, allow_prompt: bool = True) -> str:
     """Work out the stream title, most-explicit source first.
 
@@ -500,7 +514,24 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
     # channel's public RSS feed matched by stream date.
     existing_rb = dup_checker.get_platform_result(file_hash, "rumble")
     existing_rb_match_url = None
-    if not existing_rb and cfg.rumble.skip_if_exists:
+    # Title matching is only safe when the title IDENTIFIES the stream.
+    # When the real title could not be read, every stream generates the
+    # same one - "Gaming Stream" - so the second such stream matches the
+    # first in local history and is skipped as already uploaded. That is
+    # how a stream reached YouTube and never reached Rumble: Rumble has
+    # no feed to check against, so the title is all its dedup has.
+    #
+    # The content hash still protects against a genuine re-upload, which
+    # is the check that actually matters. Falling through here risks a
+    # duplicate; refusing here loses the stream entirely, and one of
+    # those is recoverable.
+    generic = is_placeholder_title(stream_title, cfg.general.default_title)
+    if generic:
+        print(f"[Rumble] Not matching by title - \"{stream_title}\" is the "
+              f"fallback name, not this stream's own, and every stream that "
+              f"loses its title generates it. The content hash still "
+              f"applies.")
+    if not existing_rb and cfg.rumble.skip_if_exists and not generic:
         existing_rb = dup_checker.find_platform_title("rumble", rb_title)
         if not existing_rb and existing_rumble_videos:
             rb_match = find_existing_video(existing_rumble_videos, now, stream_title)

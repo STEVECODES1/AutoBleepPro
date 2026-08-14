@@ -158,3 +158,32 @@ def test_a_real_failure_does_not_count_as_done(tmp_path):
     c.record_platform_result("H3", "x.mp4", "youtube", "https://youtu.be/ok")
     c.record_platform_result("H3", "x.mp4", "rumble", "FAILED: timeout")
     assert c.is_fully_uploaded("H3") is False
+
+
+def test_a_placeholder_title_is_not_used_to_match():
+    """A stream whose real title could not be read gets the configured
+    default, and EVERY such stream gets the same one - so the second one
+    matches the first in local history and is skipped as already
+    uploaded. That is how a stream reached YouTube and never reached
+    Rumble: Rumble has no feed, so the title is all its dedup has."""
+    import main
+
+    assert main.is_placeholder_title("Gaming Stream", "Gaming Stream")
+    assert main.is_placeholder_title("  gaming   stream ", "Gaming Stream")
+    assert main.is_placeholder_title("", "Gaming Stream")
+
+
+def test_a_real_title_still_matches():
+    """The title check is what catches the same stream arriving as a
+    re-encoded file, and that has to keep working."""
+    import main
+
+    assert not main.is_placeholder_title(
+        "Copyrighting All Yall Plug Channels", "Gaming Stream")
+    assert not main.is_placeholder_title("monkey n gamble howl", "Gaming Stream")
+
+
+def test_no_default_configured_means_no_placeholder():
+    import main
+
+    assert not main.is_placeholder_title("anything", "")
