@@ -361,9 +361,14 @@ def motion_crop_filter(commands_path: str) -> str:
     The height and width are fixed - only the horizontal position moves,
     because a 16:9 source cut to 9:16 has no vertical slack to pan into.
     """
+    # EVERY expression is quoted. A comma inside min() is a filter
+    # SEPARATOR to ffmpeg's parser, so an unquoted min(iw,ih*9/16) splits
+    # the chain mid-expression and the whole graph fails to build with
+    # "No such filter: 'ih*9/16)...'". Two of these three were bare, which
+    # would have failed every single gameplay clip.
     return (f"sendcmd=f='{escape_filter_path(commands_path)}',"
-            f"crop={CROP_WIDTH_EXPR}:'min(ih,iw*16/9)':"
-            f"(iw-{CROP_WIDTH_EXPR})/2:0,"
+            f"crop='{CROP_WIDTH_EXPR}':'min(ih,iw*16/9)':"
+            f"'(iw-{CROP_WIDTH_EXPR})/2':0,"
             f"scale={VERTICAL_WIDTH}:{VERTICAL_HEIGHT}:flags=bicubic,"
             "setsar=1")
 
