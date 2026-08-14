@@ -264,6 +264,11 @@ def make_clips(cfg, source_path: str, title: str,
     from autoreel.clip_maker import ClipError, ClipMaker
 
     clips_cfg = dict(getattr(cfg, "clips", {}) or {})
+    # What this video is, so clips.profile can be "auto" and the framing
+    # follows the CONTENT instead of one global setting. Without this a
+    # GTA stream went through the Monkey rectangle - the left 46% of a
+    # gameplay frame, cropped for a call window that was not there.
+    clips_cfg["content_title"] = title or os.path.basename(source_path)
     output_dir = clips_cfg.get("output_folder") or os.path.join(
         cfg.project_root, "clips")
 
@@ -285,6 +290,15 @@ def make_clips(cfg, source_path: str, title: str,
         return ClipRun([], [], output_dir, reason)
 
     speed = dict(getattr(cfg.general, "speed", {}) or {})
+    from autoreel.crop_strategy import resolve_crop_strategy, resolve_profile
+
+    if str(clips_cfg.get("profile", "")).strip().lower() == "auto":
+        from autoreel.crop_strategy import profile_for_title
+
+        chosen = profile_for_title(clips_cfg["content_title"])
+        print(f"[Clips] Framing chosen from the title: {chosen} "
+              f"({resolve_crop_strategy({'clips': clips_cfg})} crop)")
+
     maker = ClipMaker(
         output_dir=output_dir,
         config={"clips": clips_cfg},

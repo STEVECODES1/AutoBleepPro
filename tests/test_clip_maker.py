@@ -570,20 +570,55 @@ def test_the_region_filter_crops_before_it_frames():
 
 
 def test_the_shipped_config_uses_a_profile_that_exists():
+    """A typo'd profile name silently falls back to the default, which
+    is how gameplay would get a call-window crop without anyone being
+    told."""
     import json
-    with open(os.path.join(_REPO, "auto_uploader", "config.json")) as f:
-        clips = json.load(f)["clips"]
-    from autoreel.crop_strategy import PROFILES
-    assert clips.get("profile") in PROFILES
+
+    from autoreel.crop_strategy import AUTO_PROFILE, PROFILES
+
+    with open(os.path.join(_REPO, "auto_uploader", "config.json"),
+              encoding="utf-8") as handle:
+        clips = json.load(handle)["clips"]
+
+    name = str(clips.get("profile", "")).strip().lower()
+    assert name == AUTO_PROFILE or name in PROFILES
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-# Word-by-word captions
-#
-# Captions were switched off here because they were a static white slab
-# that read like a subtitle track. The phrase now stays on screen and only
-# the colour moves, which is the format short-form settled on.
-# ═════════════════════════════════════════════════════════════════════════════
+def test_auto_picks_the_framing_from_the_stream_title():
+    """The profile is one global setting and this channel streams two
+    completely different things - so every GTA stream went through the
+    Monkey rectangle, cropped to the left 46% of a gameplay frame for a
+    call window that was not there."""
+    from autoreel.crop_strategy import (CROP_MOTION, CROP_REGION,
+                                        resolve_crop_strategy)
+
+    def framing(title):
+        return resolve_crop_strategy(
+            {"clips": {"profile": "auto", "content_title": title}})
+
+    assert framing('"stackswopo + gta D10 johnny cox + Lifestyle RP" 8/12/26') \
+        == CROP_MOTION
+    assert framing("Stackswopo monkey app trolling pt 1") == CROP_REGION
+
+
+def test_an_unrecognisable_title_keeps_the_whole_frame():
+    """A wrong CROP cannot be undone once the clip is posted. Being
+    un-cropped is the smaller failure."""
+    from autoreel.crop_strategy import CROP_FIT, resolve_crop_strategy
+
+    for title in ("Copyrighting All Yall Plug Channels", "vareity guy", ""):
+        assert resolve_crop_strategy(
+            {"clips": {"profile": "auto", "content_title": title}}) == CROP_FIT
+
+
+def test_the_earliest_hint_in_the_title_wins():
+    """"monkey app while playing gta later" is a monkey stream."""
+    from autoreel.crop_strategy import profile_for_title
+
+    assert profile_for_title("monkey app then gta after") == "monkey"
+    assert profile_for_title("gta rp then monkey app after") == "gta"
+
 
 def _spoken(*words, step=0.4, hold=0.35):
     return [{"word": w, "start": i * step, "end": i * step + hold}

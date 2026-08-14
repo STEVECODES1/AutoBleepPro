@@ -132,6 +132,54 @@ PROFILES: Dict[str, Dict[str, Any]] = {
 }
 DEFAULT_PROFILE = "monkey"
 
+# Set clips.profile to this and the framing is chosen per VIDEO from its
+# title, instead of one global setting being wrong for half the content.
+#
+# This is the bug that put GTA clips through the Monkey rectangle: the
+# profile is configured once, the channel streams two completely
+# different things, and the auto-clip path after a stream has no way to
+# say which one it just recorded. Clips came out framed on the left 46%
+# of a gameplay frame - the crop for a call window that was not there.
+AUTO_PROFILE = "auto"
+
+# Matched against the stream title, longest first so "monkey app" wins
+# over a bare "app". Titles on this channel name the content plainly -
+# "stackswopo + gta D10 johnny cox + Lifestyle RP", "monkey app trolling"
+# - which is what makes this reliable rather than clever.
+_TITLE_HINTS = (
+    ("monkey", "monkey"),
+    ("omegle", "monkey"),
+    ("trolling", "monkey"),
+    ("gta", "gta"),
+    ("rp", "gta"),
+    ("roleplay", "gta"),
+    ("fivem", "gta"),
+    ("nopixel", "gta"),
+    ("lifestyle", "gta"),
+    ("roblox", "gta"),
+    ("fortnite", "gta"),
+    ("minecraft", "gta"),
+)
+
+
+def profile_for_title(title: str, fallback: str = "whole") -> str:
+    """The framing this stream's title asks for.
+
+    Falls back to `whole` rather than to a guess: keeping the entire
+    frame loses nothing, and a wrong CROP is unrecoverable once the clip
+    is posted. Being un-cropped is a smaller failure than being cropped
+    onto the wrong half of the screen.
+    """
+    text = " ".join(str(title or "").lower().split())
+    if not text:
+        return fallback
+    best, best_at = fallback, len(text) + 1
+    for needle, profile in _TITLE_HINTS:
+        at = text.find(needle)
+        if at >= 0 and at < best_at:
+            best, best_at = profile, at
+    return best
+
 # The default for this project. Changing this constant changes the default
 # for every clip, which is why it is a named constant with a test on it
 # rather than a literal buried in a call site.
@@ -161,6 +209,10 @@ def resolve_profile(config: Optional[Dict[str, Any]] = None) -> dict:
     config = config or {}
     clips = config.get("clips", config) if isinstance(config, dict) else {}
     name = str(clips.get("profile") or DEFAULT_PROFILE).strip().lower()
+    if name == AUTO_PROFILE:
+        # Chosen from the title the caller put in the config it passed
+        # here, so nothing below needs to know about auto.
+        name = profile_for_title(clips.get("content_title", ""))
     settings = dict(PROFILES.get(name) or PROFILES[DEFAULT_PROFILE])
     # A profile can be overridden per key without redefining the profile.
     custom = dict((clips.get("profiles") or {}).get(name) or {})

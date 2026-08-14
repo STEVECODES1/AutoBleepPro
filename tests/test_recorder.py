@@ -1128,3 +1128,44 @@ def test_a_runaway_log_has_a_ceiling():
     from record_stream import MAX_LOG_BYTES
 
     assert 1_000_000 <= MAX_LOG_BYTES <= 50_000_000
+
+
+def test_the_title_is_written_beside_the_recording(tmp_path):
+    """The filename is built before the title is known and
+    --restrict-filenames would flatten it anyway, so the title lives in a
+    sidecar - the exact file get_stream_title() already looks for."""
+    from record_stream import remember_title
+
+    log = tmp_path / "Stackswopo youtube live 2026-08-13 04_12.log"
+    log.write_text("x")
+
+    written = remember_title(str(log), "Copyrighting All Yall Plug Channels")
+
+    assert written.endswith(".txt")
+    assert open(written, encoding="utf-8").read().strip() == \
+        "Copyrighting All Yall Plug Channels"
+
+
+def test_the_title_is_asked_for_more_than_once():
+    """On a stream that has just gone live the first ask often comes back
+    empty - the platform has not published it yet. Asked once, an empty
+    answer meant the stream was published as "Gaming Stream" while the
+    streamer had called it something else."""
+    from record_stream import MAX_TITLE_TRIES, TITLE_RETRY_SECONDS
+
+    assert MAX_TITLE_TRIES > 1
+    # Long enough not to hammer the platform, short enough that a title
+    # arriving a few minutes in is still caught.
+    assert 30 <= TITLE_RETRY_SECONDS <= 600
+
+
+def test_an_empty_title_writes_nothing(tmp_path):
+    """A sidecar containing nothing would override the filename with
+    nothing, which is worse than having no sidecar."""
+    from record_stream import remember_title
+
+    log = tmp_path / "s.log"
+    log.write_text("x")
+
+    assert remember_title(str(log), "") == ""
+    assert not (tmp_path / "s.txt").exists()

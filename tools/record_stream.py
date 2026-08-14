@@ -293,6 +293,35 @@ KEEP_LOGS = 60
 # recording. Truncated rather than deleted: the head says how it began.
 MAX_LOG_BYTES = 5 * 1024 * 1024
 
+# The title is asked for the moment recording starts, and on a stream
+# that has just gone live that call often comes back empty - the platform
+# has not published it yet. It was asked ONCE, so an empty answer meant
+# the stream kept its timestamp filename forever and was published as
+# "Gaming Stream" while the streamer had called it "Copyrighting All Yall
+# Plug Channels". Asked again, while it is still live, until it answers.
+TITLE_RETRY_SECONDS = 120
+MAX_TITLE_TRIES = 15
+
+
+def remember_title(log_path: str, title: str) -> str:
+    """Write the title beside the recording, as a .txt the uploader reads.
+
+    The filename cannot carry it - it is built before the title is known,
+    and --restrict-filenames would flatten it anyway - so the title lives
+    in a sidecar. get_stream_title() already looks for exactly this file,
+    which is why a stream recorded under a timestamp name can still be
+    published under the name the streamer gave it.
+    """
+    if not log_path or not title:
+        return ""
+    sidecar = os.path.splitext(log_path)[0] + ".txt"
+    try:
+        with open(sidecar, "w", encoding="utf-8") as handle:
+            handle.write(title.strip() + "\n")
+    except OSError:
+        return ""
+    return sidecar
+
 
 def prune_logs(folder: str, keep: int = KEEP_LOGS) -> int:
     """Delete all but the newest `keep` .log files. Returns how many went."""
@@ -747,12 +776,27 @@ class Recorder:
             # dropped connection. A RUN of refusals with no progress
             # between them ends the process instead.
             refusals = 0
+            title_tries = 0
+            title_next_try = 0.0
             for line in process.stdout:
                 line = line.rstrip()
                 if not line:
                     continue
                 tail.append(line)
                 del tail[:-40]
+
+                # Still live and still nameless: ask again. A title that
+                # arrives ten minutes in is worth just as much as one
+                # that arrived at second zero, and the alternative is a
+                # stream published under a placeholder.
+                if (not waiting and not self.title and title_tries < MAX_TITLE_TRIES
+                        and time.time() >= title_next_try):
+                    title_tries += 1
+                    title_next_try = time.time() + TITLE_RETRY_SECONDS
+                    self.title = stream_title(self.url)
+                    if self.title:
+                        self.say(f'Title: "{self.title}"')
+                        remember_title(log_path, self.title)
 
                 if is_fragment_refusal(line):
                     refusals += 1
@@ -790,6 +834,9 @@ class Recorder:
                             self.title = stream_title(self.url)
                             if self.title:
                                 self.say(f'Title: "{self.title}"')
+                                remember_title(log_path, self.title)
+                            else:
+                                title_next_try = time.time() + TITLE_RETRY_SECONDS
                     elif is_worth_saying(line):
                         # Deduplicated on the error itself, not the whole
                         # line: yt-dlp restates the same failure with a
