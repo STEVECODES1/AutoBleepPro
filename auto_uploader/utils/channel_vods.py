@@ -486,6 +486,54 @@ def owned_only(links: list, channel_url: str, impersonate: bool = False,
     return kept
 
 
+def _slug_words(text: str) -> list:
+    """The distinctive words of a title, lowercased."""
+    import re as _re
+
+    skip = {"the", "a", "an", "and", "of", "on", "in", "for", "to", "with",
+            "stream", "full", "live", "stackswopo", "vod"}
+    words = _re.findall(r"[a-z0-9]+", str(text or "").lower())
+    return [w for w in words if len(w) > 2 and w not in skip]
+
+
+def find_on_channel(channel_url: str, title: str,
+                    minimum_words: int = 3) -> str:
+    """The URL of a video on this channel whose slug matches `title`.
+
+    Rumble's uploader sometimes finishes without ever showing a link, and
+    the code recorded that as a success on the assumption the video had
+    landed anyway. It had not: a full VOD was marked uploaded, the dedup
+    store believed it, and every retry was skipped - so the stream simply
+    never appeared. Asking the channel is the only way to know.
+
+    Matching is on the distinctive words of the title against the video
+    slug, because Rumble builds the slug from the title and nothing else
+    survives the round trip reliably.
+    """
+    wanted = _slug_words(title)
+    if len(wanted) < minimum_words:
+        # Too generic to match safely. Saying "not found" here risks a
+        # duplicate; claiming a match risks losing the video entirely,
+        # and only one of those is recoverable.
+        return ""
+
+    if not listing_url(channel_url):
+        return ""
+    html, _ = _fetch_html(listing_url(channel_url))
+    if not html:
+        return ""
+
+    netloc = urllib.parse.urlsplit(channel_url).netloc or "rumble.com"
+    for link in video_links_on(html, netloc)[:12]:
+        slug = link.rsplit("/", 1)[-1].lower()
+        hits = sum(1 for word in wanted if word in slug)
+        # Most of the title's distinctive words, not all: Rumble
+        # truncates long slugs.
+        if hits >= max(minimum_words, int(len(wanted) * 0.6)):
+            return link
+    return ""
+
+
 def fetch_via_listing(channel_url: str, output_dir: str, extensions: tuple,
                       limit: int = DEFAULT_LIMIT, archive: str = "",
                       browser: str = "") -> tuple:

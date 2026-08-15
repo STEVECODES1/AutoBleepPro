@@ -38,7 +38,7 @@ from datetime import datetime
 # Bump when shipping user-visible changes, so --test-config can prove
 # which build is actually running (stale extracts have silently caused
 # several confusing "the fix did nothing" runs).
-BUILD = "2026-08-15.2 a quote in the filename killed every clip"
+BUILD = "2026-08-15.3 a Rumble upload without a link is now verified, not assumed"
 
 # How often --watch checks whether a deferred clip's wait is up. A minute
 # is fine: the waits themselves are 25 to 80 minutes, so the resolution
@@ -226,6 +226,68 @@ def tidy_downloaded_vods(paths: list, folder: str, project_root: str) -> str:
     for problem in problems:
         told += f"\n[Clips] Could not remove {problem}"
     return told
+
+
+# Recorded when Rumble finished but the video could not be found on the
+# channel afterwards. Deliberately starts with FAILED: so the duplicate
+# store treats it as NOT uploaded and a re-run tries again - the opposite
+# of the old behaviour, which believed the upload and skipped forever.
+RUMBLE_UNCONFIRMED = ("FAILED: Rumble finished but the video is not on the "
+                      "channel - it did not publish. Run again to retry.")
+
+
+def _is_link(value: str) -> bool:
+    """A real URL, not a status marker.
+
+    Deliberately local rather than imported: --clips-from imports is_url
+    from channel_vods INSIDE a function, and a module-level name of the
+    same spelling would become a local for that whole function and break
+    it. See test_no_function_shadows_a_module_level_import.
+    """
+    return str(value or "").strip().lower().startswith(("http://", "https://"))
+
+
+def _confirm_on_rumble(url: str, title: str, cfg) -> str:
+    """Turn an unconfirmed Rumble upload into a verified answer.
+
+    Returns the real URL when the video is on the channel, and a FAILED:
+    marker when it is not. A confirmed URL is passed straight through.
+
+    The cost of being wrong is asymmetric and that decides the default:
+    a duplicate can be deleted in ten seconds, a stream that silently
+    never published is gone until someone notices weeks later.
+    """
+    if _is_link(url):
+        return url
+
+    channel = str(getattr(cfg.rumble, "channel_url", "") or "").strip()
+    if not channel:
+        # Derived from the configured feed address, which is the only
+        # place the channel is named today.
+        channel = str(getattr(cfg.rumble, "rss_url", "") or "").replace(
+            "/index.xml", "")
+    if not channel:
+        print("[Rumble] Cannot verify - no channel URL configured. Treating "
+              "as uploaded; check https://rumble.com/account/content.")
+        return url
+
+    print(f"[Rumble] No link came back. Checking {channel} for the video...")
+    try:
+        from utils.channel_vods import find_on_channel
+
+        found = find_on_channel(channel, title)
+    except Exception as exc:
+        print(f"[Rumble] Could not check the channel ({exc}). Treating as "
+              f"uploaded; verify by hand.")
+        return url
+
+    if found:
+        print(f"[Rumble] Confirmed on the channel -> {found}")
+        return found
+
+    print("[Rumble] NOT on the channel. The upload did not publish, so this "
+          "is recorded as a failure and the next run will retry it.")
+    return RUMBLE_UNCONFIRMED
 
 
 def _trim_dead_air(path: str, cfg, words=None) -> str:
@@ -884,8 +946,20 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
             )
             if not parallel:
                 print()
-            rb_logger.info(f"{filename}: uploaded successfully -> {url}")
-            notify("Rumble upload complete", url, cfg.general.enable_desktop_notifications)
+            # Rumble sometimes finishes without ever showing a link, and
+            # this recorded that as a success on the assumption the video
+            # had landed anyway. It had not: a full VOD was marked
+            # uploaded, the dedup store believed it, every retry was
+            # skipped, and the stream simply never appeared. Ask the
+            # channel instead of assuming.
+            url = _confirm_on_rumble(url, rb_title, cfg)
+
+            if _is_link(url):
+                rb_logger.info(f"{filename}: uploaded successfully -> {url}")
+                notify("Rumble upload complete", url,
+                       cfg.general.enable_desktop_notifications)
+            else:
+                rb_logger.warning(f"{filename}: {url}")
             with upload_lock:
                 results["rumble"] = url
                 newly_uploaded["rumble"] = url

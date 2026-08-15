@@ -187,3 +187,70 @@ def test_no_default_configured_means_no_placeholder():
     import main
 
     assert not main.is_placeholder_title("anything", "")
+
+
+def test_an_unconfirmed_rumble_upload_is_recorded_as_a_failure():
+    """Rumble sometimes finishes without showing a link, and this used to
+    be recorded as a success on the assumption the video had landed. It
+    had not: a full VOD was marked uploaded, the dedup store believed it,
+    every retry was skipped, and the stream simply never appeared.
+
+    A duplicate can be deleted in ten seconds. A stream that silently
+    never published is gone until someone notices weeks later."""
+    import main
+
+    assert main.RUMBLE_UNCONFIRMED.startswith("FAILED:"), \
+        "dedup only skips on a non-FAILED result - this has to read as a failure"
+    assert "retry" in main.RUMBLE_UNCONFIRMED.lower()
+
+
+def test_a_confirmed_url_passes_straight_through():
+    import main
+
+    class Cfg:
+        class rumble:
+            rss_url = "https://rumble.com/user/BinScripts/index.xml"
+
+    real = "https://rumble.com/v7abc12-a-real-video.html"
+    assert main._confirm_on_rumble(real, "any title", Cfg) == real
+
+
+def test_verification_finds_the_video_by_its_slug(monkeypatch):
+    """Rumble builds the slug from the title, and nothing else survives
+    the round trip reliably."""
+    import sys
+
+    from utils import channel_vods
+
+    page = ('<a href="/v7abc12-copyrighting-all-yall-plug-channels-081326.html">x</a>'
+            '<a href="/v7zzz99-some-other-stream.html">y</a>')
+    monkeypatch.setattr(channel_vods, "_fetch_html", lambda url: (page, ""))
+
+    found = channel_vods.find_on_channel(
+        "https://rumble.com/user/BinScripts",
+        '"copyrighting all yall plug channels" 08.13.26 Stackswopo Stream')
+
+    assert found.endswith("copyrighting-all-yall-plug-channels-081326.html")
+
+
+def test_a_generic_title_is_not_matched(monkeypatch):
+    """Claiming a match on a title with nothing distinctive in it would
+    mark a stream published because a DIFFERENT one was."""
+    from utils import channel_vods
+
+    page = '<a href="/v7abc12-some-stream.html">x</a>'
+    monkeypatch.setattr(channel_vods, "_fetch_html", lambda url: (page, ""))
+
+    assert channel_vods.find_on_channel(
+        "https://rumble.com/user/BinScripts", "Full Live Stream") == ""
+
+
+def test_a_missing_video_is_reported_as_missing(monkeypatch):
+    from utils import channel_vods
+
+    monkeypatch.setattr(channel_vods, "_fetch_html",
+                        lambda url: ('<a href="/v7zzz99-unrelated.html">y</a>', ""))
+
+    assert channel_vods.find_on_channel(
+        "https://rumble.com/user/BinScripts",
+        '"copyrighting all yall plug channels" Stackswopo Stream') == ""
