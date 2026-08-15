@@ -185,7 +185,7 @@
     "vertical": true,
     "share_to_feed": true,
     "_link_comment": "Instagram captions NEVER make URLs clickable - not on the app, not on the web. Only the profile bio link is tappable. So the caption points at the bio instead of printing a URL nobody can tap, and the URLs are kept short and readable for anyone typing them. Put the monkey channel in your IG bio link for this to pay off.",
-    "caption_template": "{title} 🤣🤣🤣💀💀💀#stackswopo\n\n👆 Monkey vids + full stream - LINK IN BIO\n\nYouTube: @BinScript\nRumble: rumble.com/user/BinScripts"
+    "caption_template": "{title} 🤣🤣🤣💀💀💀#stackswopo\n\nYouTube: @BinScript\nRumble: rumble.com/user/BinScripts"
   },
   "clips": {
     "_profile_comment": "WHICH FRAMING each clip gets. 'auto' reads the stream's own title and picks - gta/RP/fivem titles get the gameplay crop that follows the action, monkey/omegle/trolling titles get the call-pane crop, anything it cannot place keeps the whole frame rather than guessing a crop that cannot be undone. Set a name instead to force one: 'monkey', 'monkey_stack' (both people stacked), 'gta', 'whole'. --profile on the command line overrides this for one run.",

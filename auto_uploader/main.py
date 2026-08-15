@@ -39,7 +39,7 @@ from datetime import datetime
 # Bump when shipping user-visible changes, so --test-config can prove
 # which build is actually running (stale extracts have silently caused
 # several confusing "the fix did nothing" runs).
-BUILD = "2026-08-15.14 a slow Rumble publish is waited for, not submitted twice"
+BUILD = "2026-08-15.15 a clip is titled by what was said, not by a filing reference"
 
 # How often --watch checks whether a deferred clip's wait is up. A minute
 # is fine: the waits themselves are 25 to 80 minutes, so the resolution
@@ -711,9 +711,28 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
         # A clip carries its own title in the filename ("who put stacks on
         # slots"), and a batch of eleven should not stop eleven times to
         # ask for something already on disk.
+        #
+        # The SIDECAR comes first though. Clips this pipeline cut have a
+        # .txt beside them holding the line actually spoken in the clip,
+        # and reading the filename instead published "Yoo Howl - Clip 03"
+        # while "Show me Q50" sat unread next to it. The filename is the
+        # fallback for a clip dropped in by hand, not the first choice.
         from utils.social_promoter import clip_title as _clip_title
-        stream_title = _clip_title(video_path)
-        print(f"[Clip] Title from the filename: {stream_title}")
+
+        sidecar = os.path.splitext(video_path)[0] + ".txt"
+        spoken = ""
+        if os.path.isfile(sidecar):
+            try:
+                with open(sidecar, "r", encoding="utf-8") as handle:
+                    spoken = handle.read().strip().splitlines()[0].strip()
+            except (OSError, IndexError):
+                spoken = ""
+        if spoken:
+            stream_title = spoken
+            print(f"[Clip] Title from the clip itself: {stream_title}")
+        else:
+            stream_title = _clip_title(video_path)
+            print(f"[Clip] Title from the filename: {stream_title}")
     else:
         stream_title = get_stream_title(video_path, cli_title, cfg, allow_prompt)
     # A freshly-finished stream should be dated today; an old VOD being
@@ -723,9 +742,17 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
     now = extract_date_from_filename(filename) or datetime.now()
     date_str = format_date(now, cfg.general.date_style)
 
-    yt_title = build_title(stream_title, date_str, cfg.youtube.title_format)
+    # A clip gets its own shape. The archival one keeps a library of full
+    # VODs sortable; on a sixty-second clip the date and the channel name
+    # are scaffolding a viewer reads past, and they are what makes a feed
+    # look automated.
+    yt_format = (cfg.youtube.clip_title_format if is_clip
+                 else cfg.youtube.title_format)
+    rb_format = (cfg.rumble.clip_title_format if is_clip
+                 else cfg.rumble.title_format)
+    yt_title = build_title(stream_title, date_str, yt_format)
     yt_description = build_description(cfg.youtube.description_template, date_str, stream_title)
-    rb_title = build_title(stream_title, date_str, cfg.rumble.title_format)
+    rb_title = build_title(stream_title, date_str, rb_format)
     rb_description = build_description(cfg.rumble.description_template, date_str, stream_title)
 
     print(f"\n{'='*70}\nProcessing: {filename}")

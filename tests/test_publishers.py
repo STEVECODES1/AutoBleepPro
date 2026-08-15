@@ -472,9 +472,12 @@ def test_the_caption_follows_the_account_s_own_format():
     # changed or taken, and every Reel already posted keeps the link it
     # was published with.
     # No printed URL for the channel: Instagram captions never make a URL
-    # tappable, on app or web, so one is just noise. Only the bio link is
-    # clickable, and that is what the caption points at.
-    assert "LINK IN BIO" in caption
+    # tappable, on app or web, so one is just noise.
+    #
+    # The "LINK IN BIO" line that used to be asserted here is gone. It was
+    # removed by hand on a live post before it was removed from the
+    # template - four lines is the length the account actually writes.
+    assert "LINK IN BIO" not in caption
     assert "https://" not in caption
     assert "BinScript" in caption
 
@@ -917,3 +920,74 @@ def test_an_already_vertical_clip_is_not_re_encoded(monkeypatch, tmp_path):
 
     assert path == str(clip)
     assert temp == ""
+
+
+def test_the_clip_caption_stays_short():
+    """Asked for directly: the Instagram/Facebook caption is the hook,
+    the hashtag and the two channels. Nothing else. The 'LINK IN BIO'
+    line was removed by hand on a live post before it was removed here."""
+    import json
+    import os
+
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    with open(os.path.join(root, "auto_uploader", "config.json"),
+              encoding="utf-8") as handle:
+        template = json.load(handle)["instagram"]["caption_template"]
+
+    assert "LINK IN BIO" not in template
+    assert template.count("\n") <= 3, "more than four lines is not short"
+    assert "{title}" in template
+    assert "@BinScript" in template and "BinScripts" in template
+
+
+def test_facebook_borrows_the_same_caption():
+    """The same clip reading two different ways across two Pages is what
+    looks automated."""
+    import sys, os
+
+    sys.path.insert(0, os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "auto_uploader"))
+    from utils.clip_queue import caption_for
+
+    config = {"instagram": {"caption_template": "{title} SHARED"}}
+    assert "SHARED" in caption_for("facebook", "/c/Clip 01.mp4", "x", config)
+
+
+def test_a_clip_title_carries_no_scaffolding():
+    """"Yoo Howl - Clip 03" 8/15/26 Stackswopo Stream is a filing
+    reference. The archival shape keeps a library of full VODs sortable;
+    on a sixty-second clip it is what makes a feed look automated."""
+    import sys, os
+
+    sys.path.insert(0, os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "auto_uploader"))
+    from utils.templating import build_title
+
+    assert build_title("Show me Q50", "8/15/26", "{title}") == "Show me Q50"
+
+
+def test_the_full_vod_keeps_its_archival_shape():
+    import sys, os
+
+    sys.path.insert(0, os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "auto_uploader"))
+    from utils.templating import build_title
+
+    built = build_title("Show me Q50", "8/15/26",
+                        '"{title}" {date} Stackswopo Stream')
+    assert built == '"Show me Q50" 8/15/26 Stackswopo Stream'
+
+
+def test_the_shipped_config_gives_clips_a_plain_title():
+    import json, os
+
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    raw = json.load(open(os.path.join(root, "auto_uploader", "config.json"),
+                         encoding="utf-8"))
+    for platform in ("youtube", "rumble"):
+        fmt = raw[platform].get("clip_title_format", "{title}")
+        assert "{date}" not in fmt, platform
+        assert "Stackswopo Stream" not in fmt, platform

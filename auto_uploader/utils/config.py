@@ -27,6 +27,11 @@ class YouTubeConfig:
     token_path: str
     censor_uploads: bool
     upload_chunk_mb: float = 8
+    # Used INSTEAD of title_format when the upload is a clip. A full VOD
+    # wants the archival shape - '"x" 8/15/26 Stackswopo Stream' - so the
+    # library stays sortable. On a sixty-second clip that same shape is
+    # scaffolding a viewer has to read past, and reads as automation.
+    clip_title_format: str = "{title}"
 
 
 @dataclass
@@ -47,6 +52,8 @@ class RumbleConfig:
     censor_uploads: bool
     rss_url: str
     skip_if_exists: bool
+    # See YouTubeConfig.clip_title_format.
+    clip_title_format: str = "{title}"
 
 
 @dataclass
@@ -130,6 +137,7 @@ def load_config(config_path: str = "config.json", env_path: str = ".env") -> App
         category_id=str(yt.get("category_id", "20")),
         made_for_kids=bool(yt.get("made_for_kids", False)),
         title_format=yt["title_format"],
+        clip_title_format=str(yt.get("clip_title_format", "{title}") or "{title}"),
         description_template=yt["description_template"],
         tags=list(yt.get("tags", [])),
         playlist_id=os.environ.get("YOUTUBE_PLAYLIST_ID", yt.get("playlist_id", "")),
@@ -147,6 +155,7 @@ def load_config(config_path: str = "config.json", env_path: str = ".env") -> App
         channel=rb["channel"],
         privacy=rb.get("privacy", "public"),
         title_format=rb["title_format"],
+        clip_title_format=str(rb.get("clip_title_format", "{title}") or "{title}"),
         description_template=rb["description_template"],
         tags=list(rb.get("tags", [])),
         thumbnail_path=rb.get("thumbnail_path", ""),
