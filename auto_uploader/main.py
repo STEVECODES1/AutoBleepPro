@@ -39,7 +39,7 @@ from datetime import datetime
 # Bump when shipping user-visible changes, so --test-config can prove
 # which build is actually running (stale extracts have silently caused
 # several confusing "the fix did nothing" runs).
-BUILD = "2026-08-15.11 clips that gave up on a broken token can be put back"
+BUILD = "2026-08-15.12 retry no longer revives clips the next drain will drop"
 
 # How often --watch checks whether a deferred clip's wait is up. A minute
 # is fine: the waits themselves are 25 to 80 minutes, so the resolution
@@ -1329,11 +1329,12 @@ def main(argv=None) -> int:
                              "Shows what it would put back in the queue and "
                              "changes nothing; add --now to actually do it. "
                              "Optionally name one platform.")
-    parser.add_argument("--retry-age", type=float, default=21.0,
+    parser.add_argument("--retry-age", type=float, default=None,
                         metavar="DAYS",
-                        help="With --retry-clips: skip clips older than this "
-                             "(default 21). A clip nobody missed three weeks "
-                             "ago is not news now.")
+                        help="With --retry-clips: skip clips older than this. "
+                             "Defaults to the same limit the queue itself "
+                             "uses (36 hours) - past that the next drain "
+                             "drops them again whatever this says.")
     parser.add_argument("--learn", action="store_true",
                         help="Look up how many views the posted clips got, "
                              "and say what the numbers suggest about which "
@@ -1775,15 +1776,21 @@ def main(argv=None) -> int:
                   else f"[Retry] Nothing has given up on {wanted}.")
             return 0
 
-        cutoff = time.time() - args.retry_age * 86400
-        eligible, gone, stale = [], [], []
-        for job in jobs:
-            if not os.path.isfile(job.clip_path):
-                gone.append(job)
-            elif job.created_at and job.created_at < cutoff:
-                stale.append(job)
-            else:
-                eligible.append(job)
+        # The queue drops anything past MAX_DEFERRED_AGE_S on the next
+        # drain. Requeuing something older than that is a promise the
+        # very next run breaks - it would report 32 revived and post
+        # none of them.
+        from utils.clip_queue import MAX_DEFERRED_AGE_S
+
+        limit_days = (MAX_DEFERRED_AGE_S / 86400.0 if args.retry_age is None
+                      else args.retry_age)
+        if args.retry_age is not None and args.retry_age > MAX_DEFERRED_AGE_S / 86400.0:
+            print(f"[Retry] NOTE: the queue drops clips over "
+                  f"{MAX_DEFERRED_AGE_S / 3600:.0f}h old on the next drain, "
+                  f"so anything revived past that will go straight back to "
+                  f"given-up.")
+        eligible, gone, stale = JobQueue.sort_retryable(
+            jobs, limit_days * 86400)
 
         print(f"[Retry] {len(jobs)} clip(s) gave up. Why they stopped:")
         reasons: dict = {}
@@ -1797,7 +1804,9 @@ def main(argv=None) -> int:
             print(f"[Retry] {len(gone)} skipped - the clip file is gone.")
         if stale:
             print(f"[Retry] {len(stale)} skipped - older than "
-                  f"{args.retry_age:.0f} days (--retry-age changes that).")
+                  f"{limit_days * 24:.0f}h, which is the point the queue "
+                  f"drops them anyway. Cut fresh clips instead: "
+                  f"--clips FILE.")
         if not eligible:
             print("[Retry] Nothing left to put back.")
             return 0

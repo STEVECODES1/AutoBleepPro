@@ -100,3 +100,58 @@ def test_a_revived_clip_can_fail_again_properly(queue):
     for _ in range(queue.max_attempts):
         queue.fail(job.id, "still broken")
     assert queue.get(job.id).state == FAILED
+
+
+# ── the age limit must match the queue's own ─────────────────────────
+
+def test_the_retry_window_matches_the_limit_the_drain_applies():
+    """A retry wider than the drain's limit is a promise the next run
+    breaks: it reported 32 revived and posted none of them."""
+    from utils.clip_queue import MAX_DEFERRED_AGE_S
+
+    old = _Job("/clips/a.mp4", age_s=MAX_DEFERRED_AGE_S + 60)
+    eligible, gone, stale = JobQueue.sort_retryable(
+        [old], MAX_DEFERRED_AGE_S, exists=lambda p: True)
+    assert stale == [old] and eligible == []
+
+
+class _Job:
+    def __init__(self, clip_path, age_s=0.0):
+        self.clip_path = clip_path
+        self.created_at = time.time() - age_s
+        self.id = clip_path
+
+
+def test_a_fresh_clip_is_worth_retrying():
+    fresh = _Job("/clips/a.mp4", age_s=60)
+    eligible, gone, stale = JobQueue.sort_retryable(
+        [fresh], 36 * 3600, exists=lambda p: True)
+    assert eligible == [fresh]
+
+
+def test_a_deleted_clip_is_never_retried():
+    """The cleanup removes posted clips; there is nothing left to post."""
+    missing = _Job("/clips/gone.mp4", age_s=60)
+    eligible, gone, stale = JobQueue.sort_retryable(
+        [missing], 36 * 3600, exists=lambda p: False)
+    assert gone == [missing] and eligible == []
+
+
+def test_a_missing_file_beats_the_age_check():
+    """Reported as gone, not as old - the reason a person sees matters."""
+    both = _Job("/clips/gone.mp4", age_s=99 * 3600)
+    eligible, gone, stale = JobQueue.sort_retryable(
+        [both], 36 * 3600, exists=lambda p: False)
+    assert gone == [both] and stale == []
+
+
+def test_a_job_with_no_recorded_age_is_given_the_benefit():
+    unknown = _Job("/clips/a.mp4")
+    unknown.created_at = 0.0
+    eligible, gone, stale = JobQueue.sort_retryable(
+        [unknown], 36 * 3600, exists=lambda p: True)
+    assert eligible == [unknown]
+
+
+def test_nothing_in_means_nothing_out():
+    assert JobQueue.sort_retryable([], 36 * 3600) == ([], [], [])

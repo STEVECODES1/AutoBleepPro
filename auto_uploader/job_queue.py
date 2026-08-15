@@ -384,6 +384,28 @@ class JobQueue:
 
     # ── Reporting ────────────────────────────────────────────────────────
 
+    @staticmethod
+    def sort_retryable(jobs: Iterable, max_age_s: float,
+                       now: Optional[float] = None,
+                       exists=os.path.isfile) -> tuple:
+        """Split given-up jobs into (worth retrying, file gone, too old).
+
+        `max_age_s` must be the SAME limit the drain applies. Reviving a
+        job past it reports a number and posts none of them - which is
+        exactly what happened when this defaulted to three weeks while
+        the drain dropped anything over 36 hours.
+        """
+        now = time.time() if now is None else now
+        eligible, gone, stale = [], [], []
+        for job in jobs:
+            if not exists(job.clip_path):
+                gone.append(job)
+            elif job.created_at and (now - job.created_at) > max_age_s:
+                stale.append(job)
+            else:
+                eligible.append(job)
+        return eligible, gone, stale
+
     def counts(self) -> dict:
         out: dict = {}
         for job in self._jobs.values():
