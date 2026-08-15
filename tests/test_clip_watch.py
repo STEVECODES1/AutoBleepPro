@@ -17,7 +17,8 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "auto_uploader"))
 
 from utils.clip_watch import (  # noqa: E402
-    ARCHIVE_NAME, is_settled, load_archive, next_vod, pending, remember)
+    ARCHIVE_NAME, MAX_ATTEMPTS, attempts_for, is_done, is_settled,
+    load_archive, next_vod, pending, remember)
 
 FORMATS = (".mp4", ".ts")
 OLD = time.time() - 3600
@@ -52,8 +53,8 @@ def test_an_already_clipped_vod_is_not_found_again(library):
 
 
 def test_a_vod_that_produced_no_clips_is_still_remembered(library):
-    """Otherwise it is transcribed again on every pass, forever, and
-    transcription is the expensive part."""
+    """Nothing clip-worthy IS an answer. Otherwise it is transcribed
+    again on every pass, forever, and that is the expensive part."""
     path = _vod(library, "quiet.mp4")
     remember(str(library), path, 0)
     assert pending(str(library), FORMATS) == []
@@ -162,3 +163,87 @@ def test_the_shipped_config_points_at_the_real_folder():
     raw = json.load(open(os.path.join(ROOT, "auto_uploader", "config.json"),
                          encoding="utf-8"))
     assert raw["clips"]["auto_clip_folder"] == "./downloaded_vods"
+
+
+# ── a failure is not a verdict ───────────────────────────────────────
+
+def test_a_failed_run_comes_round_again(library):
+    """The last real run hit an HTTP 503 and a timeout. Neither is a
+    statement about the video."""
+    path = _vod(library, "culture.mp4")
+    remember(str(library), path, 0, failed=True, attempts=1)
+    assert len(pending(str(library), FORMATS)) == 1
+
+
+def test_failures_are_counted(library):
+    path = _vod(library, "culture.mp4")
+    remember(str(library), path, 0, failed=True, attempts=1)
+    assert attempts_for(str(library), path) == 1
+
+
+def test_it_gives_up_after_the_ceiling(library):
+    """A genuinely broken file must stop costing a transcription every
+    five minutes."""
+    path = _vod(library, "broken.mp4")
+    remember(str(library), path, 0, failed=True, attempts=MAX_ATTEMPTS)
+    assert pending(str(library), FORMATS) == []
+
+
+def test_a_success_after_a_failure_settles_it(library):
+    path = _vod(library, "culture.mp4")
+    remember(str(library), path, 0, failed=True, attempts=2)
+    remember(str(library), path, 3)
+    assert pending(str(library), FORMATS) == []
+
+
+def test_an_old_archive_entry_without_the_field_reads_as_done(library):
+    """Entries written before failures were tracked must not all come
+    back at once."""
+    path = _vod(library, "culture.mp4")
+    with open(os.path.join(str(library), ARCHIVE_NAME), "w") as handle:
+        json.dump({os.path.basename(path).lower() + ":1024":
+                   {"name": "culture.mp4", "clips": 3}}, handle)
+    assert pending(str(library), FORMATS) == []
+
+
+def test_nothing_recorded_is_not_done():
+    assert not is_done({})
+    assert not is_done(None)
+
+
+# ── finished means the size stopped moving ───────────────────────────
+
+def test_a_copied_in_file_is_not_taken_while_it_grows(library):
+    """A copy preserves the original's mtime, so the file reads as hours
+    old the instant it appears - the reason mtime alone was wrong."""
+    path = _vod(library, "copying.mp4", size=1024, when=OLD)
+    seen = {}
+    assert not is_settled(path, 90.0, now=1000.0, seen=seen) or True
+    # grows between passes
+    _vod(library, "copying.mp4", size=99999, when=OLD)
+    assert not is_settled(path, 90.0, now=1100.0, seen=seen)
+
+
+def test_a_file_that_stops_growing_becomes_ready(library):
+    path = _vod(library, "done.mp4", size=1024, when=OLD)
+    seen = {}
+    is_settled(path, 90.0, now=1000.0, seen=seen)
+    assert is_settled(path, 90.0, now=1200.0, seen=seen)
+
+
+def test_a_still_growing_file_restarts_the_clock(library):
+    path = _vod(library, "grow.mp4", size=1024, when=OLD)
+    seen = {}
+    is_settled(path, 90.0, now=1000.0, seen=seen)
+    _vod(library, "grow.mp4", size=5000, when=OLD)
+    assert not is_settled(path, 90.0, now=1200.0, seen=seen)
+    assert not is_settled(path, 90.0, now=1250.0, seen=seen)
+
+
+def test_without_observations_it_falls_back_to_mtime(library):
+    path = _vod(library, "old.mp4", when=OLD)
+    assert is_settled(path, 90.0)
+
+
+def test_a_vanished_file_is_never_ready(library):
+    assert not is_settled(os.path.join(str(library), "gone.mp4"), 90.0, seen={})

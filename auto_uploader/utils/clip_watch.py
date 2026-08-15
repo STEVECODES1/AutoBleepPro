@@ -32,6 +32,24 @@ the uploader's own dedup avoids it where it can. Name-and-size is wrong
 only if a file is replaced by a different one of exactly the same length
 under exactly the same name, and the cost of being wrong is one
 duplicate clip run - not a lost video.
+
+WHEN A FILE IS FINISHED
+-----------------------
+By its SIZE holding still, not by its modification time. Copying a file
+preserves the original's mtime, so a VOD copied in from another drive
+looks hours old the instant it appears and would be transcribed while
+the copy was still running. Two observations of the same size, far
+enough apart, is the thing that actually means "nobody is writing to
+this".
+
+WHEN A RUN FAILS
+----------------
+Producing no clips is an answer: that VOD had nothing clip-worthy in it,
+and asking again would transcribe it from scratch every pass forever.
+FAILING is not an answer. The last real run hit an HTTP 503 and a
+timeout, and under a rule that treats those the same as "no clips" both
+VODs would have been skipped permanently. A failed run is retried, up to
+MAX_ATTEMPTS, and only then set aside.
 """
 
 from __future__ import annotations
@@ -42,6 +60,12 @@ import time
 from typing import Optional
 
 ARCHIVE_NAME = ".clipped.json"
+
+# How many times a VOD that FAILED is allowed to come round again. Three
+# is enough to ride out a busy model or a dropped connection, and small
+# enough that a genuinely broken file stops costing a transcription pass
+# every five minutes.
+MAX_ATTEMPTS = 3
 
 
 def _key(path: str) -> str:
@@ -66,16 +90,23 @@ def load_archive(folder: str) -> dict:
     return data if isinstance(data, dict) else {}
 
 
-def remember(folder: str, path: str, clips: int) -> None:
-    """Record that this VOD has been through the clipper.
+def remember(folder: str, path: str, clips: int, failed: bool = False,
+             attempts: int = 0) -> None:
+    """Record what happened to this VOD.
 
-    Written even when the run produced NO clips. A VOD with nothing
-    clip-worthy in it would otherwise be transcribed again on every
-    single pass, forever, and transcription is the expensive part.
+    A run that produced NO clips is still done: that VOD had nothing
+    clip-worthy in it, and asking again would transcribe it from scratch
+    on every pass forever.
+
+    A run that FAILED is a different thing, and `failed=True` keeps it
+    eligible until MAX_ATTEMPTS. An HTTP 503 from the model is not a
+    verdict about the video.
     """
     data = load_archive(folder)
     data[_key(path)] = {"name": os.path.basename(path),
-                        "clips": int(clips), "when": time.time()}
+                        "clips": int(clips), "when": time.time(),
+                        "failed": bool(failed),
+                        "attempts": int(attempts)}
     try:
         os.makedirs(folder, exist_ok=True)
         temporary = archive_path(folder) + ".tmp"
@@ -86,27 +117,63 @@ def remember(folder: str, path: str, clips: int) -> None:
         pass
 
 
-def is_settled(path: str, quiet_seconds: float = 90.0,
-               now: Optional[float] = None) -> bool:
-    """True when the file has stopped being written to.
+def attempts_for(folder: str, path: str) -> int:
+    entry = load_archive(folder).get(_key(path)) or {}
+    return int(entry.get("attempts", 0) or 0)
 
-    A download in progress is a real file of the wrong length, and
+
+def is_done(entry: dict) -> bool:
+    """True when this VOD needs no further passes."""
+    if not entry:
+        return False
+    if not entry.get("failed"):
+        return True
+    return int(entry.get("attempts", 0) or 0) >= MAX_ATTEMPTS
+
+
+def is_settled(path: str, quiet_seconds: float = 90.0,
+               now: Optional[float] = None, seen: Optional[dict] = None) -> bool:
+    """True when the file has stopped growing.
+
+    Measured on SIZE across two observations, not on modification time.
+    A copy preserves the original's mtime, so a VOD copied in from
+    another drive reads as hours old the moment it appears - and
     transcribing half a VOD wastes the expensive pass and produces clips
-    from a video that no longer exists in that form.
+    from a video that will not exist in that form.
+
+    `seen` carries the previous observation between calls: {path: (size,
+    when)}. Without it this can only answer for a file that is already
+    old by mtime too, which is the conservative direction.
     """
     now = time.time() if now is None else now
     try:
-        return (now - os.path.getmtime(path)) >= quiet_seconds
+        size = os.path.getsize(path)
+        modified = os.path.getmtime(path)
     except OSError:
         return False
 
+    if seen is None:
+        return (now - modified) >= quiet_seconds
+
+    previous = seen.get(path)
+    seen[path] = (size, now)
+    if previous is None:
+        # First sighting. An untouched file that is also old by mtime is
+        # safe to take now; anything else waits for a second look.
+        return (now - modified) >= quiet_seconds
+    last_size, first_seen = previous
+    if size != last_size:
+        seen[path] = (size, now)      # still growing - restart the clock
+        return False
+    return (now - first_seen) >= quiet_seconds
+
 
 def pending(folder: str, formats, quiet_seconds: float = 90.0,
-            now: Optional[float] = None) -> list:
-    """VODs in `folder` that have not been clipped yet, oldest first."""
+            now: Optional[float] = None, seen: Optional[dict] = None) -> list:
+    """VODs in `folder` still wanting a clip run, oldest first."""
     if not folder or not os.path.isdir(folder):
         return []
-    done = load_archive(folder)
+    archive = load_archive(folder)
     found = []
     for name in sorted(os.listdir(folder)):
         path = os.path.join(folder, name)
@@ -114,15 +181,16 @@ def pending(folder: str, formats, quiet_seconds: float = 90.0,
             continue
         if os.path.splitext(name)[1].lower() not in tuple(formats or ()):
             continue
-        if _key(path) in done:
+        if is_done(archive.get(_key(path))):
             continue
-        if not is_settled(path, quiet_seconds, now):
+        if not is_settled(path, quiet_seconds, now, seen):
             continue
         found.append(path)
     return found
 
 
-def next_vod(folder: str, formats, quiet_seconds: float = 90.0) -> str:
+def next_vod(folder: str, formats, quiet_seconds: float = 90.0,
+             seen: Optional[dict] = None) -> str:
     """The one VOD to clip on this pass, or "" for nothing to do."""
-    waiting = pending(folder, formats, quiet_seconds)
+    waiting = pending(folder, formats, quiet_seconds, seen=seen)
     return waiting[0] if waiting else ""

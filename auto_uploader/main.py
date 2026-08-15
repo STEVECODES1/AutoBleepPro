@@ -39,7 +39,7 @@ from datetime import datetime
 # Bump when shipping user-visible changes, so --test-config can prove
 # which build is actually running (stale extracts have silently caused
 # several confusing "the fix did nothing" runs).
-BUILD = "2026-08-15.16 VODs dropped in downloaded_vods become clips on their own"
+BUILD = "2026-08-15.17 a copy in progress is not finished, and a 503 is not a verdict"
 
 # How often --watch checks whether a deferred clip's wait is up. A minute
 # is fine: the waits themselves are 25 to 80 minutes, so the resolution
@@ -50,6 +50,9 @@ CLIP_DRAIN_SECONDS = 60
 # purpose: the answer is almost always "none", and the work it triggers
 # is measured in minutes.
 AUTOCLIP_SECONDS = 300
+
+# Size observations for files still being copied in, kept between passes.
+_AUTOCLIP_SEEN: dict = {}
 
 # Notices that are true for the whole run and would otherwise print on
 # every pass. --batch followed by --watch is one process saying the same
@@ -214,7 +217,8 @@ def _autoclip_one(cfg) -> int:
     posts the queue and uploads finished videos - ten new VODs must be
     ten passes, not one long freeze during which nothing else happens.
     """
-    from utils.clip_watch import next_vod, remember
+    from utils.clip_watch import (MAX_ATTEMPTS as MAX_CLIP_ATTEMPTS,
+                                  attempts_for, next_vod, remember)
 
     clips_cfg = dict(getattr(cfg, "clips", {}) or {})
     folder = str(clips_cfg.get("auto_clip_folder", "") or "").strip()
@@ -225,7 +229,11 @@ def _autoclip_one(cfg) -> int:
     if not os.path.isdir(folder):
         return 0
 
-    source = next_vod(folder, cfg.general.supported_formats)
+    # The size observations live across passes, so a file that is still
+    # being copied in is seen growing rather than judged by an mtime the
+    # copy brought with it.
+    source = next_vod(folder, cfg.general.supported_formats,
+                      seen=_AUTOCLIP_SEEN)
     if not source:
         return 0
 
@@ -242,15 +250,29 @@ def _autoclip_one(cfg) -> int:
                          count=clips_cfg.get("auto_clip_count") or None,
                          notify=False, transcribe_if_needed=True)
     except Exception as exc:
-        # Remembered anyway. A VOD that cannot be clipped would otherwise
-        # be retried on every pass forever, and the expensive part runs
-        # before most of the ways this can fail.
-        remember(folder, source, 0)
-        print(f"[Clips] {name}: {exc}")
+        # Failed, not answered. An HTTP 503 from the model is not a
+        # verdict about the video, so this comes round again - bounded,
+        # because a genuinely broken file must stop costing a
+        # transcription pass every five minutes.
+        tries = attempts_for(folder, source) + 1
+        remember(folder, source, 0, failed=True, attempts=tries)
+        print(f"[Clips] {name} failed (attempt {tries}/{MAX_CLIP_ATTEMPTS}): {exc}")
+        if tries >= MAX_CLIP_ATTEMPTS:
+            print(f"[Clips] Giving up on {name}. Cut it by hand with "
+                  f"--clips-from if you want it.")
+        return 0
+
+    if run.skipped_reason:
+        tries = attempts_for(folder, source) + 1
+        remember(folder, source, 0, failed=True, attempts=tries)
+        print(f"[Clips] {name}: {run.skipped_reason} "
+              f"(attempt {tries}/{MAX_CLIP_ATTEMPTS})")
         return 0
 
     print_run(run)
     delivered = _deliver_clips(run, cfg)
+    # A successful run with no clips IS an answer - that VOD had nothing
+    # clip-worthy in it - so it is not retried.
     remember(folder, source, delivered)
     print(f"[Clips] {delivered} clip(s) from {name} delivered to "
           f"{cfg.general.watch_folder}.")
