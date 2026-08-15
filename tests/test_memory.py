@@ -310,3 +310,176 @@ def test_no_url_is_never_asked_about():
     from autoreel import memory
 
     assert memory.views_for("") is None
+
+
+# ── wiring: one memory, two writers ──────────────────────────────────
+
+def test_the_ledger_lands_in_one_place_whatever_the_caller_holds():
+    """The cutter holds an AppConfig, the poster holds a dict. If those
+    resolved differently the memory would become two half-memories."""
+    from autoreel.memory import ledger_path
+
+    class _Cfg:
+        pass
+
+    assert ledger_path(None) == ledger_path({}) == ledger_path(_Cfg())
+
+
+def test_the_ledger_can_be_pointed_somewhere_else(tmp_path):
+    from autoreel.memory import ledger_path
+
+    wanted = str(tmp_path / "elsewhere.json")
+    assert ledger_path({"memory_path": wanted}) == wanted
+
+
+def test_a_clip_is_found_by_its_file_after_being_moved(ledger, tmp_path):
+    """Clips move from the clips folder to the watch folder before
+    posting, so the poster never sees the path the cutter wrote."""
+    record = _record("a")
+    record.path = str(tmp_path / "clips" / "Clip 01.mp4")
+    ledger.remember(record)
+    found = ledger.by_path(str(tmp_path / "watch_folder" / "Clip 01.mp4"))
+    assert found is not None and found.clip_id == "a"
+
+
+def test_an_unknown_file_matches_nothing(ledger):
+    assert ledger.by_path("/anywhere/Clip 99.mp4") is None
+
+
+def test_no_path_matches_nothing(ledger):
+    ledger.remember(_record("a"))
+    assert ledger.by_path("") is None
+
+
+class _Spec:
+    def __init__(self, start, duration, score, title):
+        self.start = start
+        self.duration = duration
+        self.score = score
+        self.title = title
+
+
+class _Clip:
+    def __init__(self, path, spec):
+        self.path = path
+        self.spec = spec
+
+
+class _Cfg:
+    memory_path = ""
+
+
+def test_a_run_is_written_down(tmp_path, monkeypatch):
+    from autoreel import memory
+
+    store = str(tmp_path / "m.json")
+    monkeypatch.setattr(memory, "ledger_path", lambda cfg=None: store)
+    clips = [_Clip("/c/Clip 01.mp4", _Spec(100.0, 40.0, 8.0, "he ran"))]
+    assert memory.remember_run(_Cfg(), "Stream A", clips,
+                               profile="gta", picked_by="model",
+                               total_seconds=1000.0) == 1
+    record = memory.Ledger(store).by_path("Clip 01.mp4")
+    assert record.position == pytest.approx(0.1)
+    assert record.picked_by == "model" and record.profile == "gta"
+
+
+def test_a_clip_past_the_end_never_scores_above_one(tmp_path, monkeypatch):
+    from autoreel import memory
+
+    monkeypatch.setattr(memory, "ledger_path",
+                        lambda cfg=None: str(tmp_path / "m.json"))
+    clips = [_Clip("/c/a.mp4", _Spec(9999.0, 40.0, 1.0, "x"))]
+    memory.remember_run(_Cfg(), "S", clips, total_seconds=100.0)
+    assert memory.Ledger(str(tmp_path / "m.json")).by_path("a.mp4").position == 1.0
+
+
+def test_an_unknown_length_does_not_divide_by_zero(tmp_path, monkeypatch):
+    from autoreel import memory
+
+    monkeypatch.setattr(memory, "ledger_path",
+                        lambda cfg=None: str(tmp_path / "m.json"))
+    clips = [_Clip("/c/a.mp4", _Spec(50.0, 40.0, 1.0, "x"))]
+    assert memory.remember_run(_Cfg(), "S", clips, total_seconds=0.0) == 1
+
+
+def test_a_broken_notebook_never_costs_the_clips(tmp_path, monkeypatch):
+    """Clips are already rendered by then. Losing them over a log file
+    would be the worst trade in the project."""
+    from autoreel import memory
+
+    monkeypatch.setattr(memory, "ledger_path",
+                        lambda cfg=None: str(tmp_path / "m.json"))
+    monkeypatch.setattr(memory.Ledger, "save", lambda self: (_ for _ in ()).throw(
+        OSError("disk full")))
+    clips = [_Clip("/c/a.mp4", _Spec(1.0, 2.0, 3.0, "x"))]
+    assert memory.remember_run(_Cfg(), "S", clips) == 0
+
+
+def test_a_broken_notebook_never_costs_a_post(tmp_path, monkeypatch):
+    from autoreel import memory
+
+    store = str(tmp_path / "m.json")
+    monkeypatch.setattr(memory, "ledger_path", lambda cfg=None: store)
+    memory.remember_run(_Cfg(), "S",
+                        [_Clip("/c/a.mp4", _Spec(1.0, 2.0, 3.0, "x"))])
+    monkeypatch.setattr(memory.Ledger, "save", lambda self: (_ for _ in ()).throw(
+        OSError("disk full")))
+    assert memory.remember_post({}, "/watch/a.mp4", "x", "http://a") is False
+
+
+def test_a_post_is_joined_to_the_clip_it_came_from(tmp_path, monkeypatch):
+    from autoreel import memory
+
+    store = str(tmp_path / "m.json")
+    monkeypatch.setattr(memory, "ledger_path", lambda cfg=None: store)
+    memory.remember_run(_Cfg(), "S",
+                        [_Clip("/c/Clip 01.mp4", _Spec(1.0, 2.0, 3.0, "x"))])
+    assert memory.remember_post({}, "/watch/Clip 01.mp4", "instagram",
+                                "https://instagram.com/p/abc")
+    record = memory.Ledger(store).by_path("Clip 01.mp4")
+    assert record.posted["instagram"] == "https://instagram.com/p/abc"
+
+
+def test_a_post_for_a_clip_we_never_cut_is_not_an_error(tmp_path, monkeypatch):
+    from autoreel import memory
+
+    monkeypatch.setattr(memory, "ledger_path",
+                        lambda cfg=None: str(tmp_path / "m.json"))
+    assert memory.remember_post({}, "/watch/unknown.mp4", "x", "http://a") is False
+
+
+def test_a_post_with_no_url_is_not_recorded(tmp_path, monkeypatch):
+    from autoreel import memory
+
+    monkeypatch.setattr(memory, "ledger_path",
+                        lambda cfg=None: str(tmp_path / "m.json"))
+    assert memory.remember_post({}, "/watch/a.mp4", "x", "") is False
+
+
+# ── the picker actually reads it ─────────────────────────────────────
+
+def test_the_prompt_carries_the_lessons():
+    from autoreel.llm_highlights import build_prompt
+    from autoreel.highlights import Highlight
+
+    prompt = build_prompt([Highlight(0.0, 30.0, 1.0, "something")], 3,
+                          lessons=["- short clips beat long ones"])
+    assert "short clips beat long ones" in prompt
+
+
+def test_the_prompt_is_unchanged_when_nothing_is_known():
+    from autoreel.llm_highlights import build_prompt
+    from autoreel.highlights import Highlight
+
+    candidates = [Highlight(0.0, 30.0, 1.0, "something")]
+    assert build_prompt(candidates, 3, lessons=[]) == \
+        build_prompt(candidates, 3, lessons=[])
+
+
+def test_reading_the_lessons_never_breaks_the_picker(monkeypatch):
+    """The model must still get asked even if the memory is unreadable."""
+    import autoreel.llm_highlights as module
+
+    monkeypatch.setattr("autoreel.memory.Ledger",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError()))
+    assert module.learned_lines() == []

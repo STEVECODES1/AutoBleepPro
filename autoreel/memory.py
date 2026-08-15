@@ -110,6 +110,10 @@ class ClipRecord:
     picked_by: str = ""
     hook: str = ""
     profile: str = ""
+    # The rendered file. This is the only link between cutting a clip and
+    # posting it - the poster works from a path in the watch folder and
+    # knows nothing about the stream it came from.
+    path: str = ""
     created: float = field(default_factory=_now)
     # platform -> url
     posted: dict = field(default_factory=dict)
@@ -218,6 +222,21 @@ class Ledger:
 
     def get(self, key: str) -> Optional[ClipRecord]:
         return self._records.get(key)
+
+    def by_path(self, path: str) -> Optional[ClipRecord]:
+        """The record for a rendered clip file.
+
+        Matched on the BASENAME: clips are moved from the clips folder to
+        the watch folder before posting, so the full path a poster sees is
+        never the one the cutter wrote.
+        """
+        wanted = os.path.basename(path or "").lower()
+        if not wanted:
+            return None
+        for record in self._records.values():
+            if os.path.basename(record.path or "").lower() == wanted:
+                return record
+        return None
 
     def scored(self) -> list:
         """Records that can teach something: recent, and actually measured."""
@@ -392,6 +411,79 @@ def _compare(records, key, threshold, subject, high_label, low_label):
             return Finding(subject, better_name, worse_name, lift,
                            len(better) + len(worse))
     return None
+
+
+# The project root, from this file's own location. The ledger is
+# anchored here rather than to anything a caller passes in, because the
+# two writers reach it from different places: the cutter holds an
+# AppConfig, the poster holds a plain dict, and neither runs from a
+# predictable directory. If they disagreed by one folder the memory
+# would silently become two half-memories, each too small to learn from
+# and neither obviously wrong.
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def ledger_path(cfg=None) -> str:
+    """The one memory file. `cfg` may be an object, a dict, or nothing."""
+    override = ""
+    if isinstance(cfg, dict):
+        override = str(cfg.get("memory_path", "") or "")
+    elif cfg is not None:
+        override = str(getattr(cfg, "memory_path", "") or "")
+    if override:
+        return override if os.path.isabs(override) else os.path.join(
+            _PROJECT_ROOT, override)
+    return os.path.join(_PROJECT_ROOT, LEDGER_NAME)
+
+
+def remember_run(cfg, source: str, clips: list, profile: str = "",
+                 picked_by: str = "", total_seconds: float = 0.0) -> int:
+    """Write down every clip a run just cut. Returns how many.
+
+    Deliberately swallows its own errors. This is a notebook, and a
+    notebook that cannot be written must never cost the user the clips
+    that were just rendered.
+    """
+    try:
+        ledger = Ledger(ledger_path(cfg))
+        for clip in clips or []:
+            spec = getattr(clip, "spec", None)
+            if spec is None:
+                continue
+            start = float(getattr(spec, "start", 0.0))
+            position = (start / total_seconds) if total_seconds > 0 else 0.0
+            ledger.remember(ClipRecord(
+                clip_id=clip_id(source, start),
+                source=source,
+                start=start,
+                duration=float(getattr(spec, "duration", 0.0)),
+                position=max(0.0, min(1.0, position)),
+                score=float(getattr(spec, "score", 0.0)),
+                picked_by=picked_by,
+                hook=str(getattr(spec, "title", "") or ""),
+                profile=profile,
+                path=str(getattr(clip, "path", "") or ""),
+            ))
+        ledger.save()
+        return len(clips or [])
+    except Exception:
+        return 0
+
+
+def remember_post(cfg, video_path: str, platform: str, url: str) -> bool:
+    """Note where a clip was published. Same silence rule as above."""
+    if not url or not platform:
+        return False
+    try:
+        ledger = Ledger(ledger_path(cfg))
+        record = ledger.by_path(video_path)
+        if record is None:
+            return False
+        record.posted[platform] = url
+        ledger.save()
+        return True
+    except Exception:
+        return False
 
 
 def learn(ledger: Ledger) -> Guidance:

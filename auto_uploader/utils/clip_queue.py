@@ -125,6 +125,11 @@ def publish(platform: str, video_path: str, caption: str,
             return False
         if posted:
             print(f"[Clips] {platform}: {posted}")
+            # Where it went, joined to why it was cut. This is the half
+            # of the loop that makes the numbers mean anything later.
+            from autoreel.memory import remember_post
+
+            remember_post(config, video_path, platform, str(posted))
         return bool(posted)
 
     if not getattr(publisher, "supports_reels", False):

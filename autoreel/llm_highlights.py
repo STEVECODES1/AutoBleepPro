@@ -271,10 +271,29 @@ def build_vision_contents(candidates: list, count: int, source_path: str,
     return parts
 
 
-def build_prompt(candidates: list, count: int) -> str:
+def learned_lines() -> list:
+    """What past clips actually did, as sentences for the model.
+
+    Sentences rather than weights: a wrong lesson shows up here as a
+    strange instruction a person can read and delete, not as a number
+    nobody can see. Returns [] until the ledger has enough measured
+    clips to say anything - which is most of the time, and correct.
+    """
+    try:
+        from autoreel.memory import Ledger, learn, ledger_path
+
+        return learn(Ledger(ledger_path())).prompt_lines()
+    except Exception:
+        return []
+
+
+def build_prompt(candidates: list, count: int, lessons: Optional[list] = None) -> str:
     """The candidate list, as the model sees it."""
     lines = [f"Pick AT MOST {count} of these {len(candidates)} candidates - "
              f"fewer if fewer are good.", ""]
+    lessons = learned_lines() if lessons is None else lessons
+    if lessons:
+        lines += lessons + [""]
     for number, highlight in enumerate(candidates, start=1):
         text = " ".join((highlight.text or "").split())[:_MAX_TEXT_CHARS]
         lines.append(

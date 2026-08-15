@@ -39,7 +39,7 @@ from datetime import datetime
 # Bump when shipping user-visible changes, so --test-config can prove
 # which build is actually running (stale extracts have silently caused
 # several confusing "the fix did nothing" runs).
-BUILD = "2026-08-15.8 --verify now says which channel the Shorts token belongs to"
+BUILD = "2026-08-15.9 clips are remembered, and what worked feeds the next pick"
 
 # How often --watch checks whether a deferred clip's wait is up. A minute
 # is fine: the waits themselves are 25 to 80 minutes, so the resolution
@@ -1323,6 +1323,12 @@ def main(argv=None) -> int:
                         help="What happened to every clip: cut, posted, "
                              "waiting, or failed and why. Reads "
                              "logs/clips.log.")
+    parser.add_argument("--learn", action="store_true",
+                        help="Look up how many views the posted clips got, "
+                             "and say what the numbers suggest about which "
+                             "clips work. Reads only; posts nothing. Says "
+                             "nothing at all until there are enough measured "
+                             "clips to mean something.")
     parser.add_argument("--keep-source", action="store_true",
                         help="Never move or delete the source video, whatever "
                              "cleanup.source_video says. For uploading out of "
@@ -1744,6 +1750,31 @@ def main(argv=None) -> int:
             return 0
         print(f"No upload history recorded for {os.path.basename(target_file)} "
               f"({scope}) - nothing to clear. You can run --file on it directly.")
+        return 0
+
+    if args.learn:
+        from autoreel.memory import Ledger, harvest, learn, ledger_path
+
+        path = ledger_path()
+        ledger = Ledger(path)
+        total = len(ledger.records())
+        if not total:
+            print("[Learn] Nothing remembered yet. Clips cut from now on are "
+                  "recorded automatically; this reads that record.")
+            return 0
+
+        pending = len(ledger.unchecked())
+        print(f"[Learn] {total} clip(s) remembered, {pending} not yet counted.")
+        if pending:
+            print("[Learn] Asking each platform how the posted ones did...")
+            filled = harvest(ledger, say=print)
+            print(f"[Learn] Counted {filled}." if filled
+                  else "[Learn] Could not read any view counts this time.")
+
+        print()
+        print(learn(ledger).summary())
+        print()
+        print(f"[Learn] Memory: {path}")
         return 0
 
     if args.health:

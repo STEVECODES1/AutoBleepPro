@@ -374,6 +374,22 @@ def make_clips(cfg, source_path: str, title: str,
         except OSError as exc:
             print(f"[Clips] could not write a caption: {exc}")
 
+    # What was cut and why, so a later run can be told how these did.
+    # Wrapped in nothing on purpose - remember_run swallows its own
+    # errors, because a notebook that cannot be written must never cost
+    # the user clips that are already rendered.
+    from autoreel.memory import remember_run
+
+    remember_run(
+        cfg, title or base, results,
+        profile=str(clips_cfg.get("profile", "")),
+        picked_by=("vision" if clips_cfg.get("use_vision")
+                   else "model" if clips_cfg.get("use_llm") else "scorer"),
+        total_seconds=float(getattr(segments[-1], "end", 0.0)
+                            if segments and not isinstance(segments[-1], dict)
+                            else (segments[-1].get("end", 0.0) if segments else 0.0)),
+    )
+
     if notify and results:
         _notify(results, output_dir)
     return ClipRun(results, caption_paths, output_dir)

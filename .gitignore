@@ -48,3 +48,4 @@ cookies.txt
 # real file just diverges from it silently.
 *.backup
 *.bak
+/clip_memory.json
