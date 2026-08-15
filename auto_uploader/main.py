@@ -39,7 +39,7 @@ from datetime import datetime
 # Bump when shipping user-visible changes, so --test-config can prove
 # which build is actually running (stale extracts have silently caused
 # several confusing "the fix did nothing" runs).
-BUILD = "2026-08-15.7 the same video in two folders is not an ambiguous --forget"
+BUILD = "2026-08-15.8 --verify now says which channel the Shorts token belongs to"
 
 # How often --watch checks whether a deferred clip's wait is up. A minute
 # is fine: the waits themselves are 25 to 80 minutes, so the resolution
@@ -1941,7 +1941,14 @@ def main(argv=None) -> int:
         guard = PublishGuard(cfg.posting, cfg.posting.get("state_path"))
         account = (cfg.features.get("social_promoter", {}) or {}).get(
             "reddit_account", "")
-        report({"posting": cfg.posting}, guard, account, live=args.verify)
+        # youtube_shorts and youtube come along so --verify can ask which
+        # CHANNEL the Shorts token belongs to. That is the one setup
+        # mistake nothing else catches.
+        report({"posting": cfg.posting,
+                "youtube_shorts": cfg.youtube_shorts,
+                "youtube": {"channel": cfg.youtube.channel,
+                            "client_secrets_path": cfg.youtube.client_secrets_path}},
+               guard, account, live=args.verify)
         print(f"\n  {summary(cfg.posting)}")
         return 0
 

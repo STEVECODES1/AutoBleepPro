@@ -331,6 +331,78 @@ def _check_reddit(account: str = "") -> Check:
     return Check("reddit", OK, identity=f"u/{me}")
 
 
+def _handle(text: str) -> str:
+    """A YouTube channel name reduced to what can actually be compared.
+
+    "@STACKSWOPO10K", "STACKSWOPO10K" and "Stackswopo 10K" all have to
+    match, because the config, the handle and the display name are three
+    different strings for one channel.
+    """
+    return "".join(c for c in (text or "").lower() if c.isalnum())
+
+
+def _check_youtube_shorts(cfg_dict: Optional[dict] = None) -> Check:
+    """Which YouTube channel the Shorts token actually belongs to.
+
+    This is the one platform where a wrong setup is invisible. A YouTube
+    token binds to the CHANNEL picked on the consent screen, not to the
+    account, so signing in and picking the VOD channel by mistake sends
+    every Short there - and nothing anywhere says so. The upload
+    succeeds, the log says ok, and the clips are simply on the wrong
+    channel until somebody happens to look.
+    """
+    cfg_dict = cfg_dict or {}
+    settings = cfg_dict.get("youtube_shorts", {}) or {}
+    try:
+        from publishers.youtube_shorts import YouTubeShortsPublisher
+    except ImportError:
+        from auto_uploader.publishers.youtube_shorts import YouTubeShortsPublisher
+
+    publisher = YouTubeShortsPublisher(cfg_dict)
+    token = publisher.token_path()
+    if not token:
+        return Check("youtube_shorts", MISSING, "token_path is not set in config.json")
+    if not os.path.isfile(token):
+        return Check("youtube_shorts", MISSING,
+                     "not signed in yet - run: python main.py --setup-shorts")
+
+    try:
+        from utils.youtube_uploader import YouTubeUploader
+    except ImportError:
+        from auto_uploader.utils.youtube_uploader import YouTubeUploader
+    try:
+        service = YouTubeUploader(publisher.client_secrets_path(),
+                                  token).get_service()
+        data = service.channels().list(part="snippet,statistics",
+                                       mine=True).execute()
+    except Exception as exc:
+        return Check("youtube_shorts", FAILED, str(exc))
+
+    items = data.get("items") or []
+    if not items:
+        return Check("youtube_shorts", FAILED,
+                     "the token works but owns no channel")
+    snippet = items[0].get("snippet", {})
+    title = snippet.get("title", "") or "(unnamed channel)"
+    custom = snippet.get("customUrl", "")
+    subscribers = (items[0].get("statistics", {}) or {}).get("subscriberCount")
+    detail = f"{subscribers} subscribers" if subscribers is not None else ""
+
+    wanted = str(settings.get("channel", "") or "").strip()
+    if wanted and _handle(wanted) not in (_handle(title), _handle(custom)):
+        vod = str((cfg_dict.get("youtube", {}) or {}).get("channel", "")).strip()
+        extra = ""
+        if vod and _handle(vod) in (_handle(title), _handle(custom)):
+            extra = (" - that is your VOD channel, so every Short would be "
+                     "published there")
+        return Check("youtube_shorts", FAILED,
+                     f"signed in as {custom or title}, but config wants "
+                     f"{wanted}{extra}. Delete {os.path.basename(token)} and "
+                     f"run --setup-shorts again, picking {wanted}.")
+
+    return Check("youtube_shorts", OK, detail, identity=custom or title)
+
+
 _CHECKS = {
     "instagram": _check_instagram,
     "facebook": _check_facebook,
@@ -338,13 +410,16 @@ _CHECKS = {
 }
 
 
-def verify(platforms: Optional[list] = None, reddit_account: str = "") -> list:
+def verify(platforms: Optional[list] = None, reddit_account: str = "",
+           cfg_dict: Optional[dict] = None) -> list:
     """Read-only identity check per platform. Makes network calls."""
     names = platforms or ["instagram", "facebook", "x", "reddit"]
     results = []
     for name in names:
         if name == "reddit":
             results.append(_check_reddit(reddit_account))
+        elif name == "youtube_shorts":
+            results.append(_check_youtube_shorts(cfg_dict))
         elif name in _CHECKS:
             results.append(_CHECKS[name]())
         else:
@@ -411,7 +486,7 @@ def report(cfg_dict: dict, guard, reddit_account: str = "",
 
     print("\nLive check (read-only - asks each API who you are, posts nothing):")
     for check in verify([p for p in platforms if p != "facebook_group"],
-                        reddit_account):
+                        reddit_account, cfg_dict):
         identity = f"  as {check.identity}" if check.identity else ""
         detail = f"  ({check.detail})" if check.detail else ""
         print(f"  {check.symbol}  {check.platform:<16}{identity}{detail}")
