@@ -49,3 +49,7 @@ cookies.txt
 *.backup
 *.bak
 /clip_memory.json
+
+# Your live settings. Tracked as config.example.json instead, so a
+# pull can never collide with a switch you flipped locally.
+/auto_uploader/config.json

@@ -39,7 +39,7 @@ from datetime import datetime
 # Bump when shipping user-visible changes, so --test-config can prove
 # which build is actually running (stale extracts have silently caused
 # several confusing "the fix did nothing" runs).
-BUILD = "2026-08-15.17 a copy in progress is not finished, and a 503 is not a verdict"
+BUILD = "2026-08-15.18 your config.json is yours - git pull can never collide again"
 
 # How often --watch checks whether a deferred clip's wait is up. A minute
 # is fine: the waits themselves are 25 to 80 minutes, so the resolution
@@ -1586,7 +1586,16 @@ def main(argv=None) -> int:
     print(f"AutoBleep auto-uploader | Build: {BUILD}")
 
     config_dir = os.path.dirname(os.path.abspath(__file__))
-    cfg = load_config(os.path.join(config_dir, "config.json"), os.path.join(config_dir, ".env"))
+    # config.json is NOT tracked in git - config.example.json is. Your
+    # settings are yours, and a pull must never collide with a switch you
+    # flipped. First run copies the example across.
+    config_file = os.path.join(config_dir, "config.json")
+    example_file = os.path.join(config_dir, "config.example.json")
+    if not os.path.isfile(config_file) and os.path.isfile(example_file):
+        shutil.copyfile(example_file, config_file)
+        print(f"[Config] First run - created config.json from the example.")
+        print(f"[Config] It is yours now; git will not touch it again.")
+    cfg = load_config(config_file, os.path.join(config_dir, ".env"))
 
     # Applied to the loaded config only - config.json is never rewritten, so
     # the flag governs this run and nothing after it.
