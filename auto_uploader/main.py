@@ -39,12 +39,17 @@ from datetime import datetime
 # Bump when shipping user-visible changes, so --test-config can prove
 # which build is actually running (stale extracts have silently caused
 # several confusing "the fix did nothing" runs).
-BUILD = "2026-08-15.15 a clip is titled by what was said, not by a filing reference"
+BUILD = "2026-08-15.16 VODs dropped in downloaded_vods become clips on their own"
 
 # How often --watch checks whether a deferred clip's wait is up. A minute
 # is fine: the waits themselves are 25 to 80 minutes, so the resolution
 # that matters is "well under the shortest spacing", not "immediate".
 CLIP_DRAIN_SECONDS = 60
+
+# How often --watch looks for a VOD nobody has clipped yet. Slow on
+# purpose: the answer is almost always "none", and the work it triggers
+# is measured in minutes.
+AUTOCLIP_SECONDS = 300
 
 # Notices that are true for the whole run and would otherwise print on
 # every pass. --batch followed by --watch is one process saying the same
@@ -199,6 +204,57 @@ def _no_target(parser, args) -> int:
     print(f"          --watch{only}".ljust(52)
           + "keep running and upload what arrives")
     return 1
+
+
+def _autoclip_one(cfg) -> int:
+    """Cut clips from ONE unclipped VOD in the auto-clip folder.
+
+    One per pass, deliberately. Transcribing a two-hour VOD took 663
+    seconds on this machine, and the loop calling this is also what
+    posts the queue and uploads finished videos - ten new VODs must be
+    ten passes, not one long freeze during which nothing else happens.
+    """
+    from utils.clip_watch import next_vod, remember
+
+    clips_cfg = dict(getattr(cfg, "clips", {}) or {})
+    folder = str(clips_cfg.get("auto_clip_folder", "") or "").strip()
+    if not folder:
+        return 0
+    if not os.path.isabs(folder):
+        folder = os.path.join(cfg.project_root, folder)
+    if not os.path.isdir(folder):
+        return 0
+
+    source = next_vod(folder, cfg.general.supported_formats)
+    if not source:
+        return 0
+
+    name = os.path.basename(source)
+    print(f"\n[Clips] New VOD in {os.path.basename(folder)}: {name}")
+    print("[Clips] Cutting clips from it now. This transcribes the whole "
+          "video, so it is the slow part; posting carries on around it.")
+
+    from utils.clip_runner import make_clips, print_run
+
+    title = get_stream_title(source, "", cfg, allow_prompt=False)
+    try:
+        run = make_clips(cfg, source, title,
+                         count=clips_cfg.get("auto_clip_count") or None,
+                         notify=False, transcribe_if_needed=True)
+    except Exception as exc:
+        # Remembered anyway. A VOD that cannot be clipped would otherwise
+        # be retried on every pass forever, and the expensive part runs
+        # before most of the ways this can fail.
+        remember(folder, source, 0)
+        print(f"[Clips] {name}: {exc}")
+        return 0
+
+    print_run(run)
+    delivered = _deliver_clips(run, cfg)
+    remember(folder, source, delivered)
+    print(f"[Clips] {delivered} clip(s) from {name} delivered to "
+          f"{cfg.general.watch_folder}.")
+    return delivered
 
 
 def _deliver_clips(run, cfg) -> int:
@@ -2403,6 +2459,7 @@ def main(argv=None) -> int:
             # video arrives, because the whole point is that the wait
             # expires long after the last file did.
             next_drain = 0.0
+            next_autoclip = time.time() + 15
             while True:
                 time.sleep(1)
                 if cfg.posting and time.time() >= next_drain:
@@ -2414,6 +2471,13 @@ def main(argv=None) -> int:
                               dry_run=dry_run, quiet=True)
                     except Exception as exc:
                         print(f"[Clips] WARNING: could not post the queue: {exc}")
+
+                if time.time() >= next_autoclip:
+                    next_autoclip = time.time() + AUTOCLIP_SECONDS
+                    try:
+                        _autoclip_one(cfg)
+                    except Exception as exc:
+                        print(f"[Clips] WARNING: auto-clip failed: {exc}")
         except KeyboardInterrupt:
             print("\nStopping...")
             watcher.stop()

@@ -188,6 +188,9 @@
     "caption_template": "{title} 🤣🤣🤣💀💀💀#stackswopo\n\nYouTube: @BinScript\nRumble: rumble.com/user/BinScripts"
   },
   "clips": {
+    "_auto_clip_comment": "Any VOD dropped in auto_clip_folder is turned into clips by `--watch`, one per pass, without a command. The folder is a LIBRARY: nothing in it is moved, renamed or deleted. A .clipped.json beside it remembers what has been done, so nothing is cut twice. Set auto_clip_folder to \"\" to switch this off.",
+    "auto_clip_folder": "./downloaded_vods",
+    "auto_clip_count": 3,
     "_profile_comment": "WHICH FRAMING each clip gets. 'auto' reads the stream's own title and picks - gta/RP/fivem titles get the gameplay crop that follows the action, monkey/omegle/trolling titles get the call-pane crop, anything it cannot place keeps the whole frame rather than guessing a crop that cannot be undone. Set a name instead to force one: 'monkey', 'monkey_stack' (both people stacked), 'gta', 'whole'. --profile on the command line overrides this for one run.",
     "profile": "auto",
     "_region_comment": "The rectangle the 'monkey' profile keeps, in FRACTIONS of the frame (0-1), so it is correct at 1080p and 4K alike. x/y are the top-left corner. These are a starting guess - run --preview-crop, look at the red box in logs/crop_preview/, and nudge until the call window is inside it.",
