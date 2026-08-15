@@ -254,3 +254,134 @@ def test_a_missing_video_is_reported_as_missing(monkeypatch):
     assert channel_vods.find_on_channel(
         "https://rumble.com/user/BinScripts",
         '"copyrighting all yall plug channels" Stackswopo Stream') == ""
+
+
+# --- finding a video by its title, not its path ------------------------
+# The tool moves a stream from watch_folder to uploaded/ by itself, so
+# --forget "some title" used to fail with "File not found" on a video
+# sitting right there.
+
+class _Gen:
+    def __init__(self, watch, uploaded):
+        self.watch_folder = str(watch)
+        self.uploaded_folder = str(uploaded)
+        self.censored_folder = ""
+        self.supported_formats = [".ts", ".mp4"]
+
+
+class _Cfg:
+    def __init__(self, watch, uploaded):
+        self.general = _Gen(watch, uploaded)
+
+
+@pytest.fixture
+def library(tmp_path):
+    watch = tmp_path / "watch"
+    uploaded = tmp_path / "uploaded"
+    watch.mkdir()
+    uploaded.mkdir()
+    for name in (
+        "Stackswopo 'copyrighting all yall plug channels' 08.13.26 Full Live Stream.ts",
+        "Stackswopo 'Gaming Stream' 08.14.26 Full Live Stream.ts",
+        "Stackswopo 'reaction' 08.11.26 Full Live Stream.ts",
+    ):
+        (uploaded / name).write_bytes(b"x")
+    (watch / "notes.txt").write_text("not a video")
+    return _Cfg(watch, uploaded)
+
+
+def test_a_title_finds_the_video_it_names(library):
+    from main import _find_video
+
+    found = _find_video(library, "copyrighting all yall plug channels")
+    assert len(found) == 1
+    assert "copyrighting" in found[0]
+
+
+def test_a_real_path_is_returned_as_given(library, tmp_path):
+    from main import _find_video
+
+    path = os.path.join(library.general.uploaded_folder,
+                        "Stackswopo 'reaction' 08.11.26 Full Live Stream.ts")
+    assert _find_video(library, path) == [path]
+
+
+def test_a_title_matching_nothing_finds_nothing(library):
+    from main import _find_video
+
+    assert _find_video(library, "minecraft speedrun") == []
+
+
+def test_words_shared_by_every_recording_match_everything(library):
+    """So the caller can refuse rather than forget the wrong stream."""
+    from main import _find_video
+
+    assert len(_find_video(library, "Full Live Stream")) == 3
+
+
+def test_non_video_files_are_never_matched(library):
+    from main import _find_video
+
+    assert _find_video(library, "notes") == []
+
+
+def test_short_words_are_not_required(library):
+    """'all' and 'yall' are noise; the distinctive words carry the match."""
+    from main import _find_video
+
+    assert len(_find_video(library, "copyrighting plug channels")) == 1
+
+
+# --- a command that says how but not what ------------------------------
+
+class _Args:
+    def __init__(self, **kw):
+        self.only = self.mode = self.title = None
+        self.keep_source = self.trim_silence = False
+        for key, value in kw.items():
+            setattr(self, key, value)
+
+
+class _Parser:
+    def __init__(self):
+        self.helped = False
+
+    def print_help(self):
+        self.helped = True
+
+
+def test_only_without_a_target_names_the_missing_word(capsys):
+    from main import _no_target
+
+    parser = _Parser()
+    assert _no_target(parser, _Args(only="rumble")) == 1
+    out = capsys.readouterr().out
+    assert "--only says how to upload, not what" in out
+    assert "--file" in out and "--batch" in out and "--watch" in out
+    assert not parser.helped, "sixty lines of help is what we replaced"
+
+
+def test_the_suggested_commands_keep_the_platform(capsys):
+    from main import _no_target
+
+    _no_target(_Parser(), _Args(only="rumble"))
+    out = capsys.readouterr().out
+    assert "--batch --only rumble" in out
+
+
+def test_no_arguments_at_all_still_prints_the_help(capsys):
+    from main import _no_target
+
+    parser = _Parser()
+    assert _no_target(parser, _Args()) == 0
+    assert parser.helped
+
+
+def test_every_modifier_given_is_listed(capsys):
+    from main import _no_target
+
+    _no_target(_Parser(), _Args(only="youtube", mode="full_rumble_clean_youtube",
+                                keep_source=True))
+    out = capsys.readouterr().out
+    for flag in ("--only", "--mode", "--keep-source"):
+        assert flag in out

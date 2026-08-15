@@ -25,6 +25,7 @@ os.environ.setdefault("ABSL_MIN_LOG_LEVEL", "2")
 
 import argparse
 import json
+import re
 import shutil
 import sys
 import threading
@@ -38,7 +39,7 @@ from datetime import datetime
 # Bump when shipping user-visible changes, so --test-config can prove
 # which build is actually running (stale extracts have silently caused
 # several confusing "the fix did nothing" runs).
-BUILD = "2026-08-15.3 a Rumble upload without a link is now verified, not assumed"
+BUILD = "2026-08-15.4 --forget takes a stream title; a command missing its target says so"
 
 # How often --watch checks whether a deferred clip's wait is up. A minute
 # is fine: the waits themselves are 25 to 80 minutes, so the resolution
@@ -118,6 +119,86 @@ def _suggest_paths(cfg, basename: str, limit: int = 5) -> list:
         if len(found) >= limit:
             break
     return found
+
+
+def _words_in(text: str) -> list:
+    """The words worth matching a filename on.
+
+    Short words are dropped because they are what every recording
+    filename already shares - "all", "the", the date, "Full Live
+    Stream". Matching on those would make every VOD look like a hit.
+    """
+    parts = re.split(r"[^0-9a-z]+", (text or "").lower())
+    return [p for p in parts if len(p) >= 3]
+
+
+def _find_video(cfg, wanted: str, limit: int = 6) -> list:
+    """Resolve a path OR a remembered title to real files on disk.
+
+    A stream is known by its title long before anyone knows which folder
+    it is sitting in - the tool itself moves it from watch_folder to
+    uploaded/ - so asking for the full path back is asking the user to
+    go find what the tool already knows.
+    """
+    if not wanted:
+        return []
+    if os.path.isfile(wanted):
+        return [wanted]
+
+    exact = _suggest_paths(cfg, os.path.basename(wanted), limit)
+    if exact:
+        return exact
+
+    words = _words_in(wanted)
+    if not words:
+        return []
+    seen, found = set(), []
+    for folder in (cfg.general.watch_folder, cfg.general.uploaded_folder,
+                   cfg.general.censored_folder, os.getcwd()):
+        folder = os.path.abspath(folder or "")
+        if not folder or folder in seen or not os.path.isdir(folder):
+            continue
+        seen.add(folder)
+        for name in sorted(os.listdir(folder)):
+            path = os.path.join(folder, name)
+            if not os.path.isfile(path):
+                continue
+            if os.path.splitext(name)[1].lower() not in cfg.general.supported_formats:
+                continue
+            haystack = _words_in(name)
+            if all(w in haystack for w in words):
+                found.append(path)
+                if len(found) >= limit:
+                    return found
+    return found
+
+
+def _no_target(parser, args) -> int:
+    """Nothing to upload was named. Say which word is missing.
+
+    --only, --mode and friends say HOW to upload, never WHAT. On their
+    own they used to fall through to the full help, which buries the one
+    missing word in sixty lines of options.
+    """
+    modifiers = [name for name, value in (
+        ("--only", args.only), ("--mode", args.mode),
+        ("--title", args.title), ("--keep-source", args.keep_source),
+        ("--trim-silence", getattr(args, "trim_silence", False)),
+    ) if value]
+    if not modifiers:
+        parser.print_help()
+        return 0
+
+    only = f" --only {args.only}" if args.only else ""
+    print(f"[ERROR] {', '.join(modifiers)} says how to upload, not what.")
+    print("        Add one of these:")
+    print(f'          --file "path\\to\\video.ts"{only}'.ljust(52)
+          + "one video")
+    print(f"          --batch{only}".ljust(52)
+          + "every video in the watch folder")
+    print(f"          --watch{only}".ljust(52)
+          + "keep running and upload what arrives")
+    return 1
 
 
 def _deliver_clips(run, cfg) -> int:
@@ -1212,9 +1293,12 @@ def main(argv=None) -> int:
                         help="Upload to just one platform (youtube|rumble). The "
                              "other is skipped entirely, and 'done' means done "
                              "for the selected platform only.")
-    parser.add_argument("--forget", metavar="FILE",
-                        help="Erase this file's upload history so it can be "
-                             "retried (use --forget-platform to target one).")
+    parser.add_argument("--forget", metavar="FILE_OR_TITLE",
+                        help="Erase a video's upload history so it can be "
+                             "retried. Takes a path, or just words from the "
+                             "stream title - the tool moves videos between "
+                             "folders itself, so it looks the file up for you "
+                             "(use --forget-platform to target one platform).")
     parser.add_argument("--forget-platform", choices=("youtube", "rumble"),
                         help="With --forget, only clear this platform.")
     parser.add_argument("--health", action="store_true", help="Run disk/CPU/network health checks + temp cleanup, then exit.")
@@ -1602,28 +1686,40 @@ def main(argv=None) -> int:
         return 0
 
     if args.forget:
-        if not os.path.isfile(args.forget):
-            print(f"[ERROR] File not found: {args.forget}")
-            for path in _suggest_paths(cfg, os.path.basename(args.forget)):
-                print(f"        Did you mean: {path}")
+        matches = _find_video(cfg, args.forget)
+        if not matches:
+            print(f"[ERROR] No video found for: {args.forget}")
+            print("        Give a path, or words from the stream title.")
             return 1
+        if len(matches) > 1:
+            print(f"[ERROR] {len(matches)} videos match: {args.forget}")
+            for path in matches:
+                print(f"        {path}")
+            print("        Add more words from the title, or pass the path.")
+            return 1
+        target_file = matches[0]
+        if target_file != args.forget:
+            print(f"Matched: {target_file}")
         checker = DuplicateChecker(cfg.general.duplicate_store_path)
 
         # Filename lookup first: hashing a multi-GB video off an external
         # drive takes minutes, and the store already records the filename.
-        targets = checker.find_hashes_by_filename(args.forget)
+        targets = checker.find_hashes_by_filename(target_file)
         if not targets:
-            size_gb = os.path.getsize(args.forget) / (1024 ** 3)
+            size_gb = os.path.getsize(target_file) / (1024 ** 3)
             print(f"No record under that filename; identifying by content "
                   f"instead ({size_gb:.1f} GB to read, this can take a minute)...")
-            targets = [hash_file(args.forget)]
+            targets = [hash_file(target_file)]
 
         scope = args.forget_platform or "both platforms"
         if any(checker.forget(t, args.forget_platform) for t in targets):
-            print(f"Forgot {os.path.basename(args.forget)} ({scope}). "
-                  f"Run --file on it to upload again.")
+            print(f"Forgot {os.path.basename(target_file)} ({scope}).")
+            print(f"Upload it again with:")
+            only = f" --only {args.forget_platform}" if args.forget_platform else ""
+            print(f'    python auto_uploader/main.py --file "{target_file}"'
+                  f'{only} --keep-source')
             return 0
-        print(f"No upload history recorded for {os.path.basename(args.forget)} "
+        print(f"No upload history recorded for {os.path.basename(target_file)} "
               f"({scope}) - nothing to clear. You can run --file on it directly.")
         return 0
 
@@ -1982,6 +2078,12 @@ def main(argv=None) -> int:
                       quiet=True)
             except Exception as exc:
                 print(f"[Clips] WARNING: could not post the queue: {exc}")
+
+    # Checked before the logging and the channel fetches below, so an
+    # incomplete command answers instantly instead of spending two
+    # network round trips to tell the user a word is missing.
+    if not args.file and args.batch is None and args.watch is None and not dry_run:
+        return _no_target(parser, args)
 
     # Before anything can post, so a failure explains itself the first
     # time rather than three uploads later as a tripped breaker.
