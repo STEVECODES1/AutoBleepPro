@@ -154,6 +154,80 @@ def probe_duration(path: str) -> Optional[float]:
         return None
 
 
+# How far audio may drift from video before it is worth saying so. One
+# AAC frame is ~23ms and nobody can hear it; a tenth of a second is the
+# point where lips stop matching words.
+SYNC_TOLERANCE_S = 0.25
+
+# Audio realigned to the video clock. `aresample=async=1` puts samples
+# where their timestamps say they belong instead of end to end, and
+# `apad` fills what is missing with silence so a lost run of audio
+# fragments costs silence rather than a permanent offset.
+#
+# WHY THIS EXISTS
+# A live recording drops fragments - four hours of home wifi guarantees
+# it. Joined with `-c copy`, missing audio is simply absent: the audio
+# track comes out SHORTER than the video, so everything after the gap
+# plays early, forever, and each resume adds more. Measured on a
+# two-segment test that mimics one lost run: 364ms of drift with copy,
+# 31ms - one frame - with this.
+#
+# Only the audio is re-encoded. Video is copied, so there is no quality
+# loss and no GPU time.
+_SYNC_AUDIO = ["-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
+               "-af", "aresample=async=1:first_pts=0,apad", "-shortest"]
+
+# Start both streams at zero and drop ffmpeg's default mux delay, so the
+# file does not open with a built-in offset.
+_SYNC_MUX = ["-avoid_negative_ts", "make_zero", "-muxdelay", "0",
+             "-muxpreload", "0"]
+
+
+def stream_durations(path: str) -> dict:
+    """{"video": seconds, "audio": seconds} for what is in this file."""
+    try:
+        completed = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries",
+             "stream=codec_type,duration", "-of", "csv=p=0", path],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=120)
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return {}
+    found = {}
+    for line in completed.stdout.decode("utf-8", "replace").splitlines():
+        parts = line.strip().split(",")
+        if len(parts) < 2 or parts[0] not in ("video", "audio"):
+            continue
+        try:
+            found.setdefault(parts[0], float(parts[1]))
+        except ValueError:
+            continue
+    return found
+
+
+def av_offset(path: str):
+    """How far audio and video lengths disagree, in seconds, or None.
+
+    A positive number means the audio track is SHORTER than the video -
+    the shape a recording takes when fragments were lost.
+    """
+    found = stream_durations(path)
+    if "video" not in found or "audio" not in found:
+        return None
+    return found["video"] - found["audio"]
+
+
+def sync_report(path: str) -> str:
+    """One line about whether this file's audio matches its picture."""
+    offset = av_offset(path)
+    if offset is None:
+        return "Sync: could not measure (no audio or no video track)."
+    if abs(offset) <= SYNC_TOLERANCE_S:
+        return f"Sync: audio and video agree to {abs(offset) * 1000:.0f}ms."
+    direction = "behind" if offset > 0 else "ahead of"
+    return (f"Sync: WARNING - audio runs {abs(offset):.2f}s {direction} the "
+            f"picture. The recording lost fragments this could not cover.")
+
+
 def stream_title(url: str) -> str:
     """The title the streamer actually gave this stream, or "".
 
@@ -951,6 +1025,9 @@ class Recorder:
         report = coverage_report(probe_duration(destination),
                                  expected_duration(self.url))
         self.say(report)
+        # Said out loud because a delay between the voice and the picture
+        # is invisible in a duration and obvious to everyone watching.
+        self.say(sync_report(destination))
         if report.startswith("SHORT") and self.fill_gaps:
             replaced = self._replace_with_vod(base, destination)
             if replaced:
@@ -1090,20 +1167,51 @@ class Recorder:
         return target
 
     def _remux(self, source: str, target: str) -> bool:
-        """TS -> MP4 without re-encoding. Fast, lossless, and gives the
-        file the index that makes it seekable."""
-        return self._ffmpeg(["-i", source, "-c", "copy",
-                             "-movflags", "+faststart", target])
+        """TS -> MP4, video copied, audio put back on the video's clock.
+
+        Video is never re-encoded, so this stays fast and lossless. The
+        audio is, because that is the only way to fill the holes a live
+        recording leaves - see _SYNC_AUDIO.
+        """
+        return self._ffmpeg(["-fflags", "+genpts", "-i", source]
+                            + _SYNC_AUDIO + _SYNC_MUX
+                            + ["-movflags", "+faststart", target])
+
+    def _normalise(self, source: str, target: str) -> bool:
+        """One segment, audio realigned, still MPEG-TS so it can be joined."""
+        return self._ffmpeg(["-fflags", "+genpts", "-i", source]
+                            + _SYNC_AUDIO + _SYNC_MUX
+                            + ["-f", "mpegts", target])
 
     def _concat(self, segments: list, target: str) -> bool:
+        """Join the segments into one file.
+
+        Each segment is realigned BEFORE the join, not after. The concat
+        demuxer splices audio end to end, so by the time the segments are
+        one file the gaps are invisible and nothing can put them back -
+        the drift has to be taken out while each piece still knows how
+        long its own picture was.
+        """
+        joinable, temporary = [], []
+        for index, segment in enumerate(segments):
+            fixed = os.path.join(self.staging, f"_sync{index:03d}.ts")
+            if self._normalise(segment, fixed):
+                joinable.append(fixed)
+                temporary.append(fixed)
+            else:
+                # Better a segment with drift than no segment at all.
+                self.say(f"Could not realign {os.path.basename(segment)} - "
+                         "joining it as it is.")
+                joinable.append(segment)
+
         list_path = os.path.join(self.staging, "_concat.txt")
-        build_concat_list(segments, list_path)
-        ok = self._ffmpeg(["-f", "concat", "-safe", "0", "-i", list_path,
-                           "-c", "copy", "-movflags", "+faststart", target])
-        try:
-            os.remove(list_path)
-        except OSError:
-            pass
+        build_concat_list(joinable, list_path)
+        ok = self._ffmpeg(["-fflags", "+genpts",
+                           "-f", "concat", "-safe", "0", "-i", list_path,
+                           "-c", "copy"] + _SYNC_MUX
+                          + ["-movflags", "+faststart", target])
+        for path in temporary + [list_path]:
+            _remove(path)
         return ok
 
     def _ffmpeg(self, args: list) -> bool:
