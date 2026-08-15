@@ -39,7 +39,7 @@ from datetime import datetime
 # Bump when shipping user-visible changes, so --test-config can prove
 # which build is actually running (stale extracts have silently caused
 # several confusing "the fix did nothing" runs).
-BUILD = "2026-08-15.19 when Instagram says do not retry, stop retrying"
+BUILD = "2026-08-15.20 new settings reach a config git no longer manages"
 
 # How often --watch checks whether a deferred clip's wait is up. A minute
 # is fine: the waits themselves are 25 to 80 minutes, so the resolution
@@ -207,6 +207,68 @@ def _no_target(parser, args) -> int:
     print(f"          --watch{only}".ljust(52)
           + "keep running and upload what arrives")
     return 1
+
+
+def _fill_missing(live: dict, example: dict, path: str = "") -> list:
+    """Add keys the example has and `live` does not. Returns their names.
+
+    Values already present are NEVER touched, at any depth. The whole
+    point of an untracked config.json is that the settings in it are the
+    operator's; this only carries across settings that did not exist
+    when they last looked.
+    """
+    added = []
+    for key, value in (example or {}).items():
+        where = f"{path}.{key}" if path else key
+        if key not in live:
+            live[key] = value
+            added.append(where)
+        elif isinstance(value, dict) and isinstance(live.get(key), dict):
+            added += _fill_missing(live[key], value, where)
+    return added
+
+
+def merge_new_settings(config_file: str, example_file: str) -> list:
+    """Carry settings added since this config.json was written.
+
+    Untracking config.json stopped `git pull` colliding with a switch the
+    operator flipped. It also stopped new settings ever reaching them: a
+    config restored from a backup had no clips.auto_clip_folder, so the
+    auto-clip pass read "" and did nothing, silently, on a build that
+    supported it.
+
+    A setting that exists in the example and not here is a feature that
+    shipped after this file was last written, and copying it across is
+    the only thing that makes an untracked config safe to keep.
+    """
+    if not os.path.isfile(config_file) or not os.path.isfile(example_file):
+        return []
+    try:
+        with open(config_file, "r", encoding="utf-8") as handle:
+            live = json.load(handle)
+        with open(example_file, "r", encoding="utf-8") as handle:
+            example = json.load(handle)
+    except (OSError, ValueError):
+        return []
+    if not isinstance(live, dict) or not isinstance(example, dict):
+        return []
+
+    added = _fill_missing(live, example)
+    if not added:
+        return []
+    try:
+        temporary = config_file + ".tmp"
+        with open(temporary, "w", encoding="utf-8") as handle:
+            json.dump(live, handle, indent=2, ensure_ascii=False)
+        os.replace(temporary, config_file)
+    except OSError as exc:
+        return [f"could not save new settings: {exc}"]
+
+    shown = ", ".join(a for a in added if not a.split(".")[-1].startswith("_"))
+    if not shown:
+        return []
+    return [f"Added {len(added)} new setting(s) from this version: {shown}",
+            "Your existing settings were not changed."]
 
 
 def _autoclip_one(cfg) -> int:
@@ -1595,6 +1657,8 @@ def main(argv=None) -> int:
         shutil.copyfile(example_file, config_file)
         print(f"[Config] First run - created config.json from the example.")
         print(f"[Config] It is yours now; git will not touch it again.")
+    for line in merge_new_settings(config_file, example_file):
+        print(f"[Config] {line}")
     cfg = load_config(config_file, os.path.join(config_dir, ".env"))
 
     # Applied to the loaded config only - config.json is never rewritten, so
