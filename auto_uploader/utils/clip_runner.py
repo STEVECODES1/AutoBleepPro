@@ -42,6 +42,19 @@ class ClipRun:
     skipped_reason: str = ""
 
 
+def _is_placeholder(title: str, default_title: str) -> bool:
+    """True when this title names no particular stream.
+
+    Local rather than imported from main: main imports this module, and
+    the placeholder rule is three lines. The generated title wraps the
+    default - `"Gaming Stream" 8/14/26 Stackswopo Stream` - so the test
+    is containment, not equality.
+    """
+    text = " ".join(str(title or "").lower().split())
+    fallback = " ".join(str(default_title or "").lower().split())
+    return bool(fallback) and (not text or fallback in text)
+
+
 def _load_segments(cfg, source_path: str) -> Optional[list]:
     """Word-level segments for this video, from the censor pass's cache."""
     from utils.censor import _load_cached_words, words_cache_path
@@ -268,7 +281,16 @@ def make_clips(cfg, source_path: str, title: str,
     # follows the CONTENT instead of one global setting. Without this a
     # GTA stream went through the Monkey rectangle - the left 46% of a
     # gameplay frame, cropped for a call window that was not there.
-    clips_cfg["content_title"] = title or os.path.basename(source_path)
+    # The FILENAME joins the title here, and is not merely a fallback for
+    # when the title is empty. A VOD whose real title could not be read
+    # gets the configured placeholder - "Gaming Stream" - which is a
+    # perfectly truthy string that says nothing. Framing was then decided
+    # from it while "monkey_n_gamble_howl [v70rbpc].mp4" sat unread in
+    # the same variable, and every such clip came out `whole`.
+    stem = os.path.splitext(os.path.basename(source_path))[0]
+    default_title = str(getattr(cfg.general, "default_title", "") or "")
+    named = title and not _is_placeholder(title, default_title)
+    clips_cfg["content_title"] = f"{title} {stem}" if not named else title
     output_dir = clips_cfg.get("output_folder") or os.path.join(
         cfg.project_root, "clips")
 

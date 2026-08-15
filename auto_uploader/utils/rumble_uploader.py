@@ -326,11 +326,16 @@ class RumbleUploader:
             candidates[0].click(timeout=120_000)
             clicked_any = True
             print(f"[Rumble] Submit step {step + 1} clicked.")
-            page.wait_for_timeout(3000)
 
             # Publication confirmed - stop here. Clicking again from the
             # success page is what navigated away in earlier runs.
-            published = self._find_video_url(page, title)
+            #
+            # WAITED FOR, not glanced at. This was one fixed 3s pause,
+            # which asks Rumble to finish inside three seconds after a
+            # multi-GB upload. When it did not, the loop pressed submit a
+            # SECOND time on a form that had already gone through - the
+            # way one clip becomes two videos on the channel.
+            published = self._await_published(page, title)
             if published:
                 print(f"[Rumble] Published: {published}")
                 return published
@@ -353,6 +358,24 @@ class RumbleUploader:
         if not clicked_any:
             raise RuntimeError("No enabled submit/publish button found on the page.")
         return self._find_video_url(page, title)
+
+    # How long to let Rumble finish publishing before concluding the
+    # submit did not take. Generous on purpose: the cost of waiting too
+    # long is a slow run, and the cost of not waiting long enough is a
+    # duplicate video that has to be deleted by hand.
+    PUBLISH_WAIT_SECONDS = 25
+    PUBLISH_POLL_SECONDS = 1.5
+
+    def _await_published(self, page, title: str):
+        """Poll for the published link instead of glancing once."""
+        deadline = time.time() + self.PUBLISH_WAIT_SECONDS
+        while True:
+            found = self._find_video_url(page, title)
+            if found:
+                return found
+            if time.time() >= deadline:
+                return None
+            page.wait_for_timeout(int(self.PUBLISH_POLL_SECONDS * 1000))
 
     @staticmethod
     def _is_clickable(locator) -> bool:

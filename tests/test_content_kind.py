@@ -205,3 +205,34 @@ def test_the_thresholds_separate_real_video(tmp_path):
 
     assert kind_for_video(desktop) == "monkey"
     assert kind_for_video(alive) == "gta"
+
+
+# ── a placeholder title must not silence the filename ────────────────
+
+def test_a_placeholder_title_lets_the_filename_speak():
+    """"Gaming Stream" is a perfectly truthy string that says nothing.
+    Framing was decided from it while "monkey_n_gamble_howl.mp4" sat
+    unread in the same variable."""
+    sys.path.insert(0, os.path.join(ROOT, "auto_uploader"))
+    from utils.clip_runner import _is_placeholder
+    from autoreel.crop_strategy import profile_for_title
+
+    title = '"Gaming Stream" 8/15/26 Stackswopo Stream'
+    assert _is_placeholder(title, "Gaming Stream")
+    assert profile_for_title(title) == "whole"
+    assert profile_for_title(f"{title} monkey_n_gamble_howl [v70rbpc]") == "monkey"
+
+
+def test_a_real_title_is_not_diluted_by_the_filename():
+    sys.path.insert(0, os.path.join(ROOT, "auto_uploader"))
+    from utils.clip_runner import _is_placeholder
+
+    assert not _is_placeholder('"copyrighting all yall plug channels" 8/13/26',
+                               "Gaming Stream")
+
+
+def test_no_configured_default_means_nothing_is_a_placeholder():
+    sys.path.insert(0, os.path.join(ROOT, "auto_uploader"))
+    from utils.clip_runner import _is_placeholder
+
+    assert not _is_placeholder("anything at all", "")

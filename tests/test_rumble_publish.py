@@ -183,3 +183,59 @@ def test_submit_reaches_step_two_instead_of_stopping_on_a_stray_link(uploader):
 
     assert uploader._submit(page, REAL_TITLE) == REAL
     assert page.clicks >= 2, "the rights/terms form on step 2 never ran"
+
+
+# ── waiting for the publish, not glancing at it ──────────────────────
+
+class _SlowPage(_SubmitPage):
+    """Rumble finishes, but not within three seconds of the click.
+
+    This is a multi-GB upload; expecting the link inside one fixed pause
+    is what pressed submit a second time on a form that had already gone
+    through.
+    """
+
+    def __init__(self, polls_before_link=4):
+        super().__init__()
+        self.polls = 0
+        self.polls_before_link = polls_before_link
+
+    def evaluate(self, script):
+        if "a[href]" in script:
+            self.polls += 1
+            ready = self.clicks >= 1 and self.polls > self.polls_before_link
+            return [STRAY] + ([REAL] if ready else [])
+        if "input,textarea" in script:
+            return []
+        return ""
+
+
+def test_a_slow_publish_is_waited_for_not_clicked_again(uploader):
+    page = _SlowPage()
+    uploader._accept_terms = lambda *a, **k: None
+    uploader._select_categories = lambda *a, **k: None
+
+    assert uploader._submit(page, REAL_TITLE) == REAL
+    assert page.clicks == 1, "submitted twice - that is the duplicate video"
+
+
+def test_the_wait_gives_up_eventually(uploader, monkeypatch):
+    """A submit that truly did not take must not hang the run."""
+    page = _SlowPage(polls_before_link=10_000)
+    monkeypatch.setattr(type(uploader), "PUBLISH_WAIT_SECONDS", 0.2)
+    monkeypatch.setattr(type(uploader), "PUBLISH_POLL_SECONDS", 0.05)
+    assert uploader._await_published(page, REAL_TITLE) is None
+
+
+def test_a_link_already_there_is_returned_at_once(uploader):
+    page = _SlowPage(polls_before_link=0)
+    page.clicks = 1
+    assert uploader._await_published(page, REAL_TITLE) == REAL
+
+
+def test_the_wait_still_ignores_a_stray_link(uploader, monkeypatch):
+    page = _FakePage(anchors=[STRAY])
+    page.wait_for_timeout = lambda ms: None
+    monkeypatch.setattr(type(uploader), "PUBLISH_WAIT_SECONDS", 0.2)
+    monkeypatch.setattr(type(uploader), "PUBLISH_POLL_SECONDS", 0.05)
+    assert uploader._await_published(page, REAL_TITLE) is None
