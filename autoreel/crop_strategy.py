@@ -53,6 +53,7 @@ with --preview-crop rather than guessed.
 
 from __future__ import annotations
 
+import re
 from typing import Any, Dict, Optional
 
 CROP_CENTER = "center"
@@ -150,6 +151,17 @@ _TITLE_HINTS = (
     ("monkey", "monkey"),
     ("omegle", "monkey"),
     ("trolling", "monkey"),
+    # The site on screen beside the call. A Monkey stream is very often
+    # titled after what was being gambled rather than after the app, and
+    # those titles used to hit no hint at all and fall through to
+    # `whole` - "yoo_howl" and "monkey_n_gamble_howl" are both real.
+    ("howl", "monkey"),
+    ("gamble", "monkey"),
+    ("gambling", "monkey"),
+    ("slots", "monkey"),
+    ("casino", "monkey"),
+    ("stake", "monkey"),
+    ("roulette", "monkey"),
     ("gta", "gta"),
     ("rp", "gta"),
     ("roleplay", "gta"),
@@ -160,6 +172,12 @@ _TITLE_HINTS = (
     ("fortnite", "gta"),
     ("minecraft", "gta"),
 )
+
+# Hints that are only meaningful as whole words. "rp" inside "sharp",
+# "burp" and "corporate" sent all three to the GTA motion crop, which is
+# the wrong framing applied confidently - the worst kind. Anything short
+# enough to hide inside an ordinary word belongs here.
+_WHOLE_WORD_ONLY = frozenset({"rp", "gta", "stake"})
 
 
 def profile_for_title(title: str, fallback: str = "whole") -> str:
@@ -173,9 +191,17 @@ def profile_for_title(title: str, fallback: str = "whole") -> str:
     text = " ".join(str(title or "").lower().split())
     if not text:
         return fallback
-    best, best_at = fallback, len(text) + 1
+    # Underscores and punctuation are word breaks here: real filenames
+    # are "monkey_n_gamble_howl", not "monkey n gamble howl".
+    padded = " " + re.sub(r"[^a-z0-9]+", " ", text) + " "
+    best, best_at = fallback, len(padded) + 1
     for needle, profile in _TITLE_HINTS:
-        at = text.find(needle)
+        if needle in _WHOLE_WORD_ONLY:
+            found = re.search(rf"(?<![a-z0-9]){re.escape(needle)}(?![a-z0-9])",
+                              padded)
+            at = found.start() if found else -1
+        else:
+            at = padded.find(needle)
         if at >= 0 and at < best_at:
             best, best_at = profile, at
     return best

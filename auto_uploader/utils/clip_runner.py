@@ -295,8 +295,20 @@ def make_clips(cfg, source_path: str, title: str,
     if str(clips_cfg.get("profile", "")).strip().lower() == "auto":
         from autoreel.crop_strategy import profile_for_title
 
-        chosen = profile_for_title(clips_cfg["content_title"])
-        print(f"[Clips] Framing chosen from the title: {chosen} "
+        chosen = profile_for_title(clips_cfg["content_title"], fallback="")
+        if chosen:
+            source_of_choice = "the title"
+        else:
+            # "yoo_howl" and "culture" are both real recordings here and
+            # neither says which kind it is. Rather than fall straight to
+            # `whole` and waste most of the frame, look at the picture.
+            from autoreel.content_kind import profile_for
+
+            chosen = profile_for(source_path, title="", fallback="whole")
+            source_of_choice = ("the picture" if chosen != "whole"
+                                else "nothing - keeping the whole frame")
+        clips_cfg["profile"] = chosen
+        print(f"[Clips] Framing chosen from {source_of_choice}: {chosen} "
               f"({resolve_crop_strategy({'clips': clips_cfg})} crop)")
 
     maker = ClipMaker(
