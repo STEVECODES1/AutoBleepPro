@@ -58,6 +58,47 @@ WINDOW_SECONDS = 24 * 60 * 60
 
 DEFAULT_KILL_SWITCH_FILE = "STOP_POSTING"
 
+# The cap key. "max_per_day" is here because a platform block was once
+# written with that name, nothing read it, and the guard reported
+# "unlimited" for a platform whose config plainly said 3 - a typo in a
+# key is invisible, and reads as "no limit" precisely where a limit was
+# meant.
+CAP_KEYS = ("daily_cap", "max_per_day")
+
+# Everything a platform block may contain. Anything else is a typo, and
+# saying so is the only way a silently-ignored limit gets noticed.
+KNOWN_PLATFORM_KEYS = frozenset({
+    "enabled", "daily_cap", "max_per_day", "min_minutes_between",
+    "manual_approval_only", "_comment", "_note",
+})
+
+# Used when a platform is switched on but names no cap at all. NOT
+# unlimited: an enabled platform with no stated limit is far more likely
+# to be an oversight than a decision to post without bound.
+FALLBACK_DAILY_CAP = 5
+
+
+def daily_cap_of(settings: dict) -> int:
+    """This platform's daily cap, where 0 means no limit.
+
+    An explicit 0 is honoured: writing it is a decision. A MISSING cap on
+    an enabled platform is not a decision, it is an oversight, and the
+    two used to be indistinguishable - which is how a block that plainly
+    said 3 ran unlimited for a week under a key nothing read.
+    """
+    settings = settings or {}
+    for key in CAP_KEYS:
+        if key in settings:
+            return int(settings.get(key) or 0)
+    if settings.get("enabled", False):
+        return FALLBACK_DAILY_CAP
+    return 0
+
+
+def unknown_keys(settings: dict) -> list:
+    """Keys in a platform block that nothing reads."""
+    return sorted(k for k in (settings or {}) if k not in KNOWN_PLATFORM_KEYS)
+
 
 @dataclass
 class Decision:
@@ -239,7 +280,7 @@ class PublishGuard:
                 "level - fix it, then clear with reset_failures()")
 
         recent = self._recent_posts(platform, now)
-        cap = int(settings.get("daily_cap", 0) or 0)
+        cap = daily_cap_of(settings)
         if cap > 0 and len(recent) >= cap:
             oldest = recent[0]
             wait = max(0.0, (oldest + WINDOW_SECONDS) - now)

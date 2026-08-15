@@ -456,8 +456,17 @@ def report(cfg_dict: dict, guard, reddit_account: str = "",
           "to stop everything, including a running --watch")
 
     print("\nPer platform (the guard's actual verdict right now):")
+    from publish_guard import unknown_keys
+
     for name, allowed, reason in guard.status(platforms):
         print(f"  {'ALLOW' if allowed else 'BLOCK'}  {name:<16} {reason}")
+        # A misspelled key reads as "no limit" exactly where a limit was
+        # meant, and looks identical to a working config until something
+        # posts twenty times.
+        stray = unknown_keys((posting.get("platforms") or {}).get(name) or {})
+        if stray:
+            print(f"         {'':<16} WARNING: nothing reads "
+                  f"{', '.join(stray)} - check the spelling.")
         if allowed and name in NO_LINK_POST:
             # ALLOW on its own reads as "this will post", and for
             # Instagram it does not: the guard permits it, and the

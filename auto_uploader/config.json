@@ -167,7 +167,7 @@
       "youtube_shorts": {
         "_comment": "OFF until you have reviewed a private batch. Caps are deliberately low: twenty clips from one VOD posted in an afternoon is what 'repetitious content' means in YouTube's policy, whoever made them.",
         "enabled": false,
-        "max_per_day": 3,
+        "daily_cap": 3,
         "min_minutes_between": 180
       }
     },

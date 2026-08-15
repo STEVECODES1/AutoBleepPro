@@ -150,6 +150,6 @@ def test_it_ships_off_with_low_caps():
     settings = config["posting"]["platforms"]["youtube_shorts"]
 
     assert settings["enabled"] is False
-    assert settings["max_per_day"] <= 5
+    assert settings["daily_cap"] <= 5
     assert settings["min_minutes_between"] >= 60
     assert config["youtube_shorts"]["privacy"] == "private"
