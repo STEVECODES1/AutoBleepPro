@@ -69,9 +69,23 @@ CROP_REGION = "region"
 # half the height. No single crop can produce it - a crop keeps one
 # rectangle - which is why every rectangle tried so far looked wrong.
 CROP_STACK = "stack"
+# A measured rectangle that MOVES, following the people inside it.
+#
+# Deliberately not CROP_FACE. That constant means the per-frame moviepy
+# renderer, every profile is tested against ever becoming it, and the
+# gameplay rule that face tracking never touches GTA is permanent. This
+# is a different thing: a fixed-size box, measured once from the call
+# pane, whose centre is walked along a damped path by sendcmd - the same
+# transport the gameplay motion crop already uses.
+#
+# It is off unless asked for. face_region's own docstring argues a
+# moving crop on a two-person call "swings between them every time
+# someone talks", and that reasoning has not stopped being true - the
+# damping below is what makes it survivable, not a proof it is better.
+CROP_FACE_PAN = "face_pan"
 
 VALID_STRATEGIES = (CROP_CENTER, CROP_MOTION, CROP_FACE, CROP_FIT,
-                    CROP_REGION, CROP_STACK)
+                    CROP_REGION, CROP_STACK, CROP_FACE_PAN)
 
 # The rectangle REGION keeps, as fractions of the source width and
 # height. The default points at the right-hand third, full height, which
@@ -113,7 +127,15 @@ PROFILES: Dict[str, Dict[str, Any]] = {
     # One call pane, framed on whoever is in it. This is the layout the
     # channel actually records: monkey.app on the left of the screen,
     # howl.gg on the right, and the clip is the call.
-    "monkey": {"crop_strategy": CROP_REGION, "crop_region": DEFAULT_REGION,
+    #
+    # FACE_PAN rather than REGION: the box is still measured from the
+    # call pane and still held at one size, but its centre is allowed to
+    # walk. A person who stands up, leans out or swaps seats mid-clip was
+    # ending up at the edge of a frame that was mostly wall, because one
+    # rectangle for a whole minute can only be right about the average.
+    # When nobody moves far enough to matter the path is refused and this
+    # renders as the static rectangle it always was.
+    "monkey": {"crop_strategy": CROP_FACE_PAN, "crop_region": DEFAULT_REGION,
                "content_region": DEFAULT_CONTENT_REGION},
     # Both people stacked, for a stream where the camera is a separate
     # pane from the call - the layout the hand-made CapCut edits use.

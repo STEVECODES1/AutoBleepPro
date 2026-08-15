@@ -202,7 +202,8 @@ def is_worth_moving(path: Sequence) -> bool:
     return (max(positions) - min(positions)) > DEADZONE
 
 
-def commands_file(path: Sequence, crop_width_expr: str = "") -> str:
+def commands_file(path: Sequence, crop_width_expr: str = "",
+                  crop_height_expr: str = "") -> str:
     """The sendcmd script that walks the crop across the frame.
 
     ffmpeg's crop filter accepts `x` as a runtime command, so the pan is
@@ -214,10 +215,21 @@ def commands_file(path: Sequence, crop_width_expr: str = "") -> str:
     same file is correct at 1080p and 4K.
     """
     lines = []
-    for seconds, centre in path:
+    for entry in path:
+        # A gameplay path is (t, x): a 16:9 source cut to 9:16 has no
+        # vertical slack to pan into. A face path inside the call pane
+        # is (t, x, y) - that pane is 0.90 of the frame tall, so there
+        # is real room to move, and a face that stands up leaves a crop
+        # that only tracks sideways.
+        seconds, centre = entry[0], entry[1]
+        vertical = entry[2] if len(entry) > 2 else None
         # x is the LEFT edge; centre minus half the crop width, clamped
         # inside the frame by the expression itself so a value near an
         # edge cannot produce an invalid crop.
         left = f"clip(iw*{centre:.4f}-{crop_width_expr}/2,0,iw-{crop_width_expr})"
         lines.append(f"{seconds:.2f} crop x '{left}';")
+        if vertical is not None and crop_height_expr:
+            top = (f"clip(ih*{vertical:.4f}-{crop_height_expr}/2,0,"
+                   f"ih-{crop_height_expr})")
+            lines.append(f"{seconds:.2f} crop y '{top}';")
     return "\n".join(lines) + ("\n" if lines else "")

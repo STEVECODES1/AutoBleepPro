@@ -282,33 +282,33 @@ def _cover(boxes: list) -> Optional[dict]:
             "width": round(right - left, 4), "height": round(bottom - top, 4)}
 
 
-def region_for(source: str, start: float, duration: float,
-               within: Optional[dict] = None) -> Optional[dict]:
-    """The rectangle the people are in, or None if none were found.
+def _measure(source: str, start: float, duration: float,
+             within: Optional[dict] = None,
+             count: int = SAMPLE_COUNT) -> list:
+    """Faces per still, in order: [[(x,y,w,h), ...], ...].
 
-    `within` confines the search to one part of the frame - the call
-    pane - so nothing outside it can be framed. None is a normal answer
-    (gameplay, a loading screen, everyone off camera) and the caller
-    keeps whatever rectangle it already had.
+    One ffmpeg call and one detector for both callers. region_for wants
+    the whole list collapsed to a rectangle; path_for wants it kept in
+    order, and neither should be paying for its own pass over the video.
     """
     if not have_mediapipe() or not shutil.which("ffmpeg"):
-        return None
+        return []
     _quiet_tensorflow()
 
     workspace = tempfile.mkdtemp(prefix="faces_")
     try:
         try:
             subprocess.run(sample_args(source, start, duration, workspace,
-                                       within=within),
+                                       count=count, within=within),
                            timeout=_TIMEOUT, stdout=subprocess.DEVNULL,
                            stderr=subprocess.DEVNULL)
         except (OSError, subprocess.TimeoutExpired):
-            return None
+            return []
 
         stills = sorted(name for name in os.listdir(workspace)
                         if name.endswith(".png"))
         if not stills:
-            return None
+            return []
 
         import mediapipe as mp
 
@@ -321,7 +321,7 @@ def region_for(source: str, start: float, duration: float,
                 min_detection_confidence=0.5)
             detector = mp.tasks.vision.FaceDetector.create_from_options(options)
         except Exception:
-            return None
+            return []
 
         # Grouped per still, NOT flattened: which faces were on screen
         # together is the difference between framing a two-person call
@@ -335,10 +335,162 @@ def region_for(source: str, start: float, duration: float,
                 detector.close()
             except Exception:
                 pass
-
-        found = _steady_box(boxes)
-        # Measured inside the crop, so it has to be mapped back before
-        # anyone uses it against the whole frame.
-        return _to_whole_frame(found, within) if (found and within) else found
+        return boxes
     finally:
         shutil.rmtree(workspace, ignore_errors=True)
+
+
+def region_for(source: str, start: float, duration: float,
+               within: Optional[dict] = None) -> Optional[dict]:
+    """The rectangle the people are in, or None if none were found.
+
+    `within` confines the search to one part of the frame - the call
+    pane - so nothing outside it can be framed. None is a normal answer
+    (gameplay, a loading screen, everyone off camera) and the caller
+    keeps whatever rectangle it already had.
+    """
+    found = _steady_box(_measure(source, start, duration, within))
+    # Measured inside the crop, so it has to be mapped back before
+    # anyone uses it against the whole frame.
+    return _to_whole_frame(found, within) if (found and within) else found
+
+
+# ── a path, for when the crop is allowed to move ─────────────────────
+#
+# Everything below is OFF unless a profile asks for CROP_FACE_PAN. The
+# static rectangle above is still the default, and the argument for it -
+# that a crop which moves on a two-person call swings between them every
+# time someone talks - has not stopped being true. What follows is the
+# damping that makes moving survivable when it is asked for.
+
+# Stills per second for a path. sendcmd STEPS between values rather than
+# interpolating, so keyframes 7 seconds apart do not glide, they lurch -
+# which is worse than not moving at all. Two a second is the floor that
+# reads as movement rather than as cuts.
+PATH_FPS = 2.0
+
+# Never more than this many stills for one clip, whatever its length.
+# Each one is a mediapipe pass; a 60s clip at 2fps is already 120 of
+# them, and this is on top of transcription.
+MAX_PATH_SAMPLES = 120
+
+# Below this much movement the crop stays exactly where it is. Copied in
+# spirit from motion_region.DEADZONE: a crop that answers every small
+# head movement is the seasick one.
+PATH_DEADZONE = 0.02
+
+# The most the crop may travel in a second, as a fraction of the frame.
+# This is the whole difference between following someone and snapping to
+# whoever just spoke.
+MAX_PAN_PER_S = 0.10
+
+# How hard the raw centres are smoothed before any of that. Low means
+# heavy smoothing.
+PATH_SMOOTHING = 0.25
+
+
+def _centres(per_still: list) -> list:
+    """The centre of each still's people, holding through empty stills.
+
+    A still with nobody in it is not a reason to move - it is a moment
+    when somebody turned away from the camera. Jumping to nothing and
+    back is exactly the twitch this is meant to avoid.
+    """
+    centres, last = [], None
+    for boxes in per_still:
+        found = _cover(boxes) if boxes else None
+        if found:
+            last = (found["x"] + found["width"] / 2,
+                    found["y"] + found["height"] / 2)
+        centres.append(last)
+    # Anything before the first face is that first face's position: the
+    # crop should already be where the person is when the clip opens.
+    first = next((c for c in centres if c), None)
+    return [c or first for c in centres]
+
+
+def pan_path(per_still: list, fps: float = PATH_FPS) -> list:
+    """[(seconds, centre_x, centre_y)], smoothed, deadzoned, speed-capped.
+
+    Same shape as motion_region.pan_path and for the same reason: raw
+    positions are jittery, and a crop that copies them is unwatchable.
+    """
+    centres = [c for c in _centres(per_still)]
+    if not any(centres):
+        return []
+
+    per_frame = MAX_PAN_PER_S / max(0.001, fps)
+    smooth_x = smooth_y = None
+    x, y = centres[0]
+    path = []
+    for index, centre in enumerate(centres):
+        if centre:
+            target_x, target_y = centre
+            smooth_x = (target_x if smooth_x is None else
+                        smooth_x + PATH_SMOOTHING * (target_x - smooth_x))
+            smooth_y = (target_y if smooth_y is None else
+                        smooth_y + PATH_SMOOTHING * (target_y - smooth_y))
+        if smooth_x is not None:
+            for axis, target in (("x", smooth_x), ("y", smooth_y)):
+                current = x if axis == "x" else y
+                gap = target - current
+                if abs(gap) > PATH_DEADZONE:
+                    step = max(-per_frame, min(per_frame, gap))
+                    current += step
+                if axis == "x":
+                    x = current
+                else:
+                    y = current
+        path.append((round(index / fps, 3),
+                     round(min(1.0, max(0.0, x)), 4),
+                     round(min(1.0, max(0.0, y)), 4)))
+    return path
+
+
+def is_worth_moving(path) -> bool:
+    """False when the path never really leaves where it started.
+
+    A path that sits still is a static crop written the expensive way,
+    and rendering it through sendcmd adds a filter, a temp file and a way
+    to fail for no visible difference.
+    """
+    path = list(path)
+    if len(path) < 2:
+        return False
+    xs = [x for _, x, _ in path]
+    ys = [y for _, _, y in path]
+    return ((max(xs) - min(xs)) > PATH_DEADZONE
+            or (max(ys) - min(ys)) > PATH_DEADZONE)
+
+
+def path_for(source: str, start: float, duration: float,
+             within: Optional[dict] = None) -> tuple:
+    """(size, path) for a moving face crop, or (None, []) for none.
+
+    `size` is ONE rectangle measured across the whole clip and held for
+    all of it - only the centre moves. A per-still size produces a crop
+    that breathes in and out, which reads as a fault rather than as
+    camerawork.
+
+    Both are in whole-frame fractions, so the caller does not have to
+    know the search was confined to the call pane.
+    """
+    count = int(min(MAX_PATH_SAMPLES, max(2, round(duration * PATH_FPS))))
+    per_still = _measure(source, start, duration, within, count=count)
+    if not per_still:
+        return None, []
+
+    size = _steady_box(per_still)
+    if not size:
+        return None, []
+    path = pan_path(per_still, fps=count / max(0.001, duration))
+    if not is_worth_moving(path):
+        return None, []
+
+    if within:
+        size = _to_whole_frame(size, within)
+        path = [(t,
+                 round(within["x"] + cx * within["width"], 4),
+                 round(within["y"] + cy * within["height"], 4))
+                for t, cx, cy in path]
+    return size, path

@@ -95,6 +95,54 @@ def test_the_motion_crop_renders(source, tmp_path):
     assert _describe(out) == ("1080,1920", "aac")
 
 
+def test_the_face_pan_renders(source, tmp_path):
+    """The moving Monkey crop. Same class of bug is available here - the
+    crop's width, height, x AND y are all expressions driven by sendcmd,
+    and clip() takes three comma-separated arguments, so an unquoted one
+    splits the chain exactly the way min() did."""
+    from autoreel.face_region import path_for  # noqa: F401  (shape check)
+    from autoreel.motion_region import commands_file
+
+    region = {"x": 0.03, "y": 0.05, "width": 0.46, "height": 0.90}
+    commands = tmp_path / "face.cmds"
+    commands.write_text(commands_file(
+        [(0.0, 0.20, 0.40), (1.0, 0.26, 0.48), (2.0, 0.33, 0.55)],
+        f"iw*{region['width']:.4f}", f"ih*{region['height']:.4f}"))
+    out = str(tmp_path / "face_pan.mp4")
+
+    render_clip(source, ClipSpec(1.0, 4.0, 1), out, "face_pan", None,
+                "libx264", "ultrafast", 30, region,
+                motion_commands=str(commands))
+
+    assert _describe(out) == ("1080,1920", "aac")
+
+
+def test_a_face_pan_with_captions_renders(source, tmp_path):
+    """sendcmd, a moving crop and burned subtitles in one chain. Each is
+    fine alone; the order they compose in is not something a string test
+    can tell you is legal."""
+    from autoreel.captions import STYLE_WORD, caption_file_for_clip
+    from autoreel.motion_region import commands_file
+
+    region = {"x": 0.03, "y": 0.05, "width": 0.46, "height": 0.90}
+    ass = caption_file_for_clip(
+        str(tmp_path / "f.ass"),
+        [{"start": 1.0, "end": 4.0,
+          "words": [{"word": "yo", "start": 1.0, "end": 1.5}]}],
+        1.0, 4.0, style=STYLE_WORD, uppercase=True)
+    commands = tmp_path / "face2.cmds"
+    commands.write_text(commands_file(
+        [(0.0, 0.20, 0.40), (1.5, 0.30, 0.52)],
+        f"iw*{region['width']:.4f}", f"ih*{region['height']:.4f}"))
+    out = str(tmp_path / "face_pan_captioned.mp4")
+
+    render_clip(source, ClipSpec(1.0, 4.0, 1), out, "face_pan", ass,
+                "libx264", "ultrafast", 30, region,
+                motion_commands=str(commands))
+
+    assert _describe(out) == ("1080,1920", "aac")
+
+
 def test_burned_captions_render_and_are_censored(source, tmp_path):
     """The words reach the screen, and the flagged ones do not."""
     from autoreel.captions import STYLE_WORD, caption_file_for_clip

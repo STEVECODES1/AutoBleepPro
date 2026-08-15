@@ -40,6 +40,7 @@ from . import face_region, motion_region
 from .crop_strategy import (
     CROP_CENTER,
     CROP_FACE,
+    CROP_FACE_PAN,
     CROP_FIT,
     CROP_MOTION,
     CROP_REGION,
@@ -395,6 +396,35 @@ def motion_crop_filter(commands_path: str) -> str:
             "setsar=1")
 
 
+def face_pan_filter(commands_path: str, region: dict) -> str:
+    """A measured rectangle whose position is walked by sendcmd.
+
+    Different from motion_crop_filter in the one way that matters: the
+    crop is the SIZE OF THE MEASURED BOX, not a 9:16 slice of the whole
+    frame. Reusing the motion filter here would pan a full-height strip
+    across the entire desktop, browser included - the call pane is a
+    rectangle inside the frame, and its size is the whole point.
+
+    Only the position moves. The size is fixed for the clip because a
+    crop that resizes as it goes reads as a fault rather than as
+    camerawork.
+    """
+    width = f"iw*{region['width']:.4f}"
+    height = f"ih*{region['height']:.4f}"
+    # Where it sits before the first sendcmd line fires - the measured
+    # box's own corner, so the opening frame is already right even if
+    # the path starts late.
+    x = f"iw*{region['x']:.4f}"
+    y = f"ih*{region['y']:.4f}"
+    # Every expression quoted, for the reason spelled out in
+    # motion_crop_filter: a comma inside an expression is a filter
+    # separator to ffmpeg's parser.
+    return (f"sendcmd=f='{escape_filter_path(commands_path)}',"
+            f"crop='{width}':'{height}':'{x}':'{y}',"
+            f"scale={VERTICAL_WIDTH}:{VERTICAL_HEIGHT}:flags=bicubic,"
+            "setsar=1")
+
+
 def build_filter(strategy: str = CROP_CENTER,
                  caption_path: Optional[str] = None,
                  region: Optional[dict] = None,
@@ -404,7 +434,13 @@ def build_filter(strategy: str = CROP_CENTER,
 
     Order: crop/fit  ->  captions (optional)  ->  watermark.
     """
-    if motion_commands:
+    if motion_commands and strategy == CROP_FACE_PAN and region:
+        # The region is NOT discarded here. motion_crop_filter ignores it
+        # by design - gameplay pans across the whole frame - and reusing
+        # that branch for a face path would throw away the call pane and
+        # pan across the desktop.
+        chain = face_pan_filter(motion_commands, region)
+    elif motion_commands:
         chain = motion_crop_filter(motion_commands)
     else:
         chain = crop_filter(strategy, region)
@@ -806,7 +842,7 @@ class ClipMaker:
             # stands.
             region = self.region
             clip_strategy = strategy
-            if strategy == CROP_REGION and self.find_faces:
+            if strategy in (CROP_REGION, CROP_FACE_PAN) and self.find_faces:
                 # Said ONCE per run, not per clip. Without mediapipe every
                 # clip falls back to the fixed call-pane rectangle and the
                 # person drifts out of it, and the only sign was the crop
@@ -816,9 +852,33 @@ class ClipMaker:
                         "[Clips] Face framing is OFF - mediapipe is not "
                         "installed, so the crop cannot follow anyone. "
                         "Install it with:  pip install mediapipe")
-                measured = face_region.region_for(
-                    source_path, spec.start, spec.end - spec.start,
-                    within=self.content_region)
+                measured = None
+                if strategy == CROP_FACE_PAN:
+                    # Ask for a path first. It answers (None, []) for a
+                    # clip where nobody moves far enough to be worth
+                    # following, and that answer is the common one - a
+                    # call where both people sit still is exactly the
+                    # case a moving crop makes worse, not better.
+                    size, path = face_region.path_for(
+                        source_path, spec.start, spec.end - spec.start,
+                        within=self.content_region)
+                    if size and path:
+                        measured = size
+                        motion_commands = os.path.join(
+                            self.output_dir,
+                            f".{safe_stem(basename)}_clip{spec.index:02d}.cmds")
+                        with open(motion_commands, "w", encoding="utf-8") as f:
+                            f.write(motion_region.commands_file(
+                                path,
+                                f"iw*{size['width']:.4f}",
+                                f"ih*{size['height']:.4f}"))
+                if measured is None:
+                    # No path, or not this strategy: the static rectangle,
+                    # measured the same way it always was.
+                    clip_strategy = CROP_REGION
+                    measured = face_region.region_for(
+                        source_path, spec.start, spec.end - spec.start,
+                        within=self.content_region)
                 if measured:
                     region = measured
                 elif self.content_region:
@@ -857,6 +917,11 @@ class ClipMaker:
             finally:
                 if caption_path:
                     _remove(caption_path)
+                # The sendcmd script is scratch too, and it was never
+                # cleaned - a hidden .cmds beside every gameplay clip,
+                # left behind for the life of the folder.
+                if motion_commands:
+                    _remove(motion_commands)
             results.append(ClipResult(output_path, spec, bool(caption_path),
                                       strategy, self.encoder))
 
