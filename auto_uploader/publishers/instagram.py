@@ -25,6 +25,8 @@ import os
 import time
 from typing import Any, Dict, Optional
 
+from .errors import PermanentlyRejected, is_permanent_rejection
+
 log = logging.getLogger("publisher.instagram")
 
 try:
@@ -217,6 +219,18 @@ class InstagramPublisher:
             # cost an evening.
             log.error("Instagram: upload rejected (HTTP %s): %s",
                       status, _why(r))
+            # Meta answers a Reel it cannot process with
+            # `'retriable': False`. That is a considered statement, and
+            # ignoring it cost three identical uploads of one clip inside
+            # a single drain, each rejected identically.
+            try:
+                payload = r.json()
+            except Exception:
+                payload = None
+            if is_permanent_rejection(payload):
+                raise PermanentlyRejected(
+                    f"Instagram will not process this video "
+                    f"(HTTP {status}): {_why(r)}")
             return False
         log.info("Instagram: uploaded %.1f MB for container %s",
                  size / 1e6, container_id)

@@ -51,3 +51,38 @@ def is_configuration_problem(code, message: str = "") -> bool:
         pass
     lowered = (message or "").lower()
     return any(phrase in lowered for phrase in _CONFIG_PHRASES)
+
+
+class PermanentlyRejected(Exception):
+    """The platform looked at this specific video and said no.
+
+    Distinct from NotConfigured, which is about the account, and from a
+    plain failure, which is worth trying again. Meta answers a Reel it
+    cannot process with `'retriable': False` in the body - a considered
+    statement that repeating the request changes nothing.
+
+    Ignoring that field cost three identical uploads of one clip inside a
+    single drain, each rejected the same way. Retrying against an
+    explicit "do not retry" is not persistence, it is hammering an API
+    that already answered.
+    """
+
+
+def is_permanent_rejection(payload) -> bool:
+    """True when Meta says retrying this upload cannot help.
+
+    Reads `retriable` wherever it sits: Meta nests it under debug_info
+    for a Reel, and at the top level elsewhere. Absent means unknown,
+    which stays retriable - the ceiling and the breaker already bound
+    that case, and treating silence as permanent would abandon clips
+    over a dropped connection.
+    """
+    if not isinstance(payload, dict):
+        return False
+    for holder in (payload,
+                   payload.get("error") or {},
+                   (payload.get("debug_info") or {}),
+                   ((payload.get("error") or {}).get("debug_info") or {})):
+        if isinstance(holder, dict) and holder.get("retriable") is False:
+            return True
+    return False

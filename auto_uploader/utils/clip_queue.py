@@ -98,7 +98,7 @@ def publish(platform: str, video_path: str, caption: str,
     Raises NotConfigured when the platform refuses for a reason no retry
     can fix - a missing token scope, most often.
     """
-    from publishers.errors import NotConfigured
+    from publishers.errors import NotConfigured, PermanentlyRejected
     if not os.path.isfile(video_path):
         print(f"[Clips] {platform}: the clip is gone: {video_path}")
         return False
@@ -118,7 +118,9 @@ def publish(platform: str, video_path: str, caption: str,
     if hasattr(publisher, "post_clip"):
         try:
             posted = publisher.post_clip(video_path, caption, dry_run)
-        except NotConfigured:
+        except (NotConfigured, PermanentlyRejected):
+            # Both mean "a retry cannot help", for different reasons.
+            # Neither may be swallowed by the catch-all below.
             raise
         except Exception as exc:
             print(f"[Clips] {platform}: {exc}")
@@ -151,9 +153,10 @@ def publish(platform: str, video_path: str, caption: str,
         ok = bool(publisher.post_reel_from_file(
             upload_path, caption,
             share_to_feed=bool(settings.get("share_to_feed", True))))
-    except NotConfigured as exc:
-        # Re-raised for the caller to treat as "not set up yet" rather
-        # than a failed post - see publishers/errors.
+    except (NotConfigured, PermanentlyRejected):
+        # Re-raised for the caller to treat as "not set up yet" or "this
+        # video will never be accepted" rather than a failed post - see
+        # publishers/errors. The catch-all below must not see either.
         raise
     except Exception as exc:
         ok = False
@@ -175,7 +178,7 @@ def offer(posting: dict, config: dict, video_path: str,
     Returns {platform: "posted" | "queued" | "skipped: reason"}.
     """
     from publish_guard import PublishGuard
-    from publishers.errors import NotConfigured
+    from publishers.errors import NotConfigured, PermanentlyRejected
 
     outcome: dict = {}
     if not posting or not video_path:
@@ -242,6 +245,17 @@ def offer(posting: dict, config: dict, video_path: str,
             # what tells you whether to look at the code or at a token.
             _journal(config, "wait", platform, video_path, str(exc))
             continue
+        except PermanentlyRejected as exc:
+            # The platform read this video and refused it. Not a failure
+            # to record against the breaker either - the account is fine,
+            # this one file is not.
+            queue.abandon(job_id, str(exc))
+            outcome[platform] = "skipped: rejected"
+            print(f"[Clips] {platform}: will not accept "
+                  f"{os.path.basename(video_path)} - {exc}")
+            _journal(config, "FAIL", platform, video_path,
+                     "the platform will not process this video")
+            continue
         if dry_run:
             queue.block(job_id, "dry run", 300)
             outcome[platform] = "posted"
@@ -273,7 +287,7 @@ def drain(posting: dict, config: dict, limit: int = 0,
     Returns {platform: posted_count}.
     """
     from publish_guard import PublishGuard
-    from publishers.errors import NotConfigured
+    from publishers.errors import NotConfigured, PermanentlyRejected
 
     posted: dict = {}
     if not posting:
@@ -323,6 +337,15 @@ def drain(posting: dict, config: dict, limit: int = 0,
             queue.block(job.id, str(exc), MAX_DEFERRED_AGE_S)
             if not quiet:
                 print(f"[Clips] {job.platform}: held - {exc}")
+            continue
+        except PermanentlyRejected as exc:
+            # The platform looked at this video and said no. Retrying
+            # against an explicit "do not retry" is not persistence.
+            queue.abandon(job.id, str(exc), now=now)
+            _journal(config, "FAIL", job.platform, job.clip_path,
+                     "the platform will not process this video")
+            print(f"[Clips] {job.platform}: giving up on "
+                  f"{os.path.basename(job.clip_path)} - {exc}")
             continue
         if dry_run:
             # Put it back with a real wait: a zero would make it eligible
