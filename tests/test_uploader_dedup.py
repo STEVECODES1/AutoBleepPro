@@ -385,3 +385,32 @@ def test_every_modifier_given_is_listed(capsys):
     out = capsys.readouterr().out
     for flag in ("--only", "--mode", "--keep-source"):
         assert flag in out
+
+
+def test_the_same_video_in_two_folders_is_not_ambiguous(library):
+    """watch_folder and uploaded/ hold the same file - this tool put it
+    in both. Upload history is keyed on the filename, so either copy
+    clears the same record and there is nothing for the user to decide."""
+    from main import _find_video
+
+    name = "Stackswopo 'copyrighting all yall plug channels' 08.13.26 Full Live Stream.ts"
+    watch = os.path.join(library.general.watch_folder, name)
+    with open(watch, "wb") as handle:
+        handle.write(b"x")
+
+    found = _find_video(library, "copyrighting all yall plug channels")
+    assert len(found) == 2
+    assert len({os.path.basename(p) for p in found}) == 1
+
+
+def test_two_genuinely_different_videos_stay_ambiguous(library):
+    from main import _find_video
+
+    other = os.path.join(
+        library.general.watch_folder,
+        "Stackswopo 'copyrighting plug channels again' 08.15.26 Full Live Stream.ts")
+    with open(other, "wb") as handle:
+        handle.write(b"x")
+
+    found = _find_video(library, "copyrighting plug channels")
+    assert len({os.path.basename(p) for p in found}) == 2

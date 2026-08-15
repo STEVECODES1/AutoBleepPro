@@ -39,7 +39,7 @@ from datetime import datetime
 # Bump when shipping user-visible changes, so --test-config can prove
 # which build is actually running (stale extracts have silently caused
 # several confusing "the fix did nothing" runs).
-BUILD = "2026-08-15.6 Rumble stopped after step 1 on a sidebar link and never published"
+BUILD = "2026-08-15.7 the same video in two folders is not an ambiguous --forget"
 
 # How often --watch checks whether a deferred clip's wait is up. A minute
 # is fine: the waits themselves are 25 to 80 minutes, so the resolution
@@ -1705,12 +1705,21 @@ def main(argv=None) -> int:
             print(f"[ERROR] No video found for: {args.forget}")
             print("        Give a path, or words from the stream title.")
             return 1
-        if len(matches) > 1:
-            print(f"[ERROR] {len(matches)} videos match: {args.forget}")
+        # The same video in watch_folder AND uploaded/ is not ambiguity -
+        # it is this tool's own filing. It moves a video between those two
+        # folders, and upload history is keyed on the filename, so both
+        # copies clear the very same record. Refusing there sent the user
+        # to type out a 90-character path for no decision at all.
+        names = {os.path.basename(p) for p in matches}
+        if len(names) > 1:
+            print(f"[ERROR] {len(names)} different videos match: {args.forget}")
             for path in matches:
                 print(f"        {path}")
             print("        Add more words from the title, or pass the path.")
             return 1
+        if len(matches) > 1:
+            print(f"Matched the same video in {len(matches)} folders - "
+                  f"they share one upload record.")
         target_file = matches[0]
         if target_file != args.forget:
             print(f"Matched: {target_file}")
