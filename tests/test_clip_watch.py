@@ -247,3 +247,39 @@ def test_without_observations_it_falls_back_to_mtime(library):
 
 def test_a_vanished_file_is_never_ready(library):
     assert not is_settled(os.path.join(str(library), "gone.mp4"), 90.0, seen={})
+
+
+# ── uploaded is not the same as clipped ──────────────────────────────
+
+def test_a_video_is_recognised_after_it_moves_folders(library, tmp_path):
+    """A VOD moves from watch_folder to uploaded/ after it publishes.
+    The record lives with the logs; the KEY is the video's own name and
+    size, so the move must not lose it."""
+    from utils.clip_watch import was_clipped
+
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    original = _vod(library, "stream.ts", size=2048)
+    remember(str(logs), original, 3)
+
+    moved_dir = tmp_path / "uploaded"
+    moved_dir.mkdir()
+    moved = _vod(moved_dir, "stream.ts", size=2048)
+    assert was_clipped(str(logs), moved)
+
+
+def test_an_unclipped_video_is_not_claimed_as_clipped(library, tmp_path):
+    from utils.clip_watch import was_clipped
+
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    assert not was_clipped(str(logs), _vod(library, "fresh.ts"))
+
+
+def test_a_differently_sized_video_of_the_same_name_is_not_clipped(library, tmp_path):
+    from utils.clip_watch import was_clipped
+
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    remember(str(logs), _vod(library, "stream.ts", size=1024), 3)
+    assert not was_clipped(str(logs), _vod(library, "stream.ts", size=9999))

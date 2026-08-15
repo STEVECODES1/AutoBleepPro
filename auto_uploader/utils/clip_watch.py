@@ -117,6 +117,16 @@ def remember(folder: str, path: str, clips: int, failed: bool = False,
         pass
 
 
+def was_clipped(archive_folder: str, path: str) -> bool:
+    """Has this video already been through the clipper?
+
+    `archive_folder` is only where the record LIVES - the key is the
+    video's own name and size, so a VOD that has since moved from
+    watch_folder to uploaded/ is still recognised.
+    """
+    return is_done(load_archive(archive_folder).get(_key(path)))
+
+
 def attempts_for(folder: str, path: str) -> int:
     entry = load_archive(folder).get(_key(path)) or {}
     return int(entry.get("attempts", 0) or 0)

@@ -39,7 +39,7 @@ from datetime import datetime
 # Bump when shipping user-visible changes, so --test-config can prove
 # which build is actually running (stale extracts have silently caused
 # several confusing "the fix did nothing" runs).
-BUILD = "2026-08-15.20 new settings reach a config git no longer manages"
+BUILD = "2026-08-15.21 already uploaded is not already clipped"
 
 # How often --watch checks whether a deferred clip's wait is up. A minute
 # is fine: the waits themselves are 25 to 80 minutes, so the resolution
@@ -269,6 +269,58 @@ def merge_new_settings(config_file: str, example_file: str) -> list:
         return []
     return [f"Added {len(added)} new setting(s) from this version: {shown}",
             "Your existing settings were not changed."]
+
+
+def _clip_already_uploaded(cfg, video_path: str, is_clip: bool) -> int:
+    """Cut clips from a VOD that was uploaded on an earlier run.
+
+    The dedup check answers "has this been UPLOADED", and the answer was
+    being used to skip everything - including clipping, which had never
+    happened for that file. Clips are the reason to keep a stream around
+    after it is published, so being already-uploaded is precisely the
+    state where clipping is still owed.
+
+    Clips are never clipped. A clip of a clip is not a thing.
+    """
+    if is_clip:
+        return 0
+    clips_cfg = dict(getattr(cfg, "clips", {}) or {})
+    if not clips_cfg.get("auto_from_streams", False):
+        return 0
+
+    from utils.clip_watch import remember, was_clipped
+
+    # The record lives with the logs; the key is the video's own name and
+    # size, so a VOD that has moved to uploaded/ since is still known.
+    archive = cfg.general.logs_folder
+    source = video_path
+    if not os.path.isfile(source):
+        moved = _suggest_paths(cfg, os.path.basename(video_path))
+        if not moved:
+            return 0
+        source = moved[0]
+    if was_clipped(archive, source):
+        return 0
+
+    print(f"[Clips] Already uploaded, but never clipped. Cutting clips from "
+          f"{os.path.basename(source)} now.")
+    from utils.clip_runner import make_clips, print_run
+
+    title = get_stream_title(source, "", cfg, allow_prompt=False)
+    try:
+        run = make_clips(cfg, source, title,
+                         count=clips_cfg.get("count") or None,
+                         notify=False, transcribe_if_needed=True)
+    except Exception as exc:
+        print(f"[Clips] could not clip {os.path.basename(source)}: {exc}")
+        return 0
+    if run.skipped_reason:
+        print(f"[Clips] {run.skipped_reason}")
+        return 0
+    print_run(run)
+    delivered = _deliver_clips(run, cfg)
+    remember(archive, source, delivered)
+    return delivered
 
 
 def _autoclip_one(cfg) -> int:
@@ -845,6 +897,11 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
     if dup_checker.is_fully_uploaded(file_hash, platforms=active_platforms):
         where = only_platform or "both platforms"
         print(f"[SKIP] {filename} already uploaded to {where} previously (matched by content hash).")
+        # Uploaded is not the same as CLIPPED. This returned here, so a
+        # stream that had been through once was never looked at again -
+        # and a 2.7 GB VOD sat in the watch folder being skipped every
+        # single run while no clip was ever cut from it.
+        _clip_already_uploaded(cfg, video_path, is_clip)
         return {"skipped": "duplicate"}
 
     if is_clip and not cli_title:
@@ -1502,6 +1559,12 @@ def main(argv=None) -> int:
                              "Defaults to the same limit the queue itself "
                              "uses (36 hours) - past that the next drain "
                              "drops them again whatever this says.")
+    parser.add_argument("--backfill", metavar="PLATFORM",
+                        help="Queue clips that were cut BEFORE this platform "
+                             "was switched on. Enabling a platform does not "
+                             "reach back on its own, so clips already posted "
+                             "elsewhere never get offered to it. Shows what "
+                             "it would do; add --now to do it.")
     parser.add_argument("--learn", action="store_true",
                         help="Look up how many views the posted clips got, "
                              "and say what the numbers suggest about which "
@@ -1940,6 +2003,67 @@ def main(argv=None) -> int:
             return 0
         print(f"No upload history recorded for {os.path.basename(target_file)} "
               f"({scope}) - nothing to clear. You can run --file on it directly.")
+        return 0
+
+    if args.backfill:
+        from job_queue import JobQueue
+        from utils.clip_queue import CLIP_PLATFORMS, MAX_DEFERRED_AGE_S
+        from utils.clip_queue import caption_for
+
+        platform = str(args.backfill).strip().lower()
+        if platform not in CLIP_PLATFORMS:
+            print(f"[Backfill] Not a clip platform: {platform}")
+            print(f"           Try one of: {', '.join(CLIP_PLATFORMS)}")
+            return 1
+
+        queue = JobQueue(path=cfg.posting.get("queue_path"))
+        jobs = queue.list_jobs()
+        have = {j.clip_path for j in jobs if j.platform == platform}
+        # Every clip the queue knows about, whichever platform put it
+        # there. That set IS the record of what has been cut.
+        known = {}
+        for job in jobs:
+            known.setdefault(job.clip_path, job)
+
+        cutoff = time.time() - MAX_DEFERRED_AGE_S
+        missing, gone, stale = [], [], []
+        for path, job in known.items():
+            if path in have:
+                continue
+            if not os.path.isfile(path):
+                gone.append(path)
+            elif job.created_at and job.created_at < cutoff:
+                stale.append(path)
+            else:
+                missing.append(path)
+
+        print(f"[Backfill] {len(known)} clip(s) known, "
+              f"{len(have)} already offered to {platform}.")
+        if gone:
+            print(f"[Backfill] {len(gone)} skipped - the clip file is gone.")
+        if stale:
+            print(f"[Backfill] {len(stale)} skipped - past the "
+                  f"{MAX_DEFERRED_AGE_S / 3600:.0f}h the queue will hold a clip.")
+        if not missing:
+            print(f"[Backfill] Nothing to add for {platform}.")
+            return 0
+
+        if not args.now:
+            for path in missing[:10]:
+                print(f"             {os.path.basename(path)}")
+            if len(missing) > 10:
+                print(f"             ... and {len(missing) - 10} more")
+            print(f"[Backfill] Would queue {len(missing)} for {platform}. "
+                  f"Nothing changed - add --now to do it.")
+            return 0
+
+        clip_cfg = _clip_config(cfg)
+        for path in missing:
+            queue.enqueue(platform, path,
+                          caption_for(platform, path, "", clip_cfg))
+        print(f"[Backfill] Queued {len(missing)} for {platform}.")
+        print(f"[Backfill] The daily cap and spacing still apply, so these go "
+              f"out over days. --watch drains them.")
         return 0
 
     if args.retry_clips:
