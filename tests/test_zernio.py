@@ -25,10 +25,12 @@ from publishers.zernio import (  # noqa: E402
     MAX_TWEET_CHARS, MAX_UPLOAD_BYTES, ZernioError, ZernioPublisher, _post_url)
 
 
-def _pub(**settings):
-    base = {"account_id": "acc_1", "api_key": "sk_test", "platform": "twitter"}
+def _pub(destination="zernio_twitter", **settings):
+    base = {"api_key": "sk_test",
+            "accounts": {"twitter": {"account_id": "acc_1"},
+                         "tiktok": {"account_id": "acc_tt"}}}
     base.update(settings)
-    return ZernioPublisher({"zernio": base})
+    return ZernioPublisher({"zernio": base}, destination)
 
 
 @pytest.fixture
@@ -47,7 +49,7 @@ def test_it_is_not_ready_without_a_key():
 def test_it_is_not_ready_without_an_account():
     """A key with no account id reaches Zernio and is told which account
     it forgot, one clip at a time."""
-    assert not _pub(account_id="").ready()
+    assert not _pub(accounts={}).ready()
 
 
 def test_it_is_ready_with_both():
@@ -69,7 +71,7 @@ def test_a_missing_key_names_the_command_to_fix_it():
 
 def test_a_missing_account_names_the_command_to_fix_it():
     with pytest.raises(NotConfigured) as caught:
-        _pub(account_id="").post_clip("/c/a.mp4", "hi")
+        _pub(accounts={}).post_clip("/c/a.mp4", "hi")
     assert "--setup-zernio" in str(caught.value)
 
 
@@ -113,6 +115,21 @@ def test_the_presigned_put_carries_no_bearer_token(clip, monkeypatch):
     monkeypatch.setattr("publishers.zernio._request", fake)
     _pub().post_clip(clip, "hi")
     assert seen["https://store/put"] == ""
+
+
+def test_a_tiktok_post_names_the_tiktok_account(clip, monkeypatch):
+    body = {}
+
+    def fake(method, url, token="", payload=None, raw=b"", content_type=""):
+        if url.endswith("/presign"):
+            return {"uploadUrl": "https://s/p", "publicUrl": "https://cdn/x.mp4"}
+        if url.endswith("/v1/posts"):
+            body.update(payload)
+        return {}
+
+    monkeypatch.setattr("publishers.zernio._request", fake)
+    _pub("zernio_tiktok").post_clip(clip, "hi")
+    assert body["platforms"] == [{"platform": "tiktok", "accountId": "acc_tt"}]
 
 
 def test_the_post_names_the_configured_account(clip, monkeypatch):
@@ -229,25 +246,65 @@ def test_no_url_anywhere_is_an_empty_string():
 
 # ── wiring ───────────────────────────────────────────────────────────
 
-def test_it_is_a_clip_platform():
+def test_both_destinations_are_clip_platforms():
     from utils.clip_queue import CLEAN_TEXT_PLATFORMS, CLIP_PLATFORMS
 
-    assert "zernio" in CLIP_PLATFORMS
-    assert "zernio" in CLEAN_TEXT_PLATFORMS, "X reads the text too"
+    for destination in ("zernio_twitter", "zernio_tiktok"):
+        assert destination in CLIP_PLATFORMS
+        assert destination in CLEAN_TEXT_PLATFORMS, "both read the text"
 
 
-def test_the_publisher_lookup_finds_it():
+def test_the_publisher_lookup_finds_each_destination():
     from utils.social_promoter import _publisher_for
 
-    assert _publisher_for("zernio", {"zernio": {}}) is not None
+    for destination in ("zernio_twitter", "zernio_tiktok"):
+        found = _publisher_for(destination, {"zernio": {}})
+        assert found is not None
+        assert found.destination == destination
 
 
-def test_the_shipped_cap_is_one_an_hour():
+def test_each_destination_has_its_own_cap():
+    """One shared cap would force X and TikTok to share a budget, and
+    their rules are nothing alike."""
     raw = json.load(open(os.path.join(ROOT, "auto_uploader",
                                       "config.example.json"), encoding="utf-8"))
-    cap = raw["posting"]["platforms"]["zernio"]
-    assert cap["enabled"] is False, "a paid platform ships off"
-    assert cap["min_minutes_between"] >= 60
+    platforms = raw["posting"]["platforms"]
+    x = platforms["zernio_twitter"]
+    tiktok = platforms["zernio_tiktok"]
+    assert x["enabled"] is False and tiktok["enabled"] is False
+    assert x["min_minutes_between"] >= 60
+    assert tiktok["min_minutes_between"] > x["min_minutes_between"], (
+        "TikTok's spam checks punish rapid near-identical posting hardest")
+    assert tiktok["daily_cap"] < x["daily_cap"]
+
+
+def test_reddit_is_not_posted_to_automatically():
+    """Self-promotion is governed per subreddit, and an automated feed of
+    one channel's clips is what most subreddits ban on sight."""
+    from publishers.zernio import DESTINATIONS, NOT_AUTOMATED
+
+    assert "reddit" in NOT_AUTOMATED
+    assert "reddit" not in DESTINATIONS.values()
+
+
+def test_each_destination_uses_its_own_account():
+    """The same key reaches four accounts. Posting to whichever was
+    written down first is not a thing to leave to chance."""
+    assert _pub("zernio_twitter").account_id() == "acc_1"
+    assert _pub("zernio_tiktok").account_id() == "acc_tt"
+
+
+def test_the_caption_is_cut_to_each_platform_s_limit():
+    assert _pub("zernio_twitter").char_limit() == MAX_TWEET_CHARS
+    assert _pub("zernio_tiktok").char_limit() > MAX_TWEET_CHARS
+
+
+def test_every_destination_shares_one_caption_block():
+    from utils.clip_queue import caption_for
+
+    config = {"zernio": {"caption_template": "{title} SHARED"}}
+    for destination in ("zernio_twitter", "zernio_tiktok"):
+        assert "SHARED" in caption_for(destination, "/c/Clip 01.mp4", "x", config)
 
 
 def test_the_api_key_is_not_in_the_shipped_config():

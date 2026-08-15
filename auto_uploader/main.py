@@ -39,7 +39,7 @@ from datetime import datetime
 # Bump when shipping user-visible changes, so --test-config can prove
 # which build is actually running (stale extracts have silently caused
 # several confusing "the fix did nothing" runs).
-BUILD = "2026-08-15.24 X posting through Zernio - no X password, no $0.20 a post"
+BUILD = "2026-08-15.25 X and TikTok through Zernio, each capped to its own rules"
 
 # How often --watch checks whether a deferred clip's wait is up. A minute
 # is fine: the waits themselves are 25 to 80 minutes, so the resolution
@@ -2103,36 +2103,55 @@ def main(argv=None) -> int:
             print("         Connect X at zernio.com, then run this again.")
             return 0
 
-        wanted = publisher.platform_name()
+        from publishers.zernio import DESTINATIONS, NOT_AUTOMATED
+
+        wanted = set(DESTINATIONS.values())
         print(f"[Zernio] {len(accounts)} account(s) on this key:")
-        chosen = ""
+        found: dict = {}
         for account in accounts:
             platform = str(account.get("platform", "?"))
             handle = str(account.get("username")
                          or account.get("displayName") or "?")
-            mark = " <-- X" if platform == wanted and not chosen else ""
-            print(f"           {platform:<12} {handle}{mark}")
-            if platform == wanted and not chosen:
-                chosen = str(account.get("_id") or account.get("id") or "")
-        if not chosen:
-            print(f"[Zernio] None of them is a {wanted} account. Connect X "
-                  f"at zernio.com and run this again.")
+            if platform in NOT_AUTOMATED:
+                note = "  (left to you - see the config comment)"
+            elif platform in wanted and platform not in found:
+                found[platform] = str(account.get("_id")
+                                      or account.get("id") or "")
+                note = "  <-- will post clips"
+            else:
+                note = ""
+            print(f"           {platform:<12} {handle}{note}")
+
+        if not found:
+            print("[Zernio] None of these is a destination this posts to "
+                  f"({', '.join(sorted(wanted))}). Connect one at zernio.com.")
             return 1
 
         config_file = os.path.join(config_dir, "config.json")
         try:
             with open(config_file, "r", encoding="utf-8") as handle:
                 raw = json.load(handle)
-            raw.setdefault("zernio", {})["account_id"] = chosen
+            block = raw.setdefault("zernio", {})
+            accounts_block = block.setdefault("accounts", {})
+            for platform, account_id in found.items():
+                accounts_block.setdefault(platform, {})["account_id"] = account_id
             with open(config_file, "w", encoding="utf-8") as handle:
                 json.dump(raw, handle, indent=2, ensure_ascii=False)
         except (OSError, ValueError) as exc:
-            print(f"[Zernio] Found the account but could not save it: {exc}")
-            print(f"         Set zernio.account_id to {chosen} by hand.")
+            print(f"[Zernio] Found the accounts but could not save them: {exc}")
+            for platform, account_id in found.items():
+                print(f"         zernio.accounts.{platform}.account_id = "
+                      f"{account_id}")
             return 1
-        print(f"[Zernio] Saved account_id {chosen} to config.json.")
-        print("[Zernio] Turn it on with posting.platforms.zernio.enabled = "
-              "true (one clip an hour).")
+
+        print(f"[Zernio] Saved {len(found)} account id(s) to config.json.")
+        for destination, platform in sorted(DESTINATIONS.items()):
+            if platform not in found:
+                continue
+            settings = (cfg.posting.get("platforms") or {}).get(destination, {})
+            print(f"[Zernio]   posting.platforms.{destination}.enabled = true"
+                  f"   ({settings.get('daily_cap', '?')}/day, every "
+                  f"{settings.get('min_minutes_between', '?')} min)")
         return 0
 
     if args.backfill:

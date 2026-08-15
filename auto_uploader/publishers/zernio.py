@@ -62,6 +62,26 @@ MAX_UPLOAD_BYTES = 5 * 1024 ** 3
 # X truncates past this. Zernio would accept more and X would cut it.
 MAX_TWEET_CHARS = 280
 
+# Every destination Zernio can reach that this project posts clips to,
+# and the guarded platform name each one uses. Separate names on purpose:
+# a single "zernio" cap would force X and TikTok to share a budget, and
+# their rules are nothing alike - X tolerates hourly, TikTok's spam
+# checks punish rapid near-identical posting far harder.
+DESTINATIONS = {
+    "zernio_twitter": "twitter",
+    "zernio_tiktok": "tiktok",
+}
+
+# How much text each destination will actually keep. Sending more is not
+# an error anywhere; it is silently cut, usually mid-word.
+CHAR_LIMITS = {"twitter": MAX_TWEET_CHARS, "tiktok": 2200}
+
+# Reddit is reachable on this key and is NOT here. Self-promotion is
+# governed per subreddit rather than by one account-wide rule, and an
+# automated feed of one channel's clips is what most subreddits ban on
+# sight. It stays a human's decision.
+NOT_AUTOMATED = ("reddit",)
+
 _TIMEOUT = 120
 
 
@@ -105,9 +125,11 @@ def _request(method: str, url: str, token: str = "", payload=None,
 class ZernioPublisher:
     """Posts one clip to X via Zernio."""
 
-    def __init__(self, config: dict):
+    def __init__(self, config: dict, destination: str = "zernio_twitter"):
         self.config = config or {}
         self.settings = dict(self.config.get("zernio", {}) or {})
+        self.destination = destination
+        self._platform = DESTINATIONS.get(destination, "twitter")
 
     # ── configuration ────────────────────────────────────────────────
 
@@ -118,10 +140,23 @@ class ZernioPublisher:
                 or str(self.settings.get("api_key", ""))).strip()
 
     def account_id(self) -> str:
-        return str(self.settings.get("account_id", "")).strip()
+        """The Zernio account id for THIS destination.
+
+        Per destination, not one shared id: the same key reaches four
+        accounts, and posting a clip to whichever happened to be written
+        down first is not a thing to leave to chance.
+        """
+        accounts = dict(self.settings.get("accounts", {}) or {})
+        entry = accounts.get(self._platform) or {}
+        if isinstance(entry, dict):
+            return str(entry.get("account_id", "")).strip()
+        return str(entry).strip()
 
     def platform_name(self) -> str:
-        return str(self.settings.get("platform", "twitter")).strip() or "twitter"
+        return self._platform
+
+    def char_limit(self) -> int:
+        return int(CHAR_LIMITS.get(self._platform, MAX_TWEET_CHARS))
 
     def base_url(self) -> str:
         return str(self.settings.get("base_url", "") or BASE_URL).rstrip("/")
@@ -141,8 +176,9 @@ class ZernioPublisher:
                 "         python main.py --set-env ZERNIO_API_KEY=sk_...")
         if not self.account_id():
             raise NotConfigured(
-                "zernio: no account_id. Connect X in the Zernio dashboard, "
-                "then run:\n         python main.py --setup-zernio")
+                f"zernio: no account_id for {self._platform}. Connect it in "
+                f"the Zernio dashboard, then run:\n"
+                f"         python main.py --setup-zernio")
 
     # ── the three calls ──────────────────────────────────────────────
 
@@ -178,7 +214,7 @@ class ZernioPublisher:
     def post(self, text: str, media_url: str) -> str:
         """Publish. Returns the post URL, or "" when Zernio gives none."""
         body = {
-            "content": text[:MAX_TWEET_CHARS],
+            "content": text[:self.char_limit()],
             "mediaItems": [{"type": "video", "url": media_url}],
             "platforms": [{"platform": self.platform_name(),
                            "accountId": self.account_id()}],

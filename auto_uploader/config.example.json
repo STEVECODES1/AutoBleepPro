@@ -164,17 +164,23 @@
         "daily_cap": 1,
         "manual_approval_only": true
       },
-      "zernio": {
-        "_comment": "One clip an hour, which reads as a person posting. Zernio bills per post from a prepaid balance, so this cap is also the spend cap.",
-        "enabled": false,
-        "daily_cap": 12,
-        "min_minutes_between": 60
-      },
       "youtube_shorts": {
         "_comment": "OFF until you have reviewed a private batch. Caps are deliberately low: twenty clips from one VOD posted in an afternoon is what 'repetitious content' means in YouTube's policy, whoever made them.",
         "enabled": false,
         "daily_cap": 3,
         "min_minutes_between": 180
+      },
+      "zernio_twitter": {
+        "_comment": "One an hour, which reads as a person posting. X is the loosest of these about repetition.",
+        "enabled": false,
+        "daily_cap": 12,
+        "min_minutes_between": 60
+      },
+      "zernio_tiktok": {
+        "_comment": "Wider spacing than X and a lower cap. TikTok's spam checks punish rapid near-identical posting harder than any other platform here, and the account is the thing at risk.",
+        "enabled": false,
+        "daily_cap": 6,
+        "min_minutes_between": 150
       }
     },
     "_spacing_comment": "min_minutes_between is what spreads posts through the day rather than firing them in a burst. 8 posts at 100 minutes apart covers about 13 hours, so a day of clips goes out steadily instead of all at once - which is the pattern every platform's spam detection actually keys on.",
@@ -312,9 +318,16 @@
     }
   },
   "zernio": {
-    "_comment": "Posts clips to X through Zernio, an authorised poster that holds the X relationship itself. Chosen over X's own API ($0.20 per post containing a URL) and over twikit/Selenium, which need the X password in a file and get fresh accounts flagged as bot spam. The credential here is a Zernio key in .env - ZERNIO_API_KEY - and revoking it costs nothing.",
-    "platform": "twitter",
-    "account_id": "",
+    "_comment": "Posts clips through Zernio, an authorised poster that holds each platform's relationship itself. The credential is a Zernio key in .env - ZERNIO_API_KEY. Account ids are filled in by `python main.py --setup-zernio`.",
+    "_reddit_comment": "Reddit is reachable on the same key and is left out on purpose. Self-promotion is governed per subreddit, not by one account-wide rule, and an automated feed of one channel's clips is what most subreddits ban on sight. Post there by hand.",
+    "accounts": {
+      "twitter": {
+        "account_id": ""
+      },
+      "tiktok": {
+        "account_id": ""
+      }
+    },
     "caption_template": "{title} 🤣🤣🤣#stackswopo"
   }
 }

@@ -328,9 +328,9 @@ def _publisher_for(platform: str, config: dict):
     if platform == "youtube_shorts":
         from publishers.youtube_shorts import YouTubeShortsPublisher
         return YouTubeShortsPublisher(config)
-    if platform == "zernio":
+    if platform.startswith("zernio"):
         from publishers.zernio import ZernioPublisher
-        return ZernioPublisher(config)
+        return ZernioPublisher(config, platform)
     return None
 
 
