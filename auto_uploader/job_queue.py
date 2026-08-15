@@ -358,6 +358,30 @@ class JobQueue:
         self._save()
         return job
 
+    def retry(self, job_id: str, now: Optional[float] = None) -> Optional[Job]:
+        """Give a given-up job its retry budget back.
+
+        For the case the ceiling was never designed for: the job was not
+        broken, the ACCOUNT was. Forty-three clips exhausted their three
+        attempts each against an expired Facebook token and an open
+        Instagram breaker, and every one of them would have posted fine
+        the day after the token was fixed.
+
+        Only failed jobs are touched. Reviving a done job would post it
+        twice, and that is the one mistake here with no undo.
+        """
+        now = time.time() if now is None else now
+        job = self._jobs.get(job_id)
+        if job is None or job.state != FAILED:
+            return None
+        job.state = PENDING
+        job.attempts = 0
+        job.not_before = 0.0
+        job.claimed_at = 0.0
+        job.updated_at = now
+        self._save()
+        return job
+
     # ── Reporting ────────────────────────────────────────────────────────
 
     def counts(self) -> dict:

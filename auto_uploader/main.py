@@ -39,7 +39,7 @@ from datetime import datetime
 # Bump when shipping user-visible changes, so --test-config can prove
 # which build is actually running (stale extracts have silently caused
 # several confusing "the fix did nothing" runs).
-BUILD = "2026-08-15.10 a cap under a key nothing reads is no longer unlimited"
+BUILD = "2026-08-15.11 clips that gave up on a broken token can be put back"
 
 # How often --watch checks whether a deferred clip's wait is up. A minute
 # is fine: the waits themselves are 25 to 80 minutes, so the resolution
@@ -1323,6 +1323,17 @@ def main(argv=None) -> int:
                         help="What happened to every clip: cut, posted, "
                              "waiting, or failed and why. Reads "
                              "logs/clips.log.")
+    parser.add_argument("--retry-clips", nargs="?", const="all",
+                        metavar="PLATFORM",
+                        help="Clips that gave up while a token was broken. "
+                             "Shows what it would put back in the queue and "
+                             "changes nothing; add --now to actually do it. "
+                             "Optionally name one platform.")
+    parser.add_argument("--retry-age", type=float, default=21.0,
+                        metavar="DAYS",
+                        help="With --retry-clips: skip clips older than this "
+                             "(default 21). A clip nobody missed three weeks "
+                             "ago is not news now.")
     parser.add_argument("--learn", action="store_true",
                         help="Look up how many views the posted clips got, "
                              "and say what the numbers suggest about which "
@@ -1750,6 +1761,58 @@ def main(argv=None) -> int:
             return 0
         print(f"No upload history recorded for {os.path.basename(target_file)} "
               f"({scope}) - nothing to clear. You can run --file on it directly.")
+        return 0
+
+    if args.retry_clips:
+        from job_queue import FAILED, JobQueue
+
+        queue = JobQueue(path=cfg.posting.get("queue_path"))
+        wanted = str(args.retry_clips).lower()
+        jobs = [j for j in queue.list_jobs(FAILED)
+                if wanted in ("all", j.platform.lower())]
+        if not jobs:
+            print("[Retry] Nothing has given up." if wanted == "all"
+                  else f"[Retry] Nothing has given up on {wanted}.")
+            return 0
+
+        cutoff = time.time() - args.retry_age * 86400
+        eligible, gone, stale = [], [], []
+        for job in jobs:
+            if not os.path.isfile(job.clip_path):
+                gone.append(job)
+            elif job.created_at and job.created_at < cutoff:
+                stale.append(job)
+            else:
+                eligible.append(job)
+
+        print(f"[Retry] {len(jobs)} clip(s) gave up. Why they stopped:")
+        reasons: dict = {}
+        for job in jobs:
+            key = (job.last_error or "no reason recorded")[:70]
+            reasons[key] = reasons.get(key, 0) + 1
+        for reason, count in sorted(reasons.items(), key=lambda kv: -kv[1]):
+            print(f"         {count:>3}  {reason}")
+
+        if gone:
+            print(f"[Retry] {len(gone)} skipped - the clip file is gone.")
+        if stale:
+            print(f"[Retry] {len(stale)} skipped - older than "
+                  f"{args.retry_age:.0f} days (--retry-age changes that).")
+        if not eligible:
+            print("[Retry] Nothing left to put back.")
+            return 0
+
+        if not args.now:
+            print(f"[Retry] Would requeue {len(eligible)}. "
+                  f"Nothing changed - add --now to do it.")
+            return 0
+
+        for job in eligible:
+            queue.retry(job.id)
+        print(f"[Retry] Requeued {len(eligible)}.")
+        print("[Retry] The daily caps and spacing still apply, so these go "
+              "out over days, not all at once. --watch drains them, or run "
+              "--post-queue.")
         return 0
 
     if args.learn:
