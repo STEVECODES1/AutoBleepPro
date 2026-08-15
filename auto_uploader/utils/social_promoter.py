@@ -11,6 +11,7 @@ mark an upload as failed.
 
 import json
 import os
+import re
 import time
 import urllib.request
 
@@ -468,14 +469,69 @@ def announce_to_platforms(posting: dict, title: str, new_uploads: dict,
     return posted
 
 
-def clip_title(video_path: str) -> str:
-    """A caption headline from the clip's filename.
+# Filename furniture that is not part of any title. "vertical" is the
+# prefix _vertical_copy puts on its temp file; "- Clip 07" is the index;
+# a bare 20250914 204409 is the recorder's timestamp. All three reached
+# Instagram inside real captions:
+#
+#     vertical Typooooooooooo - Clip 01
+#     vertical Stackswopo Love Yall 20250914 204409 - Clip 03
+_FILENAME_NOISE = (
+    re.compile(r"^\s*_?vertical[_\s]+", re.I),
+    re.compile(r"[-\s]+clip\s*\d+\s*$", re.I),
+    re.compile(r"\b\d{8}\s+\d{6}\b"),       # 20250914 204409
+    re.compile(r"\b\d{4}-\d{2}-\d{2}\b"),
+    re.compile(r"\b\d{2}[.\-]\d{2}[.\-]\d{2}\b"),
+    re.compile(r"\bfull live stream\b", re.I),
+    re.compile(r"\[[a-z0-9]{6,}\]", re.I),      # [v70rbpc]
+)
 
-    The recorder names clips "<name> <platform> clips <clip title>.mp4",
-    so the interesting part is the tail - "ban that...", "who put stacks
-    on slots". Stripping the prefix is what turns a filename into
-    something that reads like a caption.
+
+def spoken_line(video_path: str) -> str:
+    """The line actually said in this clip, from the file beside it.
+
+    _deliver_clips writes it there, and NOTHING read it back - so the
+    caption fell through to the filename and Instagram got "vertical
+    Typooooooooooo - Clip 01" while the real line sat unread next to the
+    video.
     """
+    stem = os.path.splitext(video_path or "")[0]
+    # The temp vertical copy is named "_vertical_<clip>.mp4"; its sidecar
+    # belongs to the clip, not to the copy.
+    plain = os.path.join(os.path.dirname(stem),
+                         re.sub(r"^_?vertical[_\s]+", "",
+                                os.path.basename(stem), flags=re.I))
+    for candidate in (stem + ".txt", stem + "_caption.txt",
+                      plain + ".txt", plain + "_caption.txt"):
+        try:
+            with open(candidate, "r", encoding="utf-8") as handle:
+                first = handle.read().strip().splitlines()
+        except (OSError, IndexError):
+            continue
+        if first and first[0].strip():
+            return first[0].strip()
+    return ""
+
+
+def tidy_stem(stem: str) -> str:
+    """A filename with the machinery taken out of it."""
+    text = stem.replace("_", " ")
+    for pattern in _FILENAME_NOISE:
+        text = pattern.sub(" ", text)
+    return " ".join(text.split()).strip(" -.")
+
+
+def clip_title(video_path: str) -> str:
+    """A caption headline for this clip.
+
+    The line spoken in the clip comes first - it is what makes a caption
+    read like a person wrote it. The filename is the fallback, and it is
+    scrubbed of the parts no human would type.
+    """
+    said = spoken_line(video_path)
+    if said:
+        return said
+
     stem = os.path.splitext(os.path.basename(video_path or ""))[0]
     for marker in (" clips ", " twitch ", " youtube ",
                    "_clips_", "_twitch_", "_youtube_"):
@@ -484,16 +540,17 @@ def clip_title(video_path: str) -> str:
     # Downloads are stored with ASCII-safe names, which means underscores
     # where the clip title had spaces. A caption should read as the title
     # did, not as the filename does.
-    return " ".join(stem.replace("_", " ").split()).strip(" -.") or "Stackswopo"
+    return tidy_stem(stem) or "Stackswopo"
 
 
-def build_caption(template: str, video_path: str, title: str = "") -> str:
+def build_caption(template: str, video_path: str, title: str = "",
+                  tags: str = "") -> str:
     """Fill the Instagram caption template. Never raises on a bad key."""
     headline = title or clip_title(video_path)
     if not template:
         return headline
     try:
-        return template.format(title=headline)
+        return template.format(title=headline, tags=tags)
     except (KeyError, IndexError):
         # A typo'd placeholder must not cost the post.
         return headline
@@ -696,3 +753,75 @@ def announce_upload(features: dict, title: str, new_uploads: dict,
                                             config, dry_run, skip_platforms))
 
     return posted + [p for p in posted_extra if p not in posted]
+
+
+# ── hashtags ─────────────────────────────────────────────────────────
+#
+# Tags are how a small account gets found, and the wrong ones are how it
+# gets buried. Every platform here demotes posts whose tags do not match
+# the content, so these are picked FROM THE CLIP rather than pasted the
+# same on everything.
+#
+# The counts differ because the platforms differ. Instagram rewards a
+# dozen; TikTok's own guidance is a handful; X demotes more than about
+# two and they eat the 280 characters a caption needs.
+TAG_LIMITS = {
+    "instagram": 12,
+    "facebook": 8,
+    "youtube_shorts": 5,
+    "zernio_tiktok": 6,
+    "zernio_twitter": 2,
+}
+
+# Always present. The channel's own name is the one tag that is true of
+# every clip, and the one someone searches to find more.
+ALWAYS_TAGS = ("stackswopo",)
+
+# Matched against the clip's own title, so a Monkey clip is not tagged
+# #gtarp. The key is what to look for; the value is what to tag it.
+CONTENT_TAGS = (
+    (("monkey", "omegle", "troll"),
+     ("monkeyapp", "monkeyapptrolling", "omegle")),
+    (("gta", "rp", "fivem", "nopixel", "lifestyle"),
+     ("gtarp", "gta5", "gtaonline")),
+    (("howl", "slot", "gambl", "casino", "stake"),
+     ("slots", "gambling", "bigwin")),
+    (("react", "watch"), ("reaction", "reacting")),
+)
+
+# Used to fill up to the platform's limit once the specific ones are in.
+# True of every clip here and searched constantly, but generic enough
+# that leading with them would be the spam signal itself.
+FILLER_TAGS = ("funnymoments", "streamerclips", "clips", "funny",
+               "viral", "fyp")
+
+
+def hashtags_for(title: str, platform: str = "instagram",
+                 limit=None) -> str:
+    """The tags for one clip on one platform, as a ready string.
+
+    Specific first, generic last, capped at what the platform rewards.
+    A clip whose title says nothing still gets the channel tag and the
+    fillers - the alternative is an untagged post, which is invisible.
+    """
+    if limit is None:
+        limit = TAG_LIMITS.get(platform, 8)
+    if limit <= 0:
+        return ""
+
+    text = " ".join(str(title or "").lower().split())
+    chosen: list = []
+
+    def add(tag: str) -> None:
+        if tag not in chosen and len(chosen) < limit:
+            chosen.append(tag)
+
+    for tag in ALWAYS_TAGS:
+        add(tag)
+    for needles, tags in CONTENT_TAGS:
+        if any(needle in text for needle in needles):
+            for tag in tags:
+                add(tag)
+    for tag in FILLER_TAGS:
+        add(tag)
+    return " ".join(f"#{tag}" for tag in chosen)

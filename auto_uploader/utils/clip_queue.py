@@ -88,7 +88,7 @@ def caption_for(platform: str, video_path: str, fallback: str,
     voice, because the same clip reading two different ways across two
     Pages is what looks automated.
     """
-    from utils.social_promoter import build_caption
+    from utils.social_promoter import build_caption, clip_title, hashtags_for
 
     # Every zernio_* destination shares one config block: they are one
     # service with several accounts, and a per-destination lookup would
@@ -99,7 +99,13 @@ def caption_for(platform: str, video_path: str, fallback: str,
     if not template:
         template = ((config or {}).get("instagram", {}) or {}).get(
             "caption_template", "")
-    caption = build_caption(template, video_path) or fallback
+    # Tags are picked from the CLIP and sized to the platform: a Monkey
+    # clip must not be tagged #gtarp, and the count that helps on
+    # Instagram gets a post demoted on X.
+    headline = clip_title(video_path)
+    tags = hashtags_for(headline, platform,
+                        settings.get("max_hashtags"))
+    caption = build_caption(template, video_path, tags=tags) or fallback
 
     # Instagram and YouTube apply their rules to the TEXT as well as the
     # video. Rumble is not in this set on purpose: that channel is the
