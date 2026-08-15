@@ -39,7 +39,7 @@ from datetime import datetime
 # Bump when shipping user-visible changes, so --test-config can prove
 # which build is actually running (stale extracts have silently caused
 # several confusing "the fix did nothing" runs).
-BUILD = "2026-08-15.22 Shorts could never see its own settings; titles are now safe to publish"
+BUILD = "2026-08-15.23 the watch folder empties itself and says it is watching again"
 
 # How often --watch checks whether a deferred clip's wait is up. A minute
 # is fine: the waits themselves are 25 to 80 minutes, so the resolution
@@ -269,6 +269,59 @@ def merge_new_settings(config_file: str, example_file: str) -> list:
         return []
     return [f"Added {len(added)} new setting(s) from this version: {shown}",
             "Your existing settings were not changed."]
+
+
+def _retire_duplicate(cfg, video_path: str) -> None:
+    """Get an already-uploaded video out of the watch folder.
+
+    Honours cleanup.source_video rather than always deleting. `move` is
+    the shipped default and the reversible one: the video is published,
+    but a local copy is the only thing that can re-cut a clip if a later
+    pass frames one badly, and deleting it is not undoable.
+    """
+    # SOURCE_DELETE, SOURCE_KEEP and resolve_source_action are imported
+    # at module level. Re-importing them here would bind them as locals
+    # for the WHOLE function - the shadowing bug the AST test guards,
+    # which it caught on this very function.
+    if not os.path.isfile(video_path):
+        return
+    watch = os.path.abspath(cfg.general.watch_folder or "")
+    if os.path.dirname(os.path.abspath(video_path)) != watch:
+        # Already somewhere else - uploaded/, a library folder pointed at
+        # by --batch. Nothing to tidy, and moving a file out of a folder
+        # the user named is not this function's business.
+        return
+
+    name = os.path.basename(video_path)
+    action = resolve_source_action(cfg)
+    if action == SOURCE_KEEP:
+        print(f"[Cleanup] {name} stays in the watch folder "
+              f"(cleanup.source_video is 'keep').")
+        return
+    if action == SOURCE_DELETE:
+        try:
+            size_mb = os.path.getsize(video_path) / (1024 ** 2)
+            os.remove(video_path)
+            print(f"[Cleanup] Already uploaded - deleted {name} "
+                  f"({size_mb:.0f} MB).")
+        except OSError as exc:
+            print(f"[WARN] Could not delete {name}: {exc}")
+        return
+    destination = os.path.join(cfg.general.uploaded_folder, name)
+    try:
+        os.makedirs(cfg.general.uploaded_folder, exist_ok=True)
+        if os.path.exists(destination):
+            # The same video is already filed. Two copies of a published
+            # VOD is the thing being cleaned up, so drop this one.
+            os.remove(video_path)
+            print(f"[Cleanup] Already uploaded and already filed - "
+                  f"removed the copy in the watch folder.")
+            return
+        shutil.move(video_path, destination)
+        print(f"[Cleanup] Already uploaded - moved {name} to "
+              f"{os.path.basename(cfg.general.uploaded_folder)}/.")
+    except OSError as exc:
+        print(f"[WARN] Could not move {name}: {exc}")
 
 
 def _clip_already_uploaded(cfg, video_path: str, is_clip: bool) -> int:
@@ -916,6 +969,12 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
         # and a 2.7 GB VOD sat in the watch folder being skipped every
         # single run while no clip was ever cut from it.
         _clip_already_uploaded(cfg, video_path, is_clip)
+        # Then get it out of the watch folder. Leaving it meant every
+        # run re-hashed 2.7 GB to reach the same answer, and the folder
+        # never emptied. Retired the SAME way a freshly-uploaded video
+        # is - whatever cleanup.source_video says - because "already
+        # uploaded" and "just uploaded" are the same state.
+        _retire_duplicate(cfg, video_path)
         return {"skipped": "duplicate"}
 
     if is_clip and not cli_title:
@@ -2677,9 +2736,19 @@ def main(argv=None) -> int:
         def on_ready(path):
             # allow_prompt=False: this runs in the watcher's background
             # thread with nobody at the keyboard.
-            process_file(path, cfg, None, dup_checker, yt_logger, rb_logger, dry_run,
-                         existing_youtube_videos, existing_rumble_videos,
-                         allow_prompt=False, only_platform=args.only)
+            try:
+                process_file(path, cfg, None, dup_checker, yt_logger, rb_logger,
+                             dry_run, existing_youtube_videos,
+                             existing_rumble_videos,
+                             allow_prompt=False, only_platform=args.only)
+            finally:
+                # Said after EVERY file, including one that failed. A run
+                # that ends on a stack trace or on a timing table looks
+                # like a run that stopped, and there was no way to tell
+                # from the output that the watcher was still there.
+                print(f"\n[Watch] Done with {os.path.basename(path)}. "
+                      f"Watching {watch_folder} for the next one... "
+                      f"(Ctrl+C to stop)\n")
 
         watcher = FolderWatcher(
             watch_folder, cfg.general.supported_formats,
