@@ -44,7 +44,13 @@ from typing import Optional
 # Enough to find the window without paying for the whole clip. The call
 # window does not move mid-clip; this is looking for where it IS, not
 # where it goes.
-SAMPLE_COUNT = 6
+# Stills taken across the clip. Twelve rather than six: this measures ONE
+# rectangle that then has to hold for the whole clip, and six samples over
+# 45 seconds is a still every 7.5s - thin evidence for a decision that
+# cannot be revised once the clip is rendered. Each still is a mediapipe
+# pass, so this is the expensive knob; twelve is about a second per clip
+# on a 4060.
+SAMPLE_COUNT = 12
 
 # Faces are small in a full-screen capture. Everything below this is
 # usually a thumbnail, an avatar in a chat sidebar, or a face on the
@@ -153,8 +159,78 @@ def _boxes_in(path: str, detector) -> list:
     return found
 
 
+def _steady_box(per_still: list) -> Optional[dict]:
+    """The rectangle to hold for the whole clip, from every still.
+
+    Two different questions, and conflating them is what put a person at
+    the edge of their own clip:
+
+      WITHIN one still, faces are concurrent - a two-person call needs
+      both, so those are unioned by _cover.
+
+      ACROSS stills they are the same people at different MOMENTS. A
+      union there spans where someone stood at second 0 and where they
+      stood at second 40, then centres on the wall between the two.
+
+    So: union each still, then take the MEDIAN of those. Someone leaning
+    out of shot for one sample, or a face passing behind, moves a median
+    barely at all where a union is dragged the whole way.
+
+    Size comes from the roomiest typical still rather than the median
+    one. A crop slightly too generous keeps a head in frame when somebody
+    leans; slightly too tight cuts it off. Only one of those is
+    recoverable after the clip is posted.
+    """
+    stills = [_cover(boxes) for boxes in per_still if boxes]
+    stills = [box for box in stills if box]
+    if not stills:
+        return None
+    if len(stills) == 1:
+        return stills[0]
+
+    def middle(values: list) -> float:
+        ordered = sorted(values)
+        return ordered[len(ordered) // 2]
+
+    centre_x = middle([b["x"] + b["width"] / 2 for b in stills])
+    centre_y = middle([b["y"] + b["height"] / 2 for b in stills])
+    width = _percentile(sorted(b["width"] for b in stills), 0.75)
+    height = _percentile(sorted(b["height"] for b in stills), 0.75)
+
+    box = {"x": centre_x - width / 2, "y": centre_y - height / 2,
+           "width": width, "height": height}
+    return _slide_inside(box)
+
+
+def _slide_inside(box: dict) -> dict:
+    """Move a box back inside the frame rather than squashing it.
+
+    Shrinking to fit would cut off the face this exists to keep.
+    """
+    width = min(1.0, box["width"])
+    height = min(1.0, box["height"])
+    x = min(max(0.0, box["x"]), 1.0 - width)
+    y = min(max(0.0, box["y"]), 1.0 - height)
+    return {"x": round(x, 4), "y": round(y, 4),
+            "width": round(width, 4), "height": round(height, 4)}
+
+
+def _percentile(values: list, fraction: float) -> float:
+    """`fraction` of the way up a sorted list."""
+    if not values:
+        return 0.0
+    index = min(len(values) - 1, max(0, int(round(fraction * (len(values) - 1)))))
+    return values[index]
+
+
 def _cover(boxes: list) -> Optional[dict]:
-    """The one rectangle containing all of them, padded and made 9:16."""
+    """One rectangle containing all of them, padded and made 9:16.
+
+    Everything handed here is CONCURRENT - faces seen at the same moment.
+    A two-person call is the whole point of this profile, so both have to
+    fit, and that means a union. Spreading boxes from different MOMENTS
+    across this is what produced the bad crops; see _steady_box.
+    """
     if not boxes:
         return None
 
@@ -247,17 +323,20 @@ def region_for(source: str, start: float, duration: float,
         except Exception:
             return None
 
+        # Grouped per still, NOT flattened: which faces were on screen
+        # together is the difference between framing a two-person call
+        # and framing the gap between where one person used to be.
         boxes = []
         try:
             for name in stills:
-                boxes.extend(_boxes_in(os.path.join(workspace, name), detector))
+                boxes.append(_boxes_in(os.path.join(workspace, name), detector))
         finally:
             try:
                 detector.close()
             except Exception:
                 pass
 
-        found = _cover(boxes)
+        found = _steady_box(boxes)
         # Measured inside the crop, so it has to be mapped back before
         # anyone uses it against the whole frame.
         return _to_whole_frame(found, within) if (found and within) else found

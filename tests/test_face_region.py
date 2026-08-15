@@ -149,3 +149,78 @@ def test_a_box_found_inside_the_pane_is_mapped_back_to_the_frame():
     assert abs(mapped["x"] - (0.03 + 0.375 * 0.46)) < 1e-4
     assert abs(mapped["width"] - 0.25 * 0.46) < 1e-4
     assert mapped["x"] + mapped["width"] <= 0.5, "it escaped into the browser"
+
+
+# ── concurrent faces vs the same face at different moments ───────────
+#
+# Conflating these is what put a person at the very edge of their own
+# clip with blank wall filling the rest.
+
+def test_a_two_person_call_keeps_both_people():
+    """Within one still the faces are CONCURRENT. Framing one and
+    cropping the other out is the bug wearing a different hat."""
+    from autoreel.face_region import _steady_box
+
+    together = [[(0.10, 0.30, 0.10, 0.15), (0.60, 0.32, 0.09, 0.14)]] * 5
+    box = _steady_box(together)
+    assert box["x"] <= 0.10
+    assert box["x"] + box["width"] >= 0.69
+
+
+def test_one_person_moving_does_not_stretch_the_box():
+    """Across stills they are the same person at different MOMENTS. A
+    union spans where they stood at second 0 and second 40, then centres
+    on the wall between."""
+    from autoreel.face_region import _steady_box
+
+    drifting = [[(0.55, 0.30, 0.18, 0.30)], [(0.57, 0.30, 0.18, 0.30)],
+                [(0.60, 0.31, 0.18, 0.30)], [(0.62, 0.32, 0.18, 0.30)]]
+    centre = _steady_box(drifting)
+    middle = centre["x"] + centre["width"] / 2
+    assert 0.45 < middle < 0.85, "the crop should sit on the person"
+
+
+def test_a_passer_by_in_one_still_does_not_drag_the_crop():
+    """A median moves barely at all where a union is dragged the whole
+    way."""
+    from autoreel.face_region import _steady_box
+
+    person = [(0.60, 0.30, 0.18, 0.30)]
+    stills = [person, person, [(0.03, 0.30, 0.12, 0.20)], person, person]
+    box = _steady_box(stills)
+    assert box["x"] + box["width"] / 2 > 0.45
+
+
+def test_an_empty_still_is_skipped_not_counted():
+    """A moment with nobody on camera is not evidence about where the
+    crop belongs."""
+    from autoreel.face_region import _steady_box
+
+    person = [(0.60, 0.30, 0.18, 0.30)]
+    assert _steady_box([[], person, [], person]) == _steady_box([person, person])
+
+
+def test_nothing_found_anywhere_is_still_none():
+    from autoreel.face_region import _steady_box
+
+    assert _steady_box([]) is None
+    assert _steady_box([[], [], []]) is None
+
+
+def test_a_single_still_is_used_as_it_is():
+    from autoreel.face_region import _cover, _steady_box
+
+    one = [(0.40, 0.30, 0.15, 0.20)]
+    assert _steady_box([one]) == _cover(one)
+
+
+def test_the_box_stays_inside_the_frame():
+    """Slid back in, never squashed - shrinking would cut off the face
+    this exists to keep."""
+    from autoreel.face_region import _steady_box
+
+    edge = [[(0.90, 0.85, 0.15, 0.20)]] * 4
+    box = _steady_box(edge)
+    assert box["x"] >= 0.0 and box["y"] >= 0.0
+    assert box["x"] + box["width"] <= 1.0001
+    assert box["y"] + box["height"] <= 1.0001

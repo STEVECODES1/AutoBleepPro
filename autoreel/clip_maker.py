@@ -696,6 +696,21 @@ class ClipMaker:
         """The rectangle REGION cuts, from the configured profile."""
         return resolve_region(self.config)
 
+    def _say_once(self, message: str) -> None:
+        """Print this the first time only.
+
+        A note that is true of every clip in a run is noise after the
+        first one, and noise is what makes a real warning get scrolled
+        past.
+        """
+        seen = getattr(self, "_said", None)
+        if seen is None:
+            seen = set()
+            object.__setattr__(self, "_said", seen)
+        if message not in seen:
+            seen.add(message)
+            print(message)
+
     @property
     def content_region(self) -> Optional[dict]:
         """Where the people are - the only place faces are looked for."""
@@ -792,6 +807,15 @@ class ClipMaker:
             region = self.region
             clip_strategy = strategy
             if strategy == CROP_REGION and self.find_faces:
+                # Said ONCE per run, not per clip. Without mediapipe every
+                # clip falls back to the fixed call-pane rectangle and the
+                # person drifts out of it, and the only sign was the crop
+                # itself looking wrong.
+                if not face_region.have_mediapipe():
+                    self._say_once(
+                        "[Clips] Face framing is OFF - mediapipe is not "
+                        "installed, so the crop cannot follow anyone. "
+                        "Install it with:  pip install mediapipe")
                 measured = face_region.region_for(
                     source_path, spec.start, spec.end - spec.start,
                     within=self.content_region)

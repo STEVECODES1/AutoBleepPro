@@ -99,6 +99,25 @@ def run_health_check(cfg, features: dict = None, do_cleanup: bool = True) -> boo
     except ImportError:
         print("  CPU/RAM: psutil not installed (pip install psutil) - skipped")
 
+    # Face framing is the difference between a Monkey clip centred on the
+    # person and one centred on the wall beside them, and without
+    # mediapipe it turns itself off silently - every clip falls back to a
+    # fixed rectangle and drifts out of it, with nothing anywhere saying
+    # why. Not a "problem": clips still render, and gameplay never wanted
+    # it. But it must be visible.
+    try:
+        from autoreel.face_region import have_mediapipe
+
+        if have_mediapipe():
+            print("  Face framing: mediapipe present - Monkey clips will "
+                  "follow the people")
+        else:
+            print("  Face framing: mediapipe MISSING - Monkey clips fall "
+                  "back to a fixed rectangle")
+            print("                fix with:  pip install mediapipe")
+    except Exception as exc:
+        print(f"  Face framing: could not be checked ({exc})")
+
     for name, url in _PROBES:
         ok = _probe(url)
         print(f"  Network ({name}): {'reachable' if ok else 'UNREACHABLE'}")
