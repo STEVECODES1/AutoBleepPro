@@ -289,7 +289,7 @@ class RumbleUploader:
         re.I,
     )
 
-    def _submit(self, page) -> Optional[str]:
+    def _submit(self, page, title: str = "") -> Optional[str]:
         """Click through Rumble's submit step(s). Returns the video URL if
         Rumble reveals one, else None.
 
@@ -305,6 +305,12 @@ class RumbleUploader:
         left on the success page. One upload ended on rumble.com/videos -
         a navigation link, not a video - and that video never appeared on
         the channel at all.
+
+        That early stop is only safe because the link is matched against
+        `title`. Without it, any video link already on the page ends the
+        loop after step 1 and the rights/terms form never gets filled -
+        which is exactly how a VOD was reported as published under the
+        address of an unrelated video, and never appeared at all.
         """
         submit_locator = (
             page.get_by_role("button", name=re.compile(r"^(submit|publish|upload)$", re.I))
@@ -324,7 +330,7 @@ class RumbleUploader:
 
             # Publication confirmed - stop here. Clicking again from the
             # success page is what navigated away in earlier runs.
-            published = self._find_video_url(page)
+            published = self._find_video_url(page, title)
             if published:
                 print(f"[Rumble] Published: {published}")
                 return published
@@ -346,7 +352,7 @@ class RumbleUploader:
 
         if not clicked_any:
             raise RuntimeError("No enabled submit/publish button found on the page.")
-        return self._find_video_url(page)
+        return self._find_video_url(page, title)
 
     @staticmethod
     def _is_clickable(locator) -> bool:
@@ -829,7 +835,7 @@ class RumbleUploader:
             pass
 
         try:
-            submitted_url = self._submit(page)
+            submitted_url = self._submit(page, title)
         except Exception as exc:
             # Dump the live page so the actual submit-button markup can be
             # inspected instead of guessed at - blind selector guessing has
@@ -851,7 +857,7 @@ class RumbleUploader:
         direct_url = submitted_url
         deadline = time.time() + 45
         while time.time() < deadline and not direct_url:
-            direct_url = self._find_video_url(page)
+            direct_url = self._find_video_url(page, title)
             if not direct_url:
                 page.wait_for_timeout(2000)
 
@@ -877,12 +883,22 @@ class RumbleUploader:
         self._dump_page(page)
         return UPLOADED_NO_URL
 
-    def _find_video_url(self, page):
+    def _find_video_url(self, page, title: str = ""):
         """The published video's URL from the success page.
 
         Tried in order: the Direct Link input/textarea value, any anchor
         pointing at a video, then any rumble.com/v... link anywhere in the
         HTML. Anything under /upload is rejected - that's this page.
+
+        `title` is what makes a candidate trustworthy. Rumble's upload
+        page carries links to OTHER videos - sidebar, recommendations,
+        the channel strip - and every one of them is a valid
+        rumble.com/v... URL. Accepting any of them cost a full VOD: a
+        stray link was read as the publish result after submit step 1,
+        _submit stopped on it, the rights/terms form on step 2 was never
+        filled, and the video stayed a draft that never appeared on the
+        channel. The log said "uploaded successfully" with a link to
+        somebody else's video.
         """
         candidates: list[str] = []
 
@@ -922,8 +938,24 @@ class RumbleUploader:
         except Exception:
             pass
 
-        for candidate in candidates:
-            candidate = candidate.rstrip('\'"')
-            if _is_video_url(candidate):
-                return candidate
-        return None
+        usable = [c.rstrip('\'"') for c in candidates]
+        usable = [c for c in usable if _is_video_url(c)]
+        if not usable:
+            return None
+
+        try:
+            from .channel_vods import slug_matches_title
+        except ImportError:
+            from channel_vods import slug_matches_title
+
+        matched = [c for c in usable if slug_matches_title(c, title) is True]
+        if matched:
+            return matched[0]
+
+        # None judgeable means the title had too few distinctive words to
+        # tell a real link from a sidebar one. Falling back to the first
+        # link keeps the old behaviour for those, which is the best that
+        # can be done without something to compare against.
+        if title and slug_matches_title(usable[0], title) is not None:
+            return None
+        return usable[0]

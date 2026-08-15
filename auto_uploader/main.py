@@ -39,7 +39,7 @@ from datetime import datetime
 # Bump when shipping user-visible changes, so --test-config can prove
 # which build is actually running (stale extracts have silently caused
 # several confusing "the fix did nothing" runs).
-BUILD = "2026-08-15.5 Shorts credentials no longer depend on the launch directory"
+BUILD = "2026-08-15.6 Rumble stopped after step 1 on a sidebar link and never published"
 
 # How often --watch checks whether a deferred clip's wait is up. A minute
 # is fine: the waits themselves are 25 to 80 minutes, so the resolution
@@ -339,7 +339,21 @@ def _confirm_on_rumble(url: str, title: str, cfg) -> str:
     never published is gone until someone notices weeks later.
     """
     if _is_link(url):
-        return url
+        # A link is proof something is on Rumble - not proof it is OUR
+        # video. The uploader used to hand back a link scraped off the
+        # sidebar of the upload page.
+        try:
+            from utils.channel_vods import slug_matches_title
+
+            looks_right = slug_matches_title(url, title)
+        except Exception:
+            looks_right = None
+        if looks_right is not False:
+            return url
+        print("[Rumble] The returned link does not match the title that was "
+              "sent - not trusting it.")
+        print(f"           sent: {title}")
+        print(f"           got:  {url}")
 
     channel = str(getattr(cfg.rumble, "channel_url", "") or "").strip()
     if not channel:

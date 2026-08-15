@@ -534,6 +534,31 @@ def find_on_channel(channel_url: str, title: str,
     return ""
 
 
+def slug_matches_title(url: str, title: str, minimum_words: int = 3):
+    """Does this Rumble URL look like it belongs to `title`?
+
+    True / False / None, where None means the title has too few
+    distinctive words to judge and the caller must not conclude anything.
+
+    Rumble builds the slug from the title at publish time, so a slug with
+    nothing in common with the title means the video published under a
+    DIFFERENT title than the one that was sent - a stale draft picked up
+    from an already-open upload page, for instance. The upload log says
+    "uploaded successfully" either way, and the wrong title on the right
+    video is invisible in a log.
+    """
+    wanted = _slug_words(title)
+    if len(wanted) < minimum_words:
+        return None
+    slug = str(url or "").rsplit("/", 1)[-1].lower()
+    if not slug:
+        return None
+    # One shared word is a low bar on purpose. This is here to catch a
+    # completely unrelated slug, not to police truncation - Rumble cuts
+    # long slugs off, and a near miss must not read as a failure.
+    return any(word in slug for word in wanted)
+
+
 def fetch_via_listing(channel_url: str, output_dir: str, extensions: tuple,
                       limit: int = DEFAULT_LIMIT, archive: str = "",
                       browser: str = "") -> tuple:
