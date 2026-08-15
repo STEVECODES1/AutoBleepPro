@@ -1,7 +1,11 @@
 name: CI
 
 on:
+  # Only main. Every change here lands on a feature branch and is then
+  # fast-forwarded onto main, so an unfiltered `push:` ran the whole
+  # workflow TWICE for one commit - 292 runs for half that many changes.
   push:
+    branches: [main]
   pull_request:
 
 jobs:
