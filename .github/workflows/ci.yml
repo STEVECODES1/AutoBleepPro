@@ -10,7 +10,7 @@ on:
 
 jobs:
   test:
-    name: Detection tests (Python ${{ matrix.python-version }})
+    name: Tests (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -27,32 +27,45 @@ jobs:
           cache: pip
 
       - name: Install test dependencies
-        # bleep_engine imports torch / whisper / moviepy defensively, so the
-        # tests need none of the ML or video stack. pydub is pure Python and
-        # its Sine/silent generators need no ffmpeg, which is what lets the
-        # audio tests run here. Keeping this list minimal is what makes the
-        # job finish in well under a minute on a runner with no CUDA.
+        # The exact set the suite needs, arrived at by building a clean
+        # venv and adding only what an import error actually asked for.
+        #
+        # Not here on purpose: torch, whisper, faster-whisper, mediapipe,
+        # opencv. The modules that use them import them defensively and
+        # the tests never reach that code, so installing them would add
+        # gigabytes and minutes to prove nothing.
+        #
+        #   playwright  - rumble_uploader imports sync_playwright at module
+        #                 level. The PACKAGE only; no browsers are
+        #                 downloaded and no test launches one.
+        #   watchdog    - file_watcher imports it at module level.
+        #   dotenv      - utils/config.py reads .env at import time.
+        #   google-*    - the YouTube uploader's client libraries.
         run: |
           python -m pip install --upgrade pip
-          pip install pytest better-profanity pydub
-
-      - name: Install full requirements (best effort)
-        # The pinned stack includes GPU-oriented and platform-specific wheels
-        # (faster-whisper, mediapipe, torch) that need not resolve on a
-        # hosted runner. A failure here must NOT fail the build - the unit
-        # tests above are the gate.
-        continue-on-error: true
-        run: pip install -r requirements.txt
+          pip install pytest better-profanity pydub watchdog playwright \
+                      python-dotenv google-api-python-client \
+                      google-auth-oauthlib google-auth-httplib2
 
       - name: Show resolved environment
         run: |
           python -c "import sys; print(sys.version)"
           python -c "import bleep_engine as e; print('engine', e.__version__, 'SPEED_MODE =', e.SPEED_MODE)"
           python cli.py --help > /dev/null && echo "cli.py --help OK"
+          ffmpeg -version | head -1
           pip list
 
-      - name: Run unit tests
-        run: pytest tests/test_detection.py tests/test_export.py -q
+      - name: Run the whole test suite
+        # Was two files out of thirty-nine. Every bug fixed in the days
+        # before this one - the filter-graph quoting that killed twenty
+        # clips, the Rumble link scraped off a sidebar, the audio drifting
+        # away from the picture - lived outside those two files, and CI
+        # would have reported success for all of them.
+        #
+        # The recorder's sync tests build real media and run real ffmpeg,
+        # which ubuntu-latest already has. They skip themselves if it is
+        # ever missing rather than failing.
+        run: pytest tests/ -q
 
   lint:
     name: Byte-compile
@@ -65,4 +78,4 @@ jobs:
       - name: Compile every module
         # Catches syntax errors in the GUI without needing a display or the
         # heavy imports that actually running it would pull in.
-        run: python -m compileall -q bleep_engine.py autobleep_pro.py cli.py autoreel_gui.py autoreel auto_uploader tests
+        run: python -m compileall -q bleep_engine.py autobleep_pro.py cli.py autoreel_gui.py autoreel auto_uploader tests tools
