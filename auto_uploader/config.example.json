@@ -164,6 +164,12 @@
         "daily_cap": 1,
         "manual_approval_only": true
       },
+      "zernio": {
+        "_comment": "One clip an hour, which reads as a person posting. Zernio bills per post from a prepaid balance, so this cap is also the spend cap.",
+        "enabled": false,
+        "daily_cap": 12,
+        "min_minutes_between": 60
+      },
       "youtube_shorts": {
         "_comment": "OFF until you have reviewed a private batch. Caps are deliberately low: twenty clips from one VOD posted in an afternoon is what 'repetitious content' means in YouTube's policy, whoever made them.",
         "enabled": false,
@@ -304,5 +310,11 @@
       "trim_silence": true,
       "clips_to_shorts": true
     }
+  },
+  "zernio": {
+    "_comment": "Posts clips to X through Zernio, an authorised poster that holds the X relationship itself. Chosen over X's own API ($0.20 per post containing a URL) and over twikit/Selenium, which need the X password in a file and get fresh accounts flagged as bot spam. The credential here is a Zernio key in .env - ZERNIO_API_KEY - and revoking it costs nothing.",
+    "platform": "twitter",
+    "account_id": "",
+    "caption_template": "{title} 🤣🤣🤣#stackswopo"
   }
 }

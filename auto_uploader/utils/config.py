@@ -105,6 +105,9 @@ class AppConfig:
     # chosen on the consent screen, not to the Google account - so the
     # two channels cannot share a token however much else they share.
     youtube_shorts: dict = field(default_factory=dict)
+    # Posting to X through an authorised third party rather than through
+    # X's own paid API or a browser driven with the account password.
+    zernio: dict = field(default_factory=dict)
     # Named routing for a full stream. "" is the existing behaviour.
     mode: str = ""
     modes: dict = field(default_factory=dict)
@@ -224,6 +227,7 @@ def load_config(config_path: str = "config.json", env_path: str = ".env") -> App
                      instagram=raw.get("instagram", {}),
                      facebook=raw.get("facebook", {}),
                      youtube_shorts=raw.get("youtube_shorts", {}),
+                     zernio=raw.get("zernio", {}),
                      mode=str(raw.get("mode", "") or ""),
                      modes=raw.get("modes", {}))
 

@@ -39,7 +39,7 @@ from datetime import datetime
 # Bump when shipping user-visible changes, so --test-config can prove
 # which build is actually running (stale extracts have silently caused
 # several confusing "the fix did nothing" runs).
-BUILD = "2026-08-15.23 the watch folder empties itself and says it is watching again"
+BUILD = "2026-08-15.24 X posting through Zernio - no X password, no $0.20 a post"
 
 # How often --watch checks whether a deferred clip's wait is up. A minute
 # is fine: the waits themselves are 25 to 80 minutes, so the resolution
@@ -746,6 +746,7 @@ def _clip_config(cfg) -> dict:
     return {"instagram": cfg.instagram, "facebook": cfg.facebook,
             "clips": cfg.clips, "features": cfg.features,
             "youtube_shorts": cfg.youtube_shorts,
+            "zernio": cfg.zernio,
             # The Shorts publisher falls back to the VOD channel's
             # client_secrets.json - same app, different channel.
             "youtube": {"client_secrets_path": cfg.youtube.client_secrets_path,
@@ -1632,6 +1633,11 @@ def main(argv=None) -> int:
                              "Defaults to the same limit the queue itself "
                              "uses (36 hours) - past that the next drain "
                              "drops them again whatever this says.")
+    parser.add_argument("--setup-zernio", action="store_true",
+                        help="List the accounts your Zernio key can post to "
+                             "and write the X one into config.json. Needs "
+                             "ZERNIO_API_KEY in .env. Reads only; posts "
+                             "nothing.")
     parser.add_argument("--backfill", metavar="PLATFORM",
                         help="Queue clips that were cut BEFORE this platform "
                              "was switched on. Enabling a platform does not "
@@ -2078,6 +2084,57 @@ def main(argv=None) -> int:
               f"({scope}) - nothing to clear. You can run --file on it directly.")
         return 0
 
+    if args.setup_zernio:
+        from publishers.zernio import ZernioError, ZernioPublisher
+
+        publisher = ZernioPublisher({"zernio": cfg.zernio})
+        if not publisher.token():
+            print("[Zernio] No API key. Add it to .env first:")
+            print("         python main.py --set-env ZERNIO_API_KEY=sk_...")
+            return 1
+        try:
+            accounts = publisher.accounts()
+        except ZernioError as exc:
+            print(f"[Zernio] Could not read your accounts: {exc}")
+            return 1
+        if not accounts:
+            print("[Zernio] The key works, but no social accounts are "
+                  "connected yet.")
+            print("         Connect X at zernio.com, then run this again.")
+            return 0
+
+        wanted = publisher.platform_name()
+        print(f"[Zernio] {len(accounts)} account(s) on this key:")
+        chosen = ""
+        for account in accounts:
+            platform = str(account.get("platform", "?"))
+            handle = str(account.get("username")
+                         or account.get("displayName") or "?")
+            mark = " <-- X" if platform == wanted and not chosen else ""
+            print(f"           {platform:<12} {handle}{mark}")
+            if platform == wanted and not chosen:
+                chosen = str(account.get("_id") or account.get("id") or "")
+        if not chosen:
+            print(f"[Zernio] None of them is a {wanted} account. Connect X "
+                  f"at zernio.com and run this again.")
+            return 1
+
+        config_file = os.path.join(config_dir, "config.json")
+        try:
+            with open(config_file, "r", encoding="utf-8") as handle:
+                raw = json.load(handle)
+            raw.setdefault("zernio", {})["account_id"] = chosen
+            with open(config_file, "w", encoding="utf-8") as handle:
+                json.dump(raw, handle, indent=2, ensure_ascii=False)
+        except (OSError, ValueError) as exc:
+            print(f"[Zernio] Found the account but could not save it: {exc}")
+            print(f"         Set zernio.account_id to {chosen} by hand.")
+            return 1
+        print(f"[Zernio] Saved account_id {chosen} to config.json.")
+        print("[Zernio] Turn it on with posting.platforms.zernio.enabled = "
+              "true (one clip an hour).")
+        return 0
+
     if args.backfill:
         from job_queue import JobQueue
         from utils.clip_queue import CLIP_PLATFORMS, MAX_DEFERRED_AGE_S
@@ -2424,6 +2481,7 @@ def main(argv=None) -> int:
         # mistake nothing else catches.
         report({"posting": cfg.posting,
                 "youtube_shorts": cfg.youtube_shorts,
+            "zernio": cfg.zernio,
                 "youtube": {"channel": cfg.youtube.channel,
                             "client_secrets_path": cfg.youtube.client_secrets_path}},
                guard, account, live=args.verify)
