@@ -49,6 +49,28 @@ from .errors import NotConfigured
 # rather than an expected limit.
 MAX_SHORT_SECONDS = 180
 
+# Where config.json lives. Paths in it like "./youtube_shorts_token.json"
+# mean "next to the config", not "next to whatever directory the user
+# happened to be standing in" - running from the repo root instead of
+# auto_uploader/ made --setup-shorts report a missing client_secrets.json
+# that was sitting right there, and would have made ready() answer "not
+# signed in" for a token that existed.
+_CONFIG_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_DEFAULT_SECRETS = os.path.join(_CONFIG_DIR, "client_secrets.json")
+
+
+def _anchored(path) -> str:
+    """An absolute path for a config value, or "" if it was blank."""
+    text = str(path or "").strip()
+    if not text:
+        return ""
+    if os.path.isabs(text):
+        return text
+    # normpath so a "./" prefix does not survive into the path this
+    # prints back at the user after sign-in.
+    return os.path.normpath(os.path.join(_CONFIG_DIR, text))
+
+
 # Appended to the description. Not required by YouTube any more - it
 # classifies by aspect and length - but it is still how the channel page
 # and search group them.
@@ -65,16 +87,16 @@ class YouTubeShortsPublisher:
     # ── configuration ────────────────────────────────────────────────
 
     def token_path(self) -> str:
-        return str(self.settings.get("token_path", "")).strip()
+        return _anchored(self.settings.get("token_path", ""))
 
     def client_secrets_path(self) -> str:
         """Shared with the VOD uploader - it identifies the app, not the
         channel."""
-        configured = str(self.settings.get("client_secrets_path", "")).strip()
+        configured = _anchored(self.settings.get("client_secrets_path", ""))
         if configured:
             return configured
-        return str((self.config.get("youtube", {}) or {}).get(
-            "client_secrets_path", "")).strip()
+        return _anchored((self.config.get("youtube", {}) or {}).get(
+            "client_secrets_path", "")) or _DEFAULT_SECRETS
 
     def ready(self) -> bool:
         """True only when this channel has been signed into.

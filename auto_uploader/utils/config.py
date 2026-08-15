@@ -198,7 +198,13 @@ def load_config(config_path: str = "config.json", env_path: str = ".env") -> App
     posting = dict(raw.get("posting", {}))
     for key, default in (("state_path", "./posting_state.json"),
                          ("queue_path", "./clip_jobs.json"),
-                         ("kill_switch_file", "./STOP_POSTING")):
+                         ("kill_switch_file", "./STOP_POSTING"),
+                         # Where a post that only a human may make gets
+                         # written down. Relative, it lands under whatever
+                         # directory the run started in - which is how a
+                         # queue of manual posts becomes a file nobody
+                         # ever opens.
+                         ("manual_queue_path", "./logs/manual_posts.txt")):
         posting[key] = _resolve_path(project_root, posting.get(key) or default)
 
     return AppConfig(youtube=youtube, rumble=rumble, general=general,
