@@ -39,7 +39,7 @@ from datetime import datetime
 # Bump when shipping user-visible changes, so --test-config can prove
 # which build is actually running (stale extracts have silently caused
 # several confusing "the fix did nothing" runs).
-BUILD = "2026-08-15.21 already uploaded is not already clipped"
+BUILD = "2026-08-15.22 Shorts could never see its own settings; titles are now safe to publish"
 
 # How often --watch checks whether a deferred clip's wait is up. A minute
 # is fine: the waits themselves are 25 to 80 minutes, so the resolution
@@ -680,9 +680,23 @@ def _apply_mode(cfg, name: str, settings: dict):
 
 
 def _clip_config(cfg) -> dict:
-    """The slice of config the clip publishers actually read."""
+    """The slice of config the clip publishers actually read.
+
+    youtube_shorts was missing from here, and the effect was silent: the
+    publisher read its settings out of this dict, got {}, resolved an
+    empty token_path, and answered ready() False - so every clip logged
+    "youtube_shorts: skipped - not configured yet" no matter how
+    correctly the token had been set up. --posting-status looked right,
+    --verify named the right channel, and nothing ever reached the
+    channel. A slice of config is a place things go missing quietly.
+    """
     return {"instagram": cfg.instagram, "facebook": cfg.facebook,
             "clips": cfg.clips, "features": cfg.features,
+            "youtube_shorts": cfg.youtube_shorts,
+            # The Shorts publisher falls back to the VOD channel's
+            # client_secrets.json - same app, different channel.
+            "youtube": {"client_secrets_path": cfg.youtube.client_secrets_path,
+                        "channel": cfg.youtube.channel},
             # So every posting outcome lands in logs/clips.log.
             "logs_folder": cfg.general.logs_folder}
 

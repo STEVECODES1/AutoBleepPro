@@ -43,6 +43,11 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # once its own guard, cap and spacing allow it.
 CLIP_PLATFORMS = ("instagram", "facebook", "youtube_shorts")
 
+# Platforms whose CAPTION text goes through the profanity filter. Rumble
+# is deliberately absent - it is the uncensored channel, and the titles
+# there are the line actually spoken, which is the point.
+CLEAN_TEXT_PLATFORMS = ("instagram", "facebook", "youtube_shorts")
+
 # A blocked clip is worth keeping for about a day. Past that the stream it
 # came from is stale and posting it is worse than not.
 MAX_DEFERRED_AGE_S = 36 * 3600
@@ -88,7 +93,17 @@ def caption_for(platform: str, video_path: str, fallback: str,
     if not template:
         template = ((config or {}).get("instagram", {}) or {}).get(
             "caption_template", "")
-    return build_caption(template, video_path) or fallback
+    caption = build_caption(template, video_path) or fallback
+
+    # Instagram and YouTube apply their rules to the TEXT as well as the
+    # video. Rumble is not in this set on purpose: that channel is the
+    # uncensored one, and running the filter over it would flatten the
+    # exact thing its audience is there for.
+    if platform in CLEAN_TEXT_PLATFORMS:
+        from autoreel.safe_text import clean_lines
+
+        caption = clean_lines(caption)
+    return caption
 
 
 def publish(platform: str, video_path: str, caption: str,

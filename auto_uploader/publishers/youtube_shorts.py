@@ -127,11 +127,19 @@ class YouTubeShortsPublisher:
     # ── posting ──────────────────────────────────────────────────────
 
     def description_for(self, caption: str) -> str:
+        from autoreel.safe_text import clean_lines
+
+        caption = clean_lines(caption)
         template = str(self.settings.get("description_template", "")).strip()
         body = template.replace("[CAPTION]", caption) if template else caption
         if SHORTS_TAG.lower() not in body.lower():
             body = f"{body}\n\n{SHORTS_TAG}".strip()
         return body
+
+    def safe_fallback(self, video_path: str) -> str:
+        """What to title a clip whose spoken line cannot be published."""
+        configured = str(self.settings.get("safe_title", "") or "").strip()
+        return configured or "Stackswopo clip"
 
     def title_for(self, caption: str, video_path: str) -> str:
         """A Short's title is the first line of the caption, trimmed.
@@ -144,6 +152,14 @@ class YouTubeShortsPublisher:
         title = (line[0] if line else "").strip()
         if not title:
             title = os.path.splitext(os.path.basename(video_path))[0]
+        # YouTube applies its rules to the TEXT as well as the video,
+        # and does not care that the words came off the audio. The clip
+        # titles this pipeline produces are the line actually spoken -
+        # which is why they read like a person wrote them, and why some
+        # of them cannot go on a YouTube channel as written.
+        from autoreel.safe_text import clean_title
+
+        title = clean_title(title, self.safe_fallback(video_path))
         limit = int(self.settings.get("max_title_chars", 90))
         if len(title) > limit:
             title = title[:limit].rsplit(" ", 1)[0].rstrip(" ,;:-")

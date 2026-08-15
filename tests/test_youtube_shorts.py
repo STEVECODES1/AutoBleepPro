@@ -153,3 +153,66 @@ def test_it_ships_off_with_low_caps():
     assert settings["daily_cap"] <= 5
     assert settings["min_minutes_between"] >= 60
     assert config["youtube_shorts"]["privacy"] == "private"
+
+
+def test_the_clip_config_carries_the_shorts_settings():
+    """The publisher reads its settings out of the dict _clip_config
+    builds. When youtube_shorts was absent it resolved an empty
+    token_path, answered ready() False, and every clip logged
+    "skipped - not configured yet" - while --posting-status and --verify
+    both looked perfect. Nothing ever reached the channel."""
+    import sys
+
+    sys.path.insert(0, _UPLOADER)
+    from main import _clip_config
+    from publishers.youtube_shorts import YouTubeShortsPublisher
+
+    class _General:
+        logs_folder = "logs"
+
+    class _YouTube:
+        client_secrets_path = "/tmp/secrets.json"
+        channel = "@StackswopoGames"
+
+    class _Cfg:
+        instagram = {}
+        facebook = {}
+        clips = {}
+        features = {}
+        youtube_shorts = {"token_path": "./youtube_shorts_token.json",
+                          "channel": "@STACKSWOPO10K"}
+        youtube = _YouTube()
+        general = _General()
+
+    built = _clip_config(_Cfg())
+    assert "youtube_shorts" in built, "the publisher cannot see its own settings"
+
+    publisher = YouTubeShortsPublisher(built)
+    assert publisher.token_path(), "an empty token_path means ready() is always False"
+    assert publisher.token_path().endswith("youtube_shorts_token.json")
+
+
+def test_the_clip_config_carries_the_shared_client_secrets():
+    import sys
+
+    sys.path.insert(0, _UPLOADER)
+    from main import _clip_config
+
+    class _General:
+        logs_folder = "logs"
+
+    class _YouTube:
+        client_secrets_path = "/tmp/secrets.json"
+        channel = "@StackswopoGames"
+
+    class _Cfg:
+        instagram = {}
+        facebook = {}
+        clips = {}
+        features = {}
+        youtube_shorts = {}
+        youtube = _YouTube()
+        general = _General()
+
+    built = _clip_config(_Cfg())
+    assert built["youtube"]["client_secrets_path"] == "/tmp/secrets.json"
