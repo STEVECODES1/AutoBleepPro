@@ -39,7 +39,7 @@ from datetime import datetime
 # Bump when shipping user-visible changes, so --test-config can prove
 # which build is actually running (stale extracts have silently caused
 # several confusing "the fix did nothing" runs).
-BUILD = "2026-08-16.43 a slur never reaches Instagram, in the audio or on the screen"
+BUILD = "2026-08-16.44 a queued clip finds its own title, wherever the notes are"
 
 # How often --watch checks whether a deferred clip's wait is up. A minute
 # is fine: the waits themselves are 25 to 80 minutes, so the resolution
@@ -1194,7 +1194,27 @@ def _clip_config(cfg) -> dict:
             "youtube": {"client_secrets_path": cfg.youtube.client_secrets_path,
                         "channel": cfg.youtube.channel},
             # So every posting outcome lands in logs/clips.log.
-            "logs_folder": cfg.general.logs_folder}
+            "logs_folder": cfg.general.logs_folder,
+            # Where a clip's notes might be, when they are not beside the
+            # file being posted. The 9:16 re-frame lives in censored/ and
+            # the notes were written next to the CLIP in the watch folder
+            # - so Rumble, which uploads the clip, was titled "Gumball ass
+            # animations" while Instagram uploaded the re-frame, found
+            # nothing, and posted the stream's name.
+            #
+            # New clips get their notes copied alongside the re-frame.
+            # This is what rescues the ones already queued.
+            #
+            # getattr rather than attribute access: this slice is built
+            # from whatever config object it is handed, and a folder it
+            # cannot see must cost a better title rather than the whole
+            # post.
+            "note_folders": tuple(
+                folder for folder in
+                (getattr(cfg.general, "watch_folder", ""),
+                 getattr(cfg.general, "uploaded_folder", ""),
+                 getattr(cfg.general, "censored_folder", ""))
+                if folder)}
 
 
 def _find_clips(cfg, limit: int = 15) -> list:

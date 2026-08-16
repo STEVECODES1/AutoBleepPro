@@ -529,7 +529,7 @@ def copy_sidecars(source: str, target: str) -> int:
     return brought
 
 
-def spoken_line(video_path: str) -> str:
+def spoken_line(video_path: str, folders=()) -> str:
     """The line actually said in this clip, from the file beside it.
 
     _deliver_clips writes it there, and NOTHING read it back - so the
@@ -543,13 +543,24 @@ def spoken_line(video_path: str) -> str:
     plain = os.path.join(os.path.dirname(stem),
                          re.sub(r"^_?vertical[_\s]+", "",
                                 os.path.basename(stem), flags=re.I))
+    # Somewhere else entirely, when the file being posted is the 9:16
+    # re-frame: that lives in censored/ and the notes were written beside
+    # the CLIP, in the watch folder. New clips get their notes copied
+    # across; this is what rescues the ones already queued.
+    elsewhere = []
+    for folder in folders or ():
+        if folder and os.path.isdir(folder):
+            elsewhere.append(os.path.join(folder,
+                                          os.path.basename(plain)))
+
     # _line.txt FIRST: it holds the spoken line and nothing else.
     # _caption.txt is a whole formatted caption whose first line is the
     # hook only when there IS one - otherwise it is "From: <stream>",
     # which is scaffolding, not a headline.
-    for candidate in (stem + "_line.txt", plain + "_line.txt",
-                      stem + ".txt", stem + "_caption.txt",
-                      plain + ".txt", plain + "_caption.txt"):
+    roots = [stem, plain] + elsewhere
+    for candidate in ([root + "_line.txt" for root in roots]
+                      + [root + ".txt" for root in roots]
+                      + [root + "_caption.txt" for root in roots]):
         try:
             with open(candidate, "r", encoding="utf-8") as handle:
                 lines = handle.read().strip().splitlines()
@@ -577,14 +588,14 @@ def tidy_stem(stem: str) -> str:
     return " ".join(text.split()).strip(" -.")
 
 
-def clip_title(video_path: str) -> str:
+def clip_title(video_path: str, folders=()) -> str:
     """A caption headline for this clip.
 
     The line spoken in the clip comes first - it is what makes a caption
     read like a person wrote it. The filename is the fallback, and it is
     scrubbed of the parts no human would type.
     """
-    said = spoken_line(video_path)
+    said = spoken_line(video_path, folders)
     if said:
         return said
 
@@ -600,9 +611,9 @@ def clip_title(video_path: str) -> str:
 
 
 def build_caption(template: str, video_path: str, title: str = "",
-                  tags: str = "") -> str:
+                  tags: str = "", folders=()) -> str:
     """Fill the Instagram caption template. Never raises on a bad key."""
-    headline = title or clip_title(video_path)
+    headline = title or clip_title(video_path, folders)
     if not template:
         return _with_tags(headline, tags)
     try:

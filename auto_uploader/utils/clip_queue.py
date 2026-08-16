@@ -109,7 +109,7 @@ def clean_template(template: str) -> str:
     return cleaned.strip("\n")
 
 
-def _subject_note(video_path: str) -> str:
+def _subject_note(video_path: str, folders=()) -> str:
     """What the clip IS, written beside it when it was cut.
 
     The stream's title and the framing profile - "monkey", "gta" - which
@@ -123,7 +123,11 @@ def _subject_note(video_path: str) -> str:
     plain = os.path.join(os.path.dirname(stem),
                          re.sub(r"^_?vertical[_\s]+", "",
                                 os.path.basename(stem), flags=re.I))
-    for candidate in (stem + "_subject.txt", plain + "_subject.txt"):
+    roots = [stem, plain]
+    for folder in folders or ():
+        if folder and os.path.isdir(folder):
+            roots.append(os.path.join(folder, os.path.basename(plain)))
+    for candidate in [root + "_subject.txt" for root in roots]:
         try:
             with open(candidate, "r", encoding="utf-8") as handle:
                 found = handle.read().strip()
@@ -165,7 +169,10 @@ def caption_for(platform: str, video_path: str, fallback: str,
     # Tags are picked from the CLIP and sized to the platform: a Monkey
     # clip must not be tagged #gtarp, and the count that helps on
     # Instagram gets a post demoted on X.
-    headline = clip_title(video_path)
+    # Where a clip's notes might be when they are not beside the file
+    # being posted - see _clip_config's note_folders.
+    folders = tuple((config or {}).get("note_folders", ()) or ())
+    headline = clip_title(video_path, folders)
     # Matched against the headline AND the filename, because the headline
     # is usually the line spoken in the clip and people do not announce
     # what app they are on. "Stackswopo Love Yall - Clip 03" says nothing
@@ -174,10 +181,11 @@ def caption_for(platform: str, video_path: str, fallback: str,
     # the headline meant the specific tags almost never fired and every
     # clip went out with the generic fillers.
     subject = f"{headline} {os.path.basename(video_path or '')} " \
-              f"{_subject_note(video_path)}"
+              f"{_subject_note(video_path, folders)}"
     tags = hashtags_for(subject, platform,
                         settings.get("max_hashtags"))
-    caption = build_caption(template, video_path, tags=tags) or fallback
+    caption = build_caption(template, video_path, tags=tags,
+                            folders=folders) or fallback
 
     # Instagram and YouTube apply their rules to the TEXT as well as the
     # video. Rumble is not in this set on purpose: that channel is the

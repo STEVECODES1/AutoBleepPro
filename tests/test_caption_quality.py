@@ -508,3 +508,51 @@ def test_instagram_gets_the_clips_line_with_the_language_filtered(tmp_path):
     assert "ass" not in caption.lower().split()[1], "unfiltered on Instagram"
     assert clip_title(str(clip)) == "Gumball ass animations", \
         "Rumble's title was filtered too"
+
+
+def test_the_notes_are_found_in_another_folder(tmp_path):
+    """The clips ALREADY queued cannot have their notes copied - the copy
+    happens when the re-frame is made, and theirs was made days ago. So
+    the lookup also searches the folders a clip's notes actually live in.
+
+    Rumble showed "Gumball ass animations" while Facebook showed
+    "Stackswopovods", for the same clip, at the same moment."""
+    import sys
+
+    sys.path.insert(0, os.path.join(ROOT, "auto_uploader"))
+    from utils.clip_queue import caption_for
+
+    watch = tmp_path / "watch"
+    censored = tmp_path / "censored"
+    watch.mkdir()
+    censored.mkdir()
+    base = "Stackswopovods - Clip 02"
+    (watch / f"{base}.txt").write_text("Gumball ass animations")
+    (watch / f"{base}_subject.txt").write_text("Stackswopovods monkey")
+    reframed = censored / f"_vertical_{base}.mp4"
+    reframed.write_bytes(b"x")
+
+    template = {"instagram": {"caption_template": "{title}"}}
+    assert caption_for("facebook", str(reframed), "", template).startswith(
+        "Stackswopovods"), "the stream name is what it finds without help"
+
+    template["note_folders"] = (str(watch), str(censored))
+    caption = caption_for("facebook", str(reframed), "", template)
+
+    assert caption.startswith("Gumball a"), \
+        "a queued clip still cannot find its own title"
+    assert "#monkeyapp" in caption, "and its subject note was not found either"
+
+
+def test_note_folders_that_do_not_exist_are_skipped(tmp_path):
+    import sys
+
+    sys.path.insert(0, os.path.join(ROOT, "auto_uploader"))
+    from utils.clip_queue import caption_for
+
+    clip = tmp_path / "a - Clip 01.mp4"
+    clip.write_bytes(b"x")
+
+    assert caption_for("facebook", str(clip), "",
+                       {"instagram": {"caption_template": "{title}"},
+                        "note_folders": ("/nope", "", None)})
