@@ -305,3 +305,56 @@ def test_shorts_privacy_is_a_command_not_a_json_edit(tmp_path):
     assert "not one of" in main.set_shorts_privacy(str(path), "secret")
     assert json.loads(path.read_text())["youtube_shorts"]["privacy"] == \
         "unlisted", "a rejected value still changed the file"
+
+
+# ── the title is the line, the decoration goes in the description ────
+
+@pytest.mark.parametrize("caption,expected", [
+    ("Gumball a** animations \U0001f923\U0001f923\U0001f923#stackswopo",
+     "Gumball a** animations"),
+    ("Just shut up please \U0001f923\U0001f923\U0001f923#stackswopo",
+     "Just shut up please"),
+    ("yall b***** be wild \U0001f923 #stackswopo #funny",
+     "yall b***** be wild"),
+    ("Wifi Cooked #stackswopo #funny", "Wifi Cooked"),
+    ("He got me a couple gift cards", "He got me a couple gift cards"),
+])
+def test_the_title_is_the_line_without_the_emoji_tail(tmp_path, caption,
+                                                      expected):
+    """A caption's first line is the spoken line plus the emoji and the
+    channel tag. That is right in a description and reads as a bot on a
+    title - which is what went on the channel:
+    "vertical Stackswopo Love Yall 20250914 204409 - Clip 03 ...#st..."."""
+    publisher = YouTubeShortsPublisher(_config(tmp_path))
+
+    assert publisher.title_for(caption, "/x/clip.mp4") == expected
+
+
+def test_an_emoji_inside_the_sentence_is_part_of_it(tmp_path):
+    """Only the TAIL comes off. An earlier version allowed words after
+    the first emoji and cut "yo (emoji) that was crazy" down to "yo"."""
+    publisher = YouTubeShortsPublisher(_config(tmp_path))
+
+    assert publisher.title_for("yo \U0001f923 that was crazy",
+                               "/x/clip.mp4") == "yo \U0001f923 that was crazy"
+
+
+def test_a_title_that_is_only_emoji_keeps_them(tmp_path):
+    """Stripping it to empty would be worse than leaving it."""
+    publisher = YouTubeShortsPublisher(_config(tmp_path))
+
+    assert publisher.title_for("\U0001f923\U0001f923\U0001f923",
+                               "/x/clip.mp4") == "\U0001f923\U0001f923\U0001f923"
+
+
+def test_the_description_still_carries_everything(tmp_path):
+    """The tags and emoji are not thrown away - they move to where they
+    belong, which is where they already went."""
+    publisher = YouTubeShortsPublisher(_config(tmp_path))
+    caption = ("Gumball a** animations \U0001f923#stackswopo\n\n"
+               "#monkeyapp #funnymoments")
+
+    body = publisher.description_for(caption)
+
+    assert "#stackswopo" in body and "#monkeyapp" in body
+    assert SHORTS_TAG in body

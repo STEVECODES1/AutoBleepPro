@@ -39,6 +39,7 @@ matters most - this is not reposting.
 
 from __future__ import annotations
 
+import re
 import os
 from typing import Optional
 
@@ -75,6 +76,31 @@ def _anchored(path) -> str:
 # classifies by aspect and length - but it is still how the channel page
 # and search group them.
 SHORTS_TAG = "#Shorts"
+
+# The decoration a caption carries and a TITLE should not.
+#
+# A caption's first line is the spoken line plus the emoji and the
+# channel tag - fine in a description, and on a title it reads as a bot:
+# "Gumball a** animations 🤣🤣🤣💀💀💀#stackswopo". The line is the title;
+# the rest belongs in the description, which is where it already goes.
+#
+# The tail is a run of tags and emoji separated by nothing but space. A
+# word anywhere in it means the run has not started yet: "yo 🤣 that was
+# crazy" is a whole sentence, and an earlier version of this cut it to
+# "yo" because it allowed word characters after the first emoji.
+_DECORATION = r"(?:#\w+|[\U0001F000-\U0001FAFF☀-➿️‍])"
+_TITLE_TAIL = re.compile(rf"(?:\s*{_DECORATION}+)+\s*$")
+
+
+def _bare_line(text: str) -> str:
+    """A caption's first line with its trailing emoji and tags removed.
+
+    Only the TAIL. An emoji in the middle of what somebody said is part
+    of the sentence, and a title that is nothing but emoji keeps them -
+    stripping it to empty would be worse than leaving it.
+    """
+    trimmed = _TITLE_TAIL.sub("", text or "").strip(" -,;:·|")
+    return trimmed or (text or "").strip()
 
 
 class YouTubeShortsPublisher:
@@ -149,7 +175,7 @@ class YouTubeShortsPublisher:
         feed it appears in.
         """
         line = (caption or "").strip().splitlines()
-        title = (line[0] if line else "").strip()
+        title = _bare_line((line[0] if line else "").strip())
         if not title:
             title = os.path.splitext(os.path.basename(video_path))[0]
         # YouTube applies its rules to the TEXT as well as the video,
