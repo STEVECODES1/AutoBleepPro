@@ -385,3 +385,52 @@ def test_the_clip_sidecar_no_longer_says_link_in_bio(tmp_path):
 
     assert "link in bio" not in written.lower()
     assert "Taylor, you know who" in written
+
+
+# ── the filename IS the title, when a person typed it ────────────────
+
+def test_a_hand_typed_filename_is_used_as_the_title():
+    """"WIFI COOKED.mp4" has no quotes, no date and no video id, so every
+    pattern-based check declined it - and the stream went up called
+    "Gaming Stream" while its real title sat in the filename."""
+    import sys
+
+    sys.path.insert(0, os.path.join(ROOT, "auto_uploader"))
+    from utils.templating import title_from_plain_filename
+
+    assert title_from_plain_filename("WIFI COOKED.mp4") == "WIFI COOKED"
+    assert title_from_plain_filename("monkey_n_gamble_howl.mp4") == \
+        "monkey n gamble howl"
+    assert title_from_plain_filename("GG.mp4") == "GG", \
+        "a one-word stream title is still a title"
+
+
+@pytest.mark.parametrize("name", [
+    "20250914 204409.mp4",      # a timestamp
+    "12345678.mp4",             # digits
+    "video.mp4",                # what a tool called it
+    "output.mp4",
+    "recording final.mp4",
+    "VID_20240101.mp4",         # a phone
+    "[v70rbpc].mp4",            # a yt-dlp id and nothing else
+    "1080p60.mp4",              # an encoding setting
+])
+def test_a_machine_name_is_refused(name):
+    """A wrong title gets published; a missing one is only a default.
+    Only one of those can be taken back."""
+    import sys
+
+    sys.path.insert(0, os.path.join(ROOT, "auto_uploader"))
+    from utils.templating import title_from_plain_filename
+
+    assert title_from_plain_filename(name) is None
+
+
+def test_the_machinery_still_comes_off_a_real_name():
+    import sys
+
+    sys.path.insert(0, os.path.join(ROOT, "auto_uploader"))
+    from utils.templating import title_from_plain_filename
+
+    assert title_from_plain_filename(
+        "Stackswopo Love Yall 20250914 204409.mp4") == "Stackswopo Love Yall"

@@ -152,6 +152,59 @@ def _collapse_spaces(text: str) -> str:
     return re.sub(r"\s{2,}", " ", text).strip()
 
 
+# Names that are what a tool called a file, not what anybody called the
+# stream. Titling a video "output" is worse than admitting we do not know.
+_MACHINE_NAMES = frozenset({
+    "video", "output", "out", "final", "temp", "tmp", "untitled", "new",
+    "recording", "record", "capture", "clip", "stream", "vod", "download",
+    "movie", "render", "export", "test", "sample", "footage",
+})
+
+# Machinery inside a filename that is never part of a title.
+_NAME_NOISE = (
+    re.compile(r"\[[a-z0-9_-]{6,}\]", re.I),      # [v70rbpc]
+    re.compile(r"\b\d{8}[\s_-]+\d{6}\b"),         # 20250914 204409
+    re.compile(r"\bvid[\s_-]*\d{6,}\b", re.I),    # VID_20240101
+    re.compile(r"\b\d{4}-\d{2}-\d{2}\b"),
+    re.compile(r"^\s*_?vertical[_\s]+", re.I),
+    re.compile(r"[-\s]+clip\s*\d+\s*$", re.I),
+    re.compile(r"\b(1080p|720p|4k|60fps|30fps|mp4|hevc|h264)\b", re.I),
+)
+
+
+def title_from_plain_filename(filename: str) -> Optional[str]:
+    """The filename itself, when a PERSON clearly typed it.
+
+    extract_title_from_filename only answers when it finds a pattern - a
+    quoted section, a date, a yt-dlp id. That was the right caution when
+    filenames looked like "video_2026_08_15.mp4". It is the wrong answer
+    for "WIFI COOKED.mp4", which was named by hand and IS the title: the
+    tool threw it away and uploaded a stream called "Gaming Stream".
+
+    So this is the last look before giving up. It accepts a name only
+    when what is left after the machinery comes out reads like words
+    somebody wrote, and returns None otherwise - because a wrong title
+    is published and a missing one is only a default.
+    """
+    name = os.path.splitext(os.path.basename(filename or ""))[0]
+    name = name.replace("_", " ")
+    for pattern in _NAME_NOISE:
+        name = pattern.sub(" ", name)
+    name = _collapse_spaces(name).strip(" -.")
+    if not name:
+        return None
+
+    letters = sum(1 for ch in name if ch.isalpha())
+    # Two letters is the floor - "GG" is a plausible stream title, "3" is
+    # not - and letters have to be most of what is there, so a timestamp
+    # with a stray character in it cannot pass.
+    if letters < 2 or letters < len(name.replace(" ", "")) * 0.5:
+        return None
+    if all(word.lower() in _MACHINE_NAMES for word in name.split()):
+        return None
+    return name
+
+
 def format_date(dt: datetime, date_style: str) -> str:
     """Render `dt` per `date_style`.
 

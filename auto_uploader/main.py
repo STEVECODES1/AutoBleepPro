@@ -39,7 +39,7 @@ from datetime import datetime
 # Bump when shipping user-visible changes, so --test-config can prove
 # which build is actually running (stale extracts have silently caused
 # several confusing "the fix did nothing" runs).
-BUILD = "2026-08-16.33 bleep a Short before YouTube hears it"
+BUILD = "2026-08-16.34 if the filename says WIFI COOKED, the stream is called WIFI COOKED"
 
 # How often --watch checks whether a deferred clip's wait is up. A minute
 # is fine: the waits themselves are 25 to 80 minutes, so the resolution
@@ -95,6 +95,7 @@ from utils.templating import (
     build_title,
     extract_date_from_filename,
     extract_title_from_filename,
+    title_from_plain_filename,
     format_date,
 )
 from utils.youtube_checker import (
@@ -1100,6 +1101,16 @@ def get_stream_title(video_path: str, cli_title: str, cfg, allow_prompt: bool = 
         os.path.basename(video_path), cfg.general.filename_channel_prefixes)
     if extracted:
         return extracted
+
+    # The filename ITSELF, when a person clearly typed it. "WIFI
+    # COOKED.mp4" carries no quotes, no date and no video id, so every
+    # check above declined it - and the stream went up called "Gaming
+    # Stream" while its real title sat in the filename. Asked for
+    # directly, and rightly.
+    plain = title_from_plain_filename(os.path.basename(video_path))
+    if plain:
+        print(f"[TITLE] Using the filename as the title: {plain}")
+        return plain
 
     if cfg.general.ask_for_title and allow_prompt:
         prompt = f"\nNew video detected: {os.path.basename(video_path)}\nStream title (Enter for default '{cfg.general.default_title}'): "
