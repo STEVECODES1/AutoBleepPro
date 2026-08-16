@@ -487,3 +487,52 @@ def test_offering_the_same_clip_twice_never_double_posts(publisher, posting,
         publisher.offer(posting, CONFIG, clips[0], platforms=("instagram",))
 
     assert len(FakePublisher.posted) == before
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# ONE CLIP, TWO PATHS, TWO UPLOADS
+#
+# "Clip 01" is on the Shorts channel twice, byte for byte identical,
+# eighteen seconds each. The queue matched jobs on the exact path string,
+# and one clip legitimately has more than one path: watch_folder/X.mp4 when
+# it is already 9:16, censored/_vertical_X.mp4 when a re-frame happened.
+# Two paths, two jobs, two uploads - and the Shorts publisher has no dedup
+# of its own to catch it.
+# ═════════════════════════════════════════════════════════════════════════════
+
+def test_the_reframed_copy_is_the_same_clip(publisher):
+    from utils.clip_queue import clip_key
+
+    assert clip_key("/watch/Wifi Cooked - Clip 01.mp4") == \
+        clip_key("/censored/_vertical_Wifi Cooked - Clip 01.mp4")
+    assert clip_key("/a/Clip 01.mp4") != clip_key("/a/Clip 02.mp4")
+
+
+def test_a_clip_is_not_posted_twice_under_its_other_name(publisher, posting,
+                                                         tmp_path):
+    """THE duplicate. Offer it as the plain clip, then as the re-framed
+    copy - the second must recognise the first."""
+    plain = tmp_path / "Wifi Cooked - Clip 01.mp4"
+    plain.write_bytes(b"x")
+    reframed = tmp_path / "_vertical_Wifi Cooked - Clip 01.mp4"
+    reframed.write_bytes(b"x")
+
+    first = publisher.offer(posting, CONFIG, str(plain),
+                            platforms=("instagram",))
+    assert first["instagram"] == "posted"
+
+    again = publisher.offer(posting, CONFIG, str(reframed),
+                            platforms=("instagram",))
+
+    assert again["instagram"] == "skipped: already posted", \
+        "the re-framed copy uploaded the same clip a second time"
+    assert len(FakePublisher.posted) == 1
+
+
+def test_two_different_clips_are_still_two_clips(publisher, posting, clips):
+    """The normalisation must not collapse a whole stream into one job."""
+    publisher.offer(posting, CONFIG, clips[0], platforms=("instagram",))
+    _rewind(posting, minutes=30)
+    publisher.offer(posting, CONFIG, clips[1], platforms=("instagram",))
+
+    assert len(FakePublisher.posted) == 2

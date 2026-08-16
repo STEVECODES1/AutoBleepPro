@@ -340,6 +340,36 @@ def publish(platform: str, video_path: str, caption: str,
     return ok
 
 
+def clip_key(video_path: str) -> str:
+    """What makes two paths the SAME clip.
+
+    The queue matched on the exact path string, and one clip legitimately
+    has more than one: it is offered as `watch_folder/X.mp4` when it is
+    already 9:16, and as `censored/_vertical_X.mp4` when a re-frame
+    happened. Two paths meant two jobs meant two uploads - which is how
+    "Clip 01" appears twice on the Shorts channel, byte for byte
+    identical, eighteen seconds each.
+
+    The name without its folder or the re-frame prefix is enough here:
+    clip filenames already carry the stream and the index, so two clips
+    sharing one are the same clip.
+    """
+    name = os.path.basename(video_path or "")
+    return re.sub(r"^_?vertical[_\s]+", "", name, flags=re.I).lower()
+
+
+def _already_posted(queue, platform: str, video_path: str):
+    """This clip's job on this platform, whichever path it was queued as."""
+    wanted = clip_key(video_path)
+    exact = queue.find(platform, video_path)
+    if exact is not None:
+        return exact
+    for job in queue.list_jobs():
+        if job.platform == platform and clip_key(job.clip_path) == wanted:
+            return job
+    return None
+
+
 def offer(posting: dict, config: dict, video_path: str,
           fallback_caption: str = "", platforms=CLIP_PLATFORMS,
           dry_run: bool = False) -> dict:
@@ -358,7 +388,7 @@ def offer(posting: dict, config: dict, video_path: str,
     queue = _queue(posting)
 
     for platform in platforms:
-        already = queue.find(platform, video_path)
+        already = _already_posted(queue, platform, video_path)
         if already is not None and already.state == "done":
             # This clip has been through here before - a re-run of the
             # same file must not post it a second time.
