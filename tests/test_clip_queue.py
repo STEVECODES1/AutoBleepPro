@@ -439,3 +439,51 @@ def test_nothing_flagged_means_no_second_copy(publisher, tmp_path,
 
     assert clip_queue._censored_clip("youtube_shorts", str(raw),
                                      {"general": {}}) == (str(raw), "")
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# RUMBLE HAVING SEEN A CLIP SAYS NOTHING ABOUT YOUTUBE
+#
+# The offer to Instagram / Facebook / Shorts / X / TikTok used to sit inside
+# `if newly_uploaded:` in main.py, alongside the announcement. So a clip
+# Rumble skipped as a duplicate was never offered to any of the other five
+# platforms either - and a clip that reached Rumble but never reached
+# Shorts could never reach Shorts, on any later run. Shorts stayed empty
+# while Rumble filled up.
+#
+# What makes offering it again safe is here: the queue answers per
+# platform, not per clip.
+# ═════════════════════════════════════════════════════════════════════════════
+
+def test_a_clip_posted_to_one_platform_is_still_offered_to_the_others(
+        publisher, posting, clips):
+    """The guarantee the un-gating leans on."""
+    posting["platforms"]["youtube_shorts"] = {"enabled": True,
+                                              "daily_cap": 50,
+                                              "min_minutes_between": 0}
+
+    first = publisher.offer(posting, CONFIG, clips[0],
+                            platforms=("instagram",))
+    assert first["instagram"] == "posted"
+
+    # The same clip, offered again now that another platform is on.
+    again = publisher.offer(posting, CONFIG, clips[0],
+                            platforms=("instagram", "youtube_shorts"))
+
+    assert again["instagram"] == "skipped: already posted", \
+        "it was about to post the same clip to Instagram twice"
+    assert again["youtube_shorts"] != "skipped: already posted", \
+        "a platform that never saw this clip was skipped anyway"
+
+
+def test_offering_the_same_clip_twice_never_double_posts(publisher, posting,
+                                                         clips):
+    """Every pass of the watcher offers whatever it is holding. That must
+    be free when there is nothing new to do."""
+    publisher.offer(posting, CONFIG, clips[0], platforms=("instagram",))
+    before = len(FakePublisher.posted)
+
+    for _ in range(3):
+        publisher.offer(posting, CONFIG, clips[0], platforms=("instagram",))
+
+    assert len(FakePublisher.posted) == before

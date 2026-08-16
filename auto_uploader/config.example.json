@@ -293,7 +293,7 @@
     "_safe_title_comment": "Used when the line spoken in a clip cannot be published as a title on YouTube or Instagram - a slur cannot be masked convincingly and cannot be removed without wrecking the sentence around it. Rumble keeps the real line.",
     "safe_title": "Stackswopo clip",
     "_privacy_comment": "private until you have watched a batch. YouTube is stricter than the other destinations about volume and repetition, and a channel is far harder to get back than a post is to delete. Switch to 'public' once you are happy with what it is producing.",
-    "privacy": "private",
+    "privacy": "unlisted",
     "category_id": "20",
     "made_for_kids": false,
     "max_title_chars": 90,

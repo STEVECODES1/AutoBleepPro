@@ -139,20 +139,37 @@ def test_youtube_is_the_last_clip_platform():
     assert CLIP_PLATFORMS[-1] == "youtube_shorts"
 
 
-def test_it_ships_off_with_low_caps():
+def test_it_ships_off():
+    """Nobody's channel gets posted to because they cloned a repo."""
+    import json
+
+    with open(os.path.join(_UPLOADER, "config.example.json"),
+              encoding="utf-8") as f:
+        shipped = json.load(f)
+
+    assert shipped["posting"]["platforms"]["youtube_shorts"]["enabled"] \
+        is False
+
+
+def test_the_caps_stay_low_and_nothing_goes_public_by_itself():
     """Twenty clips from one VOD posted in an afternoon is what
-    'repetitious content' means in YouTube's policy, whoever made
-    them."""
+    'repetitious content' means in YouTube's policy, whoever made them.
+
+    Shorts may be switched ON here - that is the point of the feature -
+    but the caps and the privacy are what make it safe to leave on, so
+    those are what this guards. "public" is deliberately not allowed to
+    arrive by edit: a Short is censored by a pass that has to actually
+    work, and the first clip to prove it should not be the first one
+    strangers see."""
     import json
 
     with open(os.path.join(_UPLOADER, "config.json"), encoding="utf-8") as f:
         config = json.load(f)
     settings = config["posting"]["platforms"]["youtube_shorts"]
 
-    assert settings["enabled"] is False
     assert settings["daily_cap"] <= 5
     assert settings["min_minutes_between"] >= 60
-    assert config["youtube_shorts"]["privacy"] == "private"
+    assert config["youtube_shorts"]["privacy"] in ("private", "unlisted")
 
 
 def test_the_clip_config_carries_the_shorts_settings():
@@ -218,3 +235,41 @@ def test_the_clip_config_carries_the_shared_client_secrets():
 
     built = _clip_config(_Cfg())
     assert built["youtube"]["client_secrets_path"] == "/tmp/secrets.json"
+
+
+def test_a_platform_can_be_switched_on_without_editing_json(tmp_path):
+    """config.json is untracked so a pull cannot collide with a switch the
+    operator flipped - which also means merge_new_settings never updates a
+    setting that already exists there. Turning Shorts on was therefore a
+    hand edit, in a 700-line file, on Windows."""
+    import importlib.util
+    import json
+    import sys
+
+    sys.path.insert(0, _UPLOADER)
+    spec = importlib.util.spec_from_file_location(
+        "_main_enable", os.path.join(_UPLOADER, "main.py"))
+    main = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(main)
+
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps({"posting": {"platforms": {
+        "youtube_shorts": {"enabled": False, "daily_cap": 3,
+                           "min_minutes_between": 180}}}}))
+
+    said = main.set_platform_enabled(str(path), "youtube_shorts", on=True)
+
+    assert "ON" in said
+    assert json.loads(path.read_text())["posting"]["platforms"][
+        "youtube_shorts"]["enabled"] is True
+    # The caps are NOT touched - they are what makes leaving it on safe.
+    settings = json.loads(path.read_text())["posting"]["platforms"][
+        "youtube_shorts"]
+    assert settings["daily_cap"] == 3
+    assert settings["min_minutes_between"] == 180
+
+    # Idempotent, and honest about a name it does not know.
+    assert main.set_platform_enabled(str(path), "youtube_shorts",
+                                     on=True) is None
+    assert "no such platform" in main.set_platform_enabled(
+        str(path), "tiktok", on=True)

@@ -39,7 +39,7 @@ from datetime import datetime
 # Bump when shipping user-visible changes, so --test-config can prove
 # which build is actually running (stale extracts have silently caused
 # several confusing "the fix did nothing" runs).
-BUILD = "2026-08-16.34 if the filename says WIFI COOKED, the stream is called WIFI COOKED"
+BUILD = "2026-08-16.35 Rumble having seen a clip says nothing about YouTube"
 
 # How often --watch checks whether a deferred clip's wait is up. A minute
 # is fine: the waits themselves are 25 to 80 minutes, so the resolution
@@ -227,6 +227,49 @@ def _fill_missing(live: dict, example: dict, path: str = "") -> list:
         elif isinstance(value, dict) and isinstance(live.get(key), dict):
             added += _fill_missing(live[key], value, where)
     return added
+
+
+def set_platform_enabled(config_file: str, platform: str, on: bool):
+    """Switch one posting platform on or off in config.json.
+
+    A command rather than an instruction to edit JSON. config.json is
+    untracked - deliberately, so a pull cannot collide with a switch the
+    operator flipped - which also means a setting that already exists
+    there is never updated by anything. Turning Shorts on was therefore a
+    hand edit, in a 700-line file, on the machine least convenient for
+    it.
+
+    Returns a line describing what changed, or None when nothing did.
+    """
+    try:
+        with open(config_file, "r", encoding="utf-8") as handle:
+            live = json.load(handle)
+    except (OSError, ValueError) as exc:
+        return f"could not read config.json: {exc}"
+
+    platforms = live.setdefault("posting", {}).setdefault("platforms", {})
+    if platform not in platforms:
+        known = ", ".join(sorted(platforms)) or "none configured"
+        return f"no such platform '{platform}'. Known: {known}"
+
+    settings = platforms[platform]
+    if bool(settings.get("enabled")) == on:
+        return None
+
+    settings["enabled"] = on
+    try:
+        temporary = config_file + ".tmp"
+        with open(temporary, "w", encoding="utf-8") as handle:
+            json.dump(live, handle, indent=2, ensure_ascii=False)
+            handle.write("\n")
+        os.replace(temporary, config_file)
+    except OSError as exc:
+        return f"could not write config.json: {exc}"
+
+    where = f"cap {settings.get('daily_cap', '?')}/day, " \
+            f"{settings.get('min_minutes_between', '?')} min apart"
+    return (f"{platform} is now {'ON' if on else 'OFF'} ({where})."
+            if on else f"{platform} is now OFF.")
 
 
 def merge_new_settings(config_file: str, example_file: str) -> list:
@@ -1710,24 +1753,35 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
     # in a dry run. A failure here must not mark the upload as failed.
     stage_timer.mark("upload")
 
+    # A CLIP goes to Instagram and Facebook as a Reel - the bytes are
+    # uploaded, so nothing needs hosting. Through the queue rather than
+    # directly, because ten clips arrive within minutes of each other and
+    # the platforms are spaced much wider than that: the ones that cannot
+    # go now are kept and posted when their wait is up, instead of being
+    # dropped the way they were.
+    #
+    # OUTSIDE the `newly_uploaded` gate, unlike the announcement below.
+    # This sat inside it, so a clip Rumble skipped as a duplicate was
+    # never offered to Instagram, Facebook, Shorts, X or TikTok either -
+    # and a clip that reached Rumble but never reached Shorts could never
+    # reach Shorts, on any later run. That is why Shorts stayed empty
+    # while Rumble filled up.
+    #
+    # Safe to run every time because `offer` asks the queue per platform
+    # and skips the ones already marked done. Rumble having seen this
+    # clip says nothing about whether YouTube has.
+    clip_reels = {}
+    if is_clip and cfg.posting:
+        try:
+            from utils.clip_queue import CLIP_PLATFORMS, offer
+
+            clip_reels = offer(
+                cfg.posting, _clip_config(cfg), instagram_clip_path(),
+                fallback_caption=yt_title, dry_run=dry_run)
+        except Exception as exc:
+            print(f"[Clips] WARNING: could not offer the clip: {exc}")
+
     if newly_uploaded:
-        # A CLIP goes to Instagram and Facebook as a Reel - the bytes are
-        # uploaded, so nothing needs hosting. Through the queue rather
-        # than directly, because ten clips arrive within minutes of each
-        # other and the platforms are spaced much wider than that: the
-        # ones that cannot go now are kept and posted when their wait is
-        # up, instead of being dropped the way they were.
-        clip_reels = {}
-        if is_clip and cfg.posting:
-            try:
-                from utils.clip_queue import CLIP_PLATFORMS, offer
-
-                clip_reels = offer(
-                    cfg.posting, _clip_config(cfg), instagram_clip_path(),
-                    fallback_caption=yt_title, dry_run=dry_run)
-            except Exception as exc:
-                print(f"[Clips] WARNING: could not offer the clip: {exc}")
-
         try:
             from utils.social_promoter import announce_upload
             # cfg.posting carries the guarded public platforms (Facebook,
@@ -1977,6 +2031,13 @@ def main(argv=None) -> int:
                         help="Write before/after stills showing exactly what "
                              "the clip framing will keep, so the rectangle can "
                              "be aimed in seconds instead of after ten renders.")
+    parser.add_argument("--enable", metavar="PLATFORM",
+                        help="Turn a posting platform ON in config.json "
+                             "(youtube_shorts, zernio_twitter, "
+                             "zernio_tiktok, instagram, facebook). Its cap "
+                             "and spacing are left exactly as they are.")
+    parser.add_argument("--disable", metavar="PLATFORM",
+                        help="Turn a posting platform OFF in config.json.")
     parser.add_argument("--check-sync", metavar="FILE", nargs="?", const="",
                         help="Measure whether captions will line up with the "
                              "audio in clips cut from this video, and say "
@@ -2778,6 +2839,18 @@ def main(argv=None) -> int:
                             "client_secrets_path": cfg.youtube.client_secrets_path}},
                guard, account, live=args.verify)
         print(f"\n  {summary(cfg.posting)}")
+        return 0
+
+    if args.enable or args.disable:
+        wanted = args.enable or args.disable
+        said = set_platform_enabled(
+            os.path.join(config_dir, "config.json"), wanted,
+            on=bool(args.enable))
+        print(f"[Config] {said}" if said else
+              f"[Config] {wanted} was already "
+              f"{'on' if args.enable else 'off'}.")
+        if said and said.startswith("no such platform"):
+            return 1
         return 0
 
     if args.check_sync is not None:
