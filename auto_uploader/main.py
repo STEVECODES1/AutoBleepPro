@@ -39,7 +39,7 @@ from datetime import datetime
 # Bump when shipping user-visible changes, so --test-config can prove
 # which build is actually running (stale extracts have silently caused
 # several confusing "the fix did nothing" runs).
-BUILD = "2026-08-16.30 measure whether the captions land on the words"
+BUILD = "2026-08-16.31 stop posting a slogan that was deleted, and tag what the clip actually is"
 
 # How often --watch checks whether a deferred clip's wait is up. A minute
 # is fine: the waits themselves are 25 to 80 minutes, so the resolution
@@ -732,6 +732,12 @@ def _apply_mode(cfg, name: str, settings: dict):
     return cfg
 
 
+# What a file this tool RENDERED looks like: "... - Clip 03.mp4", and
+# the temp 9:16 copy "_vertical_...". Both live in watch_folder next to
+# the sources, and both are outputs rather than things to measure.
+_RENDERED_CLIP = re.compile(r"[-\s]clip\s*\d+\s*\.|^_?vertical[_\s]", re.I)
+
+
 def _newest_video(cfg) -> str:
     """The most recently written video in any folder this tool uses.
 
@@ -745,22 +751,117 @@ def _newest_video(cfg) -> str:
         clips_folder = os.path.join(cfg.project_root, clips_folder)
 
     formats = tuple(cfg.general.supported_formats or (".mp4",))
-    newest, newest_at = "", -1.0
-    for folder in (clips_folder, cfg.general.watch_folder,
-                   cfg.general.uploaded_folder):
+
+    def candidates(folder: str) -> list:
         if not folder or not os.path.isdir(folder):
-            continue
+            return []
+        found = []
         for name in os.listdir(folder):
             if not name.lower().endswith(formats):
                 continue
+            # A rendered clip is not what this wants. watch_folder fills
+            # up with finished clips waiting to post, and they are the
+            # newest thing in there by a mile - so "the newest video"
+            # picked one every time, measured a cut out of a cut, and
+            # found no transcript because clips do not have one.
+            if _RENDERED_CLIP.search(name):
+                continue
             path = os.path.join(folder, name)
             try:
-                when = os.path.getmtime(path)
+                found.append((os.path.getmtime(path), path))
             except OSError:
                 continue
-            if when > newest_at:
-                newest, newest_at = path, when
-    return newest
+        return found
+
+    # Folders in priority order, and the FIRST one holding anything wins.
+    # downloaded_vods is where the sources live; the others are where
+    # they go afterwards.
+    folders = (clips_folder, cfg.general.watch_folder,
+               cfg.general.uploaded_folder)
+    for folder in folders:
+        found = candidates(folder)
+        if not found:
+            continue
+        # Among those, prefer one whose transcript is already cached.
+        # Checking the words against the sound is the whole point of the
+        # command, and it is the half that cannot be measured without
+        # one - so a slightly older video that CAN be fully checked beats
+        # a newer one that cannot.
+        try:
+            from utils.clip_runner import _load_segments
+
+            with_words = [pair for pair in found
+                          if _load_segments(cfg, pair[1])]
+        except Exception:
+            with_words = []
+        return max(with_words or found)[1]
+
+    # Nothing but rendered clips left - which happens once the source VOD
+    # has been uploaded and retired. Measure one of those instead: it is
+    # short enough to transcribe on the spot, and it is the actual file
+    # the captions came out wrong on.
+    for folder in folders:
+        if not folder or not os.path.isdir(folder):
+            continue
+        clips = [(os.path.getmtime(os.path.join(folder, name)),
+                  os.path.join(folder, name))
+                 for name in os.listdir(folder)
+                 if name.lower().endswith(formats)
+                 and os.path.isfile(os.path.join(folder, name))]
+        if clips:
+            return max(clips)[1]
+    return ""
+
+
+def _transcribe_both_ways(cfg, source: str, length: float) -> tuple:
+    """Word timings vs the sound, with the silence filter on and off.
+
+    Returns the (offset, confidence) for the setting the pipeline
+    ACTUALLY uses, so the verdict speaks about the real behaviour - but
+    prints both, because the difference between them is the answer.
+    """
+    import tempfile
+
+    from autoreel import clip_sync
+    from utils.censor import _get_transcriber
+    from utils.ffmpeg_tools import extract_audio
+
+    print(f"\n  No transcript cached. Transcribing these {length:.0f}s "
+          f"directly (model={cfg.general.censor_model})...")
+
+    workspace = tempfile.mkdtemp(prefix="synctx_")
+    live = (0.0, 0.0)
+    try:
+        audio = os.path.join(workspace, "check.wav")
+        if not extract_audio(source, audio):
+            print("  could not read the audio.")
+            return live
+        transcriber = _get_transcriber(cfg.general.censor_model,
+                                       cfg.general.censor_device, reuse=True)
+        for label, filtered in (("silence filter ON  (what runs today)", True),
+                                ("silence filter OFF", False)):
+            try:
+                result = transcriber.transcribe(audio, vad_filter=filtered)
+            except TypeError:
+                # An older Transcriber without the switch. One reading is
+                # still worth having.
+                result = transcriber.transcribe(audio)
+                filtered = True
+            segments = (result or {}).get("segments") or []
+            if not segments:
+                print(f"    {label}: nothing transcribed.")
+                continue
+            measured = clip_sync.transcript_offset(source, segments,
+                                                   0.0, length)
+            print(f"    {label}: {measured[0]:+.3f}s "
+                  f"(confidence {measured[1]:.2f})")
+            if filtered:
+                live = measured
+    except Exception as exc:
+        print(f"  could not transcribe: {exc}")
+    finally:
+        shutil.rmtree(workspace, ignore_errors=True)
+    return live
 
 
 def _check_sync(cfg, source: str) -> int:
@@ -815,7 +916,9 @@ def _check_sync(cfg, source: str) -> int:
     else:
         points = [min(180.0, length * 0.1), min(1200.0, length * 0.6)]
 
-    span = 12.0
+    # Never ask for more than the file has left after the sample point -
+    # a test clip that runs off the end measures the padding, not the cut.
+    span = min(12.0, max(3.0, length - max(points) - 0.5)) if length else 12.0
     cuts = []
     workspace = tempfile.mkdtemp(prefix="sync_")
     try:
@@ -849,14 +952,26 @@ def _check_sync(cfg, source: str) -> int:
         segments = _load_segments(cfg, source)
     except Exception:
         segments = None
+
     if segments:
         words = clip_sync.transcript_offset(source, segments, points[0], span)
         print(f"\n  transcript vs sound: {words[0]:+.3f}s "
               f"(confidence {words[1]:.2f})")
+    elif length and length <= 600:
+        # No cached transcript, but the file is short enough to make one
+        # on the spot - which is the case once the source VOD has been
+        # uploaded and retired and only the rendered clips are left.
+        #
+        # Both ways, deliberately. vad_filter cuts the silence out before
+        # transcribing and maps the timestamps back afterwards, and that
+        # mapping is the likeliest place for word timings to come back
+        # shifted. Running the same audio with it on and off is what
+        # tells the two apart instead of arguing about which it is.
+        words = _transcribe_both_ways(cfg, source, length)
     else:
-        print("\n  transcript: none cached for this video, so its word "
-              "timings could not be checked. Run --clips-from on it first "
-              "if the cut below looks fine but captions still do not.")
+        print("\n  transcript: none cached, and this file is too long to "
+              "transcribe just for a check. Run --clips-from on it first, "
+              "then this again.")
 
     print("\n" + "-" * 68)
     print(clip_sync.verdict(streams, cuts, words))

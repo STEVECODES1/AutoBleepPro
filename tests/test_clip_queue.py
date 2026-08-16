@@ -270,7 +270,7 @@ def test_an_expired_token_is_a_wait_not_a_failure(tmp_path, monkeypatch):
 # ═════════════════════════════════════════════════════════════════════════════
 
 OLD_CONFIG = {"instagram": {"caption_template":
-                            "{title} - LINK IN BIO"},
+                            "{title} - YESTERDAYS WORDING"},
               "facebook": {}, "clips": {}}
 NEW_CONFIG = {"instagram": {"caption_template": "{title} #stackswopo"},
               "facebook": {}, "clips": {}}
@@ -285,13 +285,13 @@ def test_a_queued_clip_posts_todays_wording_not_the_day_it_was_queued(
 
     # The first went straight out and carries the old wording - it is
     # already published and nothing can change that.
-    assert "LINK IN BIO" in FakePublisher.posted[0][1]
+    assert "YESTERDAYS WORDING" in FakePublisher.posted[0][1]
 
     _rewind(posting, minutes=30)
     publisher.drain(posting, NEW_CONFIG, quiet=True)
 
     _name, caption = FakePublisher.posted[-1]
-    assert "LINK IN BIO" not in caption, \
+    assert "YESTERDAYS WORDING" not in caption, \
         "the queued clip published a caption written before the fix"
     assert "#stackswopo" in caption
 
@@ -325,14 +325,15 @@ def test_recaption_rewrites_what_is_still_waiting(publisher, posting, clips):
 
     assert len(changed) == 1, "the one waiting clip was not reworded"
     _platform, _clip, before, after = changed[0]
-    assert "LINK IN BIO" in before and "LINK IN BIO" not in after
+    assert "YESTERDAYS WORDING" in before
+    assert "YESTERDAYS WORDING" not in after
 
     # And it sticks: a fresh read of the queue file sees the new text.
     from job_queue import ACTIVE_STATES, JobQueue
 
     reopened = JobQueue(path=posting["queue_path"])
     waiting = reopened.list_jobs(ACTIVE_STATES)
-    assert waiting and "LINK IN BIO" not in waiting[0].caption
+    assert waiting and "YESTERDAYS WORDING" not in waiting[0].caption
 
 
 def test_recaption_says_nothing_when_nothing_needs_it(publisher, posting,

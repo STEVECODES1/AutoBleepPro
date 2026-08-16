@@ -28,6 +28,7 @@ Those are skipped with the guard's own reason, exactly as before.
 
 from __future__ import annotations
 
+import re
 import os
 import sys
 from typing import Optional
@@ -79,6 +80,60 @@ def _publisher(platform: str, config: dict):
     return _publisher_for(platform, config or {})
 
 
+# Lines that were removed from the shipped caption template and must not
+# come back from an old config.json. Matched loosely because the live
+# file has them dressed in emoji.
+#
+# "LINK IN BIO" is the one that mattered: there IS no link in the bio for
+# these clips, the two channels are named on the next two lines, and it
+# is the single most recognisable mark of an automated repost account.
+_DEAD_TEMPLATE_LINES = (
+    "link in bio",
+    "monkey vids + full stream",
+)
+
+
+def clean_template(template: str) -> str:
+    """A caption template with the lines nobody wants any more taken out.
+
+    Whole lines, not substrings: cutting a phrase out of the middle
+    leaves a sentence that reads worse than the one it replaced.
+    """
+    kept = [line for line in str(template or "").splitlines()
+            if not any(dead in line.lower() for dead in _DEAD_TEMPLATE_LINES)]
+    # Collapse the blank line the removal leaves behind, so the caption
+    # does not open with a gap where the slogan used to be.
+    cleaned = "\n".join(kept)
+    while "\n\n\n" in cleaned:
+        cleaned = cleaned.replace("\n\n\n", "\n\n")
+    return cleaned.strip("\n")
+
+
+def _subject_note(video_path: str) -> str:
+    """What the clip IS, written beside it when it was cut.
+
+    The stream's title and the framing profile - "monkey", "gta" - which
+    are known at cut time and gone by post time. Without this a Monkey
+    clip called "Stackswopo Love Yall - Clip 02" can only be given the
+    generic tags, because nothing in its name says what is in it.
+    """
+    stem = os.path.splitext(video_path or "")[0]
+    # The temp 9:16 copy is "_vertical_<clip>.mp4"; the note belongs to
+    # the clip, not to the copy.
+    plain = os.path.join(os.path.dirname(stem),
+                         re.sub(r"^_?vertical[_\s]+", "",
+                                os.path.basename(stem), flags=re.I))
+    for candidate in (stem + "_subject.txt", plain + "_subject.txt"):
+        try:
+            with open(candidate, "r", encoding="utf-8") as handle:
+                found = handle.read().strip()
+            if found:
+                return found
+        except OSError:
+            continue
+    return ""
+
+
 def caption_for(platform: str, video_path: str, fallback: str,
                 config: dict) -> str:
     """The caption this platform posts with.
@@ -99,6 +154,14 @@ def caption_for(platform: str, video_path: str, fallback: str,
     if not template:
         template = ((config or {}).get("instagram", {}) or {}).get(
             "caption_template", "")
+    # config.json is not tracked, so it is whatever it was the day it was
+    # written - and a line deleted from the shipped template stays in the
+    # live one forever. "LINK IN BIO" was removed here and kept posting
+    # for days because nothing rewrote the file anyone actually runs.
+    #
+    # Cleaning the template on the way past means a dead line dies
+    # everywhere at once, without asking anybody to go and edit JSON.
+    template = clean_template(template)
     # Tags are picked from the CLIP and sized to the platform: a Monkey
     # clip must not be tagged #gtarp, and the count that helps on
     # Instagram gets a post demoted on X.
@@ -110,7 +173,8 @@ def caption_for(platform: str, video_path: str, fallback: str,
     # "monkey_n_gamble_howl" - which says exactly what it is. Using only
     # the headline meant the specific tags almost never fired and every
     # clip went out with the generic fillers.
-    subject = f"{headline} {os.path.basename(video_path or '')}"
+    subject = f"{headline} {os.path.basename(video_path or '')} " \
+              f"{_subject_note(video_path)}"
     tags = hashtags_for(subject, platform,
                         settings.get("max_hashtags"))
     caption = build_caption(template, video_path, tags=tags) or fallback

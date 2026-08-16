@@ -239,3 +239,86 @@ def test_a_gameplay_clip_is_not_tagged_as_monkey(tmp_path):
 
     assert "#gtarp" in caption
     assert "#monkeyapp" not in caption
+
+
+# ── the live config.json goes stale, and nothing rewrites it ─────────
+
+def test_a_line_deleted_from_the_template_stops_posting(tmp_path):
+    """config.json is not tracked, so it is whatever it was the day it
+    was written. "LINK IN BIO" was deleted from the shipped template and
+    kept going out for DAYS, because the file anyone actually runs still
+    had it. There is no link in the bio for these clips, and it is the
+    most recognisable mark of an automated repost account."""
+    import sys
+
+    sys.path.insert(0, os.path.join(ROOT, "auto_uploader"))
+    from utils.clip_queue import caption_for
+
+    clip = tmp_path / "monkey_n_gamble_howl - Clip 02.mp4"
+    clip.write_bytes(b"x")
+    stale = ("{title} #stackswopo\n\n"
+             "\U0001f44b Monkey vids + full stream - LINK IN BIO\n\n"
+             "YouTube: @BinScript")
+
+    caption = caption_for("instagram", str(clip), "",
+                          {"instagram": {"caption_template": stale}})
+
+    assert "LINK IN BIO" not in caption
+    assert "Monkey vids + full stream" not in caption
+    assert "YouTube: @BinScript" in caption, "it took out too much"
+    assert "\n\n\n" not in caption, "it left a hole where the line was"
+
+
+def test_what_the_clip_is_survives_until_it_posts(tmp_path):
+    """By post time all that is left is the filename, and "Stackswopo
+    Love Yall - Clip 02" does not say it is Monkey footage - so every
+    clip went out with only the generic tags. The stream title and the
+    framing profile are known when the clip is CUT, and get written
+    down beside it."""
+    import sys
+
+    sys.path.insert(0, os.path.join(ROOT, "auto_uploader"))
+    from utils.clip_queue import caption_for
+
+    stem = "Stackswopo Love Yall 20250914 204409 - Clip 02"
+    (tmp_path / f"{stem}.mp4").write_bytes(b"x")
+    (tmp_path / f"{stem}_subject.txt").write_text(
+        "Stackswopo Love Yall monkey_n_gamble_howl monkey")
+
+    caption = caption_for("instagram", str(tmp_path / f"{stem}.mp4"), "",
+                          {"instagram": {"caption_template": "{title}"}})
+
+    assert "#monkeyapp" in caption, \
+        "the clip's own subject note was not read, so it got filler tags"
+
+
+def test_the_vertical_copy_finds_the_subject_note_too(tmp_path):
+    """_vertical_copy renames the file; the note belongs to the clip."""
+    import sys
+
+    sys.path.insert(0, os.path.join(ROOT, "auto_uploader"))
+    from utils.clip_queue import caption_for
+
+    stem = "Stackswopo Love Yall - Clip 02"
+    (tmp_path / f"_vertical_{stem}.mp4").write_bytes(b"x")
+    (tmp_path / f"{stem}_subject.txt").write_text("gta rp lifestyle gta")
+
+    caption = caption_for("instagram", str(tmp_path / f"_vertical_{stem}.mp4"),
+                          "", {"instagram": {"caption_template": "{title}"}})
+
+    assert "#gtarp" in caption
+    assert "#monkeyapp" not in caption
+
+
+def test_no_subject_note_is_not_an_error(tmp_path):
+    """Every clip cut before this existed has no note beside it."""
+    import sys
+
+    sys.path.insert(0, os.path.join(ROOT, "auto_uploader"))
+    from utils.clip_queue import caption_for
+
+    clip = tmp_path / "a - Clip 01.mp4"
+    clip.write_bytes(b"x")
+
+    assert caption_for("instagram", str(clip), "",
+                       {"instagram": {"caption_template": "{title}"}})

@@ -314,3 +314,31 @@ def test_a_skewed_container_is_still_cut_correctly(beeps, tmp_path):
 
     assert score > 0.8
     assert abs(offset) <= 0.08
+
+
+# ── picking which video to measure ───────────────────────────────────
+
+def test_a_rendered_clip_is_never_chosen_as_the_video_to_measure():
+    """watch_folder fills up with finished clips waiting to post, and
+    they are the newest thing in there by a mile. "The newest video"
+    picked one every time - so it measured a cut out of a cut, and found
+    no transcript, because clips do not have one."""
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "_main_for_test", os.path.join(_REPO, "auto_uploader", "main.py"))
+    main = importlib.util.module_from_spec(spec)
+    sys.path.insert(0, os.path.join(_REPO, "auto_uploader"))
+    spec.loader.exec_module(main)
+
+    skipped = ("Stackswopo Love Yall 20250914 204409 - Clip 03.mp4",
+               "_vertical_Stackswopovods - Clip 11.mp4",
+               "x - clip 7.mp4")
+    kept = ("monkey_n_gamble_howl.mp4",
+            "Stackswopo Love Yall 20250914 204409.mp4",
+            "yoo_howl [v70rbpc].mp4")
+
+    for name in skipped:
+        assert main._RENDERED_CLIP.search(name), f"{name} should be skipped"
+    for name in kept:
+        assert not main._RENDERED_CLIP.search(name), f"{name} is a source"

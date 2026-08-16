@@ -191,9 +191,17 @@ class Transcriber:
 
     # ── Transcription ────────────────────────────────────────────────────
 
-    def transcribe(self, audio_path: str) -> dict:
+    def transcribe(self, audio_path: str, vad_filter: bool = True) -> dict:
         """Return a Whisper-style result: {'segments': [...]}, each
-        segment carrying word-level timestamps."""
+        segment carrying word-level timestamps.
+
+        `vad_filter` is exposed ONLY so --check-sync can run the same
+        audio both ways and compare. It cuts the silence out before
+        transcribing and then maps the timestamps back afterwards, and
+        that mapping is the most likely place for word timings to come
+        back shifted - which is a caption that does not match the audio.
+        Nothing in the normal path passes it.
+        """
         model = self._load()
 
         if self.backend == BACKEND_FASTER:
@@ -202,7 +210,7 @@ class Transcriber:
                 # The default (0) disables VAD; trimming silence is a
                 # straight speed win on stream VODs, which are mostly
                 # gameplay audio with long gaps between speech.
-                vad_filter=True,
+                vad_filter=vad_filter,
                 initial_prompt=VERBATIM_PROMPT,
                 # Whisper otherwise feeds each window its own previous
                 # output, and on hours of gameplay one bad window makes

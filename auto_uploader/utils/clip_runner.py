@@ -400,13 +400,28 @@ def make_clips(cfg, source_path: str, title: str,
     tags = list(getattr(cfg.youtube, "tags", []) or [])
     caption_paths = []
     for clip in results:
-        path = os.path.splitext(clip.path)[0] + "_caption.txt"
+        stem = os.path.splitext(clip.path)[0]
+        path = stem + "_caption.txt"
         try:
             with open(path, "w", encoding="utf-8") as f:
                 f.write(caption_for(clip, title, tags))
             caption_paths.append(path)
         except OSError as exc:
             print(f"[Clips] could not write a caption: {exc}")
+        # WHAT this clip is, written down while it is still known.
+        #
+        # By the time the clip posts, all that is left is its filename -
+        # and "Stackswopo Love Yall - Clip 02" does not say it is Monkey
+        # app footage, so every clip went out with only generic tags.
+        # The stream's own title and the framing profile both say exactly
+        # what it is, and both are in hand right here.
+        try:
+            with open(stem + "_subject.txt", "w", encoding="utf-8") as f:
+                f.write(f"{clips_cfg.get('content_title', '')} "
+                        f"{clips_cfg.get('profile', '')}".strip())
+        except OSError:
+            # Tags are a nice-to-have; losing them must not cost the clip.
+            pass
 
     # What was cut and why, so a later run can be told how these did.
     # Wrapped in nothing on purpose - remember_run swallows its own
