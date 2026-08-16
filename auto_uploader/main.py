@@ -39,7 +39,7 @@ from datetime import datetime
 # Bump when shipping user-visible changes, so --test-config can prove
 # which build is actually running (stale extracts have silently caused
 # several confusing "the fix did nothing" runs).
-BUILD = "2026-08-16.41 see the post before it posts"
+BUILD = "2026-08-16.42 delete the 9:16 copies nothing is waiting on"
 
 # How often --watch checks whether a deferred clip's wait is up. A minute
 # is fine: the waits themselves are 25 to 80 minutes, so the resolution
@@ -79,6 +79,7 @@ from utils.cleanup import (
     SOURCE_KEEP,
     cleanup_after_upload,
     prune_uploaded_folder,
+    prune_vertical_copies,
     resolve_source_action,
 )
 from utils.config import load_config, validate_config
@@ -2028,6 +2029,10 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
         keep = int((cfg.general.cleanup or {}).get("keep_uploaded_videos", 0) or 0)
         if keep > 0:
             freed += prune_uploaded_folder(cfg, keep)
+        # The 9:16 re-frames, which nothing has ever deleted. Only ones
+        # no queued post is waiting on, and only once they are past the
+        # queue's own give-up age - see prune_vertical_copies.
+        freed += prune_vertical_copies(cfg)
         if freed >= 1:
             print(f"[Cleanup] Freed {freed:.0f} MB of working files.")
         for what, reason in report.kept:
@@ -2797,6 +2802,11 @@ def main(argv=None) -> int:
 
     if args.health:
         ok = run_health_check(cfg, cfg.features.get("self_healing", {}))
+        # --health is the command reached for when a disk is filling up,
+        # and the re-frames are the folder that grows without limit.
+        freed = prune_vertical_copies(cfg)
+        if freed >= 1:
+            print(f"[Cleanup] Freed {freed:.0f} MB of finished 9:16 copies.")
         return 0 if ok else 1
 
     if args.gpu_check:

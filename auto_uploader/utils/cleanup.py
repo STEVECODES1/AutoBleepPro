@@ -46,6 +46,7 @@ and nothing here touches watch_folder or uploaded/.
 """
 
 import glob
+import time
 import os
 from dataclasses import dataclass, field
 from typing import Iterable, Optional
@@ -347,5 +348,92 @@ def prune_uploaded_folder(cfg, keep_newest: int) -> float:
 
     report = CleanupReport()
     for path in videos[keep_newest:]:
+        _remove(path, report)
+    return report.freed_mb
+
+
+# A re-frame is only scratch once nothing is still waiting to post it.
+# The queue's own ceiling: past this a job is abandoned as too old to be
+# worth posting, so nothing can still be pointing at the file.
+VERTICAL_MIN_AGE_S = 36 * 3600
+
+
+def _queued_clip_paths(cfg) -> set:
+    """Every clip path a job is still waiting on. Empty set on any doubt.
+
+    Doubt matters here. A queue that cannot be read must read as "every
+    file is spoken for", never as "nothing is" - deleting a clip out from
+    under a pending post loses the post silently, which is the exact
+    class of failure this project keeps finding days late.
+    """
+    path = (getattr(cfg, "posting", {}) or {}).get(
+        "queue_path") or "./clip_jobs.json"
+
+    # Parsed here FIRST, on purpose. JobQueue swallows an unreadable file
+    # and comes back empty, which is indistinguishable from "nothing is
+    # queued" - and this function's whole job is to tell those two apart.
+    # A test caught it deleting files against a corrupt queue.
+    if os.path.exists(path):
+        try:
+            import json
+
+            with open(path, "r", encoding="utf-8") as handle:
+                json.load(handle)
+        except (OSError, ValueError):
+            return None
+
+    try:
+        from job_queue import ACTIVE_STATES, JobQueue
+
+        queue = JobQueue(path=path)
+        return {os.path.realpath(job.clip_path)
+                for job in queue.list_jobs(ACTIVE_STATES)}
+    except Exception:
+        return None
+
+
+def prune_vertical_copies(cfg, min_age_s: float = VERTICAL_MIN_AGE_S) -> float:
+    """Delete 9:16 re-frames nothing is waiting to post. Returns MB freed.
+
+    vertical_path writes "_vertical_<clip>.mp4" into censored/ so that
+    Rumble and Instagram share one encode instead of paying for it twice.
+    NOTHING has ever deleted them. Each is a full re-encode of a clip, so
+    a machine that clips daily grows a folder of them forever - and this
+    project runs off an external drive, where a full disk stops the
+    RECORDER, not just the posting.
+
+    Two conditions, both required, because the queue stores the re-framed
+    path and not the original:
+
+      * no active job is waiting on this file, and
+      * it is older than the queue's own give-up age, so a job that is
+        about to be created cannot be raced.
+    """
+    folder = getattr(cfg.general, "censored_folder", "")
+    if not folder or not os.path.isdir(folder):
+        return 0.0
+
+    spoken_for = _queued_clip_paths(cfg)
+    if spoken_for is None:
+        # The queue could not be read. Delete nothing.
+        return 0.0
+
+    now = time.time()
+    report = CleanupReport()
+    for name in os.listdir(folder):
+        if not name.lower().startswith("_vertical_"):
+            continue
+        path = os.path.join(folder, name)
+        if not os.path.isfile(path):
+            continue
+        if os.path.realpath(path) in spoken_for:
+            report.keep(name, "a queued post is still waiting on it")
+            continue
+        try:
+            if now - os.path.getmtime(path) < min_age_s:
+                report.keep(name, "too recent to be sure nothing wants it")
+                continue
+        except OSError:
+            continue
         _remove(path, report)
     return report.freed_mb
