@@ -444,7 +444,41 @@ def pan_path(per_still: list, fps: float = PATH_FPS) -> list:
         path.append((round(index / fps, 3),
                      round(min(1.0, max(0.0, x)), 4),
                      round(min(1.0, max(0.0, y)), 4)))
-    return path
+    return _glide(path)
+
+
+# How often the crop is TOLD where to be. sendcmd does not interpolate -
+# it STEPS to each value and holds it - so a path emitted at the sampling
+# rate moves in visible jerks twice a second however carefully the points
+# themselves were smoothed. That is the "jumping" in a pan that is
+# mathematically gentle.
+#
+# Detection stays at PATH_FPS; only the emitted points are denser, so
+# this costs nothing but lines in a text file.
+EMIT_FPS = 12.0
+
+
+def _glide(path: list) -> list:
+    """The same path, filled in between its points so it slides.
+
+    Linear between measured positions. Nothing here invents movement -
+    every emitted point lies on the line between two the detector
+    actually produced - it only stops the crop teleporting from one to
+    the next.
+    """
+    if len(path) < 2:
+        return path
+    filled = []
+    for (t0, x0, y0), (t1, x1, y1) in zip(path, path[1:]):
+        span = t1 - t0
+        steps = max(1, int(round(span * EMIT_FPS)))
+        for step in range(steps):
+            share = step / steps
+            filled.append((round(t0 + span * share, 3),
+                           round(x0 + (x1 - x0) * share, 4),
+                           round(y0 + (y1 - y0) * share, 4)))
+    filled.append(path[-1])
+    return filled
 
 
 def is_worth_moving(path) -> bool:

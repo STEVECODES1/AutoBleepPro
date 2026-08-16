@@ -278,3 +278,79 @@ def test_the_monkey_pan_still_searches_only_the_call_pane():
     pane = PROFILES["monkey"]["content_region"]
 
     assert pane["x"] + pane["width"] <= 0.5
+
+
+# ── the pan has to LOOK smooth, not just be gentle ───────────────────
+#
+# "I dont like how the face sensor jumping like this it should be smooth
+# and barely noticeable." The points were already speed-capped and
+# damped - the jumping came from sendcmd, which does not interpolate. It
+# STEPS to each value and holds it, so a path emitted twice a second
+# lurches twice a second however carefully the points were smoothed.
+
+def test_the_crop_is_told_where_to_be_far_more_often_than_it_is_measured():
+    from autoreel.face_region import EMIT_FPS, pan_path
+
+    measured = _stills(*([(0.25, 0.5)] * 4 + [(0.75, 0.5)] * 16))
+    path = pan_path(measured, fps=2.0)
+
+    assert len(path) > len(measured) * 3, \
+        "the crop still moves at the sampling rate"
+    gaps = [b[0] - a[0] for a, b in zip(path, path[1:])]
+    assert max(gaps) <= (1.0 / EMIT_FPS) + 0.02
+
+
+def test_the_steps_between_points_are_small_enough_not_to_read_as_a_jump():
+    from autoreel.face_region import pan_path
+
+    path = pan_path(_stills(*([(0.20, 0.5)] * 2 + [(0.80, 0.5)] * 20)),
+                    fps=2.0)
+
+    xs = [x for _, x, _ in path]
+    steps = [abs(b - a) for a, b in zip(xs, xs[1:])]
+    assert max(steps) < 0.02, f"biggest single move was {max(steps):.4f}"
+
+
+def test_filling_in_invents_no_movement(): 
+    """Every emitted point lies on the line between two the detector
+    actually produced. A still person must stay still."""
+    from autoreel.face_region import pan_path
+
+    path = pan_path(_stills(*([(0.5, 0.5)] * 20)), fps=2.0)
+
+    assert len({round(x, 3) for _, x, _ in path}) == 1
+
+
+def test_it_still_arrives_where_the_person_went():
+    from autoreel.face_region import pan_path
+
+    path = pan_path(_stills(*([(0.25, 0.5)] * 4 + [(0.75, 0.5)] * 20)),
+                    fps=2.0)
+
+    xs = [x for _, x, _ in path]
+    assert xs[0] < 0.4 and xs[-1] > 0.6
+
+
+def test_a_path_too_short_to_fill_is_returned_as_it_is():
+    from autoreel.face_region import _glide
+
+    assert _glide([]) == []
+    assert _glide([(0.0, 0.5, 0.5)]) == [(0.0, 0.5, 0.5)]
+
+
+# ── a clip with nobody in it is not a clip about somebody ────────────
+
+def test_no_faces_keeps_the_whole_frame_not_the_call_pane():
+    """A stream is not one thing for ninety minutes. The profile is
+    chosen once from a sample of the picture, and a clip taken at 90m can
+    be the plain desktop while the sample at 8m was a call - so a taskbar
+    full of Steam icons went out cropped to 9:16 as if it were a person."""
+    import inspect
+
+    from autoreel import clip_maker
+
+    body = inspect.getsource(clip_maker.ClipMaker.make)
+
+    assert "framing the call pane" not in body, \
+        "no faces still falls back to a rectangle that guessed"
+    assert "CROP_FIT" in body

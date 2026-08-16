@@ -933,15 +933,20 @@ class ClipMaker:
                         within=self.content_region)
                 if measured:
                     region = measured
-                elif self.content_region:
-                    # The call pane. Not the whole frame and not a stale
-                    # rectangle: on this layout the whole frame is half
-                    # browser, and the old rectangle WAS the browser -
-                    # x 0.50 width 0.37 is the slots window exactly.
-                    region = self.content_region
-                    print(f"[Clips] Clip {spec.index:02d}: no faces here - "
-                          f"framing the call pane.")
                 else:
+                    # NOT the call pane either, which this used to fall
+                    # back to. A stream is not one thing for ninety
+                    # minutes: the profile is chosen once from a sample of
+                    # the picture, and a clip taken at 90m can be the
+                    # plain desktop while the sample at 8m was a call. On
+                    # that clip the "call pane" is the left half of a
+                    # wallpaper, and a taskbar full of Steam icons went
+                    # out cropped to 9:16 as if it were a person.
+                    #
+                    # No faces IS the signal. Whatever the profile
+                    # guessed, a clip with nobody in it is not a clip
+                    # about somebody, so keep all of it.
+                    #
                     # NOT the configured rectangle. That rectangle points
                     # wherever it was last aimed, and when no face is on
                     # screen what sits there is the browser - which is how
