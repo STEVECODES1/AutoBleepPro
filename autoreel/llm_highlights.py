@@ -376,12 +376,48 @@ def check(provider: str = "", model: str = "") -> tuple:
     return True, f"{provider} ({model}) answered - the key works"
 
 
+# What this asks the model to do is READ a transcript of the channel's
+# own stream and say which minutes are worth clipping. The transcript is
+# a loud, sweary Monkey-app call, and on the default thresholds Gemini
+# declines to answer at all - the request comes back with no candidate
+# and the caller sees "the model returned nothing usable", which is how
+# a working API key produced scorer-picked titles for weeks.
+#
+# BLOCK_ONLY_HIGH rather than off: the severe end still blocks, and what
+# gets through is the ordinary swearing this channel is made of. Nothing
+# here generates anything - the model classifies footage the account
+# owner recorded, and the reply is a list of indexes and titles.
+_SAFETY = [{"category": name, "threshold": "BLOCK_ONLY_HIGH"} for name in (
+    "HARM_CATEGORY_HARASSMENT",
+    "HARM_CATEGORY_HATE_SPEECH",
+    "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+    "HARM_CATEGORY_DANGEROUS_CONTENT",
+)]
+
+
+def _refusal(data: dict) -> str:
+    """Why Gemini gave no answer, in its own words. "" if it did answer."""
+    if not isinstance(data, dict):
+        return "no reply"
+    feedback = data.get("promptFeedback") or {}
+    if feedback.get("blockReason"):
+        return f"the prompt was blocked ({feedback['blockReason']})"
+    for candidate in data.get("candidates") or []:
+        reason = (candidate or {}).get("finishReason", "")
+        if reason and reason not in ("STOP", "MAX_TOKENS"):
+            return f"the answer was stopped ({reason})"
+    if not data.get("candidates"):
+        return "no candidates in the reply"
+    return ""
+
+
 def _ask_gemini(key: str, model: str, prompt: str) -> str:
     url = (f"https://generativelanguage.googleapis.com/v1beta/models/"
            f"{model}:generateContent?key={key}")
     payload = {
         "systemInstruction": {"parts": [{"text": SYSTEM_PROMPT}]},
         "contents": [{"parts": [{"text": prompt}]}],
+        "safetySettings": _SAFETY,
         "generationConfig": {"responseMimeType": "application/json",
                              "temperature": 0.4},
     }
@@ -391,6 +427,11 @@ def _ask_gemini(key: str, model: str, prompt: str) -> str:
     try:
         return data["candidates"][0]["content"]["parts"][0]["text"]
     except (KeyError, IndexError, TypeError):
+        # Said out loud. Swallowed, this is indistinguishable from a
+        # model that read the clips and liked none of them.
+        why = _refusal(data)
+        if why:
+            print(f"[Clips] The model would not answer: {why}.")
         return ""
 
 
@@ -407,6 +448,10 @@ def _ask_gemini_vision(key: str, model: str, parts: list) -> tuple:
     payload = {
         "systemInstruction": {"parts": [{"text": SYSTEM_PROMPT + VISION_NOTE}]},
         "contents": [{"parts": parts}],
+        # Same reason as the text call, and more so: these are FRAMES of
+        # the stream, and the default thresholds decline a Monkey call
+        # outright. See _SAFETY.
+        "safetySettings": _SAFETY,
         "generationConfig": {"responseMimeType": "application/json",
                              "temperature": 0.4},
     }

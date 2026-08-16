@@ -357,3 +357,62 @@ def test_listing_failures_are_silent(monkeypatch):
 
     monkeypatch.setattr(llm_highlights.urllib.request, "urlopen", explode)
     assert llm_highlights.list_models("gemini", "k") == []
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# THE MODEL DECLINING IS NOT THE MODEL HAVING NO OPINION
+#
+# --check-llm reported the key working while every batch came back
+# scorer-titled. The key WAS working: the request asks the model to read a
+# transcript of a loud, sweary Monkey-app call, and on Gemini's default
+# thresholds it declines to answer at all. No candidate comes back, the
+# parse yields "", and the caller prints "the model returned nothing
+# usable" - which reads as "it looked and liked none of them".
+# ═════════════════════════════════════════════════════════════════════════════
+
+def test_the_request_carries_safety_thresholds():
+    """Without these the channel's own content is refused outright."""
+    from autoreel.llm_highlights import _SAFETY
+
+    assert _SAFETY, "no safety settings are sent at all"
+    categories = {entry["category"] for entry in _SAFETY}
+    assert "HARM_CATEGORY_HARASSMENT" in categories
+    assert "HARM_CATEGORY_HATE_SPEECH" in categories
+    assert all(entry["threshold"] == "BLOCK_ONLY_HIGH" for entry in _SAFETY), \
+        "the severe end must still block - this is not 'off'"
+
+
+def test_both_calls_send_them(monkeypatch):
+    """The vision pass sends FRAMES of the same call, and was refused for
+    the same reason."""
+    from autoreel import llm_highlights
+
+    sent = []
+    monkeypatch.setattr(llm_highlights, "_post",
+                        lambda url, payload, headers: sent.append(payload) or {})
+    monkeypatch.setattr(llm_highlights, "_post_detailed",
+                        lambda url, payload, headers: (sent.append(payload), ({}, ""))[1])
+
+    llm_highlights._ask_gemini("k", "m", "prompt")
+    llm_highlights._ask_gemini_vision("k", "m", [{"text": "x"}])
+
+    assert len(sent) == 2
+    assert all("safetySettings" in payload for payload in sent)
+
+
+@pytest.mark.parametrize("reply,expected", [
+    ({"promptFeedback": {"blockReason": "SAFETY"}}, "blocked"),
+    ({"candidates": [{"finishReason": "SAFETY"}]}, "stopped"),
+    ({}, "no candidates"),
+    ({"candidates": [{"finishReason": "STOP"}]}, ""),
+])
+def test_a_refusal_is_named_not_swallowed(reply, expected):
+    """Swallowed, this is indistinguishable from a model that read the
+    clips and liked none of them - which is exactly how it was read."""
+    from autoreel.llm_highlights import _refusal
+
+    said = _refusal(reply)
+    if expected:
+        assert expected in said
+    else:
+        assert said == "", "a normal finish must not read as a refusal"
