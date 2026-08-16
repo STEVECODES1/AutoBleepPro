@@ -262,7 +262,11 @@ def caption_for(clip, title: str, tags: list) -> str:
         hook = spoken if len(spoken) <= 120 else spoken[:119].rsplit(" ", 1)[0] + "…"
         lines.append(hook)
     lines.append(f"\nFrom: {title}")
-    lines.append("Full stream on YouTube - link in bio")
+    # No "link in bio" here either. There is no link in the bio for these
+    # clips, the channels are named where it matters, and it is the most
+    # recognisable mark of an automated repost account - see
+    # clip_queue._DEAD_TEMPLATE_LINES, which kills the same slogan on the
+    # other side.
     if tags:
         lines.append("\n" + " ".join(f"#{t}" for t in tags[:12]))
     return "\n".join(lines)
@@ -422,6 +426,21 @@ def make_clips(cfg, source_path: str, title: str,
         except OSError:
             # Tags are a nice-to-have; losing them must not cost the clip.
             pass
+        # The spoken line ON ITS OWN, in its own file.
+        #
+        # _caption.txt is a whole caption - hook, "From: <stream>", tags -
+        # and the poster only ever wanted its first line. Reading a
+        # headline out of a formatted document meant a clip with no
+        # per-clip title handed back "From: Stackswopo Love Yall", or
+        # nothing, and the caption fell through to the filename. One
+        # value per file cannot go wrong that way.
+        line = (clip.spec.title or "").strip()
+        if line:
+            try:
+                with open(stem + "_line.txt", "w", encoding="utf-8") as f:
+                    f.write(line)
+            except OSError:
+                pass
 
     # What was cut and why, so a later run can be told how these did.
     # Wrapped in nothing on purpose - remember_run swallows its own

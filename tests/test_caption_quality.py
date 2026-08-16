@@ -322,3 +322,66 @@ def test_no_subject_note_is_not_an_error(tmp_path):
 
     assert caption_for("instagram", str(clip), "",
                        {"instagram": {"caption_template": "{title}"}})
+
+
+# ── the sidecar is a document, not a headline ────────────────────────
+
+def test_caption_scaffolding_is_never_used_as_the_title(tmp_path):
+    """_caption.txt is a whole caption - hook, "From: <stream>", tags -
+    and the poster only ever wanted its first line. On a clip with no
+    per-clip title that first line is "From: Stackswopo Love Yall",
+    which is structure, not something anybody said."""
+    clip = tmp_path / "Stackswopo Love Yall 20250914 204409 - Clip 02.mp4"
+    clip.write_bytes(b"x")
+    (tmp_path / "Stackswopo Love Yall 20250914 204409 - Clip 02_caption.txt"
+     ).write_text("\nFrom: Stackswopo Love Yall\n\n#stackswopo #funny")
+
+    assert clip_title(str(clip)) == "Stackswopo Love Yall", \
+        "it used the caption's scaffolding as the headline"
+
+
+def test_a_real_hook_in_the_caption_file_is_still_used(tmp_path):
+    clip = tmp_path / "a - Clip 02.mp4"
+    clip.write_bytes(b"x")
+    (tmp_path / "a - Clip 02_caption.txt").write_text(
+        "Taylor, you know who\n\nFrom: Stackswopo Love Yall\n\n#stackswopo")
+
+    assert clip_title(str(clip)) == "Taylor, you know who"
+
+
+def test_the_line_file_wins_over_the_caption_file(tmp_path):
+    """One value per file cannot be misread the way a formatted document
+    can."""
+    clip = tmp_path / "a - Clip 02.mp4"
+    clip.write_bytes(b"x")
+    (tmp_path / "a - Clip 02_caption.txt").write_text("From: something")
+    (tmp_path / "a - Clip 02_line.txt").write_text("N**** you got call")
+
+    assert clip_title(str(clip)) == "N**** you got call"
+
+
+def test_the_vertical_copy_finds_the_line_file(tmp_path):
+    (tmp_path / "a - Clip 02_line.txt").write_text("Show me Q50")
+    copy = tmp_path / "_vertical_a - Clip 02.mp4"
+    copy.write_bytes(b"x")
+
+    assert clip_title(str(copy)) == "Show me Q50"
+
+
+def test_the_clip_sidecar_no_longer_says_link_in_bio(tmp_path):
+    """The same dead slogan lived in a SECOND place - written into every
+    clip's caption file, where cleaning the config template could not
+    reach it."""
+    import sys
+    import types
+
+    sys.path.insert(0, os.path.join(ROOT, "auto_uploader"))
+    from utils.clip_runner import caption_for as clip_caption
+
+    spec = types.SimpleNamespace(title="Taylor, you know who")
+    clip = types.SimpleNamespace(spec=spec)
+
+    written = clip_caption(clip, "Stackswopo Love Yall", ["stackswopo"])
+
+    assert "link in bio" not in written.lower()
+    assert "Taylor, you know who" in written

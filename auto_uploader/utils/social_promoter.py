@@ -501,16 +501,30 @@ def spoken_line(video_path: str) -> str:
     plain = os.path.join(os.path.dirname(stem),
                          re.sub(r"^_?vertical[_\s]+", "",
                                 os.path.basename(stem), flags=re.I))
-    for candidate in (stem + ".txt", stem + "_caption.txt",
+    # _line.txt FIRST: it holds the spoken line and nothing else.
+    # _caption.txt is a whole formatted caption whose first line is the
+    # hook only when there IS one - otherwise it is "From: <stream>",
+    # which is scaffolding, not a headline.
+    for candidate in (stem + "_line.txt", plain + "_line.txt",
+                      stem + ".txt", stem + "_caption.txt",
                       plain + ".txt", plain + "_caption.txt"):
         try:
             with open(candidate, "r", encoding="utf-8") as handle:
-                first = handle.read().strip().splitlines()
-        except (OSError, IndexError):
+                lines = handle.read().strip().splitlines()
+        except OSError:
             continue
-        if first and first[0].strip():
-            return first[0].strip()
+        for line in lines:
+            line = line.strip()
+            if line and not _IS_SCAFFOLDING.match(line):
+                return line
     return ""
+
+
+# Lines in a caption file that are structure rather than something
+# somebody said. Returning one of these as the headline is how a clip
+# ended up titled "From: Stackswopo Love Yall".
+_IS_SCAFFOLDING = re.compile(
+    r"^(from:|full stream|youtube:|rumble:|#|\W*$)", re.I)
 
 
 def tidy_stem(stem: str) -> str:
