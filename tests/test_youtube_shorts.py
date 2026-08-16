@@ -273,3 +273,35 @@ def test_a_platform_can_be_switched_on_without_editing_json(tmp_path):
                                      on=True) is None
     assert "no such platform" in main.set_platform_enabled(
         str(path), "tiktok", on=True)
+
+
+def test_shorts_privacy_is_a_command_not_a_json_edit(tmp_path):
+    """Same reason as --enable: config.json is untracked, so a setting
+    already in it is never updated by a pull.
+
+    The distinction this exists to make usable: PRIVATE is nobody at all,
+    including anyone holding the link - which is why a channel full of
+    private Shorts reads 0 views - while UNLISTED is watchable by link
+    and checkable before it is made public."""
+    import importlib.util
+    import json
+    import sys
+
+    sys.path.insert(0, _UPLOADER)
+    spec = importlib.util.spec_from_file_location(
+        "_main_privacy", os.path.join(_UPLOADER, "main.py"))
+    main = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(main)
+
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps({"youtube_shorts": {"privacy": "private"}}))
+
+    said = main.set_shorts_privacy(str(path), "unlisted")
+
+    assert "unlisted" in said
+    assert json.loads(path.read_text())["youtube_shorts"]["privacy"] == \
+        "unlisted"
+    assert main.set_shorts_privacy(str(path), "unlisted") is None
+    assert "not one of" in main.set_shorts_privacy(str(path), "secret")
+    assert json.loads(path.read_text())["youtube_shorts"]["privacy"] == \
+        "unlisted", "a rejected value still changed the file"

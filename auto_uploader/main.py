@@ -39,7 +39,7 @@ from datetime import datetime
 # Bump when shipping user-visible changes, so --test-config can prove
 # which build is actually running (stale extracts have silently caused
 # several confusing "the fix did nothing" runs).
-BUILD = "2026-08-16.35 Rumble having seen a clip says nothing about YouTube"
+BUILD = "2026-08-16.36 unlisted is not private, and neither is a JSON edit"
 
 # How often --watch checks whether a deferred clip's wait is up. A minute
 # is fine: the waits themselves are 25 to 80 minutes, so the resolution
@@ -270,6 +270,48 @@ def set_platform_enabled(config_file: str, platform: str, on: bool):
             f"{settings.get('min_minutes_between', '?')} min apart"
     return (f"{platform} is now {'ON' if on else 'OFF'} ({where})."
             if on else f"{platform} is now OFF.")
+
+
+def set_shorts_privacy(config_file: str, privacy: str):
+    """How a new Short goes up: private, unlisted or public.
+
+    Its own command for the same reason --enable is: config.json is
+    untracked, so merge_new_settings never updates a setting already in
+    it, and changing this meant hand-editing JSON on the machine least
+    convenient for it.
+
+    Worth knowing which is which, because the difference is not obvious:
+    PRIVATE is nobody at all, including anyone holding the link - which
+    is why a channel full of private Shorts reads 0 views. UNLISTED is
+    watchable by link but not published to the channel or the feed, so
+    each one can be checked and then made public by hand.
+    """
+    if privacy not in ("private", "unlisted", "public"):
+        return f"'{privacy}' is not one of private, unlisted, public."
+    try:
+        with open(config_file, "r", encoding="utf-8") as handle:
+            live = json.load(handle)
+    except (OSError, ValueError) as exc:
+        return f"could not read config.json: {exc}"
+
+    block = live.setdefault("youtube_shorts", {})
+    if block.get("privacy") == privacy:
+        return None
+    was = block.get("privacy", "unset")
+    block["privacy"] = privacy
+    try:
+        temporary = config_file + ".tmp"
+        with open(temporary, "w", encoding="utf-8") as handle:
+            json.dump(live, handle, indent=2, ensure_ascii=False)
+            handle.write("\n")
+        os.replace(temporary, config_file)
+    except OSError as exc:
+        return f"could not write config.json: {exc}"
+
+    note = {"private": "nobody can see them, not even with a link",
+            "unlisted": "watchable by link, not listed on the channel",
+            "public": "live on the channel the moment they upload"}[privacy]
+    return f"new Shorts go up {privacy} ({note}). Was {was}."
 
 
 def merge_new_settings(config_file: str, example_file: str) -> list:
@@ -2038,6 +2080,12 @@ def main(argv=None) -> int:
                              "and spacing are left exactly as they are.")
     parser.add_argument("--disable", metavar="PLATFORM",
                         help="Turn a posting platform OFF in config.json.")
+    parser.add_argument("--shorts-privacy", metavar="VALUE",
+                        choices=("private", "unlisted", "public"),
+                        help="How a new Short goes up: private (nobody, "
+                             "not even with a link - which is why private "
+                             "Shorts read 0 views), unlisted (watchable by "
+                             "link, not listed on the channel), or public.")
     parser.add_argument("--check-sync", metavar="FILE", nargs="?", const="",
                         help="Measure whether captions will line up with the "
                              "audio in clips cut from this video, and say "
@@ -2839,6 +2887,14 @@ def main(argv=None) -> int:
                             "client_secrets_path": cfg.youtube.client_secrets_path}},
                guard, account, live=args.verify)
         print(f"\n  {summary(cfg.posting)}")
+        return 0
+
+    if args.shorts_privacy:
+        said = set_shorts_privacy(os.path.join(config_dir, "config.json"),
+                                  args.shorts_privacy)
+        print(f"[Config] {said}" if said else
+              f"[Config] Shorts were already going up "
+              f"{args.shorts_privacy}.")
         return 0
 
     if args.enable or args.disable:
