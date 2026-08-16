@@ -131,6 +131,16 @@ anything you are unsure about below 50 and leave it out.\
 """
 
 
+# Appended when the model refused to write titles. It still ranks - and
+# ranking is the half the local scorer cannot do.
+NUMBERS_ONLY = """
+
+IMPORTANT, THIS TIME ONLY: do NOT write titles. Reply with the index and
+the score for each clip you pick and nothing else:
+{"clips": [{"index": <candidate number>, "score": <0-100>}]}
+"""
+
+
 def api_key(provider: str) -> str:
     for name in _KEY_NAMES.get(provider, ()):
         value = os.environ.get(name, "").strip()
@@ -292,7 +302,7 @@ def learned_lines() -> list:
 
 
 def for_the_model(text: str) -> str:
-    """A candidate's transcript with the words the model will not echo masked.
+    """A candidate's transcript with the words the model will not echo removed.
 
     Gemini refused these clips at the OUTPUT: "the model output could not
     be generated. This output contains sensitive words". Not the prompt -
@@ -305,12 +315,26 @@ def for_the_model(text: str) -> str:
     is still described - the surrounding sentence is untouched - and the
     model picks and names it from what is left.
 
+    Masking was not enough on its own: "f***" is still a sensitive word
+    to the filter and the refusal came back unchanged, so a flagged word
+    is REMOVED here rather than starred. What is left is the sentence
+    around it, which is all the model needs to tell one moment from
+    another.
+
     No loss anywhere downstream either: every platform that gets a title
     from this already has those words stripped or masked before posting.
     """
-    from .safe_text import clean
+    from .safe_text import DROP_ENTIRELY, clean, _checker, _flagged
 
-    return clean(" ".join((text or "").split()))
+    checker = _checker()
+    kept = []
+    for word in " ".join((text or "").split()).split():
+        bare = word.lower().strip(".,!?;:\"'")
+        if bare in DROP_ENTIRELY or _flagged(word, checker):
+            continue
+        kept.append(word)
+    # clean() as a backstop for anything the word split missed.
+    return clean(" ".join(kept))
 
 
 def build_prompt(candidates: list, count: int, lessons: Optional[list] = None) -> str:
@@ -620,6 +644,30 @@ def rank(candidates: list, count: int, provider: str = "",
             return None
 
     picked = parse_reply(raw, len(shortlist))
+    if not picked:
+        # Once more, asking for NO TITLES.
+        #
+        # The refusal is at the output: "the model output could not be
+        # generated, this output contains sensitive words". Writing the
+        # title is the only part that makes the model produce the
+        # channel's own language - CHOOSING is just numbers. So when it
+        # will not write, the numbers are still worth having: which of
+        # sixty candidates are actually worth clipping is the half the
+        # local scorer cannot do, and the titles it already writes are
+        # decent.
+        #
+        # Losing the whole pass over the naming was throwing away the
+        # part that mattered more.
+        print("[Clips] The model would not write titles - asking it to "
+              "just pick, and titling them here.")
+        ask = ask or (_ask_gemini if provider == GEMINI else _ask_openai)
+        try:
+            raw = ask(key, model,
+                      build_prompt(shortlist, count) + NUMBERS_ONLY)
+        except Exception:
+            raw = ""
+        picked = parse_reply(raw, len(shortlist))
+
     if not picked:
         print("[Clips] The model returned nothing usable - the scorer's own "
               "ranking stands.")

@@ -439,11 +439,14 @@ def test_a_slur_never_reaches_the_model():
     assert "yo this" in sent and "bro" in sent, "the moment was destroyed"
 
 
-def test_ordinary_swearing_is_masked_not_removed():
-    """The model still needs to know the register it is reading."""
+def test_ordinary_swearing_is_removed_too():
+    """Masking was tried first and did not clear the refusal - "f***" is
+    still a sensitive word to the filter."""
     from autoreel.llm_highlights import for_the_model
 
-    assert "f***" in for_the_model("what the fuck bro")
+    sent = for_the_model("what the fuck bro")
+    assert "f***" not in sent and "fuck" not in sent
+    assert "bro" in sent
 
 
 def test_the_candidate_list_is_masked(monkeypatch):
@@ -456,7 +459,8 @@ def test_the_candidate_list_is_masked(monkeypatch):
     prompt = build_prompt([_H()], count=1, lessons=[])
 
     assert "nigga" not in prompt
-    assert "f***" in prompt
+    assert "f***" not in prompt and "fuck" not in prompt
+    assert "yo this" in prompt, "the moment itself was destroyed"
 
 
 def test_the_model_is_told_not_to_echo_a_masked_word():
@@ -466,3 +470,69 @@ def test_the_model_is_told_not_to_echo_a_masked_word():
 
     assert "NEVER reproduce a slur" in SYSTEM_PROMPT
     assert "stars" in SYSTEM_PROMPT
+
+
+# ── refusing to WRITE is not refusing to CHOOSE ──────────────────────
+#
+# The refusal is at the output. Writing the title is the only part that
+# makes the model produce the channel's own language - choosing is just
+# numbers. Losing the whole pass over the naming threw away the half the
+# local scorer cannot do.
+
+def test_a_flagged_word_is_removed_from_the_prompt_not_starred():
+    """Masking alone did not clear it: "f***" is still a sensitive word
+    to the filter, and the refusal came back unchanged."""
+    from autoreel.llm_highlights import for_the_model
+
+    sent = for_the_model("yo this nigga said what the fuck bro")
+
+    assert "f***" not in sent and "fuck" not in sent
+    assert "nigga" not in sent
+    assert "yo this" in sent and "bro" in sent
+
+
+def test_an_ordinary_sentence_survives_intact():
+    from autoreel.llm_highlights import for_the_model
+
+    said = "she said something and I was like bro no way"
+    assert for_the_model(said) == said
+
+
+def test_it_asks_again_without_titles_when_the_model_will_not_write(
+        monkeypatch):
+    from autoreel import llm_highlights
+    from autoreel.highlights import Highlight
+
+    shortlist = [Highlight(start=0.0, end=30.0, text="a moment", score=10.0)]
+    asked = []
+
+    def refuses_titles(key, model, prompt):
+        asked.append(prompt)
+        if llm_highlights.NUMBERS_ONLY.strip() in prompt:
+            return '{"clips": [{"index": 1, "score": 88}]}'
+        return ""          # blocked at the output
+
+    monkeypatch.setenv("GEMINI_API_KEY", "k")
+    chosen = llm_highlights.rank(shortlist, 1, provider="gemini",
+                                 model="m", ask=refuses_titles)
+
+    assert len(asked) == 2, "it gave up instead of asking again"
+    assert chosen and chosen[0].score == 88, \
+        "the model's ranking was thrown away with its titles"
+
+
+def test_the_scorers_title_stands_when_the_model_writes_none(monkeypatch):
+    from autoreel import llm_highlights
+    from autoreel.highlights import Highlight
+
+    shortlist = [Highlight(start=0.0, end=30.0, text="a moment",
+                           score=10.0, hook="the line the scorer picked")]
+
+    monkeypatch.setenv("GEMINI_API_KEY", "k")
+    chosen = llm_highlights.rank(
+        shortlist, 1, provider="gemini", model="m",
+        ask=lambda k, m, p: ('{"clips": [{"index": 1, "score": 70}]}'
+                             if llm_highlights.NUMBERS_ONLY.strip() in p
+                             else ""))
+
+    assert chosen[0].hook == "the line the scorer picked"
