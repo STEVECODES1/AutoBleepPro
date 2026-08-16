@@ -536,3 +536,40 @@ def test_the_scorers_title_stands_when_the_model_writes_none(monkeypatch):
                              else ""))
 
     assert chosen[0].hook == "the line the scorer picked"
+
+
+def test_a_refusal_is_told_apart_from_a_missing_key(monkeypatch):
+    """"Check the key with --check-llm" sent people to a command that
+    reports the key working - true, and useless, because the provider
+    declined the CONTENT. Those two need opposite advice and got the
+    same line."""
+    from autoreel import llm_highlights
+    from autoreel.highlights import Highlight
+
+    monkeypatch.setenv("GEMINI_API_KEY", "k")
+    llm_highlights._remember_refusal("")
+
+    def blocked(key, model, prompt):
+        llm_highlights._remember_refusal(
+            llm_highlights._refusal({"candidates": [{"finishReason": "SAFETY"}]}))
+        return ""
+
+    result = llm_highlights.rank(
+        [Highlight(start=0.0, end=30.0, text="a moment", score=10.0)],
+        1, provider="gemini", model="m", ask=blocked)
+
+    assert result is None
+    assert "SAFETY" in llm_highlights.last_refusal()
+
+
+def test_a_fresh_run_does_not_report_a_stale_reason(monkeypatch):
+    from autoreel import llm_highlights
+
+    llm_highlights._remember_refusal("the answer was stopped (SAFETY)")
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    llm_highlights.rank([], 1)
+
+    assert llm_highlights.last_refusal() == ""

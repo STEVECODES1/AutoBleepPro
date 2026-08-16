@@ -640,8 +640,21 @@ def specs_from_segments(segments: Iterable[dict], count: int = DEFAULT_CLIP_COUN
     named_by_model = highlights is not None
     if highlights is None:
         if llm_rank:
-            print("[Clips] No model opinion - picking on the transcript "
-                  "score alone. Check the key with --check-llm.")
+            # NOT "check the key" when the model answered and refused.
+            # It sent people to --check-llm, which reports the key
+            # working, which is true and useless - the provider declined
+            # the CONTENT, and no key fixes that.
+            from .llm_highlights import last_refusal
+
+            refused = last_refusal()
+            if refused:
+                print(f"[Clips] The model would not process this video "
+                      f"({refused}) - picking on the transcript score "
+                      f"alone. The key is fine; the provider declined the "
+                      f"content.")
+            else:
+                print("[Clips] No model opinion - picking on the transcript "
+                      "score alone. Check the key with --check-llm.")
         # The scorer's own verdict: best first, then back into timeline
         # order so clip 01 is the earliest.
         highlights = sorted(shortlist, key=lambda h: h.score,

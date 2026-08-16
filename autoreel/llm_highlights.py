@@ -445,6 +445,21 @@ _SAFETY = [{"category": name, "threshold": "BLOCK_ONLY_HIGH"} for name in (
 )]
 
 
+# The last reason a provider gave for not answering, so the caller can
+# tell "no key" from "it read this and said no". Those need opposite
+# advice and got the same line for weeks.
+_LAST_REFUSAL = {"why": ""}
+
+
+def last_refusal() -> str:
+    """Why the provider declined, or "" if it was not a refusal."""
+    return _LAST_REFUSAL["why"]
+
+
+def _remember_refusal(why: str) -> None:
+    _LAST_REFUSAL["why"] = why
+
+
 def _refusal(data: dict) -> str:
     """Why Gemini gave no answer, in its own words. "" if it did answer."""
     if not isinstance(data, dict):
@@ -481,6 +496,7 @@ def _ask_gemini(key: str, model: str, prompt: str) -> str:
         # model that read the clips and liked none of them.
         why = _refusal(data)
         if why:
+            _remember_refusal(why)
             print(f"[Clips] The model would not answer: {why}.")
         return ""
 
@@ -598,6 +614,7 @@ def rank(candidates: list, count: int, provider: str = "",
     back - and the caller keeps its own ranking. It never means "none of
     these are any good".
     """
+    _remember_refusal("")
     if not candidates or count <= 0:
         return None
 
