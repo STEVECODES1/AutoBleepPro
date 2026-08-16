@@ -215,6 +215,17 @@ class ClipSpec:
     # the line worth putting on a thumbnail - and a caption wants the
     # rest, so both are carried rather than one being derived twice.
     transcript: str = ""
+    # WHO wrote the title: "model" when a language model read the clip
+    # and named it, "scorer" when it is the best sentence picked out by
+    # length and punctuation alone.
+    #
+    # Recorded because the difference is visible in the output and
+    # invisible in the run. The model's titles read like "Gumball ass
+    # animations"; the scorer's read like "Doing amazing world of gumball
+    # animations" - and with no way to tell them apart, a run where the
+    # model quietly failed looks exactly like one where it worked and
+    # wrote something flat.
+    titled_by: str = "scorer"
 
     @property
     def duration(self) -> float:
@@ -626,6 +637,7 @@ def specs_from_segments(segments: Iterable[dict], count: int = DEFAULT_CLIP_COUN
     highlights = rank(shortlist, count, llm_provider, llm_model,
                       source_path=source_path if use_vision else "") \
         if llm_rank else None
+    named_by_model = highlights is not None
     if highlights is None:
         if llm_rank:
             print("[Clips] No model opinion - picking on the transcript "
@@ -642,10 +654,12 @@ def specs_from_segments(segments: Iterable[dict], count: int = DEFAULT_CLIP_COUN
         # it: "watched 24 candidates" then "read 72".
         print(f"[Clips] The model chose {len(highlights)} clips.")
 
+    titled_by = "model" if named_by_model else "scorer"
     return [
         ClipSpec(start=h.start, end=h.end, index=i,
                  title=(h.hook or h.text).strip(),
-                 score=h.score, transcript=h.text.strip())
+                 score=h.score, transcript=h.text.strip(),
+                 titled_by=titled_by)
         for i, h in enumerate(highlights, start=1)
     ]
 

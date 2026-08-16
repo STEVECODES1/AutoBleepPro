@@ -506,5 +506,16 @@ def print_run(run: ClipRun) -> None:
               f"(from {clip.spec.start / 60:.0f}m{clip.spec.start % 60:02.0f}s, "
               f"{clip.strategy} crop"
               f"{', captions burned in' if clip.captioned else ''})")
-    print("\n  Each clip has a *_caption.txt beside it. Post from the "
-          "Instagram/TikTok app - no hosting, no API, better reach.")
+    # WHO named them. The model's titles read like "Gumball ass
+    # animations"; the scorer's read like "Doing amazing world of gumball
+    # animations". Without this line a run where the model quietly failed
+    # looks exactly like one where it worked and wrote something flat -
+    # and the only symptom is titles that read slightly worse than the
+    # ones on the channel from last week.
+    by = {getattr(c.spec, "titled_by", "scorer") for c in run.clips}
+    if by == {"model"}:
+        print("\n  Titles written by the model.")
+    elif "model" not in by:
+        print("\n  Titles picked by the SCORER, not the model - the best "
+              "sentence in each clip by length and punctuation. Check the "
+              "key with --check-llm; the model's titles read better.")

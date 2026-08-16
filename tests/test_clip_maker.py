@@ -826,3 +826,58 @@ def test_the_stack_render_maps_the_composed_stream_and_the_audio():
 
     assert '"-map", "[v]"' in body
     assert '"-map", "0:a?"' in body
+
+
+# ── who wrote the title ──────────────────────────────────────────────
+#
+# The model's titles read like "Gumball ass animations"; the scorer's read
+# like "Doing amazing world of gumball animations". The difference is
+# plain in the output and was invisible in the run - so a batch where the
+# model quietly failed looked exactly like one where it worked and wrote
+# something flat, and the only symptom was titles slightly worse than last
+# week's.
+
+def test_a_clip_records_who_named_it():
+    from autoreel.clip_maker import ClipSpec
+
+    assert ClipSpec(0.0, 10.0).titled_by == "scorer", \
+        "the safe assumption is the cheaper source"
+
+
+def test_the_model_naming_the_clips_is_recorded(monkeypatch):
+    from autoreel import clip_maker
+
+    segments = [{"start": float(i * 30), "end": float(i * 30 + 25),
+                 "text": "OH MY GOD what the hell holy crap bro",
+                 "words": []} for i in range(6)]
+
+    def model_ranked(shortlist, count, *_a, **_k):
+        for highlight in shortlist[:count]:
+            highlight.hook = "Gumball ass animations"
+        return list(shortlist[:count])
+
+    from autoreel import llm_highlights
+
+    monkeypatch.setattr(llm_highlights, "rank", model_ranked)
+    specs = clip_maker.specs_from_segments(segments, count=2, llm_rank=True)
+
+    assert specs, "nothing was chosen"
+    assert all(spec.titled_by == "model" for spec in specs)
+
+
+def test_the_scorer_naming_the_clips_is_recorded(monkeypatch):
+    """rank() returning None is how it says the key is missing, the reply
+    was unusable, or the call failed."""
+    from autoreel import clip_maker
+
+    segments = [{"start": float(i * 30), "end": float(i * 30 + 25),
+                 "text": "OH MY GOD what the hell holy crap bro",
+                 "words": []} for i in range(6)]
+
+    from autoreel import llm_highlights
+
+    monkeypatch.setattr(llm_highlights, "rank", lambda *a, **k: None)
+    specs = clip_maker.specs_from_segments(segments, count=2, llm_rank=True)
+
+    assert specs
+    assert all(spec.titled_by == "scorer" for spec in specs)
