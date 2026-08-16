@@ -416,3 +416,53 @@ def test_a_refusal_is_named_not_swallowed(reply, expected):
         assert expected in said
     else:
         assert said == "", "a normal finish must not read as a refusal"
+
+
+# ── the OUTPUT was blocked, not the input ────────────────────────────
+#
+#   finishReason: SAFETY
+#   "The model output could not be generated. This output contains
+#    sensitive words that violate Google's ... policy"
+#
+# It read the transcript fine. It was told to title each clip "in the
+# streamer's own words", those words include slurs, and it will not write
+# one. safetySettings cannot reach that - output policy is not
+# configurable - so the slur never goes in.
+
+def test_a_slur_never_reaches_the_model():
+    from autoreel.llm_highlights import for_the_model
+
+    sent = for_the_model("yo this nigga said what the fuck bro")
+
+    assert "nigga" not in sent
+    assert "n****" not in sent, "a starred slur is still a word to echo"
+    assert "yo this" in sent and "bro" in sent, "the moment was destroyed"
+
+
+def test_ordinary_swearing_is_masked_not_removed():
+    """The model still needs to know the register it is reading."""
+    from autoreel.llm_highlights import for_the_model
+
+    assert "f***" in for_the_model("what the fuck bro")
+
+
+def test_the_candidate_list_is_masked(monkeypatch):
+    from autoreel.llm_highlights import build_prompt
+
+    class _H:
+        start, end = 10.0, 40.0
+        text = "yo this nigga said what the fuck"
+
+    prompt = build_prompt([_H()], count=1, lessons=[])
+
+    assert "nigga" not in prompt
+    assert "f***" in prompt
+
+
+def test_the_model_is_told_not_to_echo_a_masked_word():
+    """Masking the input is most of it; saying so out loud covers the
+    case where it would have copied the stars across instead."""
+    from autoreel.llm_highlights import SYSTEM_PROMPT
+
+    assert "NEVER reproduce a slur" in SYSTEM_PROMPT
+    assert "stars" in SYSTEM_PROMPT

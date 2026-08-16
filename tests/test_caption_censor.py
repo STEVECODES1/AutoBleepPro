@@ -10,6 +10,8 @@ is worse than doing neither, because the mute makes it look handled.
 import os
 import sys
 
+import pytest
+
 _REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _REPO not in sys.path:
     sys.path.insert(0, _REPO)
@@ -261,3 +263,54 @@ def test_a_config_saying_true_still_means_everything():
         utils.censor.censor_video = original
 
     assert seen["scope"] == (), "True must still mean every category"
+
+
+# ── the classic substring bug ────────────────────────────────────────
+#
+# "meth" is inside "so-meth-ing". The category lists were matched with a
+# plain `phrase in word` test, so the word "something" was flagged as a
+# drug reference: every caption rendered it "s********" and the audio pass
+# bleeped it - on a channel where somebody says "something" every few
+# sentences. It surfaced from a prompt-building test, not from anyone
+# watching a clip.
+
+@pytest.mark.parametrize("word", [
+    "something", "somethings", "methodical", "assassin", "class", "bass",
+    "therapist", "grass", "analysis", "basement", "passing",
+])
+def test_an_ordinary_word_is_not_flagged(word):
+    from autoreel.compliance import ComplianceEngine
+
+    assert ComplianceEngine()._flag_reason(word) is None, \
+        f"{word!r} would be bleeped and starred out"
+
+
+@pytest.mark.parametrize("word,category", [
+    ("meth", "drugs"),
+    ("cocaine", "drugs"),
+    ("nigga", "hate_speech"),
+    ("niggas", "hate_speech"),
+    ("retarded", "hate_speech"),
+])
+def test_the_real_words_are_still_caught(word, category):
+    from autoreel.compliance import ComplianceEngine
+
+    assert ComplianceEngine()._flag_reason(word) == category
+
+
+@pytest.mark.parametrize("word", ["fucking", "fucker", "shitting", "fucks"])
+def test_inflections_still_match(word):
+    """A word boundary ALONE would have broken this - which is why the
+    substring test was there in the first place."""
+    from autoreel.compliance import ComplianceEngine
+
+    assert ComplianceEngine()._flag_reason(word) is not None
+
+
+def test_a_custom_word_is_matched_the_same_way():
+    from autoreel.compliance import ComplianceEngine
+
+    engine = ComplianceEngine(custom_words=("bing",))
+
+    assert engine._flag_reason("bing") == "custom_word"
+    assert engine._flag_reason("bingo") is None, "custom words match whole words too"

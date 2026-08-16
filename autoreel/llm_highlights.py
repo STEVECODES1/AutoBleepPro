@@ -108,6 +108,10 @@ contain, it is not a clip.
 
 For each one you pick, write a TITLE:
 - what actually happens in it, in the streamer's own words where possible
+- NEVER reproduce a slur or a masked word. Some transcripts arrive with
+  words starred out; those are censored on purpose. Describe the moment
+  instead - "the instant he finds out her age" - and never copy the
+  stars into the title either
 - no hashtags, no emoji, no "you won't believe", no ALL CAPS
 - under 70 characters, and a real phrase rather than a label
 - never "Funny Moment", "Epic Fail", "Clip 3" or anything that would fit
@@ -256,7 +260,7 @@ def build_vision_contents(candidates: list, count: int, source_path: str,
     parts = [{"text": f"Pick AT MOST {count} of these {len(candidates)} "
                       f"candidates - fewer if fewer are good.\n"}]
     for number, highlight in enumerate(candidates, start=1):
-        text = " ".join((highlight.text or "").split())[:_MAX_TEXT_CHARS]
+        text = for_the_model(highlight.text)[:_MAX_TEXT_CHARS]
         parts.append({"text": (
             f"\n[{number}] at {_timestamp(highlight.start)}, "
             f"{highlight.end - highlight.start:.0f}s\n{text}\n")})
@@ -287,6 +291,28 @@ def learned_lines() -> list:
         return []
 
 
+def for_the_model(text: str) -> str:
+    """A candidate's transcript with the words the model will not echo masked.
+
+    Gemini refused these clips at the OUTPUT: "the model output could not
+    be generated. This output contains sensitive words". Not the prompt -
+    it read the transcript fine. It was asked to title each clip "in the
+    streamer's own words", the streamer's own words include slurs, and it
+    will not write one.
+
+    safetySettings cannot reach that; output policy is not configurable.
+    So the slur never goes in, and there is nothing to echo. The moment
+    is still described - the surrounding sentence is untouched - and the
+    model picks and names it from what is left.
+
+    No loss anywhere downstream either: every platform that gets a title
+    from this already has those words stripped or masked before posting.
+    """
+    from .safe_text import clean
+
+    return clean(" ".join((text or "").split()))
+
+
 def build_prompt(candidates: list, count: int, lessons: Optional[list] = None) -> str:
     """The candidate list, as the model sees it."""
     lines = [f"Pick AT MOST {count} of these {len(candidates)} candidates - "
@@ -295,7 +321,7 @@ def build_prompt(candidates: list, count: int, lessons: Optional[list] = None) -
     if lessons:
         lines += lessons + [""]
     for number, highlight in enumerate(candidates, start=1):
-        text = " ".join((highlight.text or "").split())[:_MAX_TEXT_CHARS]
+        text = for_the_model(highlight.text)[:_MAX_TEXT_CHARS]
         lines.append(
             f"[{number}] at {_timestamp(highlight.start)}, "
             f"{highlight.end - highlight.start:.0f}s\n{text}\n")

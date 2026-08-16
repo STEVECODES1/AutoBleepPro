@@ -66,6 +66,33 @@ DEFAULT_CATEGORIES: dict[str, list[str]] = {
 # segment goes. YouTube acts on context, not just the audible word.
 HIGH_SEVERITY_CATEGORIES: frozenset = frozenset({"hate_speech"})
 
+
+# Endings a flagged word genuinely takes. "fuck" has to catch "fucking";
+# "meth" must NOT catch "something".
+_INFLECTIONS = r"(?:s|es|ed|ing|er|ers|y|ies|in|a|az|z)?"
+
+
+def _matcher(phrases):
+    """One regex for a keyword list, matched on WORD BOUNDARIES.
+
+    This was a plain `phrase in word` substring test, and the classic
+    result: "meth" is inside "so-meth-ing", so the word "something" was
+    flagged as a drug reference. Every caption rendered it "s********"
+    and the audio pass bleeped it - on a channel where somebody says
+    "something" every few sentences.
+
+    A boundary alone is not enough either, because the list has to catch
+    inflections: "fuck" must still flag "fucking". So it is a boundary
+    plus the endings a word actually takes, which "something" and
+    "methodical" do not have.
+    """
+    words = sorted({str(p).strip().lower() for p in (phrases or ()) if str(p).strip()},
+                   key=len, reverse=True)
+    if not words:
+        return None
+    joined = "|".join(re.escape(word) for word in words)
+    return re.compile(rf"\b(?:{joined}){_INFLECTIONS}\b")
+
 # How far a mute may cross into the word next to it. Whisper's word
 # timings are 100-300ms out, so a pad that stops dead at the neighbour's
 # reported boundary can still leave the flagged syllable audible. This is
@@ -142,6 +169,9 @@ class ComplianceEngine:
                 self.categories.setdefault(category, [])
                 self.categories[category].extend(phrases)
         self.custom_words = tuple(w.strip().lower() for w in self.custom_words if w.strip())
+        self._patterns = {name: _matcher(words)
+                          for name, words in self.categories.items()}
+        self._custom = _matcher(self.custom_words)
 
     def _flag_reason(self, word: str) -> Optional[str]:
         normalized = word.strip().lower().strip(".,!?;:\"'")
@@ -160,16 +190,17 @@ class ComplianceEngine:
             # silently disabled whole-segment muting for exactly the words
             # it exists to catch.
             for category in HIGH_SEVERITY_CATEGORIES:
-                if any(phrase in candidate for phrase in self.categories.get(category, ())):
+                pattern = self._patterns.get(category)
+                if pattern and pattern.search(candidate):
                     return category
 
-            if any(custom and custom in candidate for custom in self.custom_words):
+            if self._custom and self._custom.search(candidate):
                 return "custom_word"
 
-            for category, phrases in self.categories.items():
+            for category, pattern in self._patterns.items():
                 if category in HIGH_SEVERITY_CATEGORIES:
                     continue
-                if any(phrase in candidate for phrase in phrases):
+                if pattern and pattern.search(candidate):
                     return category
 
             if self.use_profanity_filter and (
