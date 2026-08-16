@@ -39,7 +39,7 @@ from datetime import datetime
 # Bump when shipping user-visible changes, so --test-config can prove
 # which build is actually running (stale extracts have silently caused
 # several confusing "the fix did nothing" runs).
-BUILD = "2026-08-16.40 every platform gets the clip title, and the title is the line"
+BUILD = "2026-08-16.41 see the post before it posts"
 
 # How often --watch checks whether a deferred clip's wait is up. A minute
 # is fine: the waits themselves are 25 to 80 minutes, so the resolution
@@ -822,6 +822,103 @@ def _apply_mode(cfg, name: str, settings: dict):
 # the temp 9:16 copy "_vertical_...". Both live in watch_folder next to
 # the sources, and both are outputs rather than things to measure.
 _RENDERED_CLIP = re.compile(r"[-\s]clip\s*\d+\s*\.|^_?vertical[_\s]", re.I)
+
+
+def _preview_post(cfg, wanted: str = "") -> int:
+    """Show exactly what would be published, on every platform. Posts nothing.
+
+    WHY THIS EXISTS
+    Every wrong post this project has made was SILENT. A caption frozen
+    at the moment it was queued, hashtags computed and then dropped, the
+    stream's name where the clip's line belonged, a video title carrying
+    the emoji tail, a Short uploading uncensored, a platform switched off
+    - none of them raised anything, and all of them were found hours
+    later by scrolling a phone.
+
+    All six were visible in the composed text before it went anywhere.
+    --posting-status answers "may I post" - caps, credentials, the kill
+    switch. This answers "what would I post", which is the question those
+    six failures were hiding in.
+    """
+    from publish_guard import PublishGuard
+    from utils.clip_queue import (CENSOR_AUDIO_DEFAULTS, CLIP_PLATFORMS,
+                                  _current_caption, caption_for)
+
+    config = _clip_config(cfg)
+    guard = PublishGuard(cfg.posting, (cfg.posting or {}).get("state_path"))
+
+    jobs = []
+    if wanted:
+        found = _find_video(cfg, wanted)
+        if not found:
+            print(f"[Preview] File not found: {wanted}")
+            return 1
+        jobs = [(platform, found[0], None) for platform in CLIP_PLATFORMS]
+        print(f"\n[Preview] If {os.path.basename(found[0])} were posted now:")
+    else:
+        from job_queue import ACTIVE_STATES, JobQueue
+
+        queue = JobQueue(path=(cfg.posting or {}).get("queue_path")
+                         or "./clip_jobs.json")
+        waiting = queue.list_jobs(ACTIVE_STATES)
+        if not waiting:
+            print("\n[Preview] Nothing is waiting to post. Name a clip to "
+                  "see what it WOULD say:\n"
+                  '          python main.py --preview-post "clips\\a.mp4"')
+            return 0
+        # The NEXT one per platform. A backlog of thirty says the same
+        # thing thirty times, and the point is to be readable.
+        seen = set()
+        for job in waiting:
+            if job.platform in seen:
+                continue
+            seen.add(job.platform)
+            jobs.append((job.platform, job.clip_path, job))
+        print(f"\n[Preview] Next in the queue for each platform "
+              f"({len(waiting)} waiting in total):")
+
+    for platform, clip_path, job in jobs:
+        decision = guard.check(platform)
+        if decision:
+            when = "ready now"
+        elif decision.retry_after_s:
+            when = f"in {decision.retry_after_s / 60:.0f} min - {decision.reason}"
+        else:
+            when = f"BLOCKED - {decision.reason}"
+
+        print(f"\n  ── {platform} ── {when}")
+        print(f"     file:  {os.path.basename(clip_path)}")
+        if not os.path.isfile(clip_path):
+            print("     WARNING: that file is not on disk any more.")
+
+        censored = (config.get(platform, {}) or {}).get("censor_uploads")
+        if censored is None:
+            censored = CENSOR_AUDIO_DEFAULTS.get(platform, False)
+        print(f"     audio: {'BLEEPED before upload' if censored else 'as recorded'}")
+
+        caption = (_current_caption(job, config) if job is not None
+                   else caption_for(platform, clip_path, "", config))
+
+        # YouTube shows a TITLE separately from the description, and it
+        # is not the caption's first line verbatim - the emoji and tags
+        # come off it. That difference is exactly what put
+        # "...Clip 03 [emoji] #stackswopo" on the channel.
+        if platform == "youtube_shorts":
+            from publishers.youtube_shorts import YouTubeShortsPublisher
+
+            publisher = YouTubeShortsPublisher(config)
+            print(f"     title: {publisher.title_for(caption, clip_path)}")
+            body = publisher.description_for(caption)
+            print("     description:")
+            for line in body.splitlines():
+                print(f"       {line}")
+        else:
+            print("     caption:")
+            for line in caption.splitlines():
+                print(f"       {line}")
+
+    print("\n[Preview] Nothing was posted.\n")
+    return 0
 
 
 def _newest_video(cfg) -> str:
@@ -2083,6 +2180,12 @@ def main(argv=None) -> int:
                         help="Write before/after stills showing exactly what "
                              "the clip framing will keep, so the rectangle can "
                              "be aimed in seconds instead of after ten renders.")
+    parser.add_argument("--preview-post", metavar="FILE", nargs="?", const="",
+                        help="Show exactly what would be published on every "
+                             "platform - title, caption, tags, which file, "
+                             "and whether the audio gets bleeped. With no "
+                             "file it previews what is queued. Posts "
+                             "nothing.")
     parser.add_argument("--enable", metavar="PLATFORM",
                         help="Turn a posting platform ON in config.json "
                              "(youtube_shorts, zernio_twitter, "
@@ -2898,6 +3001,9 @@ def main(argv=None) -> int:
                guard, account, live=args.verify)
         print(f"\n  {summary(cfg.posting)}")
         return 0
+
+    if args.preview_post is not None:
+        return _preview_post(cfg, args.preview_post)
 
     if args.shorts_privacy:
         said = set_shorts_privacy(os.path.join(config_dir, "config.json"),
