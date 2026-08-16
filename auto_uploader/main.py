@@ -39,7 +39,7 @@ from datetime import datetime
 # Bump when shipping user-visible changes, so --test-config can prove
 # which build is actually running (stale extracts have silently caused
 # several confusing "the fix did nothing" runs).
-BUILD = "2026-08-15.29 a clip's caption is written when it posts, not when it is queued"
+BUILD = "2026-08-16.30 measure whether the captions land on the words"
 
 # How often --watch checks whether a deferred clip's wait is up. A minute
 # is fine: the waits themselves are 25 to 80 minutes, so the resolution
@@ -730,6 +730,108 @@ def _apply_mode(cfg, name: str, settings: dict):
         print("       Clips   -> YouTube Shorts (if enabled and signed in)")
     cfg.clips = clips
     return cfg
+
+
+def _check_sync(cfg, source: str) -> int:
+    """Measure caption/audio sync on a real video and name the cause.
+
+    Two test points rather than one, and they are the whole design: an
+    error that is the SAME at both is a clock or a seek problem, and one
+    that grows is the frame rate. One sample cannot tell those apart, and
+    they need opposite fixes.
+    """
+    import tempfile
+
+    from autoreel import clip_sync
+    from autoreel.clip_maker import ClipSpec, have_ffmpeg, render_clip
+
+    if not (have_ffmpeg() and clip_sync.have_tools()):
+        print("[Sync] ffmpeg and ffprobe are both needed for this.")
+        return 1
+
+    streams = clip_sync.probe_streams(source)
+    if not streams.get("audio"):
+        print("[Sync] This file has no audio track, so there is nothing "
+              "for captions to line up with.")
+        return 1
+
+    video = streams.get("video") or {}
+    audio = streams["audio"]
+    print(f"\n[Sync] {os.path.basename(source)}\n")
+    print(f"  container starts at   {streams.get('container_start')}")
+    print(f"  video  starts at      {video.get('start_time')}   "
+          f"({video.get('codec', '?')})")
+    print(f"  audio  starts at      {audio.get('start_time')}   "
+          f"({audio.get('codec', '?')})")
+    print(f"  audio/video clock gap {clip_sync.clock_gap(streams):+.3f}s")
+    print(f"  frame rate            listed {video.get('r_frame_rate')}, "
+          f"average {video.get('avg_frame_rate')}"
+          f"{'   <- VARIABLE' if clip_sync.is_variable_rate(streams) else ''}")
+    v_len, a_len = video.get("duration"), audio.get("duration")
+    if v_len and a_len:
+        print(f"  length                video {v_len:.2f}s, audio {a_len:.2f}s"
+              f"{'   <- MISMATCH' if abs(v_len - a_len) > 1.0 else ''}")
+
+    # Where to sample. Early enough to be quick, late enough that drift
+    # has had room to accumulate - the reference envelope is decoded from
+    # the start with no seek, so a point an hour in costs an hour of
+    # audio decoding and the late sample is deliberately not the end.
+    length = a_len or v_len or 0.0
+    if length < 90:
+        print("\n[Sync] This video is too short to sample twice; measuring "
+              "once.")
+        points = [max(5.0, length * 0.25)]
+    else:
+        points = [min(180.0, length * 0.1), min(1200.0, length * 0.6)]
+
+    span = 12.0
+    cuts = []
+    workspace = tempfile.mkdtemp(prefix="sync_")
+    try:
+        for point in points:
+            reference = clip_sync.envelope(source, point, span)
+            probe_path = os.path.join(workspace, f"probe_{int(point)}.mp4")
+            try:
+                render_clip(source, ClipSpec(point, point + span, 1),
+                            probe_path, "center", None, "libx264",
+                            "ultrafast", 30, watermark=False)
+            except Exception as exc:
+                print(f"\n[Sync] Could not render a test clip at "
+                      f"{point:.0f}s: {exc}")
+                continue
+            offset, score = clip_sync.best_offset(
+                reference, clip_sync.envelope(probe_path))
+            cuts.append((offset, score))
+            print(f"\n  at {point / 60:5.1f} min: the cut is {offset:+.3f}s "
+                  f"out (confidence {score:.2f})")
+    finally:
+        shutil.rmtree(workspace, ignore_errors=True)
+
+    # And the other half: does the TRANSCRIPT agree with the sound? A
+    # perfect cut still produces wrong captions when the words are
+    # written down in the wrong place, and that failure looks identical
+    # from the outside.
+    words = (0.0, 0.0)
+    try:
+        from utils.clip_runner import _load_segments
+
+        segments = _load_segments(cfg, source)
+    except Exception:
+        segments = None
+    if segments:
+        words = clip_sync.transcript_offset(source, segments, points[0], span)
+        print(f"\n  transcript vs sound: {words[0]:+.3f}s "
+              f"(confidence {words[1]:.2f})")
+    else:
+        print("\n  transcript: none cached for this video, so its word "
+              "timings could not be checked. Run --clips-from on it first "
+              "if the cut below looks fine but captions still do not.")
+
+    print("\n" + "-" * 68)
+    print(clip_sync.verdict(streams, cuts, words))
+    print("-" * 68 + "\n")
+    print("Send this whole output back and it decides what gets fixed.\n")
+    return 0
 
 
 def _clip_config(cfg) -> dict:
@@ -1718,6 +1820,13 @@ def main(argv=None) -> int:
                         help="Write before/after stills showing exactly what "
                              "the clip framing will keep, so the rectangle can "
                              "be aimed in seconds instead of after ten renders.")
+    parser.add_argument("--check-sync", metavar="FILE",
+                        help="Measure whether captions will line up with the "
+                             "audio in clips cut from this video, and say "
+                             "which of the possible causes it is. Cuts two "
+                             "short test clips and compares where the sound "
+                             "actually lands against where the transcript "
+                             "says it should.")
     parser.add_argument("--recaption", action="store_true",
                         help="Rewrite the caption on every clip still "
                              "waiting to post, using the current title "
@@ -2513,6 +2622,17 @@ def main(argv=None) -> int:
                guard, account, live=args.verify)
         print(f"\n  {summary(cfg.posting)}")
         return 0
+
+    if args.check_sync:
+        source = args.check_sync
+        if not os.path.isfile(source):
+            found = _suggest_paths(cfg, os.path.basename(source))
+            if not found:
+                print(f"[Sync] File not found: {source}")
+                return 1
+            source = found[0]
+            print(f"[Sync] Using {source}")
+        return _check_sync(cfg, source)
 
     if args.recaption:
         from utils.clip_queue import recaption
