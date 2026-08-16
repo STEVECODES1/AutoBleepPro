@@ -263,7 +263,9 @@
     "use_vision": true,
     "_trim_comment": "Remove dead air from the CENSORED export before upload. Only cuts stretches with no transcribed speech AND quiet audio, so laughter and game noise survive. Off by default; the mode above turns it on.",
     "trim_silence": false,
-    "min_silence_seconds": 2.5
+    "min_silence_seconds": 2.5,
+    "_align_comment": "Line each clip's captions up with its own audio before burning them in. Whisper is accurate to about a tenth of a second, which is invisible in a transcript and plainly wrong on a caption that lights up word by word. Costs one short audio read per clip. Corrections over a second are refused - past that the match is probably on the wrong sentence.",
+    "align_captions": true
   },
   "features": {
     "_comment": "Optional extras. self_healing: python main.py --health. social_promoter posts AFTER a successful new upload (Discord needs DISCORD_WEBHOOK_URL in .env; twitter/reddit need their API keys + pip install tweepy/praw). content_optimizer writes an SEO/chapters report next to each uploaded video, reusing the censor pass's transcript.",

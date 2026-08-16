@@ -732,6 +732,30 @@ class ClipMaker:
         """The rectangle REGION cuts, from the configured profile."""
         return resolve_region(self.config)
 
+    def _caption_shift(self, source_path: str, segments, spec) -> float:
+        """Seconds to move this clip's captions so they land on the sound.
+
+        Off with clips.align_captions false. On by default because the
+        cost is one short audio decode over the clip's own window and the
+        failure it fixes - captions a fraction of a second beside the
+        speech - is the kind nobody can name but everybody sees.
+        """
+        if not bool((self.config or {}).get("clips", {})
+                    .get("align_captions", True)):
+            return 0.0
+        try:
+            from . import clip_sync
+
+            shift = clip_sync.alignment_for(source_path, segments,
+                                            spec.start, spec.duration)
+        except Exception:
+            # Captions that are slightly out beat no captions at all.
+            return 0.0
+        if shift:
+            print(f"[Clips] Clip {spec.index:02d}: captions moved "
+                  f"{shift:+.2f}s onto the speech.")
+        return shift
+
     def _say_once(self, message: str) -> None:
         """Print this the first time only.
 
@@ -808,10 +832,24 @@ class ClipMaker:
             output_path = os.path.join(self.output_dir, clip_filename(basename, spec))
             caption_path = None
             if self.captions:
+                # Line the words up with the sound before burning them in.
+                #
+                # Whisper is accurate to a tenth of a second or so, which
+                # is invisible in a transcript and plainly wrong on a
+                # caption that lights up word by word - "better now but
+                # slightly off" is exactly what a tenth of a second looks
+                # like. Measured against this clip's own audio, so it
+                # corrects whatever caused it rather than a theory about
+                # which cause it was.
+                #
+                # Returns 0.0 far more often than not: nothing worth
+                # fixing, nothing measurable, or a match too weak to act
+                # on. A wrong shift is worse than none.
+                shift = self._caption_shift(source_path, segments, spec)
                 caption_path = caption_file_for_clip(
                     os.path.join(self.output_dir,
                                  f".{safe_stem(basename)}_clip{spec.index:02d}.ass"),
-                    segments, spec.start, spec.end,
+                    segments, spec.start, spec.end, shift,
                     style=self.caption_style,
                     uppercase=self.caption_uppercase)
             # Gameplay that follows the action: measure where the frame

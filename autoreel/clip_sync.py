@@ -155,33 +155,47 @@ def is_variable_rate(streams: dict) -> bool:
 # ── loudness, on a clock we choose ───────────────────────────────────
 
 def envelope_args(source: str, start: float = 0.0, duration: float = 0.0,
-                  window: float = WINDOW) -> list:
+                  window: float = WINDOW, fast: bool = False) -> list:
     """ffmpeg printing RMS once per `window`, over [start, start+duration].
 
-    `atrim` rather than `-ss`, deliberately. -ss is the thing under
-    investigation; using it to measure itself would hide exactly the
-    error being looked for. atrim runs on DECODED audio, so it cuts on
-    the same clock the transcript was made on.
+    Two ways to reach the window, and the choice matters.
+
+    `atrim` (fast=False) runs on DECODED audio, so it cuts on exactly the
+    clock the transcript was made on - but it decodes from the start of
+    the file to get there. That is the honest way to MEASURE a seek,
+    because using -ss to check -ss would hide the error being looked for.
+
+    `-ss` (fast=True) is O(clip) instead of O(everything before it). A
+    clip two hours into a stream costs two hours of audio decoding the
+    other way, per clip, which is not payable inside a render loop. Only
+    for callers that have already established the seek is sound.
     """
     chain = []
-    if duration > 0:
+    seek = []
+    if fast and duration > 0:
+        seek = ["-accurate_seek", "-ss", f"{start:.3f}"]
+    elif duration > 0:
         chain.append(f"atrim=start={start:.3f}:end={start + duration:.3f},"
                      "asetpts=PTS-STARTPTS")
     chain.append(f"aresample={SAMPLE_RATE}")
     chain.append(f"asetnsamples={max(1, int(SAMPLE_RATE * window))}")
     chain.append("astats=metadata=1:reset=1")
     chain.append("ametadata=print:key=lavfi.astats.Overall.RMS_level:file=-")
-    return ["ffmpeg", "-hide_banner", "-nostats", "-i", source, "-vn",
-            "-af", ",".join(chain), "-f", "null", "-"]
+    args = ["ffmpeg", "-hide_banner", "-nostats"] + seek + \
+           ["-i", source, "-vn"]
+    if fast and duration > 0:
+        args += ["-t", f"{duration:.3f}"]
+    return args + ["-af", ",".join(chain), "-f", "null", "-"]
 
 
 def envelope(source: str, start: float = 0.0, duration: float = 0.0,
-             window: float = WINDOW) -> list:
+             window: float = WINDOW, fast: bool = False) -> list:
     """[dB per `window` seconds], or [] when it cannot be read."""
     if not have_tools():
         return []
     try:
-        done = subprocess.run(envelope_args(source, start, duration, window),
+        done = subprocess.run(envelope_args(source, start, duration, window,
+                                            fast),
                               stdout=subprocess.PIPE,
                               stderr=subprocess.DEVNULL, timeout=_TIMEOUT)
     except (OSError, subprocess.TimeoutExpired):
@@ -283,7 +297,8 @@ def speech_shape(segments, start: float, duration: float,
 
 def transcript_offset(source: str, segments, start: float, duration: float,
                       window: float = WINDOW,
-                      max_shift: float = MAX_SHIFT) -> tuple:
+                      max_shift: float = MAX_SHIFT,
+                      fast: bool = False) -> tuple:
     """(seconds, confidence) - how far the WORDS sit from the sound.
 
     Same sign as best_offset: positive means the captions are late,
@@ -294,11 +309,42 @@ def transcript_offset(source: str, segments, start: float, duration: float,
     Independent of how the clip is cut. This is wrong in the SOURCE, so
     every clip inherits it and re-cutting cannot help.
     """
-    heard = envelope(source, start, duration, window)
+    heard = envelope(source, start, duration, window, fast)
     if not heard:
         return 0.0, 0.0
     return best_offset(speech_shape(segments, start, duration, window),
                        heard, window, max_shift)
+
+
+# ── correcting it, per clip ──────────────────────────────────────────
+
+# Never move a caption further than this. Beyond a second the two things
+# being lined up are probably not the same speech, and a confident-
+# looking match on the wrong sentence would make every caption worse.
+MAX_CORRECTION = 1.0
+
+# Under a frame nobody sees it, and shifting costs a decode.
+WORTH_FIXING = 0.08
+
+
+def alignment_for(source: str, segments, start: float, duration: float) -> float:
+    """Seconds to ADD to this clip's word times so they land on the sound.
+
+    0.0 when there is nothing worth fixing, nothing measurable, or a
+    match too weak to act on. Silence is the right answer far more often
+    than a correction is: this runs on every clip, and a wrong shift
+    makes a caption worse in a way the viewer notices immediately.
+
+    The sign: transcript_offset returns positive when the captions are
+    LATE, so the correction is its negative.
+    """
+    offset, score = transcript_offset(source, segments, start, duration,
+                                      fast=True)
+    if score < MIN_CONFIDENCE:
+        return 0.0
+    if abs(offset) < WORTH_FIXING or abs(offset) > MAX_CORRECTION:
+        return 0.0
+    return round(-offset, 3)
 
 
 # ── the verdict ──────────────────────────────────────────────────────

@@ -236,13 +236,23 @@ def group_words(words: Iterable[dict],
     return phrases
 
 
-def words_in_range(segments: Iterable[dict], start: float, end: float) -> list:
+def words_in_range(segments: Iterable[dict], start: float, end: float,
+                   shift: float = 0.0) -> list:
     """Word timings inside [start, end), rebased so the clip starts at 0.
 
     Rebasing here rather than at render time is what lets the caption file
     be handed straight to ffmpeg alongside a trimmed clip - the timings
     already match the trimmed video.
+
+    `shift` is added to every word, and is how a transcript that writes
+    words down slightly beside the sound of them gets corrected. Whisper
+    is accurate to a tenth of a second or so, which is enough to read as
+    wrong on a caption that lights up word by word. Measured per clip by
+    clip_sync.alignment_for; 0.0 means it found nothing worth fixing,
+    which is the normal answer.
     """
+    start -= shift
+    end -= shift
     out = []
     for segment in segments or ():
         for word in (segment.get("words") or ()):
@@ -364,6 +374,7 @@ def write_ass(path: str, phrases: Iterable[Phrase], **style) -> str:
 
 def caption_file_for_clip(path: str, segments: Iterable[dict],
                           start: float, end: float,
+                          shift: float = 0.0,
                           **style) -> Optional[str]:
     """Write captions for one clip window. None if there is nothing to say.
 
@@ -371,7 +382,8 @@ def caption_file_for_clip(path: str, segments: Iterable[dict],
     render a caption track without it. The audio pass already mutes this
     speech; printing it underneath in yellow was the bug.
     """
-    phrases = group_words(censor_words(words_in_range(segments, start, end)))
+    phrases = group_words(censor_words(
+        words_in_range(segments, start, end, shift)))
     if not phrases:
         return None
     return write_ass(path, phrases, **style)

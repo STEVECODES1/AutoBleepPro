@@ -342,3 +342,84 @@ def test_a_rendered_clip_is_never_chosen_as_the_video_to_measure():
         assert main._RENDERED_CLIP.search(name), f"{name} should be skipped"
     for name in kept:
         assert not main._RENDERED_CLIP.search(name), f"{name} is a source"
+
+
+# ── correcting it, rather than diagnosing it ─────────────────────────
+
+def test_a_shift_moves_the_words_on_the_screen():
+    """The correction has to reach the .ass file, not just be measured."""
+    from autoreel.captions import words_in_range
+
+    segments = [{"words": [{"word": "a", "start": 10.0, "end": 10.4}]}]
+
+    plain = words_in_range(segments, 9.0, 12.0)
+    later = words_in_range(segments, 9.0, 12.0, shift=0.5)
+
+    assert plain[0]["start"] == pytest.approx(1.0)
+    assert later[0]["start"] == pytest.approx(1.5), \
+        "a positive shift must make the caption appear LATER"
+
+
+def test_no_shift_leaves_a_caption_exactly_where_it_was():
+    """0.0 is the normal answer and must be a true no-op."""
+    from autoreel.captions import words_in_range
+
+    segments = [{"words": [{"word": "a", "start": 10.0, "end": 10.4}]}]
+
+    assert words_in_range(segments, 9.0, 12.0) == \
+        words_in_range(segments, 9.0, 12.0, shift=0.0)
+
+
+@needs_ffmpeg
+def test_a_transcript_written_early_is_corrected(beeps):
+    """The whole feature: measure this clip's own audio and hand back the
+    number that puts the words back on it."""
+    from autoreel.clip_sync import alignment_for
+
+    assert alignment_for(beeps, _transcript(shift=-0.6), 3.0, 20.0) == \
+        pytest.approx(0.6, abs=0.10)
+    assert alignment_for(beeps, _transcript(shift=0.35), 3.0, 20.0) == \
+        pytest.approx(-0.35, abs=0.10)
+
+
+@needs_ffmpeg
+def test_a_transcript_that_is_already_right_is_left_alone(beeps):
+    """This runs on every clip. Silence has to be the common answer."""
+    from autoreel.clip_sync import alignment_for
+
+    assert alignment_for(beeps, _transcript(), 3.0, 20.0) == 0.0
+
+
+@needs_ffmpeg
+def test_an_implausibly_large_correction_is_refused(beeps):
+    """Past a second the two things being lined up are probably not the
+    same speech, and a confident-looking match on the wrong sentence
+    would make every caption in the clip worse."""
+    from autoreel.clip_sync import alignment_for
+
+    assert alignment_for(beeps, _transcript(shift=-2.5), 3.0, 20.0) == 0.0
+
+
+@needs_ffmpeg
+def test_a_clip_with_nothing_to_match_is_left_alone(beeps):
+    """No words, no correction - and no crash."""
+    from autoreel.clip_sync import alignment_for
+
+    assert alignment_for(beeps, [], 3.0, 20.0) == 0.0
+    assert alignment_for(beeps, [{"words": []}], 3.0, 20.0) == 0.0
+
+
+@needs_ffmpeg
+def test_the_fast_window_reads_the_same_audio_as_the_honest_one(beeps):
+    """`fast` seeks instead of decoding from the start, which is what
+    makes this payable inside a render loop - a clip two hours into a
+    stream would otherwise cost two hours of decoding, per clip. It has
+    to measure the same thing."""
+    from autoreel.clip_sync import best_offset, envelope
+
+    slow = envelope(beeps, 8.0, 8.0)
+    quick = envelope(beeps, 8.0, 8.0, fast=True)
+
+    offset, score = best_offset(slow, quick)
+    assert score > 0.9
+    assert abs(offset) <= 0.08
