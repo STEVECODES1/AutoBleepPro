@@ -556,3 +556,32 @@ def test_note_folders_that_do_not_exist_are_skipped(tmp_path):
     assert caption_for("facebook", str(clip), "",
                        {"instagram": {"caption_template": "{title}"},
                         "note_folders": ("/nope", "", None)})
+
+
+def test_the_other_platforms_say_what_rumble_says(tmp_path):
+    """The ask, in the user's words: caption it like the Rumble title.
+
+    Rumble reads <clip>.txt, which holds the headline AFTER headline_for
+    has cleaned it - leading filler gone, trimmed, dangling words
+    dropped. _line.txt is the same sentence raw. Preferring the raw one
+    put "The instant 180 when she said 16" on Facebook while Rumble
+    carried "The instant he finds out her age"."""
+    base = "Wifi Cooked - Clip 01"
+    clip = tmp_path / f"{base}.mp4"
+    clip.write_bytes(b"x")
+    (tmp_path / f"{base}_line.txt").write_text(
+        "so like The instant 180 when she said 16.")
+    (tmp_path / f"{base}.txt").write_text("The instant he finds out her age")
+
+    assert clip_title(str(clip)) == "The instant he finds out her age"
+
+
+def test_the_raw_line_is_still_used_when_it_is_all_there_is(tmp_path):
+    """A clip cut before headline_for wrote a .txt has only the raw one,
+    and a raw line beats the filename by a mile."""
+    base = "a - Clip 01"
+    clip = tmp_path / f"{base}.mp4"
+    clip.write_bytes(b"x")
+    (tmp_path / f"{base}_line.txt").write_text("Stay right here you might be good luck")
+
+    assert clip_title(str(clip)) == "Stay right here you might be good luck"

@@ -553,13 +553,22 @@ def spoken_line(video_path: str, folders=()) -> str:
             elsewhere.append(os.path.join(folder,
                                           os.path.basename(plain)))
 
-    # _line.txt FIRST: it holds the spoken line and nothing else.
-    # _caption.txt is a whole formatted caption whose first line is the
-    # hook only when there IS one - otherwise it is "From: <stream>",
-    # which is scaffolding, not a headline.
+    # .txt FIRST, because it is the one RUMBLE reads, and the ask was for
+    # the other platforms to say what Rumble says. It holds the headline
+    # after headline_for has cleaned it: leading filler gone, because a
+    # title starting "uh so like" reads as a transcript; trimmed to
+    # length; dangling words dropped.
+    #
+    # _line.txt is the same sentence RAW, which is why preferring it
+    # produced "The instant 180 when she said 16" on Facebook while
+    # Rumble carried "The instant he finds out her age".
+    #
+    # _caption.txt is last: it is a whole formatted caption whose first
+    # line is the hook only when there IS one, and otherwise "From:
+    # <stream>", which is scaffolding rather than a headline.
     roots = [stem, plain] + elsewhere
-    for candidate in ([root + "_line.txt" for root in roots]
-                      + [root + ".txt" for root in roots]
+    for candidate in ([root + ".txt" for root in roots]
+                      + [root + "_line.txt" for root in roots]
                       + [root + "_caption.txt" for root in roots]):
         try:
             with open(candidate, "r", encoding="utf-8") as handle:
