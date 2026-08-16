@@ -190,6 +190,67 @@ def caption_for(platform: str, video_path: str, fallback: str,
     return caption
 
 
+# Platforms whose CLIP AUDIO gets bleeped before it is posted.
+#
+# Only where a strike is the cost of being wrong. YouTube demonetises and
+# age-restricts over spoken language and a channel is far harder to get
+# back than a post is to delete. Instagram does not, which is why it is
+# absent - censoring a clip for it removes the moment and buys nothing.
+# Rumble is the uncensored channel by design.
+#
+# The TEXT of a caption is cleaned for more platforms than this; see
+# CLEAN_TEXT_PLATFORMS. Cleaning words on screen is free, and re-encoding
+# audio is not.
+CENSOR_AUDIO_DEFAULTS = {"youtube_shorts": True}
+
+
+def _censored_clip(platform: str, video_path: str, config: dict) -> tuple:
+    """(path to post, temp path to delete) for this platform's rules.
+
+    Clips are cut from the RAW stream - every call site passes the
+    original video, not the censored copy - and until now nothing
+    bleeped them afterwards either. So a Short went to YouTube carrying
+    whatever was actually said, on a channel where that is a strike.
+
+    Returns the original and "" whenever censoring is off, unavailable,
+    or finds nothing, so this can never be the reason a clip fails.
+    """
+    settings = (config or {}).get(platform, {}) or {}
+    wanted = settings.get("censor_uploads")
+    if wanted is None:
+        wanted = CENSOR_AUDIO_DEFAULTS.get(platform, False)
+    if not wanted:
+        return video_path, ""
+
+    general = (config or {}).get("general", {}) or {}
+    try:
+        from utils.censor import censor_video
+
+        result = censor_video(
+            video_path, general.get("censored_folder") or "censored",
+            model_name=general.get("censor_model", "base"),
+            bleep_method=general.get("censor_bleep_method", "beep"),
+            custom_words=tuple(general.get("censor_custom_words", ()) or ()),
+            device=general.get("censor_device") or None,
+            padding_ms=int(general.get("censor_padding_ms", 250)),
+            mute_whole_segment=bool(
+                general.get("censor_mute_whole_segment", True)))
+    except Exception as exc:
+        # A clip that cannot be censored must not go out UNcensored to a
+        # platform that asked for it - that is the one failure worth
+        # losing the post over.
+        print(f"[Clips] {platform}: could not censor the clip ({exc}) - "
+              f"not posting it there.")
+        return "", ""
+
+    made = getattr(result, "output_path", "") or video_path
+    if made != video_path:
+        count = getattr(result, "violation_count", 0)
+        print(f"[Clips] {platform}: bleeped {count} word(s) before posting.")
+        return made, made
+    return video_path, ""
+
+
 def publish(platform: str, video_path: str, caption: str,
             config: dict, dry_run: bool = False) -> bool:
     """Actually post one clip. No guard, no queue - callers do that.
@@ -215,8 +276,12 @@ def publish(platform: str, video_path: str, caption: str,
     # is already 1080x1920, which is the only thing YouTube is looking
     # at.
     if hasattr(publisher, "post_clip"):
+        upload, temporary = (video_path, "") if dry_run else \
+            _censored_clip(platform, video_path, config)
+        if not upload:
+            return False
         try:
-            posted = publisher.post_clip(video_path, caption, dry_run)
+            posted = publisher.post_clip(upload, caption, dry_run)
         except (NotConfigured, PermanentlyRejected):
             # Both mean "a retry cannot help", for different reasons.
             # Neither may be swallowed by the catch-all below.
@@ -224,6 +289,12 @@ def publish(platform: str, video_path: str, caption: str,
         except Exception as exc:
             print(f"[Clips] {platform}: {exc}")
             return False
+        finally:
+            if temporary and temporary != video_path:
+                try:
+                    os.remove(temporary)
+                except OSError:
+                    pass
         if posted:
             print(f"[Clips] {platform}: {posted}")
             # Where it went, joined to why it was cut. This is the half

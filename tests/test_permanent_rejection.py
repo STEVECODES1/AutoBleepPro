@@ -103,8 +103,14 @@ def test_the_post_clip_path_does_not_swallow_it_either(tmp_path, monkeypatch):
     clip.write_bytes(b"x")
     monkeypatch.setattr(clip_queue, "_publisher",
                         lambda p, c: _RejectingClipPublisher())
+    # Censoring off for this one. Shorts now bleep the clip's audio
+    # before posting, and a one-byte stand-in video cannot be bleeped -
+    # so the publisher would never be reached and the refusal under test
+    # would never be raised. Whether a Short gets censored is
+    # test_clip_queue's business; this is about the exception surviving.
     with pytest.raises(PermanentlyRejected):
-        clip_queue.publish("youtube_shorts", str(clip), "cap", {})
+        clip_queue.publish("youtube_shorts", str(clip), "cap",
+                           {"youtube_shorts": {"censor_uploads": False}})
 
 
 def test_an_ordinary_failure_is_still_just_false(tmp_path, monkeypatch):

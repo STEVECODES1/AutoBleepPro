@@ -343,3 +343,99 @@ def test_recaption_says_nothing_when_nothing_needs_it(publisher, posting,
     publisher.offer(posting, NEW_CONFIG, clips[1], platforms=("instagram",))
 
     assert publisher.recaption(posting, NEW_CONFIG) == []
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# THE CLIP'S AUDIO, NOT JUST ITS CAPTION
+#
+# Clips are cut from the RAW stream - every call site passes the original
+# video, never the censored copy - and nothing bleeped them afterwards
+# either. Only the caption TEXT was cleaned. So Shorts went to YouTube
+# carrying whatever was actually said, on the one channel where that is a
+# strike rather than a deleted post.
+# ═════════════════════════════════════════════════════════════════════════════
+
+def test_a_short_is_bleeped_before_it_goes_to_youtube(publisher, tmp_path,
+                                                      monkeypatch):
+    from utils import clip_queue
+
+    clean = tmp_path / "clean.mp4"
+    clean.write_bytes(b"bleeped")
+    raw = tmp_path / "raw.mp4"
+    raw.write_bytes(b"not bleeped")
+
+    class Result:
+        output_path = str(clean)
+        violation_count = 3
+
+    monkeypatch.setitem(sys.modules, "_stub", None)
+    monkeypatch.setattr("utils.censor.censor_video",
+                        lambda *a, **k: Result())
+
+    upload, temporary = clip_queue._censored_clip(
+        "youtube_shorts", str(raw), {"general": {}})
+
+    assert upload == str(clean), "the raw clip was about to go to YouTube"
+    assert temporary == str(clean), "the censored copy would be left behind"
+
+
+def test_instagram_keeps_the_original_audio(publisher, tmp_path):
+    """Instagram does not demonetise or age-restrict over language, so
+    censoring a clip for it removes the moment and buys nothing."""
+    from utils import clip_queue
+
+    raw = tmp_path / "raw.mp4"
+    raw.write_bytes(b"x")
+
+    assert clip_queue._censored_clip("instagram", str(raw), {}) == \
+        (str(raw), "")
+
+
+def test_censoring_can_be_turned_off_per_platform(publisher, tmp_path):
+    from utils import clip_queue
+
+    raw = tmp_path / "raw.mp4"
+    raw.write_bytes(b"x")
+
+    assert clip_queue._censored_clip(
+        "youtube_shorts", str(raw),
+        {"youtube_shorts": {"censor_uploads": False}}) == (str(raw), "")
+
+
+def test_a_clip_that_cannot_be_censored_is_not_posted_uncensored(
+        publisher, tmp_path, monkeypatch):
+    """The one failure worth losing a post over. Falling back to the raw
+    audio on the platform that asked for it is how a channel gets a
+    strike from a tool that was meant to prevent one."""
+    from utils import clip_queue
+
+    raw = tmp_path / "raw.mp4"
+    raw.write_bytes(b"x")
+
+    def explode(*_a, **_k):
+        raise RuntimeError("no whisper model")
+
+    monkeypatch.setattr("utils.censor.censor_video", explode)
+
+    upload, _temp = clip_queue._censored_clip("youtube_shorts", str(raw),
+                                              {"general": {}})
+
+    assert upload == "", "it was about to post the uncensored clip anyway"
+
+
+def test_nothing_flagged_means_no_second_copy(publisher, tmp_path,
+                                              monkeypatch):
+    """A clip with no profanity in it must not be re-encoded for nothing."""
+    from utils import clip_queue
+
+    raw = tmp_path / "raw.mp4"
+    raw.write_bytes(b"x")
+
+    class Result:
+        output_path = str(raw)
+        violation_count = 0
+
+    monkeypatch.setattr("utils.censor.censor_video", lambda *a, **k: Result())
+
+    assert clip_queue._censored_clip("youtube_shorts", str(raw),
+                                     {"general": {}}) == (str(raw), "")
