@@ -149,10 +149,42 @@ def test_the_template_carries_the_tags(tmp_path):
     assert "Monkey Howl" in built
 
 
-def test_a_template_without_tags_still_works(tmp_path):
+def test_a_template_without_tags_gets_them_appended(tmp_path):
+    """str.format silently ignores a keyword the template never mentions,
+    so tags computed for a template without {tags} went NOWHERE - every
+    post carried only the one tag typed into the template by hand.
+
+    The live config.json is exactly that template. Requiring someone to
+    notice a missing placeholder is not a fix."""
     clip = tmp_path / "a - Clip 01.mp4"
     clip.write_bytes(b"x")
-    assert build_caption("{title} only", str(clip), tags="#x") == "a only"
+
+    caption = build_caption("{title} only", str(clip), tags="#x #y")
+
+    assert caption.startswith("a only")
+    assert "#x" in caption and "#y" in caption
+
+
+def test_tags_the_template_already_carries_are_not_repeated(tmp_path):
+    """The shipped templates hard-code #stackswopo and hashtags_for
+    always returns it too. Printing it twice reads as a bot."""
+    clip = tmp_path / "a - Clip 01.mp4"
+    clip.write_bytes(b"x")
+
+    caption = build_caption("{title} #stackswopo", str(clip),
+                            tags="#stackswopo #funny")
+
+    assert caption.lower().count("#stackswopo") == 1
+    assert "#funny" in caption
+
+
+def test_a_template_with_the_placeholder_is_left_alone(tmp_path):
+    """It already put the tags where the author wanted them."""
+    clip = tmp_path / "a - Clip 01.mp4"
+    clip.write_bytes(b"x")
+
+    assert build_caption("{title} | {tags}", str(clip),
+                         tags="#x") == "a | #x"
 
 
 def test_a_typoed_placeholder_does_not_cost_the_post(tmp_path):
@@ -168,3 +200,42 @@ def test_the_shipped_template_uses_both_placeholders():
                                       "config.example.json"), encoding="utf-8"))
     template = raw["instagram"]["caption_template"]
     assert "{title}" in template and "{tags}" in template
+
+
+def test_tags_are_picked_from_the_filename_too(tmp_path):
+    """The headline is usually the line SPOKEN in the clip, and nobody
+    announces which app they are on. The VOD it was cut from is called
+    "monkey_n_gamble_howl", which says exactly what it is - so matching
+    only the headline meant the specific tags almost never fired."""
+    import sys
+
+    sys.path.insert(0, os.path.join(ROOT, "auto_uploader"))
+    from utils.clip_queue import caption_for
+
+    clip = tmp_path / "monkey_n_gamble_howl - Clip 03.mp4"
+    clip.write_bytes(b"x")
+
+    caption = caption_for("instagram", str(clip), "",
+                          {"instagram": {"caption_template": "{title}"}})
+
+    assert "#monkeyapp" in caption, \
+        "a Monkey clip went out with only the generic filler tags"
+
+
+def test_a_gameplay_clip_is_not_tagged_as_monkey(tmp_path):
+    """The whole reason tags are picked per clip. A wrong tag is worse
+    than a missing one - every platform here demotes a post whose tags do
+    not match what is in it."""
+    import sys
+
+    sys.path.insert(0, os.path.join(ROOT, "auto_uploader"))
+    from utils.clip_queue import caption_for
+
+    clip = tmp_path / "stackswopo gta rp lifestyle - Clip 01.mp4"
+    clip.write_bytes(b"x")
+
+    caption = caption_for("instagram", str(clip), "",
+                          {"instagram": {"caption_template": "{title}"}})
+
+    assert "#gtarp" in caption
+    assert "#monkeyapp" not in caption

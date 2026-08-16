@@ -548,12 +548,39 @@ def build_caption(template: str, video_path: str, title: str = "",
     """Fill the Instagram caption template. Never raises on a bad key."""
     headline = title or clip_title(video_path)
     if not template:
-        return headline
+        return _with_tags(headline, tags)
     try:
-        return template.format(title=headline, tags=tags)
+        filled = template.format(title=headline, tags=tags)
     except (KeyError, IndexError):
         # A typo'd placeholder must not cost the post.
-        return headline
+        return _with_tags(headline, tags)
+    if "{tags}" in template:
+        return filled
+    # The template never mentioned {tags}, and str.format drops keyword
+    # arguments a template does not use - SILENTLY. So hashtags_for ran,
+    # picked tags sized to the platform, and they went nowhere: every
+    # post went out carrying only the one tag typed into the template by
+    # hand. Appending them is what makes the tags real without anyone
+    # having to notice their config.json is missing a placeholder.
+    return _with_tags(filled, tags)
+
+
+def _with_tags(text: str, tags: str) -> str:
+    """`text` with `tags` on their own line, minus any it already has.
+
+    The templates carry a literal #stackswopo, and hashtags_for always
+    includes it - so appending blindly prints the channel tag twice,
+    which reads as a bot rather than as tagging.
+    """
+    text = (text or "").rstrip()
+    wanted = [tag for tag in str(tags or "").split() if tag]
+    if not wanted:
+        return text
+    lowered = text.lower()
+    fresh = [tag for tag in wanted if tag.lower() not in lowered]
+    if not fresh:
+        return text
+    return f"{text}\n\n{' '.join(fresh)}" if text else " ".join(fresh)
 
 
 def _vertical_copy(video_path: str, instagram_cfg: dict, clips_cfg: dict):

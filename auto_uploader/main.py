@@ -39,7 +39,7 @@ from datetime import datetime
 # Bump when shipping user-visible changes, so --test-config can prove
 # which build is actually running (stale extracts have silently caused
 # several confusing "the fix did nothing" runs).
-BUILD = "2026-08-15.28 the Monkey crop follows whoever moves, slowly"
+BUILD = "2026-08-15.29 a clip's caption is written when it posts, not when it is queued"
 
 # How often --watch checks whether a deferred clip's wait is up. A minute
 # is fine: the waits themselves are 25 to 80 minutes, so the resolution
@@ -1718,6 +1718,13 @@ def main(argv=None) -> int:
                         help="Write before/after stills showing exactly what "
                              "the clip framing will keep, so the rectangle can "
                              "be aimed in seconds instead of after ten renders.")
+    parser.add_argument("--recaption", action="store_true",
+                        help="Rewrite the caption on every clip still "
+                             "waiting to post, using the current title "
+                             "wording and tags. The queue used to freeze a "
+                             "caption when the clip was queued, so a backlog "
+                             "kept publishing text written before the last "
+                             "fix. Shows before and after for each one.")
     parser.add_argument("--check-llm", action="store_true",
                         help="Ask the configured model provider one question, "
                              "to prove the key in .env actually works. A wrong "
@@ -2505,6 +2512,25 @@ def main(argv=None) -> int:
                             "client_secrets_path": cfg.youtube.client_secrets_path}},
                guard, account, live=args.verify)
         print(f"\n  {summary(cfg.posting)}")
+        return 0
+
+    if args.recaption:
+        from utils.clip_queue import recaption
+
+        changed = recaption(cfg.posting, _clip_config(cfg))
+        if not changed:
+            print("[Clips] Nothing waiting needed rewording - every queued "
+                  "clip already reads the way it would be written today.")
+            return 0
+        print(f"[Clips] Reworded {len(changed)} queued clip(s):\n")
+        for platform, clip, before, after in changed:
+            print(f"  {platform}  {os.path.basename(clip)}")
+            print(f"    was: {before.splitlines()[0] if before else '(nothing)'}")
+            print(f"    now: {after.splitlines()[0]}")
+            extra = len(after.splitlines()) - 1
+            if extra > 0:
+                print(f"         (+{extra} more line(s), tags included)")
+            print()
         return 0
 
     if args.preview_crop:

@@ -255,3 +255,90 @@ def test_an_expired_token_is_a_wait_not_a_failure(tmp_path, monkeypatch):
     assert "FAIL" not in written, \
         "an expired credential was counted as a failed post"
     assert "wait" in written
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# THE CAPTION IS WRITTEN WHEN IT POSTS, NOT WHEN IT IS QUEUED
+#
+# It used to be composed at enqueue and stored on the job, so a clip queued
+# before a wording fix kept the old text for as long as it sat in the queue.
+# X posts one clip an hour, so a backlog kept publishing pre-fix captions
+# for hours after the fix had landed - three real posts went out reading
+# "vertical Stackswopo Love Yall 20250914 204409 - Clip 03", and an
+# Instagram post carried a "LINK IN BIO" line already deleted from the
+# template.
+# ═════════════════════════════════════════════════════════════════════════════
+
+OLD_CONFIG = {"instagram": {"caption_template":
+                            "{title} - LINK IN BIO"},
+              "facebook": {}, "clips": {}}
+NEW_CONFIG = {"instagram": {"caption_template": "{title} #stackswopo"},
+              "facebook": {}, "clips": {}}
+
+
+def test_a_queued_clip_posts_todays_wording_not_the_day_it_was_queued(
+        publisher, posting, clips):
+    """THE regression. Queue two under the old template, fix the template,
+    and the one still waiting must go out with the new one."""
+    publisher.offer(posting, OLD_CONFIG, clips[0], platforms=("instagram",))
+    publisher.offer(posting, OLD_CONFIG, clips[1], platforms=("instagram",))
+
+    # The first went straight out and carries the old wording - it is
+    # already published and nothing can change that.
+    assert "LINK IN BIO" in FakePublisher.posted[0][1]
+
+    _rewind(posting, minutes=30)
+    publisher.drain(posting, NEW_CONFIG, quiet=True)
+
+    _name, caption = FakePublisher.posted[-1]
+    assert "LINK IN BIO" not in caption, \
+        "the queued clip published a caption written before the fix"
+    assert "#stackswopo" in caption
+
+
+def test_a_caption_that_cannot_be_rebuilt_falls_back_to_the_stored_one(
+        publisher, posting, clips, monkeypatch):
+    """Composing a caption must never be the reason a clip does not go
+    out. The stored one is the fallback, which is what used to be posted
+    anyway."""
+    publisher.offer(posting, NEW_CONFIG, clips[0], platforms=("instagram",))
+    publisher.offer(posting, NEW_CONFIG, clips[1], platforms=("instagram",))
+
+    def explode(*_a, **_k):
+        raise RuntimeError("no sidecar, no filename, nothing")
+
+    monkeypatch.setattr(publisher, "caption_for", explode)
+
+    _rewind(posting, minutes=30)
+    posted = publisher.drain(posting, NEW_CONFIG, quiet=True)
+
+    assert posted == {"instagram": 1}, "a caption failure lost the clip"
+    assert FakePublisher.posted[-1][1], "it posted with no caption at all"
+
+
+def test_recaption_rewrites_what_is_still_waiting(publisher, posting, clips):
+    """So the backlog can be SEEN to be fixed rather than taken on trust."""
+    publisher.offer(posting, OLD_CONFIG, clips[0], platforms=("instagram",))
+    publisher.offer(posting, OLD_CONFIG, clips[1], platforms=("instagram",))
+
+    changed = publisher.recaption(posting, NEW_CONFIG)
+
+    assert len(changed) == 1, "the one waiting clip was not reworded"
+    _platform, _clip, before, after = changed[0]
+    assert "LINK IN BIO" in before and "LINK IN BIO" not in after
+
+    # And it sticks: a fresh read of the queue file sees the new text.
+    from job_queue import ACTIVE_STATES, JobQueue
+
+    reopened = JobQueue(path=posting["queue_path"])
+    waiting = reopened.list_jobs(ACTIVE_STATES)
+    assert waiting and "LINK IN BIO" not in waiting[0].caption
+
+
+def test_recaption_says_nothing_when_nothing_needs_it(publisher, posting,
+                                                      clips):
+    """A command that always reports work done is a command nobody reads."""
+    publisher.offer(posting, NEW_CONFIG, clips[0], platforms=("instagram",))
+    publisher.offer(posting, NEW_CONFIG, clips[1], platforms=("instagram",))
+
+    assert publisher.recaption(posting, NEW_CONFIG) == []

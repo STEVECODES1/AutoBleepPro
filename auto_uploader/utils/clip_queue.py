@@ -103,7 +103,15 @@ def caption_for(platform: str, video_path: str, fallback: str,
     # clip must not be tagged #gtarp, and the count that helps on
     # Instagram gets a post demoted on X.
     headline = clip_title(video_path)
-    tags = hashtags_for(headline, platform,
+    # Matched against the headline AND the filename, because the headline
+    # is usually the line spoken in the clip and people do not announce
+    # what app they are on. "Stackswopo Love Yall - Clip 03" says nothing
+    # a tag can be picked from, while the VOD it was cut out of is called
+    # "monkey_n_gamble_howl" - which says exactly what it is. Using only
+    # the headline meant the specific tags almost never fired and every
+    # clip went out with the generic fillers.
+    subject = f"{headline} {os.path.basename(video_path or '')}"
+    tags = hashtags_for(subject, platform,
                         settings.get("max_hashtags"))
     caption = build_caption(template, video_path, tags=tags) or fallback
 
@@ -304,6 +312,50 @@ def offer(posting: dict, config: dict, video_path: str,
     return outcome
 
 
+def _current_caption(job, config: dict) -> str:
+    """This job's caption as the CURRENT code and config would write it.
+
+    The stored one is kept as the fallback rather than as the answer: it
+    is better to post yesterday's wording than to post nothing, and a
+    clip whose sidecar text file has since been cleaned up would compose
+    to a bare filename.
+    """
+    stored = getattr(job, "caption", "") or ""
+    try:
+        fresh = caption_for(job.platform, job.clip_path, stored, config)
+    except Exception:
+        # Composing a caption must never be the reason a clip does not
+        # go out. Anything unexpected here falls back to what the job
+        # was queued with, which is what used to be posted anyway.
+        return stored
+    return fresh or stored
+
+
+def recaption(posting: dict, config: dict) -> list:
+    """Rewrite every waiting job's stored caption with current wording.
+
+    The drain composes captions fresh now, so this is not required for
+    correctness - it exists so the backlog can be SEEN to be fixed
+    instead of taken on trust, and so `--posting-status` shows what will
+    actually go out rather than what was written days ago.
+
+    Returns [(platform, clip, before, after)] for everything changed.
+    """
+    from job_queue import ACTIVE_STATES
+
+    queue = _queue(posting)
+    changed = []
+    for job in queue.list_jobs(ACTIVE_STATES):
+        before = job.caption or ""
+        after = _current_caption(job, config)
+        if after and after != before:
+            job.caption = after
+            changed.append((job.platform, job.clip_path, before, after))
+    if changed:
+        queue._save()
+    return changed
+
+
 def drain(posting: dict, config: dict, limit: int = 0,
           dry_run: bool = False, quiet: bool = False) -> dict:
     """Post whatever the queue is now allowed to post.
@@ -355,8 +407,23 @@ def drain(posting: dict, config: dict, limit: int = 0,
                 print(f"[Clips] {job.platform}: still waiting - {decision.reason}")
             continue
 
+        # Written FRESH here, not taken from the job. The caption was
+        # being composed at enqueue time and stored, so a job queued
+        # before a wording fix kept the old text for as long as it sat
+        # in the queue - and X posts one clip an hour, so a backlog kept
+        # publishing pre-fix captions for hours after the fix landed.
+        # Three real posts went out reading "vertical Stackswopo Love
+        # Yall 20250914 204409 - Clip 03" that way, and an Instagram post
+        # carried a "LINK IN BIO" line that had already been deleted from
+        # the template.
+        #
+        # Composing it at the moment of posting means a change to the
+        # template, the tags or the title logic reaches the whole backlog
+        # by itself, with nothing to re-run.
+        caption = _current_caption(job, config)
+
         try:
-            ok = publish(job.platform, job.clip_path, job.caption, config,
+            ok = publish(job.platform, job.clip_path, caption, config,
                          dry_run)
         except NotConfigured as exc:
             # Held, not failed: the clip is fine, the token is not. It
