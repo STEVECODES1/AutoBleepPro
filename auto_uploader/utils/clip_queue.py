@@ -201,7 +201,30 @@ def caption_for(platform: str, video_path: str, fallback: str,
 # The TEXT of a caption is cleaned for more platforms than this; see
 # CLEAN_TEXT_PLATFORMS. Cleaning words on screen is free, and re-encoding
 # audio is not.
-CENSOR_AUDIO_DEFAULTS = {"youtube_shorts": True}
+# "all"   - every flagged word, which is what YouTube's rules need.
+# "slurs" - ONLY the hate-speech category, leaving ordinary swearing.
+# False   - nothing.
+#
+# Instagram removed a clip under HATEFUL CONDUCT while the same account's
+# ordinary swearing broke nothing. Those are different policies and they
+# need different answers: bleeping every swear for Instagram would
+# flatten the voice the channel is there for and buy nothing, while
+# leaving a slur in is how an account gets taken away rather than a post
+# deleted.
+#
+# Rumble is absent on purpose. It is the uncensored channel, that is the
+# whole point of the split, and its audience is there for exactly what
+# the other platforms will not take.
+CENSOR_AUDIO_DEFAULTS = {
+    "youtube_shorts": "all",
+    "instagram": "slurs",
+    "facebook": "slurs",
+    "zernio_twitter": "slurs",
+    "zernio_tiktok": "slurs",
+}
+
+# Which compliance categories each mode bleeps. Empty tuple = all.
+_CENSOR_SCOPES = {"all": (), "slurs": ("hate_speech",)}
 
 
 def _censored_clip(platform: str, video_path: str, config: dict) -> tuple:
@@ -221,6 +244,10 @@ def _censored_clip(platform: str, video_path: str, config: dict) -> tuple:
         wanted = CENSOR_AUDIO_DEFAULTS.get(platform, False)
     if not wanted:
         return video_path, ""
+    # True is the old spelling of "all", kept working because it is what
+    # any config.json already in the wild says.
+    mode = "all" if wanted is True else str(wanted)
+    scope = _CENSOR_SCOPES.get(mode, ())
 
     general = (config or {}).get("general", {}) or {}
     try:
@@ -234,7 +261,8 @@ def _censored_clip(platform: str, video_path: str, config: dict) -> tuple:
             device=general.get("censor_device") or None,
             padding_ms=int(general.get("censor_padding_ms", 250)),
             mute_whole_segment=bool(
-                general.get("censor_mute_whole_segment", True)))
+                general.get("censor_mute_whole_segment", True)),
+            only_categories=scope)
     except Exception as exc:
         # A clip that cannot be censored must not go out UNcensored to a
         # platform that asked for it - that is the one failure worth

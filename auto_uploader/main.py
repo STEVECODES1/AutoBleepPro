@@ -39,7 +39,7 @@ from datetime import datetime
 # Bump when shipping user-visible changes, so --test-config can prove
 # which build is actually running (stale extracts have silently caused
 # several confusing "the fix did nothing" runs).
-BUILD = "2026-08-16.42 delete the 9:16 copies nothing is waiting on"
+BUILD = "2026-08-16.43 a slur never reaches Instagram, in the audio or on the screen"
 
 # How often --watch checks whether a deferred clip's wait is up. A minute
 # is fine: the waits themselves are 25 to 80 minutes, so the resolution
@@ -825,6 +825,15 @@ def _apply_mode(cfg, name: str, settings: dict):
 _RENDERED_CLIP = re.compile(r"[-\s]clip\s*\d+\s*\.|^_?vertical[_\s]", re.I)
 
 
+# What each censoring mode means, said the way it matters to whoever is
+# reading the preview rather than in the code's own words.
+_AUDIO_NOTE = {
+    "all": "BLEEPED - every flagged word",
+    "slurs": "BLEEPED - slurs only, ordinary swearing kept",
+    "": "as recorded",
+}
+
+
 def _preview_post(cfg, wanted: str = "") -> int:
     """Show exactly what would be published, on every platform. Posts nothing.
 
@@ -895,7 +904,8 @@ def _preview_post(cfg, wanted: str = "") -> int:
         censored = (config.get(platform, {}) or {}).get("censor_uploads")
         if censored is None:
             censored = CENSOR_AUDIO_DEFAULTS.get(platform, False)
-        print(f"     audio: {'BLEEPED before upload' if censored else 'as recorded'}")
+        mode = "all" if censored is True else str(censored or "")
+        print(f"     audio: {_AUDIO_NOTE.get(mode, 'as recorded')}")
 
         caption = (_current_caption(job, config) if job is not None
                    else caption_for(platform, clip_path, "", config))

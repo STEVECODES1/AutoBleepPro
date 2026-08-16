@@ -188,6 +188,7 @@ def censor_video(
     speed: Optional[dict] = None,
     padding_ms: int = 250,
     mute_whole_segment: bool = True,
+    only_categories: tuple = (),
 ) -> CensorResult:
     """Transcribe `source_path`, bleep any flagged words, and return the
     path that should actually be uploaded (a censored copy, or the
@@ -258,7 +259,8 @@ def censor_video(
 
         engine = ComplianceEngine(custom_words=custom_words,
                                   padding_ms=padding_ms,
-                                  mute_whole_segment=mute_whole_segment)
+                                  mute_whole_segment=mute_whole_segment,
+                                  only_categories=tuple(only_categories))
         violations = engine.scan_segments(result["segments"])
 
         if not violations:

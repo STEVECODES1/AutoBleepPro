@@ -103,6 +103,9 @@ class ComplianceEngine:
 
     custom_words: tuple[str, ...] = ()
     extra_categories: Optional[dict[str, list[str]]] = None
+    # Only flag words in these categories. Empty = all of them, which is
+    # the default and what the YouTube-facing pass wants. See __post_init__.
+    only_categories: tuple[str, ...] = ()
     use_profanity_filter: bool = True
     # Whisper's word timestamps are approximate - typically 100-300ms out.
     # Muting exactly the reported span leaves the first syllable audible,
@@ -118,6 +121,22 @@ class ComplianceEngine:
         self.categories: dict[str, list[str]] = {
             category: list(phrases) for category, phrases in DEFAULT_CATEGORIES.items()
         }
+        # Restricting to the categories that get a POST REMOVED rather
+        # than demonetised. Instagram removed a clip under hateful
+        # conduct while its ordinary swearing broke nothing - those are
+        # different rules and they need different answers. Bleeping every
+        # swear for Instagram would flatten the channel's voice for no
+        # gain; leaving a slur in gets the account taken away.
+        #
+        # better_profanity is switched off with it: it knows most slurs,
+        # but it also knows every ordinary swear, so consulting it would
+        # undo the restriction.
+        if self.only_categories:
+            wanted = set(self.only_categories)
+            self.categories = {name: words
+                               for name, words in self.categories.items()
+                               if name in wanted}
+            self.use_profanity_filter = False
         if self.extra_categories:
             for category, phrases in self.extra_categories.items():
                 self.categories.setdefault(category, [])

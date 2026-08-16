@@ -122,3 +122,142 @@ def test_a_long_line_is_broken_into_phrases():
 
     for phrase in group_words(words):
         assert len(phrase.text) <= 24, f"too wide: {phrase.text!r}"
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# INSTAGRAM REMOVED A POST UNDER HATEFUL CONDUCT
+#
+# Not for profanity - the same account's swearing broke nothing. A slur was
+# burned across the frame as "N****", and a masked slur is still legible as
+# one. Starring it is the appearance of moderation rather than the fact of
+# it, and the classifier reading the frame is not fooled by asterisks.
+#
+# Removals of that kind escalate to a disabled account, which is a different
+# order of loss from a deleted post.
+# ═════════════════════════════════════════════════════════════════════════════
+
+def test_a_slur_never_reaches_the_screen_even_starred():
+    from autoreel.captions import censor_words
+
+    words = [{"word": w, "start": i, "end": i + 0.3}
+             for i, w in enumerate(["nigga", "you", "got", "call"])]
+
+    shown = " ".join(x["word"] for x in censor_words(words))
+
+    assert "n" not in shown.split()[0].lower(), \
+        "the slur is still legible on screen"
+    assert "*" not in shown.split()[0], "a starred stump reads as the word"
+    assert "you got call" in shown, "it removed the rest of the sentence"
+
+
+def test_ordinary_swearing_is_still_only_masked():
+    """Blanking it would leave holes through every sentence the channel
+    is there for, and it breaks no rule anywhere this posts."""
+    from autoreel.captions import censor_words
+
+    words = [{"word": w, "start": i, "end": i + 0.3}
+             for i, w in enumerate(["this", "shit", "crazy"])]
+
+    shown = " ".join(x["word"] for x in censor_words(words))
+
+    assert "s***" in shown
+    assert "—" not in shown
+
+
+def test_a_dropped_word_keeps_its_slot():
+    """An empty word would collapse the phrase's spacing and the timing
+    that lights it up."""
+    from autoreel.captions import censor_words
+
+    words = [{"word": "retard", "start": 1.0, "end": 1.4}]
+
+    out = censor_words(words)
+
+    assert out[0]["word"].strip(), "the word became empty"
+    assert out[0]["start"] == 1.0 and out[0]["end"] == 1.4
+
+
+# ── the audio, per platform ──────────────────────────────────────────
+
+def test_instagram_bleeps_slurs_and_keeps_the_swearing():
+    """Two different policies needing two different answers. Bleeping
+    every swear for Instagram would flatten the voice the channel is
+    there for; leaving a slur in is how an account is taken away."""
+    import sys
+
+    sys.path.insert(0, os.path.join(_REPO, "auto_uploader"))
+    from autoreel.compliance import ComplianceEngine
+    from utils.clip_queue import CENSOR_AUDIO_DEFAULTS, _CENSOR_SCOPES
+
+    assert CENSOR_AUDIO_DEFAULTS["instagram"] == "slurs"
+    engine = ComplianceEngine(
+        only_categories=_CENSOR_SCOPES[CENSOR_AUDIO_DEFAULTS["instagram"]])
+
+    assert engine._flag_reason("nigga") == "hate_speech"
+    assert engine._flag_reason("faggot") == "hate_speech"
+    assert engine._flag_reason("shit") is None
+    assert engine._flag_reason("fuck") is None
+
+
+def test_youtube_still_bleeps_everything():
+    """YouTube demonetises over ordinary language too, and a channel is
+    harder to get back than a post."""
+    import sys
+
+    sys.path.insert(0, os.path.join(_REPO, "auto_uploader"))
+    from autoreel.compliance import ComplianceEngine
+    from utils.clip_queue import CENSOR_AUDIO_DEFAULTS, _CENSOR_SCOPES
+
+    assert CENSOR_AUDIO_DEFAULTS["youtube_shorts"] == "all"
+    engine = ComplianceEngine(
+        only_categories=_CENSOR_SCOPES[CENSOR_AUDIO_DEFAULTS["youtube_shorts"]])
+
+    assert engine._flag_reason("shit") == "profanity"
+    assert engine._flag_reason("nigga") == "hate_speech"
+
+
+def test_rumble_is_left_uncensored():
+    """The whole point of the split - its audience is there for exactly
+    what the other platforms will not take."""
+    import sys
+
+    sys.path.insert(0, os.path.join(_REPO, "auto_uploader"))
+    from utils.clip_queue import CENSOR_AUDIO_DEFAULTS
+
+    assert "rumble" not in CENSOR_AUDIO_DEFAULTS
+
+
+def test_a_config_saying_true_still_means_everything():
+    """True is the old spelling of "all" and is what any config.json
+    already in the wild says."""
+    import sys
+
+    sys.path.insert(0, os.path.join(_REPO, "auto_uploader"))
+    from utils import clip_queue
+
+    import tempfile
+    folder = tempfile.mkdtemp()
+    clip = os.path.join(folder, "a.mp4")
+    open(clip, "wb").write(b"x")
+
+    seen = {}
+
+    def fake_censor(*_a, **kwargs):
+        seen["scope"] = kwargs.get("only_categories")
+
+        class R:
+            output_path = clip
+            violation_count = 0
+        return R()
+
+    import utils.censor
+    original = utils.censor.censor_video
+    utils.censor.censor_video = fake_censor
+    try:
+        clip_queue._censored_clip(
+            "instagram", clip,
+            {"instagram": {"censor_uploads": True}, "general": {}})
+    finally:
+        utils.censor.censor_video = original
+
+    assert seen["scope"] == (), "True must still mean every category"

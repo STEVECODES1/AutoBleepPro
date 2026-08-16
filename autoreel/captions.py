@@ -170,9 +170,30 @@ def censor_words(words: Iterable[dict], checker=None) -> list:
             flagged = False
         if flagged:
             word = dict(word)
-            word["word"] = mask_word(text)
+            word["word"] = _screen_safe(text)
         censored.append(word)
     return censored
+
+
+# A masked slur is still legible as one - nobody reads "n****" as
+# anything else - and Instagram removed a clip under hateful conduct
+# with exactly that burned across it. Starring it is the appearance of
+# moderation rather than the fact of it, and the classifier reading the
+# frame is not fooled by asterisks.
+#
+# So these come off the screen entirely. Ordinary swearing is still
+# masked: it breaks no rule anywhere this posts, and blanking it would
+# leave holes through every sentence the channel is there for.
+def _screen_safe(text: str) -> str:
+    """A word as it may appear ON SCREEN: masked, or gone."""
+    from .safe_text import DROP_ENTIRELY
+
+    bare = text.strip().lower().strip(".,!?;:\"'")
+    if bare in DROP_ENTIRELY:
+        # Not "" - an empty word would collapse the phrase's spacing and
+        # the timing that lights it up.
+        return "—"
+    return mask_word(text)
 
 
 def group_words(words: Iterable[dict],

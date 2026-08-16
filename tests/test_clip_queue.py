@@ -379,16 +379,22 @@ def test_a_short_is_bleeped_before_it_goes_to_youtube(publisher, tmp_path,
     assert temporary == str(clean), "the censored copy would be left behind"
 
 
-def test_instagram_keeps_the_original_audio(publisher, tmp_path):
-    """Instagram does not demonetise or age-restrict over language, so
-    censoring a clip for it removes the moment and buys nothing."""
-    from utils import clip_queue
+def test_instagram_bleeps_slurs_but_not_ordinary_swearing(publisher):
+    """It does not demonetise over language, so bleeping every swear for
+    it would flatten the voice the channel is there for. But it REMOVED a
+    post under hateful conduct, and those removals escalate to a disabled
+    account - so slurs are a different question from swearing."""
+    from utils.clip_queue import CENSOR_AUDIO_DEFAULTS, _CENSOR_SCOPES
 
-    raw = tmp_path / "raw.mp4"
-    raw.write_bytes(b"x")
+    assert CENSOR_AUDIO_DEFAULTS["instagram"] == "slurs"
+    assert _CENSOR_SCOPES["slurs"] == ("hate_speech",)
 
-    assert clip_queue._censored_clip("instagram", str(raw), {}) == \
-        (str(raw), "")
+
+def test_rumble_audio_is_never_touched(publisher):
+    """The uncensored channel is the point of the split."""
+    from utils.clip_queue import CENSOR_AUDIO_DEFAULTS
+
+    assert "rumble" not in CENSOR_AUDIO_DEFAULTS
 
 
 def test_censoring_can_be_turned_off_per_platform(publisher, tmp_path):
