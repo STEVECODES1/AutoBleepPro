@@ -732,6 +732,37 @@ def _apply_mode(cfg, name: str, settings: dict):
     return cfg
 
 
+def _newest_video(cfg) -> str:
+    """The most recently written video in any folder this tool uses.
+
+    Looked up rather than asked for. The VOD names are long, have spaces
+    in them and live in a different folder on every machine, so typing
+    one is the step most likely to go wrong - and "the one I just
+    recorded" is nearly always the one meant.
+    """
+    clips_folder = str((cfg.clips or {}).get("auto_clip_folder", "") or "")
+    if clips_folder and not os.path.isabs(clips_folder):
+        clips_folder = os.path.join(cfg.project_root, clips_folder)
+
+    formats = tuple(cfg.general.supported_formats or (".mp4",))
+    newest, newest_at = "", -1.0
+    for folder in (clips_folder, cfg.general.watch_folder,
+                   cfg.general.uploaded_folder):
+        if not folder or not os.path.isdir(folder):
+            continue
+        for name in os.listdir(folder):
+            if not name.lower().endswith(formats):
+                continue
+            path = os.path.join(folder, name)
+            try:
+                when = os.path.getmtime(path)
+            except OSError:
+                continue
+            if when > newest_at:
+                newest, newest_at = path, when
+    return newest
+
+
 def _check_sync(cfg, source: str) -> int:
     """Measure caption/audio sync on a real video and name the cause.
 
@@ -1820,7 +1851,7 @@ def main(argv=None) -> int:
                         help="Write before/after stills showing exactly what "
                              "the clip framing will keep, so the rectangle can "
                              "be aimed in seconds instead of after ten renders.")
-    parser.add_argument("--check-sync", metavar="FILE",
+    parser.add_argument("--check-sync", metavar="FILE", nargs="?", const="",
                         help="Measure whether captions will line up with the "
                              "audio in clips cut from this video, and say "
                              "which of the possible causes it is. Cuts two "
@@ -2623,10 +2654,23 @@ def main(argv=None) -> int:
         print(f"\n  {summary(cfg.posting)}")
         return 0
 
-    if args.check_sync:
+    if args.check_sync is not None:
+        # Naming the file is the step most likely to go wrong - the VODs
+        # have long names with spaces and the folder differs per machine.
+        # With no name, take the newest one there is.
         source = args.check_sync
-        if not os.path.isfile(source):
-            found = _suggest_paths(cfg, os.path.basename(source))
+        if not source:
+            source = _newest_video(cfg)
+            if not source:
+                print("[Sync] No videos found. Give it a path:\n"
+                      '         python main.py --check-sync "downloaded_vods'
+                      '\\<the real filename>.mp4"')
+                return 1
+            print(f"[Sync] Newest video: {source}")
+        elif not os.path.isfile(source):
+            # Accepts part of a title as well as a path, same as the
+            # other commands that take a video.
+            found = _find_video(cfg, source)
             if not found:
                 print(f"[Sync] File not found: {source}")
                 return 1
