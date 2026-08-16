@@ -39,7 +39,7 @@ from datetime import datetime
 # Bump when shipping user-visible changes, so --test-config can prove
 # which build is actually running (stale extracts have silently caused
 # several confusing "the fix did nothing" runs).
-BUILD = "2026-08-16.38 captions line themselves up with the speech"
+BUILD = "2026-08-16.39 the clip title reaches Instagram, not just Rumble"
 
 # How often --watch checks whether a deferred clip's wait is up. A minute
 # is fine: the waits themselves are 25 to 80 minutes, so the resolution
@@ -1501,6 +1501,16 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
             print("[Clip] Could not re-frame - uploading as-is (it will be a "
                   "regular video, not a Short).")
             made = source
+        else:
+            # The copy lands in censored/, the clip's notes are in the
+            # watch folder, and the notes are where the title comes from.
+            # Without this Rumble - which uploads the clip itself - was
+            # titled with the line actually said in it, while Instagram
+            # and Facebook uploaded this copy, found nothing beside it,
+            # and posted the STREAM title on every clip.
+            from utils.social_promoter import copy_sidecars
+
+            copy_sidecars(source, made)
         _vertical[source] = made
         return made
 

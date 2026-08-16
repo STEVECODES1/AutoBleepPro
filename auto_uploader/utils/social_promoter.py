@@ -12,6 +12,7 @@ mark an upload as failed.
 import json
 import os
 import re
+import shutil
 import time
 import urllib.request
 
@@ -485,6 +486,47 @@ _FILENAME_NOISE = (
     re.compile(r"\bfull live stream\b", re.I),
     re.compile(r"\[[a-z0-9]{6,}\]", re.I),      # [v70rbpc]
 )
+
+
+# Everything written beside a clip that says something about it: the
+# headline the uploader reads, the composed caption, the spoken line on
+# its own, and what the clip is about for tagging.
+SIDECAR_SUFFIXES = (".txt", "_caption.txt", "_line.txt", "_subject.txt")
+
+
+def copy_sidecars(source: str, target: str) -> int:
+    """Bring a clip's notes along when the clip is copied. Returns how many.
+
+    The 9:16 re-frame writes its copy into a DIFFERENT FOLDER from the
+    clip - censored/ rather than the watch folder - and the notes stayed
+    behind. So Rumble, which uploads the clip itself, was titled with the
+    line actually said in it, while Instagram and Facebook uploaded the
+    re-framed copy, found nothing beside it, fell back to the filename
+    and posted the STREAM title on every clip.
+
+    Best-effort by design: a missing note costs a better title, and a
+    failure here must not cost the post.
+    """
+    if not source or not target or source == target:
+        return 0
+    source_stem = os.path.splitext(source)[0]
+    target_stem = os.path.splitext(target)[0]
+    # The copy is named "_vertical_<clip>"; the notes belong to the clip.
+    plain = os.path.join(os.path.dirname(source_stem),
+                         re.sub(r"^_?vertical[_\s]+", "",
+                                os.path.basename(source_stem), flags=re.I))
+    brought = 0
+    for suffix in SIDECAR_SUFFIXES:
+        for candidate in (source_stem + suffix, plain + suffix):
+            if not os.path.isfile(candidate):
+                continue
+            try:
+                shutil.copyfile(candidate, target_stem + suffix)
+                brought += 1
+            except OSError:
+                pass
+            break
+    return brought
 
 
 def spoken_line(video_path: str) -> str:

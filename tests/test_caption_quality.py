@@ -434,3 +434,77 @@ def test_the_machinery_still_comes_off_a_real_name():
 
     assert title_from_plain_filename(
         "Stackswopo Love Yall 20250914 204409.mp4") == "Stackswopo Love Yall"
+
+
+# ── the notes have to follow the clip ────────────────────────────────
+#
+# Rumble uploads the clip itself and was titled "Gumball ass animations" -
+# the line actually said in it. Instagram and Facebook upload the 9:16
+# RE-FRAME, which is written into censored/ while the clip's notes stay in
+# the watch folder - so they found nothing, fell back to the filename, and
+# posted the STREAM title ("Wifi Cooked") on every single clip.
+
+def test_the_reframed_copy_carries_the_clips_notes(tmp_path):
+    import sys
+
+    sys.path.insert(0, os.path.join(ROOT, "auto_uploader"))
+    from utils.social_promoter import copy_sidecars
+
+    watch = tmp_path / "watch"
+    censored = tmp_path / "censored"
+    watch.mkdir()
+    censored.mkdir()
+    base = "Wifi Cooked - Clip 01"
+    clip = watch / f"{base}.mp4"
+    clip.write_bytes(b"x")
+    (watch / f"{base}.txt").write_text("Gumball ass animations")
+    (watch / f"{base}_subject.txt").write_text("Wifi Cooked monkey")
+    reframed = censored / f"_vertical_{base}.mp4"
+    reframed.write_bytes(b"x")
+
+    assert clip_title(str(reframed)) == "Wifi Cooked", \
+        "the stream title is what it used to fall back to"
+
+    assert copy_sidecars(str(clip), str(reframed)) == 2
+
+    assert clip_title(str(reframed)) == "Gumball ass animations", \
+        "the re-framed copy still cannot see the clip's own title"
+    assert clip_title(str(clip)) == clip_title(str(reframed)), \
+        "Rumble and Instagram are titling the same clip differently"
+
+
+def test_copying_notes_that_are_not_there_is_not_an_error(tmp_path):
+    import sys
+
+    sys.path.insert(0, os.path.join(ROOT, "auto_uploader"))
+    from utils.social_promoter import copy_sidecars
+
+    clip = tmp_path / "a.mp4"
+    clip.write_bytes(b"x")
+
+    assert copy_sidecars(str(clip), str(tmp_path / "_vertical_a.mp4")) == 0
+    assert copy_sidecars("", "") == 0
+    assert copy_sidecars(str(clip), str(clip)) == 0, \
+        "copying a file onto itself would truncate its own notes"
+
+
+def test_instagram_gets_the_clips_line_with_the_language_filtered(tmp_path):
+    """Same title as Rumble, but Instagram's rules apply to the TEXT.
+    Rumble is the uncensored channel and keeps it as it was said."""
+    import sys
+
+    sys.path.insert(0, os.path.join(ROOT, "auto_uploader"))
+    from utils.clip_queue import caption_for
+
+    base = "Wifi Cooked - Clip 01"
+    clip = tmp_path / f"{base}.mp4"
+    clip.write_bytes(b"x")
+    (tmp_path / f"{base}.txt").write_text("Gumball ass animations")
+
+    caption = caption_for("instagram", str(clip), "",
+                          {"instagram": {"caption_template": "{title}"}})
+
+    assert caption.startswith("Gumball a"), "it posted the stream title again"
+    assert "ass" not in caption.lower().split()[1], "unfiltered on Instagram"
+    assert clip_title(str(clip)) == "Gumball ass animations", \
+        "Rumble's title was filtered too"
