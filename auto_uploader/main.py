@@ -3536,9 +3536,15 @@ def main(argv=None) -> int:
         if dry_run:
             print("[DRY RUN MODE] Nothing will actually be uploaded.")
 
-        # --watch only reacts to files ARRIVING. Anything already sitting
-        # in the folder would otherwise wait here forever with no hint
-        # that it's being ignored.
+        # The watcher only reacts to files ARRIVING. Anything already in
+        # the folder used to sit there untouched while the window said
+        # "Watching ... for new videos", and the only way to find out was
+        # to read a note and go run --batch in a second window. A video in
+        # the watch folder is a video to upload, whenever it got there.
+        #
+        # Safe to just do: the duplicate store still refuses anything
+        # already uploaded, and the publish guard's caps and spacing still
+        # hold the rate whatever arrives at once.
         try:
             already = [
                 f for f in sorted(os.listdir(watch_folder))
@@ -3548,17 +3554,6 @@ def main(argv=None) -> int:
             ]
         except OSError:
             already = []
-        if already:
-            print(f"\n[NOTE] {len(already)} video(s) are ALREADY in this folder. "
-                  f"--watch only picks up files that arrive from now on.")
-            for f in already[:5]:
-                print(f"         - {f}")
-            if len(already) > 5:
-                print(f"         ... and {len(already) - 5} more")
-            hint = ("--batch" if watch_folder == os.path.abspath(cfg.general.watch_folder)
-                    else f'--batch "{watch_folder}"')
-            print(f"       Run `python main.py {hint}` (in another window, or "
-                  "stop this first) to upload those.\n")
 
         def on_ready(path):
             # allow_prompt=False: this runs in the watcher's background
@@ -3576,6 +3571,14 @@ def main(argv=None) -> int:
                 print(f"\n[Watch] Done with {os.path.basename(path)}. "
                       f"Watching {watch_folder} for the next one... "
                       f"(Ctrl+C to stop)\n")
+
+        if already:
+            print(f"\n[Watch] {len(already)} video(s) already in this folder - "
+                  f"doing those first, then waiting for new ones.")
+            for name in already:
+                print(f"         - {name}")
+            for name in already:
+                on_ready(os.path.join(watch_folder, name))
 
         watcher = FolderWatcher(
             watch_folder, cfg.general.supported_formats,
