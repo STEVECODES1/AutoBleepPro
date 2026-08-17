@@ -39,9 +39,34 @@ class YouTubeUploader:
             creds = Credentials.from_authorized_user_file(self.token_path, SCOPES)
 
         if not creds or not creds.valid:
+            refreshed = False
             if creds and creds.expired and creds.refresh_token:
-                creds.refresh(Request())
-            else:
+                try:
+                    creds.refresh(Request())
+                    refreshed = True
+                except Exception as exc:
+                    # A refresh token is not forever. Google revokes it
+                    # when the account password changes, when the app is
+                    # removed from the account's third-party access, and
+                    # automatically after six months unused - and an
+                    # unverified app's tokens expire in seven days.
+                    #
+                    # Unhandled, this came out as a raw
+                    # "invalid_grant: Token has been expired or revoked"
+                    # and stopped --batch dead with no way forward
+                    # printed. Falling through to the browser flow is
+                    # right at a keyboard and wrong in --watch, which
+                    # would hang on it forever with nobody to answer.
+                    # So: say the command, and let a person run it.
+                    if "invalid_grant" in str(exc) or "revoked" in str(exc):
+                        raise RuntimeError(
+                            "YouTube sign-in has expired. Re-authorise "
+                            "with:\n"
+                            "         python main.py --setup-youtube\n"
+                            "         (a browser opens; pick the VOD "
+                            "channel, not the Shorts one)") from exc
+                    raise
+            if not refreshed:
                 if not os.path.exists(self.client_secrets_path):
                     raise FileNotFoundError(
                         f"YouTube client_secrets.json not found at {self.client_secrets_path}. "

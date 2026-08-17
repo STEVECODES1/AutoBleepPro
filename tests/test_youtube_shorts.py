@@ -358,3 +358,70 @@ def test_the_description_still_carries_everything(tmp_path):
 
     assert "#stackswopo" in body and "#monkeyapp" in body
     assert SHORTS_TAG in body
+
+
+# ── a refresh token is not forever ───────────────────────────────────
+#
+#   invalid_grant: Token has been expired or revoked.
+#   [ABORTED] Refusing to run --batch ... Fix the YouTube auth issue
+#             above, then try again.
+#
+# Google retires a refresh token on a password change, on the app being
+# removed from the account's third-party access, and automatically after
+# six months unused. It came out as a raw exception with no way forward
+# printed - and there was no command to re-authorise the VOD channel at
+# all, only the Shorts one.
+
+def test_a_revoked_token_says_which_command_fixes_it(tmp_path, monkeypatch):
+    import sys
+
+    sys.path.insert(0, _UPLOADER)
+    from utils.youtube_uploader import YouTubeUploader
+
+    secrets = tmp_path / "client_secrets.json"
+    secrets.write_text("{}")
+    token = tmp_path / "youtube_token.json"
+    token.write_text("{}")
+
+    class _Revoked:
+        valid = False
+        expired = True
+        refresh_token = "r"
+
+        def refresh(self, _request):
+            raise RuntimeError(
+                "('invalid_grant: Token has been expired or revoked.', ...)")
+
+    monkeypatch.setattr(
+        "utils.youtube_uploader.Credentials.from_authorized_user_file",
+        lambda *a, **k: _Revoked())
+
+    uploader = YouTubeUploader(str(secrets), str(token))
+    try:
+        uploader._get_credentials()
+    except RuntimeError as exc:
+        assert "--setup-youtube" in str(exc), \
+            "it says it is broken without saying what to run"
+    else:
+        raise AssertionError("a revoked token did not raise")
+
+
+def test_the_batch_abort_names_the_command():
+    """"Fix the YouTube auth issue above" described the problem to
+    somebody who had just read the problem."""
+    import re
+
+    with open(os.path.join(_UPLOADER, "main.py"), encoding="utf-8") as f:
+        source = f.read()
+
+    abort = source[source.index("Refusing to run --batch"):][:600]
+    assert "--setup-youtube" in abort
+
+
+def test_setup_youtube_exists_alongside_setup_shorts():
+    """There were two channels and only one way to sign in."""
+    with open(os.path.join(_UPLOADER, "main.py"), encoding="utf-8") as f:
+        source = f.read()
+
+    assert '"--setup-youtube"' in source
+    assert '"--setup-shorts"' in source

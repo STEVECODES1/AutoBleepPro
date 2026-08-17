@@ -39,7 +39,7 @@ from datetime import datetime
 # Bump when shipping user-visible changes, so --test-config can prove
 # which build is actually running (stale extracts have silently caused
 # several confusing "the fix did nothing" runs).
-BUILD = "2026-08-16.53 a 503 is not a channel being offline"
+BUILD = "2026-08-16.54 a way back in when YouTube signs you out"
 
 # How often --watch checks whether a deferred clip's wait is up. A minute
 # is fine: the waits themselves are 25 to 80 minutes, so the resolution
@@ -2177,6 +2177,12 @@ def main(argv=None) -> int:
                         action="store_false",
                         help="Keep the full length even if the mode or config "
                              "asks for a trim.")
+    parser.add_argument("--setup-youtube", action="store_true",
+                        help="Sign in to the VOD YouTube channel again. "
+                             "Needed when uploads start failing with "
+                             "'Token has been expired or revoked' - Google "
+                             "retires a refresh token after a password "
+                             "change, or after six months unused.")
     parser.add_argument("--setup-shorts", action="store_true",
                         help="Sign in to the YouTube channel that Shorts go "
                              "to. A YouTube token is bound to the CHANNEL "
@@ -2895,6 +2901,42 @@ def main(argv=None) -> int:
         _deliver_clips(run, cfg)
         return 0
 
+    if args.setup_youtube:
+        # Deleting the token IS the re-auth: the uploader runs the
+        # browser flow whenever there is no usable one. Done here rather
+        # than by hand because the file is in a folder nobody has open,
+        # and a half-deleted token is the same failure again.
+        token = cfg.youtube.token_path
+        secrets = cfg.youtube.client_secrets_path
+        if not secrets or not os.path.isfile(secrets):
+            print(f"[YouTube] client_secrets.json not found at "
+                  f"{secrets or '(not set)'} - see README.")
+            return 1
+        if os.path.isfile(token):
+            try:
+                os.remove(token)
+                print(f"[YouTube] Cleared the old sign-in ({token}).")
+            except OSError as exc:
+                print(f"[YouTube] Could not remove {token}: {exc}")
+                return 1
+        print("[YouTube] A browser will open. Sign in and pick the VOD "
+              "channel")
+        print(f"          ({cfg.youtube.channel}), NOT the Shorts one - "
+              f"the token remembers whichever you choose.")
+        try:
+            # NOT a local import: YouTubeUploader is imported at module
+            # level, and `from x import Y` inside a function binds Y as a
+            # local for the WHOLE function - so this would unbind the one
+            # the dedup check uses hundreds of lines above. That exact
+            # mistake aborted a --batch run once, and there is a test for
+            # it.
+            YouTubeUploader(secrets, token)._get_credentials()
+        except Exception as exc:
+            print(f"[YouTube] Sign-in failed: {exc}")
+            return 1
+        print(f"[YouTube] Signed in. Token written to {token}.")
+        return 0
+
     if args.setup_shorts:
         from publishers.youtube_shorts import YouTubeShortsPublisher
 
@@ -3332,9 +3374,14 @@ def main(argv=None) -> int:
     if batch_folder and existing_videos_fetch_failed and not dry_run:
         print(
             "[ABORTED] Refusing to run --batch without the existing-video dedup check working "
-            "(it would risk re-uploading videos already on the channel). Fix the YouTube auth "
-            "issue above, then try again. (--file and --watch aren't blocked by this.)"
+            "(it would risk re-uploading videos already on the channel)."
         )
+        # The command, not "fix the auth issue above". That sentence
+        # described the problem to somebody who had just read the
+        # problem, and left them to work out that the fix is a browser
+        # sign-in with no way to start one.
+        print("          Sign in again:  python main.py --setup-youtube")
+        print("          (--file and --watch aren't blocked by this.)")
         return 1
 
     if args.file:
