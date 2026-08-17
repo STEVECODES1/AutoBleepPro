@@ -55,6 +55,42 @@ def _is_video_url(candidate: str) -> bool:
     return bool(_VIDEO_URL.match(candidate.strip()))
 
 
+# How long to let Rumble's transfer run before giving up on the wait.
+#
+# This used to be a flat 90 minutes, which is fine for a 40-second clip
+# and far too short for a full stream: one real VOD read
+# "100% (708.2KB/s - 120m22s)" - over two hours of transfer - and the
+# 90-minute ceiling ended the wait while the file was still going up.
+# The wait returns rather than raises, so submit then ran against an
+# unfinished upload and the form sat filled-in and unpublished. The log
+# said "Rumble finished but the video is not on the channel".
+#
+# So: scale the ceiling to the file, at a deliberately pessimistic rate,
+# and rely on the stall detector below to end a genuinely dead upload
+# early instead of on a clock that can't know how big the file is.
+MIN_UPLOAD_WAIT_SECONDS = 30 * 60
+SLOWEST_ASSUMED_BYTES_PER_SEC = 120 * 1024
+
+# No movement in the percentage for this long means the upload is dead,
+# not slow. This is what protects a run from hanging for hours now that
+# the ceiling above can be hours.
+STALL_SECONDS = 20 * 60
+
+# ...and if a percentage never appears AT ALL, don't sit through the
+# full stall window - either the transfer finished before the first
+# scrape (small clips do) or this page has no readout to wait for.
+NO_READOUT_SECONDS = 3 * 60
+
+
+def upload_timeout_for(video_path: str) -> int:
+    """A wait ceiling proportional to the file, never below the floor."""
+    try:
+        size = os.path.getsize(video_path)
+    except OSError:
+        return MIN_UPLOAD_WAIT_SECONDS
+    return max(MIN_UPLOAD_WAIT_SECONDS, int(size / SLOWEST_ASSUMED_BYTES_PER_SEC))
+
+
 
 def _set_file_via_cdp(page, selector: str, file_path: str) -> bool:
     """Hand Chrome a local path instead of streaming the bytes to it.
@@ -752,44 +788,82 @@ class RumbleUploader:
             except Exception as exc:
                 print(f"[Rumble] WARNING: could not set category {desired!r}: {exc}")
 
-    def _wait_for_upload_complete(self, page, progress_callback, timeout_seconds: int = 60 * 90) -> None:
+    def _wait_for_upload_complete(
+        self, page, progress_callback, timeout_seconds: Optional[int] = None
+    ) -> bool:
         """Block until Rumble's own progress readout reaches 100%.
 
         Rumble renders progress as page text ("3%", "(1.3MB/s - 27s)")
         rather than a standard aria-valuenow progressbar, so this scrapes
         the percentage out of the page text instead of reading an
-        attribute. Returns (rather than raising) on timeout so the caller
-        can still attempt the submit - a stalled readout isn't proof the
-        upload failed.
+        attribute. Returns (rather than raising) when it gives up so the
+        caller can still attempt the submit - a stalled readout isn't
+        proof the upload failed. True means the transfer was seen to
+        finish; False means we stopped waiting without seeing that, and
+        anything downstream should treat the result as suspect.
         """
+        if timeout_seconds is None:
+            timeout_seconds = MIN_UPLOAD_WAIT_SECONDS
         deadline = time.time() + timeout_seconds
         last_reported = -1
+        last_change = time.time()
+        gone_for = 0
 
         while time.time() < deadline:
             percent = None
+            # A read that THREW tells us nothing about the upload. The old
+            # code caught the exception and fell through to the "no
+            # percentage on the page" branch below, so ONE slow
+            # inner_text() at 3% was enough to declare the transfer
+            # finished and send an unfinished upload to submit.
+            read_ok = True
             try:
                 body_text = page.locator("body").inner_text(timeout=5_000)
-                match = re.search(r"(\d{1,3})\s*%", body_text)
-                if match:
-                    percent = int(match.group(1))
             except Exception:
-                pass
+                body_text = ""
+                read_ok = False
+
+            match = re.search(r"(\d{1,3})\s*%", body_text)
+            if match:
+                percent = int(match.group(1))
 
             if percent is not None and percent != last_reported:
                 last_reported = percent
+                last_change = time.time()
                 if progress_callback:
                     progress_callback(percent)
 
             if percent is not None and percent >= 100:
-                return
+                return True
 
             # Rumble swaps the progress readout out for the finished state
-            # once the transfer completes; treat "no percentage on the page
-            # anymore, but we saw one earlier" as done too.
-            if percent is None and last_reported > 0:
-                return
+            # once the transfer completes, so a page that reads cleanly and
+            # no longer has a percentage on it is done too - but only once
+            # several consecutive reads agree, so a single re-render caught
+            # between frames can't end the wait early.
+            if read_ok and percent is None:
+                gone_for += 1
+                if last_reported > 0 and gone_for >= 3:
+                    return True
+                if last_reported < 0 and gone_for * 3 >= NO_READOUT_SECONDS:
+                    # Never saw a percentage at all: nothing to wait for.
+                    return True
+            else:
+                gone_for = 0
+
+            if percent is not None and time.time() - last_change > STALL_SECONDS:
+                print(f"[Rumble] WARNING: upload stuck at {last_reported}% for "
+                      f"{STALL_SECONDS // 60} minutes - it is not moving. "
+                      "Submitting anyway, but expect this one to fail.")
+                return False
 
             page.wait_for_timeout(3000)
+
+        print(f"[Rumble] WARNING: transfer still at {last_reported}% after "
+              f"{timeout_seconds // 60} minutes. Submitting anyway, but a form "
+              "submitted mid-transfer is what leaves a video filled in and "
+              "unpublished.")
+        return False
 
     def _upload_video(
         self, page, video_path, title, description, tags, privacy, thumbnail_path, progress_callback
@@ -844,7 +918,8 @@ class RumbleUploader:
         # the submit button isn't meaningfully clickable until it's done.
         # (Previously this raced the upload and burned ~60 futile click
         # retries against a still-uploading form.)
-        self._wait_for_upload_complete(page, progress_callback)
+        self._wait_for_upload_complete(
+            page, progress_callback, upload_timeout_for(video_path))
 
         # Rumble shows "Please select at least one category" inline when
         # the required category didn't take. Catch that here with a clear
