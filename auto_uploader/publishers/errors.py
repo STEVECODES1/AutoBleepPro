@@ -68,7 +68,29 @@ class PermanentlyRejected(Exception):
     """
 
 
-def is_permanent_rejection(payload) -> bool:
+# Error types Meta marks `retriable: False` and then serves again fine.
+#
+# From publishers.log, one clip, minutes apart:
+#
+#   11:16:46 upload rejected (HTTP 400): {'debug_info': {'retriable':
+#            False, 'type': 'ProcessingFailedError', 'message':
+#            'Request processing failed'}}
+#   11:17:34 ...the same
+#   11:18:10 uploaded 18.6 MB for container 18423474292146676
+#   11:18:18 published Reel, media_id=17959044240199078
+#
+# and, more plainly still, a `retriable: False` whose own message is
+# "Generic Internal Error: An internal server error occurred. Please try
+# again later." So the flag does not mean what it says on this error, and
+# honouring it threw away clips that would have posted on the next try.
+#
+# The flag is still honoured everywhere else - a Reel Meta genuinely
+# cannot process names what is wrong with it, and hammering that is what
+# PermanentlyRejected exists to stop.
+TRANSIENT_TYPES = frozenset({"processingfailederror"})
+
+
+def is_permanent_rejection(payload, status: int = 0) -> bool:
     """True when Meta says retrying this upload cannot help.
 
     Reads `retriable` wherever it sits: Meta nests it under debug_info
@@ -76,13 +98,28 @@ def is_permanent_rejection(payload) -> bool:
     which stays retriable - the ceiling and the breaker already bound
     that case, and treating silence as permanent would abandon clips
     over a dropped connection.
+
+    `status` is the HTTP code when the caller has it. A 5xx is Meta's
+    own server saying it failed, which is never a statement about this
+    video.
     """
+    if 500 <= int(status or 0) < 600:
+        return False
     if not isinstance(payload, dict):
         return False
-    for holder in (payload,
-                   payload.get("error") or {},
-                   (payload.get("debug_info") or {}),
-                   ((payload.get("error") or {}).get("debug_info") or {})):
-        if isinstance(holder, dict) and holder.get("retriable") is False:
+
+    holders = [h for h in (payload,
+                           payload.get("error") or {},
+                           (payload.get("debug_info") or {}),
+                           ((payload.get("error") or {}).get("debug_info") or {}))
+               if isinstance(h, dict)]
+
+    # Checked before the flag, so a transient type wins over it.
+    for holder in holders:
+        if str(holder.get("type", "")).strip().lower() in TRANSIENT_TYPES:
+            return False
+
+    for holder in holders:
+        if holder.get("retriable") is False:
             return True
     return False

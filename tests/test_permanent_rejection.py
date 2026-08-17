@@ -1,4 +1,6 @@
-"""An explicit "do not retry" has to be honoured.
+"""An explicit "do not retry" has to be honoured - where it means it.
+
+The original reason for reading the field at all:
 
     [Publisher] Instagram: upload rejected (HTTP 400):
       {'debug_info': {'retriable': False, 'type': 'ProcessingFailedError'}}
@@ -8,8 +10,24 @@
     [Publisher] Instagram: upload rejected (HTTP 400): ...same...
 
 Three identical uploads of one clip inside a single drain, each answered
-identically, against a field that said not to. Retrying there is not
-persistence; it is hammering an API that already answered.
+identically, against a field that said not to.
+
+But a longer run of publishers.log shows the other half of it - the same
+error, the same clip, and then it posts:
+
+    11:16:46 upload rejected (HTTP 400): ProcessingFailedError,
+             'Request processing failed', retriable: False
+    11:17:34 ...the same
+    11:18:10 uploaded 18.6 MB for container 18423474292146676
+    11:18:18 published Reel, media_id=17959044240199078
+
+and a `retriable: False` whose own message reads "Generic Internal Error:
+An internal server error occurred. Please try again later."
+
+So ProcessingFailedError is Meta being briefly unable, not Meta refusing
+this video, and abandoning a clip on it threw away clips that would have
+posted seconds later. The flag is still final everywhere else; the
+attempt ceiling and the backoff are what bound this class instead.
 """
 from __future__ import annotations
 
@@ -27,10 +45,38 @@ from publishers.errors import (  # noqa: E402
 
 # ── reading Meta's answer ────────────────────────────────────────────
 
-def test_the_real_rejection_body_is_recognised():
-    assert is_permanent_rejection(
+def test_a_processing_failure_is_not_final_however_it_is_flagged():
+    """The clip that got this twice published on the third attempt."""
+    assert not is_permanent_rejection(
         {"debug_info": {"retriable": False, "type": "ProcessingFailedError",
                         "message": "Request processing failed"}})
+
+
+def test_the_type_is_read_however_it_is_cased():
+    assert not is_permanent_rejection(
+        {"error": {"debug_info": {"retriable": False,
+                                  "type": "processingFailedError"}}})
+
+
+def test_metas_own_server_error_is_never_about_this_video():
+    """'Please try again later' arrived with retriable: False on it."""
+    body = {"debug_info": {
+        "retriable": False, "type": "ProcessingFailedError",
+        "message": '{"success":false,"error":{"message":"Generic Internal '
+                   'Error: An internal server error occurred. Please try '
+                   'again later."}}'}}
+    assert not is_permanent_rejection(body, status=500)
+    # ...and a 5xx alone is enough, whatever the body says.
+    assert not is_permanent_rejection({"retriable": False}, status=500)
+
+
+def test_a_rejection_that_names_the_video_is_still_final():
+    """Narrowing the rule must not disarm it - this is the case the
+    exception exists for, and retrying it is hammering an API that
+    already answered."""
+    assert is_permanent_rejection(
+        {"debug_info": {"retriable": False, "type": "UnsupportedFormatError",
+                        "message": "Unsupported video format"}})
 
 
 def test_it_is_found_when_nested_under_error():

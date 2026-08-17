@@ -227,7 +227,7 @@ class InstagramPublisher:
                 payload = r.json()
             except Exception:
                 payload = None
-            if is_permanent_rejection(payload):
+            if is_permanent_rejection(payload, status):
                 raise PermanentlyRejected(
                     f"Instagram will not process this video "
                     f"(HTTP {status}): {_why(r)}")
