@@ -275,6 +275,35 @@ def test_a_platform_can_be_switched_on_without_editing_json(tmp_path):
         str(path), "tiktok", on=True)
 
 
+def test_a_renamed_platform_can_still_be_switched(tmp_path):
+    """"zernio" became zernio_twitter and zernio_tiktok. A live config was
+    written before that, so the command to turn the new name on answered
+    "no such platform" - a dead end whose only fix was editing JSON."""
+    import importlib.util
+    import json
+    import sys
+
+    sys.path.insert(0, _UPLOADER)
+    spec = importlib.util.spec_from_file_location(
+        "_main_rename", os.path.join(_UPLOADER, "main.py"))
+    main = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(main)
+
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps({"posting": {"platforms": {
+        "zernio": {"enabled": True, "daily_cap": 12,
+                   "min_minutes_between": 60}}}}))
+
+    said = main.set_platform_enabled(str(path), "zernio_tiktok", on=True)
+
+    assert "no such platform" not in (said or "")
+    platforms = json.loads(path.read_text())["posting"]["platforms"]
+    assert platforms["zernio_tiktok"]["enabled"] is True
+    # TikTok keeps its own stricter budget rather than inheriting X's.
+    assert platforms["zernio_tiktok"]["daily_cap"] == 6
+    assert platforms["zernio_tiktok"]["min_minutes_between"] == 150
+
+
 def test_shorts_privacy_is_a_command_not_a_json_edit(tmp_path):
     """Same reason as --enable: config.json is untracked, so a setting
     already in it is never updated by a pull.

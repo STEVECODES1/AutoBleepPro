@@ -152,6 +152,20 @@ def test_report_runs_with_nothing_configured(clean_env, tmp_path, capsys):
         assert platform in out
 
 
+def test_report_names_the_platforms_that_replaced_a_renamed_one(
+        clean_env, tmp_path, capsys):
+    """A live config still says "zernio"; nothing posts under that name."""
+    posting = make_posting(tmp_path, enabled=True)
+    posting["platforms"]["zernio"] = {"enabled": True, "daily_cap": 12}
+    guard = PublishGuard(posting, posting["state_path"])
+    report({"posting": posting}, guard, "2", live=False)
+
+    out = capsys.readouterr().out
+    assert "ALLOW  zernio_twitter" in out
+    assert "ALLOW  zernio_tiktok" in out
+    assert "  zernio " not in out, "the retired name has no verdict to give"
+
+
 def test_report_never_prints_a_credential(clean_env, tmp_path, capsys):
     """The whole point is to be safe to paste into a chat."""
     secret = "SUPERSECRETTOKEN123"

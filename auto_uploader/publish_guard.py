@@ -58,6 +58,25 @@ WINDOW_SECONDS = 24 * 60 * 60
 
 DEFAULT_KILL_SWITCH_FILE = "STOP_POSTING"
 
+# Platforms that used to be one block and are now several. A live
+# config.json is untracked and therefore still whatever it was the day it
+# was written, so renaming a platform in the code turns a working switch
+# into a missing one - which the check below reports as "disabled in
+# config" and nobody can find, because nothing was ever disabled.
+LEGACY_PLATFORM_NAMES = {
+    "zernio_twitter": "zernio",
+    "zernio_tiktok": "zernio",
+}
+
+# What each destination gets when it is inheriting the old block. The
+# caps are per destination on purpose: TikTok's spam checks punish rapid
+# near-identical posting harder than X's, and the account is the thing at
+# risk. These mirror the shipped config.json values.
+SPLIT_PLATFORM_LIMITS = {
+    "zernio_twitter": {"daily_cap": 12, "min_minutes_between": 60},
+    "zernio_tiktok": {"daily_cap": 6, "min_minutes_between": 150},
+}
+
 # The cap key. "max_per_day" is here because a platform block was once
 # written with that name, nothing read it, and the guard reported
 # "unlimited" for a platform whose config plainly said 3 - a typo in a
@@ -98,6 +117,24 @@ def daily_cap_of(settings: dict) -> int:
 def unknown_keys(settings: dict) -> list:
     """Keys in a platform block that nothing reads."""
     return sorted(k for k in (settings or {}) if k not in KNOWN_PLATFORM_KEYS)
+
+
+def platform_names(posting: dict) -> list:
+    """The platform names actually posted to, after renames.
+
+    Listing the raw config keys shows a status line for "zernio", which
+    nothing posts to any more, and no line at all for the two
+    destinations that replaced it - so a status report can say everything
+    is fine about a name that does nothing while the real ones are
+    invisible.
+    """
+    configured = list((posting.get("platforms") or {}).keys())
+    retired = set(LEGACY_PLATFORM_NAMES.values())
+    names = [n for n in configured if n not in retired]
+    for new, old in LEGACY_PLATFORM_NAMES.items():
+        if new not in configured and old in configured:
+            names.append(new)
+    return names
 
 
 @dataclass
@@ -191,7 +228,23 @@ class PublishGuard:
 
     def _platform_config(self, platform: str) -> dict:
         platforms = (self.config.get("platforms") or {})
-        return platforms.get(platform) or {}
+        settings = platforms.get(platform) or {}
+        if settings:
+            return settings
+
+        # "zernio" was one platform until it was split into a destination
+        # each for X and TikTok. config.json is not tracked, so a live
+        # config still has the old block and none of the new ones - and a
+        # missing block reads as "disabled in config", which is how a
+        # working setup went silent overnight without anybody changing a
+        # setting. Inherit the old switch, but keep the tuned per
+        # destination caps: sharing X's looser cap with TikTok is exactly
+        # what the split existed to stop.
+        legacy_name = LEGACY_PLATFORM_NAMES.get(platform)
+        legacy = platforms.get(legacy_name) or {} if legacy_name else {}
+        if not legacy:
+            return {}
+        return {**legacy, **SPLIT_PLATFORM_LIMITS.get(platform, {})}
 
     def is_manual_only(self, platform: str) -> bool:
         if platform in ALWAYS_MANUAL:

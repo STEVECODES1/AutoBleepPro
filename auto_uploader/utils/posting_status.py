@@ -432,8 +432,10 @@ def verify(platforms: Optional[list] = None, reddit_account: str = "",
 def report(cfg_dict: dict, guard, reddit_account: str = "",
            live: bool = False) -> None:
     """Print the posting picture: config, guard verdict, credentials."""
+    from publish_guard import platform_names
+
     posting = cfg_dict.get("posting", {}) or {}
-    platforms = list((posting.get("platforms") or {}).keys())
+    platforms = platform_names(posting)
 
     print("\n" + "=" * 70)
     print("POSTING STATUS")

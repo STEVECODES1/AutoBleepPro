@@ -222,6 +222,73 @@ def test_unknown_platform_is_refused_distinctly(guard):
     assert not decision and "not configured" in decision.reason
 
 
+# ═════════════════════════════════════════════════════════════════════════════
+# A platform that was renamed under a live config
+#
+# "zernio" became "zernio_twitter" and "zernio_tiktok". config.json is not
+# tracked, so the machine running this still has the old block - and a
+# missing block reads as "disabled in config". A setup that had been
+# posting to X every day went silent and the log blamed a setting nobody
+# had touched.
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _legacy_zernio(tmp_path, **block):
+    config = make_config(tmp_path)
+    config["platforms"].pop("zernio_twitter", None)
+    config["platforms"].pop("zernio_tiktok", None)
+    config["platforms"]["zernio"] = {
+        "enabled": True, "daily_cap": 12, "min_minutes_between": 60, **block}
+    return PublishGuard(config=config, state_path=str(tmp_path / "s.json"))
+
+
+@pytest.mark.parametrize("platform", ["zernio_twitter", "zernio_tiktok"])
+def test_a_renamed_platform_inherits_the_block_it_was_split_from(
+        tmp_path, platform):
+    assert _legacy_zernio(tmp_path).check(platform, now=NOW)
+
+
+@pytest.mark.parametrize("platform", ["zernio_twitter", "zernio_tiktok"])
+def test_the_old_block_being_off_still_means_off(tmp_path, platform):
+    """Inheriting must carry the switch, not override it with an on."""
+    guard = _legacy_zernio(tmp_path, enabled=False)
+    decision = guard.check(platform, now=NOW)
+    assert not decision and "disabled" in decision.reason
+
+
+def test_the_old_block_does_not_hand_tiktok_x_s_cap(tmp_path):
+    """The split existed to stop TikTok sharing X's looser budget."""
+    guard = _legacy_zernio(tmp_path)
+    for i in range(6):
+        guard.record_post("zernio_tiktok", now=NOW + i * 60 * 151)
+
+    decision = guard.check("zernio_tiktok", now=NOW + 6 * 60 * 151)
+    assert not decision and "cap" in decision.reason
+    # ...while X, on the same inherited block, still has room.
+    assert guard.check("zernio_twitter", now=NOW + 6 * 60 * 151)
+
+
+def test_a_configured_block_beats_the_one_it_was_split_from(tmp_path):
+    """Once the real block exists, the legacy one must stop being read."""
+    config = make_config(tmp_path)
+    config["platforms"]["zernio"] = {"enabled": True, "daily_cap": 12}
+    config["platforms"]["zernio_tiktok"] = {"enabled": False, "daily_cap": 6}
+    guard = PublishGuard(config=config, state_path=str(tmp_path / "s.json"))
+
+    decision = guard.check("zernio_tiktok", now=NOW)
+    assert not decision and "disabled" in decision.reason
+
+
+def test_manual_only_survives_the_rename(tmp_path):
+    guard = _legacy_zernio(tmp_path, manual_approval_only=True)
+    assert guard.is_manual_only("zernio_twitter")
+
+
+def test_a_typo_is_still_a_typo(tmp_path):
+    """Inheritance must not turn every unknown name into a live platform."""
+    decision = _legacy_zernio(tmp_path).check("zernio_youtube", now=NOW)
+    assert not decision and "not configured" in decision.reason
+
+
 def _shipped_posting():
     with open(os.path.join(_UPLOADER, "config.json")) as f:
         shipped = json.load(f)

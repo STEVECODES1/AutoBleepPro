@@ -249,12 +249,28 @@ def set_platform_enabled(config_file: str, platform: str, on: bool):
         return f"could not read config.json: {exc}"
 
     platforms = live.setdefault("posting", {}).setdefault("platforms", {})
+    written_in = False
     if platform not in platforms:
-        known = ", ".join(sorted(platforms)) or "none configured"
-        return f"no such platform '{platform}'. Known: {known}"
+        # A platform that was renamed since this config was written is not
+        # an unknown one. "zernio" became zernio_twitter and zernio_tiktok;
+        # without this, the command to switch the new name on answers "no
+        # such platform" and there is no way forward that isn't editing
+        # JSON by hand - which is the thing this function exists to avoid.
+        from publish_guard import LEGACY_PLATFORM_NAMES, SPLIT_PLATFORM_LIMITS
+        older = LEGACY_PLATFORM_NAMES.get(platform)
+        if older and older in platforms:
+            platforms[platform] = {**platforms[older],
+                                   **SPLIT_PLATFORM_LIMITS.get(platform, {})}
+            written_in = True
+        else:
+            known = ", ".join(sorted(platforms)) or "none configured"
+            return f"no such platform '{platform}'. Known: {known}"
 
     settings = platforms[platform]
-    if bool(settings.get("enabled")) == on:
+    # A block that was just carried over from the old name still gets
+    # written out even when its switch already agrees - leaving the file
+    # unmigrated means the next reader has to work the rename out again.
+    if bool(settings.get("enabled")) == on and not written_in:
         return None
 
     settings["enabled"] = on
