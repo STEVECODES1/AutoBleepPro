@@ -50,3 +50,53 @@ def test_an_ended_stream_says_that_rather_than_no_data():
     from record_stream import _missed_stream
 
     assert "ended" in _missed_stream(["ERROR: This live event has ended."])
+
+
+# ── a 503 is not a channel being offline ─────────────────────────────
+#
+# should_resume only reconnects an attempt that ran longer than
+# RESUME_WINDOW_S, and a 503 fails in seconds. So a live stream behind a
+# transient CDN error was written off as "not live" on the first try and
+# the next look came a whole poll later - which is how a stream that was
+# genuinely broadcasting produced no recording at all.
+
+def test_a_fast_failure_is_not_resumed_by_the_normal_rule():
+    """The rule that let it through. Kept, because it is right for what
+    it was written for - this is why the missed case needs its own."""
+    from record_stream import should_resume
+
+    assert not should_resume(started_at=0.0, ended_at=8.0, resumes=0), \
+        "an eight-second attempt is not a dropped four-hour recording"
+    assert should_resume(started_at=0.0, ended_at=600.0, resumes=0)
+
+
+def test_a_found_but_empty_stream_gets_its_own_retries():
+    from record_stream import MAX_MISSED_TRIES, MISSED_RETRY_SECONDS
+
+    assert MAX_MISSED_TRIES >= 2, "one try is what missed the stream"
+    assert 5 <= MISSED_RETRY_SECONDS <= 60, \
+        "long enough for a CDN blip, short enough to catch a live stream"
+
+
+def test_the_recorder_remembers_why_it_came_away_empty():
+    """The watch loop cannot tell a missed stream from an offline
+    channel without it."""
+    from record_stream import Recorder
+
+    recorder = Recorder(url="u", staging="s", watch_folder="w")
+
+    assert recorder.last_missed == ""
+
+
+def test_the_retry_only_fires_on_a_found_stream():
+    """Reading the source rather than driving yt-dlp: the guard is what
+    stops an offline channel retrying three times every single poll, all
+    night."""
+    import inspect
+
+    from record_stream import Recorder
+
+    body = inspect.getsource(Recorder.record_one_stream)
+
+    assert "self.last_missed" in body, "it retries whatever the reason"
+    assert "missed_tries" in body

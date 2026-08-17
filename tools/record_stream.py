@@ -55,6 +55,13 @@ RESUME_WINDOW_S = 90
 # not a blip, and spinning forever would fill the disk with fragments.
 MAX_RESUMES = 20
 
+# A stream that was FOUND and produced nothing gets this many quick
+# retries before the channel is written off as offline. A 503 or a dead
+# manifest clears in seconds; if the stream really has ended, this costs
+# a minute before going back to watching.
+MAX_MISSED_TRIES = 3
+MISSED_RETRY_SECONDS = 20
+
 SAFE_CHARS = " -_.,'!()[]"
 
 # While waiting for a channel to go live, say so this often instead of
@@ -760,6 +767,11 @@ class Recorder:
     # nothing once the stream has ended.
     title: str = ""
 
+    # Why the last attempt came away with nothing, when a stream WAS
+    # found. Read by the watch loop, which otherwise cannot tell that
+    # from a channel being offline - see _missed_stream.
+    last_missed: str = ""
+
     # What has already been said, and when. Kept on the recorder rather
     # than inside one attempt because the attempt is what repeats: a
     # channel that is not live restarts yt-dlp every poll, and a problem
@@ -977,6 +989,7 @@ class Recorder:
             # ordinary polling chatter, and the only way to know was to
             # go and read the log.
             missed = _missed_stream(tail)
+            self.last_missed = missed
             if missed:
                 self.say(f"MISSED a stream at "
                          f"{time.strftime('%H:%M:%S')} - {missed}. "
@@ -1278,6 +1291,7 @@ class Recorder:
 
         self.say(f"Waiting for {self.name} to go live...")
         resumes = 0
+        missed_tries = 0
         while True:
             target = segment_path(self.staging, base, resumes + 1)
             started = time.time()
@@ -1296,6 +1310,26 @@ class Recorder:
                 self.say("Stream ended.")
                 break
             if not should_resume(started, ended, resumes):
+                # A stream that was FOUND and produced nothing is not a
+                # channel that is offline, and this treated them the
+                # same: should_resume only reconnects an attempt that
+                # ran longer than RESUME_WINDOW_S, and a 503 fails in
+                # seconds. So a live stream behind a transient CDN error
+                # was written off as "not live" on the first try, and
+                # the next look came a whole poll later.
+                #
+                # 503s and dropped fragments clear. Retry a few times,
+                # briefly - if the stream really has ended, this costs a
+                # minute before going back to watching.
+                if (resumes == 0 and self.last_missed
+                        and missed_tries < MAX_MISSED_TRIES):
+                    missed_tries += 1
+                    self.say(f"Found a stream but got nothing "
+                             f"({self.last_missed}) - trying again in "
+                             f"{MISSED_RETRY_SECONDS}s "
+                             f"({missed_tries}/{MAX_MISSED_TRIES}).")
+                    time.sleep(MISSED_RETRY_SECONDS)
+                    continue
                 if resumes == 0:
                     self.say("Channel is not live (or the recording never started).")
                     return None
