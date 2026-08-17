@@ -107,3 +107,27 @@ def test_a_clean_checkout_is_not_marked_dirty(monkeypatch):
     monkeypatch.setattr(subprocess, "run", lambda *a, **k: answers.pop(0))
 
     assert main._build_string() == "2026-08-17 abc1234 a commit subject"
+
+
+def test_untracked_files_are_not_local_edits(monkeypatch):
+    """config.json, cookies.txt and logs/ are untracked by design. Counting
+    them marks every real installation as edited forever, and a warning
+    that is always on is the same as no warning."""
+    main = _main()
+    asked = []
+
+    class Answer:
+        returncode = 0
+
+        def __init__(self, stdout):
+            self.stdout = stdout
+
+    def fake(cmd, **_k):
+        asked.append(cmd)
+        return Answer("2026-08-17 abc1234 subject" if "log" in cmd else "")
+
+    monkeypatch.setattr(subprocess, "run", fake)
+    main._build_string()
+
+    status = next(c for c in asked if "status" in c)
+    assert "--untracked-files=no" in status

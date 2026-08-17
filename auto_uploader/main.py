@@ -64,9 +64,14 @@ def _build_string() -> str:
         return BUILD_FALLBACK
     # A checkout with uncommitted edits is not the commit it names, and
     # that difference is exactly what this line gets asked about.
+    #
+    # TRACKED files only. config.json, cookies.txt and logs/ are all
+    # untracked by design, so counting untracked files marks every real
+    # installation as edited forever - a warning that is always on is the
+    # same as no warning, and this line has already lied once.
     try:
         dirty = subprocess.run(
-            ["git", "status", "--porcelain"],
+            ["git", "status", "--porcelain", "--untracked-files=no"],
             cwd=here, capture_output=True, text=True, timeout=5)
         if dirty.returncode == 0 and dirty.stdout.strip():
             line += " (+ local edits)"
