@@ -125,7 +125,8 @@
       "trim_logs_mb": 5,
       "source_video": "move",
       "keep_uploaded_videos": 3
-    }
+    },
+    "_censor_style_comment": "How a flagged word is removed. 'silence' takes the audio out; 'beep' drops a tone over it, which announces itself and is the loudest thing in a clip that is mostly talking. censor_mute_whole_segment true mutes the whole line around a SLUR rather than just the word - safer for YouTube, which acts on context, but the clip lurches to the next line. Change both with: python main.py --censor-sound silence --censor-scope word"
   },
   "_platform_limits_comment": "What each platform ITSELF allows in 24h, so a cap above it is not a policy choice but posts that will fail: Instagram 50 (Content Publishing API rejects the 51st), X ~16/day on the free tier's 500/month, Reddit and Facebook have no published hard number but act on burst rate rather than volume. Rumble has no API cap - clips.count is what decides how many go there, currently 10 per stream. Caps below sit at or under those.",
   "_posting_comment": "Short-form clip publishing. Instagram and Facebook are ENABLED — credentials confirmed live. X stays disabled until the 401 Unauthorized is fixed (go to developer.twitter.com → your app → User authentication settings → set Read+Write → regenerate Access Token+Secret → update .env). Reddit is manual-only until a separate account is configured. Create the kill_switch_file to halt ALL posting immediately. For one run, `python main.py --announce-all` turns announcing on everywhere it can actually run (and prints why the rest stay manual); `--no-announce` turns it off everywhere. Neither edits this file.",

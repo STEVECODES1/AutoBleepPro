@@ -39,7 +39,7 @@ from datetime import datetime
 # Bump when shipping user-visible changes, so --test-config can prove
 # which build is actually running (stale extracts have silently caused
 # several confusing "the fix did nothing" runs).
-BUILD = "2026-08-16.57 stop moving captions that were already right"
+BUILD = "2026-08-16.58 mute the word, not the sentence, and no beep"
 
 # How often --watch checks whether a deferred clip's wait is up. A minute
 # is fine: the waits themselves are 25 to 80 minutes, so the resolution
@@ -271,6 +271,61 @@ def set_platform_enabled(config_file: str, platform: str, on: bool):
             f"{settings.get('min_minutes_between', '?')} min apart"
     return (f"{platform} is now {'ON' if on else 'OFF'} ({where})."
             if on else f"{platform} is now OFF.")
+
+
+def set_censor_style(config_file: str, sound: str = "", scope: str = ""):
+    """How a flagged word is removed, and how much goes with it.
+
+    Two settings that are easy to confuse and were both wrong for this
+    channel:
+
+      SOUND - "beep" drops a 1kHz tone over the word; "silence" just
+      takes the audio out. A beep announces itself, and on a clip that
+      is mostly talking it is the loudest thing in the edit.
+
+      SCOPE - "sentence" mutes the whole segment around a high-severity
+      hit, not just the word. That was on because YouTube acts on
+      context rather than on the audible word, and the cost is that a
+      whole line disappears and the clip lurches to the next one.
+      "word" takes out the word and lets the sentence carry on.
+
+    Returns a line describing what changed, or None when nothing did.
+    """
+    try:
+        with open(config_file, "r", encoding="utf-8") as handle:
+            live = json.load(handle)
+    except (OSError, ValueError) as exc:
+        return f"could not read config.json: {exc}"
+
+    general = live.setdefault("general", {})
+    changes = []
+    if sound:
+        if sound not in ("beep", "silence"):
+            return f"'{sound}' is not one of beep, silence."
+        if general.get("censor_bleep_method") != sound:
+            general["censor_bleep_method"] = sound
+            changes.append("a beep over the word" if sound == "beep"
+                           else "the word taken out, no tone")
+    if scope:
+        if scope not in ("word", "sentence"):
+            return f"'{scope}' is not one of word, sentence."
+        whole = scope == "sentence"
+        if bool(general.get("censor_mute_whole_segment")) != whole:
+            general["censor_mute_whole_segment"] = whole
+            changes.append("the whole sentence around a slur" if whole
+                           else "just the word, sentence carries on")
+    if not changes:
+        return None
+
+    try:
+        temporary = config_file + ".tmp"
+        with open(temporary, "w", encoding="utf-8") as handle:
+            json.dump(live, handle, indent=2, ensure_ascii=False)
+            handle.write("\n")
+        os.replace(temporary, config_file)
+    except OSError as exc:
+        return f"could not write config.json: {exc}"
+    return "censoring is now " + ", and ".join(changes) + "."
 
 
 def set_shorts_privacy(config_file: str, privacy: str):
@@ -2234,6 +2289,18 @@ def main(argv=None) -> int:
                              "and spacing are left exactly as they are.")
     parser.add_argument("--disable", metavar="PLATFORM",
                         help="Turn a posting platform OFF in config.json.")
+    parser.add_argument("--censor-sound", metavar="HOW",
+                        choices=("beep", "silence"),
+                        help="What replaces a flagged word: 'beep' drops a "
+                             "tone over it, 'silence' just takes it out. A "
+                             "beep announces itself and is the loudest "
+                             "thing in a clip that is mostly talking.")
+    parser.add_argument("--censor-scope", metavar="HOW",
+                        choices=("word", "sentence"),
+                        help="How much goes with it: 'word' removes the "
+                             "word and the sentence carries on; 'sentence' "
+                             "mutes the whole line around a slur, which is "
+                             "safer for YouTube and makes the clip lurch.")
     parser.add_argument("--shorts-privacy", metavar="VALUE",
                         choices=("private", "unlisted", "public"),
                         help="How a new Short goes up: private (nobody, "
@@ -3095,6 +3162,16 @@ def main(argv=None) -> int:
 
     if args.preview_post is not None:
         return _preview_post(cfg, args.preview_post)
+
+    if args.censor_sound or args.censor_scope:
+        said = set_censor_style(os.path.join(config_dir, "config.json"),
+                                sound=args.censor_sound or "",
+                                scope=args.censor_scope or "")
+        print(f"[Censor] {said}" if said else
+              "[Censor] Already set that way.")
+        if said and "is not one of" in said:
+            return 1
+        return 0
 
     if args.shorts_privacy:
         said = set_shorts_privacy(os.path.join(config_dir, "config.json"),

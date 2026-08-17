@@ -314,3 +314,75 @@ def test_a_custom_word_is_matched_the_same_way():
 
     assert engine._flag_reason("bing") == "custom_word"
     assert engine._flag_reason("bingo") is None, "custom words match whole words too"
+
+
+# ── how a word is removed, and how much goes with it ─────────────────
+#
+# "I don't like bleep, I never wanted muted - if there's a bad word just
+# simply mute it and say the next phrase quick."
+#
+# Two settings, easy to confuse, both wrong for this channel. A beep is
+# the loudest thing in a clip that is mostly talking, and muting the whole
+# sentence around a slur made the clip lurch to the next line.
+
+def test_the_style_can_be_changed_without_editing_json(tmp_path):
+    import importlib.util
+    import json
+    import sys
+
+    sys.path.insert(0, os.path.join(_REPO, "auto_uploader"))
+    spec = importlib.util.spec_from_file_location(
+        "_main_censor", os.path.join(_REPO, "auto_uploader", "main.py"))
+    main = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(main)
+
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps({"general": {
+        "censor_bleep_method": "beep",
+        "censor_mute_whole_segment": True}}))
+
+    said = main.set_censor_style(str(path), sound="silence", scope="word")
+
+    assert said and "no tone" in said and "sentence carries on" in said
+    general = json.loads(path.read_text())["general"]
+    assert general["censor_bleep_method"] == "silence"
+    assert general["censor_mute_whole_segment"] is False
+
+    # Idempotent, and honest about a value it does not know.
+    assert main.set_censor_style(str(path), sound="silence",
+                                 scope="word") is None
+    assert "not one of" in main.set_censor_style(str(path), sound="honk")
+
+
+def test_one_setting_can_change_without_the_other(tmp_path):
+    import importlib.util
+    import json
+    import sys
+
+    sys.path.insert(0, os.path.join(_REPO, "auto_uploader"))
+    spec = importlib.util.spec_from_file_location(
+        "_main_censor2", os.path.join(_REPO, "auto_uploader", "main.py"))
+    main = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(main)
+
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps({"general": {
+        "censor_bleep_method": "beep",
+        "censor_mute_whole_segment": True}}))
+
+    main.set_censor_style(str(path), sound="silence")
+
+    general = json.loads(path.read_text())["general"]
+    assert general["censor_bleep_method"] == "silence"
+    assert general["censor_mute_whole_segment"] is True, \
+        "changing the sound also changed the scope"
+
+
+def test_word_scope_leaves_the_sentence_intact():
+    """The engine's own switch. mute_whole_segment is what takes the line
+    with the word."""
+    from autoreel.compliance import ComplianceEngine
+
+    assert ComplianceEngine().mute_whole_segment is False, \
+        "the engine default should be the word, not the line"
+    assert ComplianceEngine(mute_whole_segment=True).mute_whole_segment
