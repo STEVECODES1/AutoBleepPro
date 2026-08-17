@@ -400,8 +400,16 @@ def test_a_revoked_token_says_which_command_fixes_it(tmp_path, monkeypatch):
     try:
         uploader._get_credentials()
     except RuntimeError as exc:
-        assert "--setup-youtube" in str(exc), \
+        message = str(exc)
+        assert "--setup-youtube" in message, \
             "it says it is broken without saying what to run"
+        # The ROOT cause, not just the ritual. A testing-mode app's
+        # refresh tokens are killed after seven days by design, so
+        # signing in again fixes it for a week and then it is back -
+        # which is a loop somebody could stay in indefinitely without
+        # ever being told there is a switch.
+        assert "Testing mode" in message or "SEVEN DAYS" in message
+        assert "console.cloud.google.com" in message
     else:
         raise AssertionError("a revoked token did not raise")
 

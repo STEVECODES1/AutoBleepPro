@@ -60,11 +60,23 @@ class YouTubeUploader:
                     # So: say the command, and let a person run it.
                     if "invalid_grant" in str(exc) or "revoked" in str(exc):
                         raise RuntimeError(
-                            "YouTube sign-in has expired. Re-authorise "
-                            "with:\n"
+                            "YouTube sign-in has expired.\n"
                             "         python main.py --setup-youtube\n"
-                            "         (a browser opens; pick the VOD "
-                            "channel, not the Shorts one)") from exc
+                            "         (a browser opens; sign in with the "
+                            "account that OWNS the channel, and pick the "
+                            "VOD channel rather than the Shorts one)\n"
+                            "\n"
+                            "         IF THIS KEEPS HAPPENING WEEKLY: the "
+                            "Google Cloud app is still in Testing mode, "
+                            "and a testing-mode app's refresh tokens are "
+                            "killed after SEVEN DAYS by design. No amount "
+                            "of signing in again changes that. Fix it once "
+                            "at\n"
+                            "         https://console.cloud.google.com/auth/audience\n"
+                            "         -> Publish app. It stays unverified, "
+                            "which only means the consent screen shows a "
+                            "warning to click past; the tokens stop "
+                            "expiring.") from exc
                     raise
             if not refreshed:
                 if not os.path.exists(self.client_secrets_path):
