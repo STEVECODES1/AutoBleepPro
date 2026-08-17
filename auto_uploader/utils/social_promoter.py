@@ -739,7 +739,18 @@ def post_clip_to_instagram(posting: dict, video_path: str, caption: str,
     instagram_cfg = (config or {}).get("instagram", {}) or {}
     caption = build_caption(instagram_cfg.get("caption_template", ""),
                             video_path) or caption
-    upload_path, temp = _vertical_copy(video_path, instagram_cfg,
+
+    # The same slur muting the clip queue does, for the same reason: this
+    # is a second live route to the same account, and a rule that only
+    # holds on one of them is not a rule. Censor first, so the re-frame is
+    # made from the censored audio.
+    from utils.clip_queue import _censored_clip
+
+    censored, censored_temp = _censored_clip("instagram", video_path, config or {})
+    if not censored:
+        return False
+
+    upload_path, temp = _vertical_copy(censored, instagram_cfg,
                                        (config or {}).get("clips", {}))
 
     print(f"[Social] instagram: uploading "
@@ -752,11 +763,12 @@ def post_clip_to_instagram(posting: dict, video_path: str, caption: str,
         ok = False
         print(f"[Social] instagram: Reel upload raised {exc}")
     finally:
-        if temp:
-            try:
-                os.remove(temp)
-            except OSError:
-                pass
+        for leftover in (temp, censored_temp):
+            if leftover and leftover != video_path:
+                try:
+                    os.remove(leftover)
+                except OSError:
+                    pass
     guard.record_result("instagram", ok)
     print(f"[Social] instagram: {'posted a Reel' if ok else 'Reel failed'}.")
     return ok

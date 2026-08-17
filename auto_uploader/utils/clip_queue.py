@@ -351,7 +351,21 @@ def publish(platform: str, video_path: str, caption: str,
     from utils.social_promoter import _vertical_copy
 
     settings = (config or {}).get(platform, {}) or {}
-    upload_path, temp = _vertical_copy(video_path, settings,
+
+    # Censor BEFORE the re-frame, so the vertical copy is made from the
+    # censored audio rather than the raw clip.
+    #
+    # This branch used to skip censoring entirely: _censored_clip ran only
+    # for publishers with post_clip (Shorts), while Instagram and Facebook
+    # go out as Reels and came straight off the raw cut. CENSOR_AUDIO_DEFAULTS
+    # has said "slurs" for both of them the whole time and nothing read it
+    # here, so a slur that Shorts muted went to Instagram intact - which is
+    # how a Reel came down for hateful conduct.
+    censored, censored_temp = _censored_clip(platform, video_path, config)
+    if not censored:
+        return False
+
+    upload_path, temp = _vertical_copy(censored, settings,
                                        (config or {}).get("clips", {}) or {})
     print(f"[Clips] {platform}: uploading "
           f"{os.path.basename(video_path)} as a Reel...")
@@ -368,11 +382,15 @@ def publish(platform: str, video_path: str, caption: str,
         ok = False
         print(f"[Clips] {platform}: Reel upload raised {exc}")
     finally:
-        if temp:
-            try:
-                os.remove(temp)
-            except OSError:
-                pass
+        for leftover in (temp, censored_temp):
+            # Never the caller's own file: _vertical_copy returns "" when
+            # the clip was already 9:16, and _censored_clip returns "" when
+            # there was nothing to censor.
+            if leftover and leftover != video_path:
+                try:
+                    os.remove(leftover)
+                except OSError:
+                    pass
     return ok
 
 

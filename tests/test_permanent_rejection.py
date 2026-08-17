@@ -83,6 +83,12 @@ def test_publish_does_not_swallow_it(tmp_path, monkeypatch):
     monkeypatch.setattr(clip_queue, "_publisher", lambda p, c: _Rejecting())
     monkeypatch.setattr("utils.social_promoter._vertical_copy",
                         lambda path, s, c: (str(clip), None))
+    # A Reel is censored before it is re-framed now, and there is no
+    # whisper here. Nothing to censor = the path back unchanged.
+    monkeypatch.setattr("utils.censor.censor_video",
+                        lambda path, *a, **k: type(
+                            "R", (), {"output_path": path,
+                                      "violation_count": 0})())
 
     with pytest.raises(PermanentlyRejected):
         clip_queue.publish("instagram", str(clip), "cap", {}, dry_run=False)

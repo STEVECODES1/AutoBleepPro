@@ -76,7 +76,19 @@ def publisher(monkeypatch):
     # under test - post the file as it is.
     monkeypatch.setattr(social_promoter, "_vertical_copy",
                         lambda path, ig, cl: (path, ""))
+    # Nor whisper. "Nothing to censor" is what censor_video answers by
+    # handing back the path it was given - see _censored_clip.
+    monkeypatch.setattr("utils.censor.censor_video",
+                        lambda path, *a, **k: _Unchanged(path))
     return clip_queue
+
+
+class _Unchanged:
+    """A censor pass that found nothing."""
+
+    def __init__(self, path):
+        self.output_path = path
+        self.violation_count = 0
 
 
 CONFIG = {"instagram": {"caption_template": "{title} #stackswopo"},
@@ -445,6 +457,75 @@ def test_nothing_flagged_means_no_second_copy(publisher, tmp_path,
 
     assert clip_queue._censored_clip("youtube_shorts", str(raw),
                                      {"general": {}}) == (str(raw), "")
+
+
+# ── ...and a Reel is a clip too ───────────────────────────────────────
+#
+# _censored_clip only ever ran on the post_clip path, which is Shorts.
+# Instagram and Facebook go out through post_reel_from_file and came
+# straight off the raw cut, so CENSOR_AUDIO_DEFAULTS said "slurs" for
+# both of them and nothing read it. A slur Shorts muted reached
+# Instagram intact - and a Reel came down for hateful conduct.
+
+def test_a_reel_is_censored_before_it_is_posted(publisher, tmp_path,
+                                                monkeypatch):
+    from utils import clip_queue, social_promoter
+
+    raw = tmp_path / "raw.mp4"
+    raw.write_bytes(b"not bleeped")
+    clean = tmp_path / "clean.mp4"
+    clean.write_bytes(b"bleeped")
+
+    monkeypatch.setattr("utils.censor.censor_video",
+                        lambda *a, **k: type(
+                            "R", (), {"output_path": str(clean),
+                                      "violation_count": 2})())
+    framed = []
+    monkeypatch.setattr(social_promoter, "_vertical_copy",
+                        lambda path, s, c: (framed.append(path) or path, ""))
+
+    assert clip_queue.publish("instagram", str(raw), "cap", {"general": {}})
+
+    assert framed == [str(clean)], \
+        "the re-frame was made from the raw audio, not the censored copy"
+    assert FakePublisher.posted[-1][0] == "clean.mp4"
+
+
+def test_a_reel_that_cannot_be_censored_is_not_posted_uncensored(
+        publisher, tmp_path, monkeypatch):
+    from utils import clip_queue
+
+    raw = tmp_path / "raw.mp4"
+    raw.write_bytes(b"x")
+
+    def explode(*_a, **_k):
+        raise RuntimeError("no whisper model")
+
+    monkeypatch.setattr("utils.censor.censor_video", explode)
+
+    assert clip_queue.publish("instagram", str(raw), "cap",
+                              {"general": {}}) is False
+    assert not FakePublisher.posted
+
+
+def test_the_censored_copy_of_a_reel_is_cleaned_up(publisher, tmp_path,
+                                                   monkeypatch):
+    from utils import clip_queue
+
+    raw = tmp_path / "raw.mp4"
+    raw.write_bytes(b"x")
+    clean = tmp_path / "clean.mp4"
+    clean.write_bytes(b"bleeped")
+
+    monkeypatch.setattr("utils.censor.censor_video",
+                        lambda *a, **k: type(
+                            "R", (), {"output_path": str(clean),
+                                      "violation_count": 1})())
+
+    assert clip_queue.publish("instagram", str(raw), "cap", {"general": {}})
+
+    assert not clean.exists(), "a censored copy per clip fills the disk"
+    assert raw.exists(), "the clip itself is not this function's to delete"
 
 
 # ═════════════════════════════════════════════════════════════════════════════
