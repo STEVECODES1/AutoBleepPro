@@ -433,6 +433,30 @@ def is_progress_line(line: str) -> bool:
                  or "has already been" in text))
 
 
+# yt-dlp reached a live stream and came away with nothing. Distinct from
+# "this channel is not live", which is the normal state and says so on
+# every poll.
+_MISSED_MARKERS = (
+    ("did not get any data blocks", "it produced no data"),
+    ("video is no longer live", "it had already ended"),
+    ("this live event has ended", "it had already ended"),
+    ("the livestream has ended", "it had already ended"),
+)
+
+
+def _missed_stream(tail) -> str:
+    """Why a found stream produced nothing, or "" if none was found.
+
+    Only fires when yt-dlp got far enough to be TALKING about a live
+    video. A channel that is simply offline never reaches these lines.
+    """
+    text = " ".join(tail or ()).lower()
+    for marker, why in _MISSED_MARKERS:
+        if marker in text:
+            return why
+    return ""
+
+
 def is_recording_line(line: str) -> bool:
     """True once bytes are actually being fetched."""
     if any(marker in line for marker in _RECORDING_MARKERS):
@@ -945,6 +969,18 @@ class Recorder:
         finally:
             if log:
                 log.close()
+            # A stream that was FOUND and then produced nothing is not
+            # the same as a channel that was never live, and the two
+            # printed the same thing: "Still waiting". So a genuinely
+            # missed stream - yt-dlp connecting, being told the video is
+            # no longer live, and exiting with no data - scrolled past as
+            # ordinary polling chatter, and the only way to know was to
+            # go and read the log.
+            missed = _missed_stream(tail)
+            if missed:
+                self.say(f"MISSED a stream at "
+                         f"{time.strftime('%H:%M:%S')} - {missed}. "
+                         f"Nothing was saved. Still watching.")
             if tail and process.returncode not in (0, None):
                 # Same dedup: a channel that is not live fails this way
                 # every poll, and the tail is identical every time.
