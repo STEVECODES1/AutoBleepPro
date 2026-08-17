@@ -767,8 +767,21 @@ class ClipMaker:
         failure it fixes - captions a fraction of a second beside the
         speech - is the kind nobody can name but everybody sees.
         """
+        # OFF unless asked for. This was shipped on by default and the
+        # captions got WORSE - "it used to work just fine" - which is the
+        # only verdict that matters, because the alternative evidence was
+        # a fixture of three beeps in a quiet room.
+        #
+        # Real content is not that. A clip is speech over game audio,
+        # music and a second person talking, and the loudness envelope
+        # correlates with all of it. A confident-looking match on the
+        # wrong peak moves a caption that was already right, and the
+        # damage lands on every clip rather than the broken ones.
+        #
+        # The measurement stays - it is what --check-sync reports, where
+        # a wrong number costs a conversation instead of a clip.
         if not bool((self.config or {}).get("clips", {})
-                    .get("align_captions", True)):
+                    .get("align_captions", False)):
             return 0.0
         try:
             from . import clip_sync

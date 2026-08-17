@@ -423,3 +423,41 @@ def test_the_fast_window_reads_the_same_audio_as_the_honest_one(beeps):
     offset, score = best_offset(slow, quick)
     assert score > 0.9
     assert abs(offset) <= 0.08
+
+
+def test_the_caption_shift_is_off_unless_asked_for():
+    """It shipped ON and the captions got worse - "it used to work just
+    fine", which is the only verdict that matters. The evidence for it
+    was a fixture of three beeps in a quiet room, and real content is
+    speech over game audio, music and a second person talking, where the
+    loudness envelope correlates with all of it.
+
+    The measurement stays - --check-sync reports it, where a wrong number
+    costs a conversation instead of every caption in the clip."""
+    import json
+
+    from autoreel.clip_maker import ClipMaker
+
+    maker = ClipMaker(output_dir="/tmp", config={"clips": {}})
+    assert maker._caption_shift("/x/a.mp4", [], ClipSpec(0.0, 10.0, 1)) == 0.0
+
+    for name in ("config.json", "config.example.json"):
+        path = os.path.join(_REPO, "auto_uploader", name)
+        with open(path, encoding="utf-8") as handle:
+            clips = json.load(handle).get("clips", {})
+        assert clips.get("align_captions") is False, \
+            f"{name} still ships the shift switched on"
+
+
+def test_it_can_still_be_switched_on(monkeypatch):
+    """Off by default is not the same as removed - the machinery is
+    right, it just needs proving against real clips first."""
+    from autoreel import clip_maker
+
+    from autoreel import clip_sync
+
+    monkeypatch.setattr(clip_sync, "alignment_for", lambda *a, **k: 0.25)
+    maker = clip_maker.ClipMaker(
+        output_dir="/tmp", config={"clips": {"align_captions": True}})
+
+    assert maker._caption_shift("/x/a.mp4", [], ClipSpec(0.0, 10.0, 1)) == 0.25
