@@ -95,6 +95,33 @@ def default_compute_type(device: str) -> str:
     return "float16" if device == "cuda" else "int8"
 
 
+# How many chunks the GPU decodes at once. faster-whisper's sequential
+# path sends one 30-second window through at a time and leaves most of a
+# GPU idle between them; batching keeps it fed and is the single biggest
+# speed win available on this machine.
+#
+# 8 rather than as-high-as-it-goes: batch size costs VRAM, and a card that
+# runs out mid-stream would fall back to the slow path having already
+# spent the time. Raise it if the card has room.
+DEFAULT_BATCH_SIZE = 8
+
+
+def _batched(model):
+    """faster-whisper's batched pipeline, or None when unavailable.
+
+    Added in faster-whisper 1.1, so an older install simply doesn't have
+    it - and a missing speed-up must never be a failed transcript.
+    """
+    try:
+        from faster_whisper import BatchedInferencePipeline
+    except Exception:
+        return None
+    try:
+        return BatchedInferencePipeline(model=model)
+    except Exception:
+        return None
+
+
 def _normalise_faster_whisper(segments_iter, info) -> dict:
     """CTranslate2 Segment/Word objects -> the Whisper-shaped dict the
     rest of the codebase already consumes."""
@@ -128,7 +155,9 @@ class Transcriber:
     device: Optional[str] = None       # None = auto-detect
     compute_type: Optional[str] = None  # None = int8 on CPU, float16 on GPU
     backend: Optional[str] = None      # None = faster-whisper if installed
+    batch_size: int = DEFAULT_BATCH_SIZE  # GPU only; 1 disables batching
     _model: Any = field(default=None, init=False, repr=False)
+    _batch: Any = field(default=None, init=False, repr=False)
     _resolved_device: str = field(default="", init=False, repr=False)
     # What was ACTUALLY used, which is not always what was asked for.
     _resolved_compute: str = field(default="", init=False, repr=False)
@@ -183,11 +212,20 @@ class Transcriber:
 
             self._model = whisper.load_model(
                 self.model_name, device=self._resolved_device)
+
+        # Batching only where it pays. On CPU it costs RAM for very
+        # little, and the sequential path is already what the CPU
+        # fallback above exists to keep working.
+        if (self.backend == BACKEND_FASTER
+                and self._resolved_device == "cuda"
+                and int(self.batch_size or 1) > 1):
+            self._batch = _batched(self._model)
         return self._model
 
     def release(self) -> None:
         """Drop the loaded weights (frees GPU/RAM between long runs)."""
         self._model = None
+        self._batch = None
 
     # ── Transcription ────────────────────────────────────────────────────
 
@@ -205,22 +243,45 @@ class Transcriber:
         model = self._load()
 
         if self.backend == BACKEND_FASTER:
-            segments_iter, info = model.transcribe(
-                audio_path, word_timestamps=True,
+            shared = dict(
+                word_timestamps=True,
                 # The default (0) disables VAD; trimming silence is a
                 # straight speed win on stream VODs, which are mostly
                 # gameplay audio with long gaps between speech.
                 vad_filter=vad_filter,
                 initial_prompt=VERBATIM_PROMPT,
-                # Whisper otherwise feeds each window its own previous
-                # output, and on hours of gameplay one bad window makes
-                # the next worse - it loops or drifts, and whole minutes
-                # come back as repeated filler with the real words gone.
-                condition_on_previous_text=False,
                 # A wider search costs time and finds words a greedy
                 # decode drops. Missing a slur is more expensive here
                 # than the extra minutes.
                 beam_size=5)
+
+            if self._batch is not None:
+                try:
+                    # The iterator is lazy, so normalising has to happen
+                    # inside the try - a batch that will not fit in VRAM
+                    # raises while it is being consumed, not here.
+                    segments_iter, info = self._batch.transcribe(
+                        audio_path, batch_size=int(self.batch_size), **shared)
+                    return _normalise_faster_whisper(segments_iter, info)
+                except Exception as exc:
+                    # Out of VRAM, or a faster-whisper whose batched
+                    # transcribe takes different keywords. Either way the
+                    # sequential path below still produces a transcript,
+                    # which is what actually matters.
+                    print(f"[Transcribe] Batched decode unavailable "
+                          f"({exc}). Falling back to one window at a time.")
+                    self._batch = None
+
+            segments_iter, info = model.transcribe(
+                audio_path,
+                # Whisper otherwise feeds each window its own previous
+                # output, and on hours of gameplay one bad window makes
+                # the next worse - it loops or drifts, and whole minutes
+                # come back as repeated filler with the real words gone.
+                # (The batched path does not condition on previous text
+                # at all, so it does not need telling.)
+                condition_on_previous_text=False,
+                **shared)
             return _normalise_faster_whisper(segments_iter, info)
 
         with warnings.catch_warnings():
