@@ -433,3 +433,37 @@ def test_setup_youtube_exists_alongside_setup_shorts():
 
     assert '"--setup-youtube"' in source
     assert '"--setup-shorts"' in source
+
+
+def test_both_setup_commands_re_authorise_in_place():
+    """"Already signed in - delete that file and re-run" was a fine
+    answer while the only reason to run this twice was switching
+    channel. Then Google's testing-mode tokens started dying every seven
+    days and re-authorising became routine - at which point it asked the
+    operator to go and find a file in a folder they never open, on the
+    machine least convenient for it."""
+    with open(os.path.join(_UPLOADER, "main.py"), encoding="utf-8") as f:
+        source = f.read()
+
+    shorts = source[source.index("if args.setup_shorts:"):][:1800]
+
+    assert "Cleared the old sign-in" in shorts, \
+        "--setup-shorts still refuses instead of re-authorising"
+    # The refusal was a print followed by an early return. Checked as
+    # behaviour rather than by grepping for the sentence, because the
+    # comment explaining why it went away quotes it.
+    assert 'print(f"[Shorts] Already signed in' not in shorts
+
+    youtube = source[source.index("if args.setup_youtube:"):][:1800]
+    assert "Cleared the old sign-in" in youtube
+
+
+def test_re_authorising_still_says_which_channel_to_pick():
+    """The token remembers whichever is chosen, and picking the VOD
+    channel here sends every Short to the wrong place."""
+    with open(os.path.join(_UPLOADER, "main.py"), encoding="utf-8") as f:
+        source = f.read()
+
+    shorts = source[source.index("if args.setup_shorts:"):][:1800]
+
+    assert "picking the VOD channel here sends Shorts there instead" in shorts

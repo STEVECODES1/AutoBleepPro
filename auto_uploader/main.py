@@ -39,7 +39,7 @@ from datetime import datetime
 # Bump when shipping user-visible changes, so --test-config can prove
 # which build is actually running (stale extracts have silently caused
 # several confusing "the fix did nothing" runs).
-BUILD = "2026-08-16.55 say why the YouTube token keeps dying"
+BUILD = "2026-08-16.56 --setup-shorts re-authorises in place too"
 
 # How often --watch checks whether a deferred clip's wait is up. A minute
 # is fine: the waits themselves are 25 to 80 minutes, so the resolution
@@ -2952,9 +2952,18 @@ def main(argv=None) -> int:
             print("         It is the same file the VOD uploader uses.")
             return 1
         if os.path.isfile(token):
-            print(f"[Shorts] Already signed in ({token}).")
-            print("         Delete that file and re-run to switch channel.")
-            return 0
+            # Cleared, not refused. "Delete that file and re-run" was a
+            # fine answer while the only reason to run this twice was
+            # switching channel - and then Google's testing-mode tokens
+            # started dying every seven days, and re-authorising became
+            # a routine job that asked the operator to go and find a
+            # file in a folder they never open.
+            try:
+                os.remove(token)
+                print(f"[Shorts] Cleared the old sign-in ({token}).")
+            except OSError as exc:
+                print(f"[Shorts] Could not remove {token}: {exc}")
+                return 1
 
         print(f"[Shorts] A browser will open. Sign in and pick "
               f"{cfg.youtube_shorts.get('channel', 'the Shorts channel')}.")
