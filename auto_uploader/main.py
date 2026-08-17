@@ -36,10 +36,46 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from datetime import datetime
 
-# Bump when shipping user-visible changes, so --test-config can prove
-# which build is actually running (stale extracts have silently caused
-# several confusing "the fix did nothing" runs).
-BUILD = "2026-08-16.58 mute the word, not the sentence, and no beep"
+# The version line exists to prove which code is actually running, so it
+# is the one string that must never be wrong. Hand-bumped, it was: a run
+# printed a build from the day before, a correct `git pull` was read as a
+# failed one, and two rounds went into re-pulling a checkout that was
+# already current. A constant somebody has to remember to edit reports
+# the last time it was EDITED, not the code in front of you.
+#
+# So it is read from the checkout instead - the commit, and its subject.
+# BUILD_FALLBACK is only for a copy with no git around it (an extract, a
+# zip), where being obviously vague beats being confidently stale.
+BUILD_FALLBACK = "2026-08-17 (no git checkout - version unknown)"
+
+
+def _build_string() -> str:
+    import subprocess
+
+    here = os.path.dirname(os.path.abspath(__file__))
+    try:
+        out = subprocess.run(
+            ["git", "log", "-1", "--format=%cs %h %s"],
+            cwd=here, capture_output=True, text=True, timeout=5)
+    except Exception:
+        return BUILD_FALLBACK
+    line = (out.stdout or "").strip()
+    if out.returncode != 0 or not line:
+        return BUILD_FALLBACK
+    # A checkout with uncommitted edits is not the commit it names, and
+    # that difference is exactly what this line gets asked about.
+    try:
+        dirty = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=here, capture_output=True, text=True, timeout=5)
+        if dirty.returncode == 0 and dirty.stdout.strip():
+            line += " (+ local edits)"
+    except Exception:
+        pass
+    return line
+
+
+BUILD = _build_string()
 
 # How often --watch checks whether a deferred clip's wait is up. A minute
 # is fine: the waits themselves are 25 to 80 minutes, so the resolution
