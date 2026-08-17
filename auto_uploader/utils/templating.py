@@ -232,6 +232,12 @@ _TRAILING_STAMP = re.compile(
 )
 
 
+# Punctuation left stranded when a placeholder resolved to nothing.
+# A format of "{title} - {date} - Stackswopo Stream" with no date
+# published 'Culture' - - Stackswopo Stream.
+_STRANDED = re.compile(r"([-|,])(?:\s*[-|,])+")
+
+
 def _fill(title_format: str, stream_title: str, date_str: str) -> str:
     """Substitute the two placeholders, literally.
 
@@ -239,10 +245,32 @@ def _fill(title_format: str, stream_title: str, date_str: str) -> str:
     own: a stream called "drop the {beat}" raises KeyError and takes the
     whole upload with it, and any other token someone puts in the format
     string does the same. Nothing here needs format()'s power.
+
+    Literal on purpose - `_tidy` below is what deals with an empty
+    placeholder, and only where a finished title is being returned. The
+    length arithmetic in build_title measures this raw form.
     """
     return (title_format
             .replace("{title}", stream_title)
             .replace("{date}", date_str))
+
+
+def _tidy(title: str, stream_title: str, date_str: str) -> str:
+    """Take a placeholder's punctuation with it when it resolved to
+    nothing.
+
+    The separators in a format string sit BETWEEN two things. With one
+    of them missing they are just noise, and they get published:
+    "{title} - {date} - Stackswopo Stream" with no date went up as
+
+        'Culture' - - Stackswopo Stream
+
+    Only when something IS missing, so a stream whose name really does
+    contain "--" keeps it.
+    """
+    if stream_title.strip() and date_str.strip():
+        return title
+    return _collapse_spaces(_STRANDED.sub(r"\1", title)).strip(" -|,")
 
 
 def strip_trailing_stamp(stream_title: str) -> str:
@@ -270,7 +298,7 @@ def build_title(stream_title: str, date_str: str, title_format: str) -> str:
     stream_title = strip_trailing_stamp(stream_title)
     title = _fill(title_format, stream_title, date_str)
     if len(title) <= MAX_TITLE_CHARS:
-        return title
+        return _tidy(title, stream_title, date_str)
 
     # How much room the name actually has, once the format has taken its
     # share. Measured rather than assumed, so editing title_format in
@@ -285,7 +313,11 @@ def build_title(stream_title: str, date_str: str, title_format: str) -> str:
     shortened = stream_title[:budget].rsplit(" ", 1)[0].rstrip(" ,-+|")
     if not shortened:
         shortened = stream_title[:budget].rstrip(" ,-+|")
-    return _fill(title_format, shortened, date_str)
+    # Tidied against the ORIGINAL name: shortening is not what makes a
+    # placeholder empty, and a name cut to nothing still leaves the same
+    # stranded separators behind.
+    return _tidy(_fill(title_format, shortened, date_str),
+                 shortened, date_str)
 
 
 def build_description(template: str, date_str: str, stream_title: str) -> str:

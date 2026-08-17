@@ -231,3 +231,45 @@ def test_releasing_drops_the_batch_too():
 
     assert speaker._model is None
     assert speaker._batch is None
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# ONE LANGUAGE IS SPOKEN HERE
+#
+# Whisper detects the language per audio window. On a clip that opens
+# with music, a game sound or a couple of shouted words it guesses
+# Spanish and transcribes the rest as Spanish - and those words are burned
+# into the captions and matched against the profanity list. Both fail
+# quietly: the caption is wrong and the slur is never found.
+# ═════════════════════════════════════════════════════════════════════════════
+
+def test_the_language_is_told_not_guessed():
+    batched = FakeBatched()
+    _on_gpu(batched).transcribe("a.wav")
+
+    assert batched.calls[0]["language"] == "en"
+
+
+def test_the_sequential_path_is_told_too():
+    speaker = _on_gpu(None)
+
+    speaker.transcribe("a.wav")
+
+    assert speaker._model.calls[0]["language"] == "en"
+
+
+def test_the_fallback_after_a_failed_batch_is_still_english():
+    speaker = _on_gpu(LazilyFailingBatched())
+
+    speaker.transcribe("a.wav")
+
+    assert speaker._model.calls[0]["language"] == "en"
+
+
+def test_another_language_can_be_asked_for():
+    speaker = _on_gpu(None)
+    speaker.language = "fr"
+
+    speaker.transcribe("a.wav")
+
+    assert speaker._model.calls[0]["language"] == "fr"

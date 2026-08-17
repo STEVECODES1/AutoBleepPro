@@ -156,6 +156,10 @@ class Transcriber:
     compute_type: Optional[str] = None  # None = int8 on CPU, float16 on GPU
     backend: Optional[str] = None      # None = faster-whisper if installed
     batch_size: int = DEFAULT_BATCH_SIZE  # GPU only; 1 disables batching
+    # None = let Whisper detect it, which is what produced Spanish
+    # captions on an English stream. Set it to another code if the
+    # channel ever changes language; do not set it back to None.
+    language: Optional[str] = "en"
     _model: Any = field(default=None, init=False, repr=False)
     _batch: Any = field(default=None, init=False, repr=False)
     _resolved_device: str = field(default="", init=False, repr=False)
@@ -245,6 +249,13 @@ class Transcriber:
         if self.backend == BACKEND_FASTER:
             shared = dict(
                 word_timestamps=True,
+                # Told, not guessed. Whisper detects the language per
+                # audio window, and on a clip that opens with music, a
+                # game sound or a couple of shouted words it guesses
+                # Spanish and transcribes the rest as Spanish - so the
+                # burned-in captions came out in Spanish on an English
+                # stream. There is one language spoken here.
+                language=self.language,
                 # The default (0) disables VAD; trimming silence is a
                 # straight speed win on stream VODs, which are mostly
                 # gameplay audio with long gaps between speech.
@@ -294,5 +305,6 @@ class Transcriber:
                 "ignore", message=".*FP16 is not supported on CPU.*")
             return model.transcribe(
                 audio_path, word_timestamps=True,
+                language=self.language,
                 initial_prompt=VERBATIM_PROMPT,
                 condition_on_previous_text=False)

@@ -299,3 +299,61 @@ def test_an_unknown_token_in_the_format_is_left_alone():
 
     out = build_title("shadows", "8/4/26", '"{title}" {date} {mystery}')
     assert out.startswith('"shadows" 8/4/26')
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# A PLACEHOLDER THAT RESOLVED TO NOTHING TAKES ITS PUNCTUATION WITH IT
+#
+# Published on the Rumble channel, as a Short:
+#
+#     'Culture' - - Stackswopo Stream
+#
+# from a title_format of "{title} - {date} - Stackswopo Stream" and no
+# date to put in it. The separators in a format string sit BETWEEN two
+# things; with one of them gone they are just noise, and it goes out.
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _titled(name, date, fmt):
+    sys.path.insert(0, _UPLOADER)
+    from utils.templating import build_title
+
+    return build_title(name, date, fmt)
+
+
+def test_a_missing_date_does_not_publish_a_double_dash():
+    assert _titled("'Culture'", "", "{title} - {date} - Stackswopo Stream") \
+        == "'Culture' - Stackswopo Stream"
+
+
+def test_a_date_that_is_there_is_left_exactly_alone():
+    assert _titled("'Culture'", "8/17/26",
+                   "{title} - {date} - Stackswopo Stream") \
+        == "'Culture' - 8/17/26 - Stackswopo Stream"
+
+
+def test_a_name_that_really_contains_a_double_dash_keeps_it():
+    """Tidying only runs when something is actually missing - it must not
+    start editing titles that are exactly what was asked for."""
+    assert _titled("a--b", "8/17/26", "{title} - {date} - X") \
+        == "a--b - 8/17/26 - X"
+
+
+def test_the_shipped_format_survives_a_missing_date():
+    assert _titled("WIFI COOKED", "", '"{title}" {date} Stackswopo Stream') \
+        == '"WIFI COOKED" Stackswopo Stream'
+
+
+def test_tidying_does_not_let_a_title_past_the_cap():
+    """The length arithmetic measures the raw fill, so the shortening
+    budget cannot be quietly widened by the cleanup."""
+    from utils.templating import MAX_TITLE_CHARS
+
+    out = _titled("x" * 300, "", "{title} - {date} - Stackswopo Stream")
+    assert len(out) <= MAX_TITLE_CHARS
+    assert out.endswith("Stackswopo Stream")
+    assert " - - " not in out
+
+
+def test_a_missing_name_leaves_no_stranded_punctuation_either():
+    out = _titled("", "8/17/26", "{title} - {date} - Stackswopo Stream")
+    assert out == "8/17/26 - Stackswopo Stream"
