@@ -705,8 +705,22 @@ def rank(candidates: list, count: int, provider: str = "",
         picked = parse_reply(raw, len(shortlist))
 
     if not picked:
-        print("[Clips] The model returned nothing usable - the scorer's own "
-              "ranking stands.")
+        # "Nothing usable" covered two completely different failures and
+        # named neither, so a run that said it twice gave nothing to act
+        # on: --check-llm reported the key working, which was true and
+        # useless. An answer that could not be READ and no answer at all
+        # need different fixes, so say which one happened - and when
+        # there IS a reply, show it, because the reply is the evidence.
+        if not str(raw or "").strip():
+            print("[Clips] The model was asked twice and said nothing at "
+                  "all. That is the call failing, not the parsing - check "
+                  "the model name in config.json, and --check-llm.")
+        else:
+            excerpt = " ".join(str(raw).split())[:300]
+            print("[Clips] The model answered, and the answer could not be "
+                  "read as clip numbers. It said:")
+            print(f"[Clips]   {excerpt}")
+        print("[Clips] The scorer's own ranking stands.")
         return None
 
     picked.sort(key=lambda item: item[1], reverse=True)

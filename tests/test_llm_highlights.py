@@ -574,3 +574,49 @@ def test_a_fresh_run_does_not_report_a_stale_reason(monkeypatch):
     llm_highlights.rank([], 1)
 
     assert llm_highlights.last_refusal() == ""
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# "NOTHING USABLE" NAMED TWO DIFFERENT FAILURES AND NEITHER OF THEM
+#
+# A real run ended:
+#
+#   [Clips] The model would not write titles - asking it to just pick
+#   [Clips] The model returned nothing usable - the scorer's own ranking stands
+#
+# and --check-llm then reported "gemini (gemini-3.7-flash) answered - the
+# key works", which was true and left nowhere to go. An answer that could
+# not be READ and no answer at all need different fixes.
+# ═════════════════════════════════════════════════════════════════════════════
+
+def test_an_unreadable_answer_is_shown(no_keys, capsys):
+    """The reply is the evidence, and it was being thrown away."""
+    no_keys.setenv("GEMINI_API_KEY", "g")
+
+    assert rank(candidates(), 2,
+                ask=replying("I'd rather not rank these, sorry!")) is None
+
+    out = capsys.readouterr().out
+    assert "I'd rather not rank these" in out
+
+
+def test_no_answer_at_all_says_so_instead(no_keys, capsys):
+    """A silent call is not a parsing problem, and sending someone to
+    --check-llm for it is what wasted the last round."""
+    no_keys.setenv("GEMINI_API_KEY", "g")
+
+    assert rank(candidates(), 2, ask=replying("")) is None
+
+    out = capsys.readouterr().out
+    assert "said nothing at all" in out
+    assert "the call failing, not the parsing" in out
+
+
+def test_a_long_reply_is_cut_down(no_keys, capsys):
+    """Evidence, not the whole transcript back in the terminal."""
+    no_keys.setenv("GEMINI_API_KEY", "g")
+
+    rank(candidates(), 2, ask=replying("x" * 5000))
+
+    line = next(l for l in capsys.readouterr().out.splitlines() if "xxx" in l)
+    assert len(line) < 400

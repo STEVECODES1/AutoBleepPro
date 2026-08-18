@@ -186,7 +186,11 @@ def test_an_unusable_reply_is_reported(monkeypatch, capsys):
     monkeypatch.setattr(llm, "_ask_gemini", lambda *a: "not json at all")
 
     assert rank(_candidates(2), 1) is None
-    assert "nothing usable" in capsys.readouterr().out
+    # "nothing usable" named two different failures and neither of them.
+    # The reply IS the evidence, so it gets shown.
+    out = capsys.readouterr().out
+    assert "not json at all" in out
+    assert "could not be read as clip numbers" in out
 
 
 def test_a_busy_model_is_waited_out_once(monkeypatch):
