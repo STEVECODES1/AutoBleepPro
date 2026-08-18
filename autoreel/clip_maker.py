@@ -570,21 +570,44 @@ def _remove(path: str) -> None:
 
 # ── Choosing what to clip ────────────────────────────────────────────────
 
+# The most a gap may be widened to keep clips from repeating each other.
+#
+# Without a ceiling this became a COVERAGE rule instead of a
+# de-duplication one. Ten clips over a 112-minute stream worked out to
+# "spacing clips 9 min apart to cover the whole 112 min", which forces
+# one clip per nine-minute bucket whether or not anything happened in
+# that bucket - and the run it produced picked from 6m, 10m, 14m, 21m,
+# 38m, 43m, 61m, 77m, 97m and 100m. Evenly spread, and most of them about
+# nothing.
+#
+# Funny is not evenly distributed. If the ten best moments are all in one
+# twenty-minute stretch, that is where the clips should come from. Three
+# minutes is enough that two clips are never the same moment twice, which
+# is the actual thing the gap was protecting against.
+MAX_SPREAD_GAP = 180.0
+
+
 def spread_gap_for(span: float, count: int, configured: float) -> float:
     """How far apart two chosen clips must start, for this stream.
 
     A fixed gap sounds generous until you ask for twenty clips: on a
     stream where one guest is on camera for twenty minutes, six clips 90
     seconds apart are six versions of the same shot. Scaling with the
-    number asked for makes the whole stream get used instead of one good
-    stretch of it.
+    number asked for spreads them out.
+
+    But only so far - see MAX_SPREAD_GAP. Spreading is a tie-breaker
+    between moments worth posting, never a reason to take one that is
+    not.
 
     The 0.8 leaves the chooser some slack - at exactly span/count the
     windows have to be perfectly evenly spaced, and real moments are not.
     """
     if span <= 0 or count <= 0:
         return configured
-    return max(configured, (span / count) * 0.8)
+    scaled = (span / count) * 0.8
+    # `configured` is a floor the caller asked for and is never overridden
+    # by the ceiling; the ceiling only bounds what THIS function adds.
+    return max(configured, min(scaled, MAX_SPREAD_GAP))
 
 
 def specs_from_segments(segments: Iterable[dict], count: int = DEFAULT_CLIP_COUNT,

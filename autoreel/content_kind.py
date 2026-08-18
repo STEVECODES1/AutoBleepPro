@@ -155,17 +155,55 @@ def kind_for_video(source: str, start: float = 0.0,
     return kind_for_frames(frames)
 
 
+def _seconds_long(source: str) -> float:
+    """The video's duration, or 0.0 when it cannot be read."""
+    import subprocess
+
+    try:
+        out = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+             "-of", "default=nw=1:nk=1", source],
+            capture_output=True, text=True, timeout=30)
+        return max(0.0, float((out.stdout or "0").strip()))
+    except Exception:
+        return 0.0
+
+
+def sample_points(span: float, samples: int, spacing: float) -> list:
+    """Where to look, in seconds.
+
+    Spread across the WHOLE video when its length is known. Fixed
+    offsets of 0s / 300s / 600s only ever saw the first ten minutes, so a
+    112-minute stream that opened on a Monkey call and then played GTA
+    for a hundred minutes was filed as `monkey` and every clip in it got
+    a face-tracking crop - a narrow strip of gameplay with the game
+    itself cut off either side.
+
+    A stream is not one thing for two hours. Looking only at the start
+    cannot tell what it mostly was.
+
+    The offsets avoid the very beginning and the very end, which are the
+    two parts least likely to be representative: streams open on a
+    waiting screen and close on an outro.
+    """
+    if span <= 0:
+        return [index * spacing for index in range(max(1, samples))]
+    samples = max(1, samples)
+    step = span / (samples + 1)
+    return [step * (index + 1) for index in range(samples)]
+
+
 def profile_for(source: str, title: str = "", fallback: str = "whole",
-                samples: int = 3, spacing: float = 300.0) -> str:
+                samples: int = 5, spacing: float = 300.0) -> str:
     """The framing for this video: the title first, then the picture.
 
     The title wins when it says anything, because the streamer naming
     their own stream is better evidence than six seconds of pixels.
 
-    Several samples spread through the file, not one: a Monkey stream
-    opens on a waiting screen and a GTA stream has menus, and either
-    would answer for the whole video from one look. The samples vote,
-    and a tie is "not sure".
+    Several samples spread through the WHOLE file, not one and not the
+    first ten minutes: a Monkey stream opens on a waiting screen and a
+    GTA stream has menus, and either would answer for the whole video
+    from one look. The samples vote, and a tie is "not sure".
     """
     from autoreel.crop_strategy import profile_for_title
 
@@ -174,8 +212,8 @@ def profile_for(source: str, title: str = "", fallback: str = "whole",
         return named
 
     votes: dict = {}
-    for index in range(max(1, samples)):
-        kind = kind_for_video(source, start=index * spacing)
+    for at in sample_points(_seconds_long(source), samples, spacing):
+        kind = kind_for_video(source, start=at)
         if kind:
             votes[kind] = votes.get(kind, 0) + 1
     if not votes:

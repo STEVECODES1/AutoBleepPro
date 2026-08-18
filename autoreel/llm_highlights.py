@@ -65,6 +65,17 @@ _KEY_NAMES = {
 
 _TIMEOUT = 90
 
+# The vision pass is a different size of request: dozens of JPEGs in one
+# body, which the model has to receive AND look at before it answers a
+# word. On a real run it timed out at
+
+#   The vision pass failed (The read operation timed out (48 images, 0.6 MB))
+
+# and the whole point of the pass - picking clips on what is on screen
+# rather than on the transcript alone - was lost to a clock set for a
+# text request.
+_VISION_TIMEOUT = 300
+
 # One wait, not a retry loop: a busy model clears in seconds and a
 # pipeline that hammers a rate limit gets a longer one.
 _BUSY_RETRY_SECONDS = 20
@@ -366,7 +377,8 @@ def _post(url: str, payload: dict, headers: dict) -> Optional[dict]:
         return None
 
 
-def _post_detailed(url: str, payload: dict, headers: dict) -> tuple:
+def _post_detailed(url: str, payload: dict, headers: dict,
+                   timeout: Optional[int] = None) -> tuple:
     """(data, error). Same call as _post, but says what went wrong.
 
     The normal path does not want the reason - it falls back silently and
@@ -378,7 +390,8 @@ def _post_detailed(url: str, payload: dict, headers: dict) -> tuple:
     request = urllib.request.Request(url, data=body, headers={
         "Content-Type": "application/json", **headers})
     try:
-        with urllib.request.urlopen(request, timeout=_TIMEOUT) as response:
+        with urllib.request.urlopen(
+                request, timeout=timeout or _TIMEOUT) as response:
             return json.loads(response.read().decode("utf-8", "replace")), ""
     except urllib.error.HTTPError as exc:
         detail = ""
@@ -528,12 +541,18 @@ def _ask_gemini_vision(key: str, model: str, parts: list) -> tuple:
     # the free tier being shared and it clears in seconds. Falling
     # straight back to the words threw away the whole vision pass over a
     # spike that a single wait would have ridden out.
-    data, problem = _post_detailed(url, payload, {})
-    if problem and "429" in str(problem):
-        print("[Clips] The model is busy - waiting 20s and trying once "
-              "more...")
+    data, problem = _post_detailed(url, payload, {}, timeout=_VISION_TIMEOUT)
+    # A timeout gets the same second chance as a busy model. It used to
+    # get none, so one slow response threw away the entire vision pass -
+    # and what came back instead was ten clips chosen on the transcript,
+    # spaced evenly across the stream, most of them about nothing.
+    if problem and ("429" in str(problem) or "timed out" in str(problem).lower()):
+        why_waiting = ("The model is busy" if "429" in str(problem)
+                       else "That took too long")
+        print(f"[Clips] {why_waiting} - waiting 20s and trying once more...")
         time.sleep(_BUSY_RETRY_SECONDS)
-        data, problem = _post_detailed(url, payload, {})
+        data, problem = _post_detailed(url, payload, {},
+                                       timeout=_VISION_TIMEOUT)
 
     if problem:
         return "", f"{problem} ({images} images, {megabytes:.1f} MB)"

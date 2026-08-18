@@ -197,7 +197,7 @@ def test_a_busy_model_is_waited_out_once(monkeypatch):
 
     calls = []
 
-    def flaky(url, payload, headers):
+    def flaky(url, payload, headers, timeout=None):
         calls.append(1)
         if len(calls) == 1:
             return None, "HTTP 429: high demand"
@@ -218,9 +218,55 @@ def test_it_waits_once_not_in_a_loop(monkeypatch):
 
     calls = []
     monkeypatch.setattr(llm, "_post_detailed",
-                        lambda *a: (calls.append(1), (None, "HTTP 429"))[1])
+                        lambda *a, **k: (calls.append(1), (None, "HTTP 429"))[1])
     monkeypatch.setattr(llm.time, "sleep", lambda s: None)
 
     llm._ask_gemini_vision("k", "m", [{"text": "x"}])
 
     assert len(calls) == 2
+
+
+def test_a_timeout_gets_the_same_second_chance_as_a_busy_model(monkeypatch):
+    """The real failure:
+
+        The vision pass failed (The read operation timed out
+        (48 images, 0.6 MB)) - going on the words instead
+
+    One slow response threw away the entire vision pass, and what came
+    back instead was ten clips chosen on the transcript alone.
+    """
+    import autoreel.llm_highlights as llm
+
+    calls = []
+
+    def slow_once(url, payload, headers, timeout=None):
+        calls.append(timeout)
+        if len(calls) == 1:
+            return None, "The read operation timed out"
+        return {"candidates": [{"content": {"parts": [{"text": "{}"}]}}]}, ""
+
+    monkeypatch.setattr(llm, "_post_detailed", slow_once)
+    monkeypatch.setattr(llm.time, "sleep", lambda s: None)
+
+    reply, why = llm._ask_gemini_vision("k", "m", [{"text": "x"}])
+
+    assert len(calls) == 2, "it gave up on the first timeout"
+    assert reply == "{}" and why == ""
+
+
+def test_the_vision_call_gets_longer_than_a_text_call(monkeypatch):
+    """Dozens of JPEGs in one body, which the model has to receive AND
+    look at before it answers a word."""
+    import autoreel.llm_highlights as llm
+
+    seen = []
+
+    def note(url, payload, headers, timeout=None):
+        seen.append(timeout)
+        return {"candidates": [{"content": {"parts": [{"text": "{}"}]}}]}, ""
+
+    monkeypatch.setattr(llm, "_post_detailed", note)
+    llm._ask_gemini_vision("k", "m", [{"text": "x"}])
+
+    assert seen == [llm._VISION_TIMEOUT]
+    assert llm._VISION_TIMEOUT > llm._TIMEOUT

@@ -391,7 +391,8 @@ def test_both_calls_send_them(monkeypatch):
     monkeypatch.setattr(llm_highlights, "_post",
                         lambda url, payload, headers: sent.append(payload) or {})
     monkeypatch.setattr(llm_highlights, "_post_detailed",
-                        lambda url, payload, headers: (sent.append(payload), ({}, ""))[1])
+                        lambda url, payload, headers, timeout=None:
+                        (sent.append(payload), ({}, ""))[1])
 
     llm_highlights._ask_gemini("k", "m", "prompt")
     llm_highlights._ask_gemini_vision("k", "m", [{"text": "x"}])
