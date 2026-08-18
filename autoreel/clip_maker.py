@@ -650,8 +650,12 @@ def specs_from_segments(segments: Iterable[dict], count: int = DEFAULT_CLIP_COUN
                - (listed[0].get("start", 0.0) if listed else 0.0))
     effective_gap = spread_gap_for(span, count, min_gap_seconds)
     if effective_gap > min_gap_seconds:
-        print(f"[Clips] Spacing clips {effective_gap / 60:.0f} min apart to "
-              f"cover the whole {span / 60:.0f} min.")
+        # NOT "to cover the whole N min" any more - that is exactly what
+        # it stopped doing when the gap was capped, and a message that
+        # describes the old behaviour is worse than no message.
+        print(f"[Clips] Keeping chosen clips at least "
+              f"{effective_gap / 60:.0f} min apart so no two are the same "
+              f"moment.")
 
     pool = count * CANDIDATE_MULTIPLIER if llm_rank else count
     shortlist = scorer.select_clips(listed, count=pool,
