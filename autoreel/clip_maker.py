@@ -586,6 +586,12 @@ def _remove(path: str) -> None:
 # is the actual thing the gap was protecting against.
 MAX_SPREAD_GAP = 180.0
 
+# How much of the asked-for clip count still gets cut when no model read
+# the candidates. A third: enough that a stream still produces something
+# on a day the API is down, few enough that a blind ranking cannot fill
+# the channel with clips nobody chose.
+UNSURE_SHARE = 0.34
+
 
 def spread_gap_for(span: float, count: int, configured: float) -> float:
     """How far apart two chosen clips must start, for this stream.
@@ -682,10 +688,26 @@ def specs_from_segments(segments: Iterable[dict], count: int = DEFAULT_CLIP_COUN
             else:
                 print("[Clips] No model opinion - picking on the transcript "
                       "score alone. Check the key with --check-llm.")
+        # Fewer, when nobody read them.
+        #
+        # The scorer ranks on what a transcript LOOKS like - reactions,
+        # density, shape. It cannot tell whether a thing was funny, and
+        # asked for ten it will confidently hand over ten. That is where
+        # "most of these don't make no sense" came from: a full quota
+        # filled by a ranking that had no opinion worth having.
+        #
+        # This is the only quality gate that works with nobody watching.
+        # A dud that is never cut is never posted, and posting less on a
+        # bad day costs a few views; posting ten duds costs the channel.
+        wanted = count if named_by_model else max(1, round(count * UNSURE_SHARE))
+        if wanted < count:
+            print(f"[Clips] Cutting {wanted} instead of {count} - with no "
+                  f"model opinion the ranking is a guess, and a guess "
+                  f"should be quiet.")
         # The scorer's own verdict: best first, then back into timeline
         # order so clip 01 is the earliest.
         highlights = sorted(shortlist, key=lambda h: h.score,
-                            reverse=True)[:count]
+                            reverse=True)[:wanted]
         highlights.sort(key=lambda h: h.start)
     else:
         # Not "read N candidates" - the vision pass narrows the list to

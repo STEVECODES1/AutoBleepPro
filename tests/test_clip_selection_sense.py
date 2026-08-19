@@ -127,3 +127,59 @@ def test_a_call_stream_is_untouched_by_this():
 
     assert resolve_crop_strategy(
         {"clips": {"profile": "monkey"}}) == CROP_FACE_PAN
+
+
+# ── fewer clips when nothing read them ───────────────────────────────
+#
+# The scorer ranks on what a transcript LOOKS like and cannot tell
+# whether a thing was funny. Asked for ten it hands over ten anyway, and
+# that is where a channel fills with clips nobody chose. With nobody
+# watching the output, cutting fewer is the only quality gate available.
+
+def _shortlist(n):
+    """Alternating dead air and a reaction - what the scorer shortlists."""
+    out = []
+    for i in range(n):
+        out.append({"start": i * 40.0, "end": i * 40.0 + 20.0,
+                    "text": "just walking around", "words": []})
+        out.append({"start": i * 40.0 + 20.0, "end": i * 40.0 + 40.0,
+                    "text": "OH MY GOD what the hell was that bro holy",
+                    "words": []})
+    return out
+
+
+def test_a_blind_ranking_cuts_fewer_than_asked(monkeypatch):
+    from autoreel import clip_maker
+
+    monkeypatch.setattr("autoreel.llm_highlights.rank",
+                        lambda *a, **k: None)
+    specs = clip_maker.specs_from_segments(
+        _shortlist(40), count=10, min_seconds=5.0, max_seconds=60.0)
+
+    assert 0 < len(specs) < 10
+
+
+def test_a_model_opinion_gets_the_full_count(monkeypatch):
+    """Nothing is held back when something actually read the clips."""
+    from autoreel import clip_maker, llm_highlights
+
+    def pick(shortlist, count, *a, **k):
+        return list(shortlist)[:count]
+
+    monkeypatch.setattr(llm_highlights, "rank", pick)
+    specs = clip_maker.specs_from_segments(
+        _shortlist(40), count=6, min_seconds=5.0, max_seconds=60.0)
+
+    assert len(specs) == 6
+    assert all(s.titled_by == "model" for s in specs)
+
+
+def test_a_bad_day_still_produces_something(monkeypatch):
+    """Zero clips from a whole stream is its own kind of broken."""
+    from autoreel import clip_maker
+
+    monkeypatch.setattr("autoreel.llm_highlights.rank", lambda *a, **k: None)
+    specs = clip_maker.specs_from_segments(
+        _shortlist(20), count=1, min_seconds=5.0, max_seconds=60.0)
+
+    assert len(specs) >= 1
