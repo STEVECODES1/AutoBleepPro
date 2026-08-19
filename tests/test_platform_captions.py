@@ -33,7 +33,6 @@ REPLY = json.dumps({"captions": {
     "instagram": "he really did that 💀",
     "facebook": "Stackswopo gets robbed without a firearm.",
     "youtube_shorts": "Robbed With No Firearm",
-    "zernio_tiktok": "nah he was NOT ready",
 }})
 
 
@@ -228,3 +227,10 @@ def test_facebook_gets_no_hashtag_block(tmp_path, monkeypatch):
     from utils.social_promoter import TAG_LIMITS
 
     assert TAG_LIMITS.get("facebook", 0) >= 0
+
+
+def test_tiktok_is_not_asked_about():
+    """The account is off and staying off. A brief for it would put it in
+    every caption request - five answers asked for, four ever read, on
+    every clip forever."""
+    assert "zernio_tiktok" not in PLATFORM_BRIEFS

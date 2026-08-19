@@ -791,6 +791,10 @@ class ClipMaker:
     # Set by clip_runner when clips.profile is "auto"; a profile named
     # explicitly is an instruction and is left alone.
     per_clip_framing: bool = False
+    # Write a thumbnail beside each clip, from the frame a model says is
+    # the one worth showing. Off by default like every other addition
+    # here; clips.pick_thumbnails turns it on.
+    pick_thumbnails: bool = False
     # The clip's own title, held at the top of the frame for the whole
     # clip. Off by default: it is a real change to how every clip looks,
     # and the person whose account it is should choose it rather than
@@ -1100,6 +1104,20 @@ class ClipMaker:
             except ClipError as exc:
                 failures.append(str(exc))
                 continue
+            else:
+                if self.pick_thumbnails:
+                    # After the clip exists, from the CLIP - not from the
+                    # source at the same timestamp. The clip is what gets
+                    # posted: it is re-framed, captioned and censored, and
+                    # a thumbnail taken from the source would show a
+                    # framing the video never has.
+                    try:
+                        from autoreel import thumbnail
+
+                        thumbnail.make(output_path, spec.end - spec.start)
+                    except Exception as exc:
+                        print(f"[Clips] Clip {spec.index:02d}: no thumbnail "
+                              f"({exc}) - the platform will pick a frame.")
             finally:
                 if caption_path:
                     _remove(caption_path)

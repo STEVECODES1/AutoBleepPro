@@ -357,6 +357,7 @@ def make_clips(cfg, source_path: str, title: str,
         # profile named explicitly in config is a decision someone made
         # and is left alone.
         per_clip_framing=asked_for_auto,
+        pick_thumbnails=bool(clips_cfg.get("pick_thumbnails", False)),
         caption_uppercase=bool(clips_cfg.get("caption_uppercase", True)),
         count=int(count or clips_cfg.get("count", 3)),
         min_seconds=float(clips_cfg.get("min_seconds", 15)),

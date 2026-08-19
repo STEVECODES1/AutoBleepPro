@@ -40,10 +40,11 @@ PLATFORM_BRIEFS = {
     "youtube_shorts": (
         "YouTube Shorts: a TITLE more than a caption. Under 70 "
         "characters, says what happens, no hashtags."),
-    "zernio_tiktok": (
-        "TikTok: short and spoken-sounding, the kind of line someone "
-        "would say out loud. No hashtags - they are added separately."),
 }
+
+# TikTok is deliberately absent. The account is off and staying off, and
+# a brief here would put it back in every caption request - five answers
+# asked for, four ever read, on every clip forever.
 
 PROMPT = """\
 You write captions for clips from a live streamer's channel.
