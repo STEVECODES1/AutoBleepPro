@@ -25,21 +25,28 @@ from typing import Optional
 
 # What each platform actually wants. Not style preferences - these are
 # the rules their rankings enforce.
+# Hashtags are NEVER the model's job - hashtags_for picks them from the
+# clip and TAG_LIMITS sizes them per platform, and every brief here says
+# so. Telling the model "no hashtags" for a platform the code then adds
+# tags to is a contradiction the model cannot see and the reader can.
 PLATFORM_BRIEFS = {
     "zernio_twitter": (
-        "X: under 200 characters so nothing is cut off. At most 2 "
-        "hashtags - more is demoted and they eat the character budget. "
-        "Blunt and funny; no emoji strings, no 'link in bio'."),
+        "X: under 200 characters so nothing is cut off, because two "
+        "hashtags are appended afterwards and they need the room. Blunt "
+        "and funny; no emoji strings, no 'link in bio'. Do not write any "
+        "hashtags yourself."),
     "instagram": (
         "Instagram: one or two short lines, conversational, an emoji or "
-        "two is fine. It carries hashtags well, so the tags are added "
-        "separately - do not write any yourself."),
+        "two is fine. Hashtags are appended afterwards - do not write "
+        "any yourself."),
     "facebook": (
-        "Facebook: one plain sentence, no hashtags, no emoji. The "
-        "audience is older and reads hashtags as spam."),
+        "Facebook: one plain sentence, no emoji. The audience is older "
+        "and reads a wall of text as spam. Hashtags are appended "
+        "afterwards - do not write any yourself."),
     "youtube_shorts": (
         "YouTube Shorts: a TITLE more than a caption. Under 70 "
-        "characters, says what happens, no hashtags."),
+        "characters, says what happens. Hashtags are appended "
+        "afterwards - do not write any yourself."),
 }
 
 # TikTok is deliberately absent. The account is off and staying off, and

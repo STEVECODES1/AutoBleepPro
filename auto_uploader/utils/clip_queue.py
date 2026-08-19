@@ -149,7 +149,16 @@ def _with_tags(caption: str, tags, platform: str) -> str:
 
     if not tags or TAG_LIMITS.get(platform, 0) <= 0:
         return caption
-    line = " ".join(t if t.startswith("#") else f"#{t}" for t in tags)
+    # hashtags_for returns ONE STRING - "#stackswopo #funnymoments" - and
+    # iterating a string yields characters, so this posted
+    #     # #s #t #a #c #k #s #w #o #p #o # # #f #u #n #n #y
+    # on every Instagram caption for a day. A sequence of tags is
+    # accepted too, because callers reasonably expect either.
+    if isinstance(tags, str):
+        line = tags.strip()
+    else:
+        line = " ".join(str(t) if str(t).startswith("#") else f"#{t}"
+                        for t in tags if str(t).strip())
     return f"{caption}\n\n{line}" if line else caption
 
 

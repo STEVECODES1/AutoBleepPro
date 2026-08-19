@@ -72,8 +72,10 @@ def test_the_model_is_told_what_each_platform_wants():
     ask = _ask()
     write_captions("Robbed", "words", ["zernio_twitter", "facebook"], ask=ask)
 
-    assert "280" in ask.prompt or "200 characters" in ask.prompt
-    assert "no hashtags" in ask.prompt.lower()
+    assert "200 characters" in ask.prompt, "X's length limit was not sent"
+    assert "no emoji" in ask.prompt.lower(), "Facebook's rule was not sent"
+    # Every brief tells it the tags are not its job.
+    assert ask.prompt.lower().count("do not write any") >= 2
 
 
 def test_the_clip_is_described_not_the_video():
@@ -234,3 +236,72 @@ def test_tiktok_is_not_asked_about():
     every caption request - five answers asked for, four ever read, on
     every clip forever."""
     assert "zernio_tiktok" not in PLATFORM_BRIEFS
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# HASHTAGS_FOR RETURNS ONE STRING, NOT A LIST
+#
+# Iterating a string yields characters, so a day of Instagram captions
+# went out reading:
+#
+#     # #s #t #a #c #k #s #w #o #p #o # # #f #u #n #n #y #m #o #m #e #n #t #s
+#
+# under a caption the model had written perfectly well.
+# ═════════════════════════════════════════════════════════════════════════════
+
+def test_a_string_of_tags_is_not_exploded_into_letters():
+    from utils.clip_queue import _with_tags
+
+    said = _with_tags("caption", "#stackswopo #funnymoments", "instagram")
+
+    assert "#stackswopo #funnymoments" in said
+    assert "#s #t #a" not in said
+
+
+def test_a_list_of_tags_still_works():
+    from utils.clip_queue import _with_tags
+
+    said = _with_tags("caption", ["stackswopo", "#gtarp"], "instagram")
+
+    assert "#stackswopo #gtarp" in said
+
+
+def test_no_tags_leaves_the_caption_alone():
+    from utils.clip_queue import _with_tags
+
+    assert _with_tags("caption", "", "instagram") == "caption"
+    assert _with_tags("caption", [], "instagram") == "caption"
+
+
+def test_a_platform_with_no_tag_budget_gets_none():
+    """TAG_LIMITS is the authority. A platform absent from it takes no
+    tags, and every platform in it gets the count it was tuned for."""
+    from utils.clip_queue import _with_tags
+
+    assert _with_tags("caption", "#a #b", "rumble") == "caption"
+
+
+def test_every_brief_agrees_with_the_tag_limits():
+    """Telling the model 'no hashtags' for a platform the code then adds
+    tags to is a contradiction the model cannot see and the reader can."""
+    from utils.social_promoter import TAG_LIMITS
+
+    for platform, brief in PLATFORM_BRIEFS.items():
+        assert "do not write any" in brief.lower(), platform
+        if TAG_LIMITS.get(platform, 0) > 0:
+            assert "no hashtags" not in brief.lower(), platform
+
+
+def test_the_real_path_does_not_explode_them(tmp_path, monkeypatch):
+    """End to end, the way it actually failed."""
+    from utils import clip_queue
+
+    clip = tmp_path / "monkey app trolling.mp4"
+    clip.write_bytes(b"x")
+    monkeypatch.setattr(llm_captions, "write_captions",
+                        lambda *a, **k: {"instagram": "he really did that"})
+
+    said = clip_queue.caption_for("instagram", str(clip), "", {})
+
+    assert "#s #t #a" not in said
+    assert "# #" not in said
