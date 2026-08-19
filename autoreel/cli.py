@@ -38,7 +38,7 @@ def build_parser() -> argparse.ArgumentParser:
                         help="Compute device for transcription. 'auto' uses GPU if available.")
 
     # ── Censoring ───────────────────────────────────────────────
-    parser.add_argument("--bleep-method", default="beep",
+    parser.add_argument("--bleep-method", default="silence",
                         choices=["beep", "silence"],
                         help="Replace flagged words with a beep tone or silence. (default: beep)")
     parser.add_argument("--custom-words", default="",

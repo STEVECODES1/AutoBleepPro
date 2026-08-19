@@ -182,7 +182,8 @@ def censor_video(
     source_path: str,
     work_dir: str,
     model_name: str = "base",
-    bleep_method: str = "beep",
+    # See the note in config.py: silence, not beep.
+    bleep_method: str = "silence",
     custom_words: tuple = (),
     device: Optional[str] = None,
     speed: Optional[dict] = None,

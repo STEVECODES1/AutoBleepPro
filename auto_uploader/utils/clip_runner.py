@@ -346,6 +346,7 @@ def make_clips(cfg, source_path: str, title: str,
         # see autoreel/captions for why that is the difference between
         # captions people read and captions people turn off.
         caption_style=str(clips_cfg.get("caption_style", "word")),
+        burn_hook=bool(clips_cfg.get("burn_hook", False)),
         caption_uppercase=bool(clips_cfg.get("caption_uppercase", True)),
         count=int(count or clips_cfg.get("count", 3)),
         min_seconds=float(clips_cfg.get("min_seconds", 15)),

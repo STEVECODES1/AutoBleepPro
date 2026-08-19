@@ -264,7 +264,7 @@ def _censored_clip(platform: str, video_path: str, config: dict) -> tuple:
         result = censor_video(
             video_path, general.get("censored_folder") or "censored",
             model_name=general.get("censor_model", "base"),
-            bleep_method=general.get("censor_bleep_method", "beep"),
+            bleep_method=general.get("censor_bleep_method", "silence"),
             custom_words=tuple(general.get("censor_custom_words", ()) or ()),
             device=general.get("censor_device") or None,
             padding_ms=int(general.get("censor_padding_ms", 250)),

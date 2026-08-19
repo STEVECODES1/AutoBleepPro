@@ -195,7 +195,11 @@ def load_config(config_path: str = "config.json", env_path: str = ".env") -> App
         duplicate_store_path=_resolve_path(project_root, gen.get("duplicate_store_path", "./uploaded_hashes.json")),
         censor_before_upload=bool(gen.get("censor_before_upload", True)),
         censor_model=gen.get("censor_model", "base"),
-        censor_bleep_method=gen.get("censor_bleep_method", "beep"),
+        # "silence", not "beep". Said twice, plainly: a bleep announces
+        # itself and is the loudest thing in a clip that is mostly talking.
+        # Muting the word and moving on is what was asked for, and a
+        # default that has to be found in a config file is not a default.
+        censor_bleep_method=gen.get("censor_bleep_method", "silence"),
         censor_device=os.environ.get("CENSOR_DEVICE") or gen.get("censor_device") or None,
         censor_custom_words=tuple(gen.get("censor_custom_words", [])),
         censored_folder=_resolve_path(project_root, gen.get("censored_folder", "./censored")),

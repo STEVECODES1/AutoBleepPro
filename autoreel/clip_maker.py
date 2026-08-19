@@ -759,6 +759,11 @@ class ClipMaker:
     crf: int = 20
     caption_style: str = "word"
     caption_uppercase: bool = True
+    # The clip's own title, held at the top of the frame for the whole
+    # clip. Off by default: it is a real change to how every clip looks,
+    # and the person whose account it is should choose it rather than
+    # find it. clips.burn_hook turns it on.
+    burn_hook: bool = False
     use_audio_energy: bool = True
     skip_intro_seconds: float = DEFAULT_SKIP_INTRO
     skip_outro_seconds: float = DEFAULT_SKIP_OUTRO
@@ -918,7 +923,8 @@ class ClipMaker:
                                  f".{safe_stem(basename)}_clip{spec.index:02d}.ass"),
                     segments, spec.start, spec.end, shift,
                     style=self.caption_style,
-                    uppercase=self.caption_uppercase)
+                    uppercase=self.caption_uppercase,
+                    hook=spec.title if self.burn_hook else "")
             # Gameplay that follows the action: measure where the frame
             # is CHANGING and walk the crop toward it, slowly. Faces are
             # the wrong signal here - GTA is full of NPC faces and none

@@ -56,6 +56,21 @@ DEFAULT_FONT = "Arial"
 # in a 920px space, and every clip went out with the first and last
 # words sliced off.
 DEFAULT_FONT_SIZE = 62
+
+# The hook: the clip's own title, held at the top of the frame for the
+# whole clip rather than scrolling past with the speech.
+#
+# Copied from what actually works on this kind of account - every post on
+# the reference account carries one, and it is the only visible thing
+# their clips had that ours did not. It answers "why am I still watching
+# this" in the first half second, which is the entire fight on a feed
+# that autoplays.
+#
+# Smaller than the caption on purpose: it is the label, not the line
+# being spoken, and it must not compete with the words lighting up.
+HOOK_FONT_SIZE = 54
+# Clear of a phone's top UI and of most gameplay HUDs.
+HOOK_MARGIN_V = 150
 DEFAULT_MAX_WORDS = 4
 DEFAULT_MAX_CHARS = 20
 
@@ -348,12 +363,17 @@ def build_ass(phrases: Iterable[Phrase], font: str = DEFAULT_FONT,
               font_size: int = DEFAULT_FONT_SIZE,
               margin_v: int = MARGIN_V,
               style: str = DEFAULT_STYLE,
-              uppercase: bool = True) -> str:
+              uppercase: bool = True,
+              hook: str = "", hook_seconds: float = 0.0) -> str:
     """An ASS subtitle file: white text, heavy black outline, centred.
 
     Outline plus shadow rather than a background box: gameplay footage
     changes brightness constantly, and an outline stays legible over both
     a bright skybox and a dark interior without covering the picture.
+
+    `hook` is the clip's title, pinned to the top of the frame for
+    `hook_seconds`. Alignment 8 and its own style, so it sits above the
+    picture's action and cannot be mistaken for the words being spoken.
     """
     header = f"""[Script Info]
 ScriptType: v4.00+
@@ -365,11 +385,17 @@ ScaledBorderAndShadow: yes
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, OutlineColour, BackColour, Bold, Italic, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
 Style: Caption,{font},{font_size},&H00FFFFFF,&H00000000,&H00000000,-1,0,1,6,3,2,80,80,{margin_v},1
+Style: Hook,{font},{HOOK_FONT_SIZE},&H00FFFFFF,&H00000000,&H00000000,-1,0,1,6,3,8,60,60,{HOOK_MARGIN_V},1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 """
     lines = []
+    # First, so it is the bottom layer if anything ever overlaps it.
+    if hook.strip() and hook_seconds > 0:
+        lines.append(
+            f"Dialogue: 0,{_ass_time(0.0)},{_ass_time(hook_seconds)},"
+            f"Hook,,0,0,0,,{_ass_escape(hook.strip().upper() if uppercase else hook.strip())}")
     for phrase in phrases:
         if phrase.end <= phrase.start:
             continue
@@ -405,6 +431,11 @@ def caption_file_for_clip(path: str, segments: Iterable[dict],
     """
     phrases = group_words(censor_words(
         words_in_range(segments, start, end, shift)))
-    if not phrases:
+    # A clip with a hook and no speech still wants the hook. Returning
+    # None on "no phrases" would have thrown the title away on exactly
+    # the clips that need one most - the ones where nothing is said and
+    # the picture has to carry it.
+    if not phrases and not str(style.get("hook", "")).strip():
         return None
+    style.setdefault("hook_seconds", max(0.0, end - start))
     return write_ass(path, phrases, **style)
