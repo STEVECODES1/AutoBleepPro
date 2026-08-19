@@ -892,23 +892,49 @@ TAG_LIMITS = {
 # every clip, and the one someone searches to find more.
 ALWAYS_TAGS = ("stackswopo",)
 
+# Tags a specific platform needs regardless of what the clip is about.
+#
+# #Shorts is the only one that does real work: YouTube reads it when
+# deciding whether a vertical upload is a Short, and it is the one tag on
+# this whole page that changes how a platform FILES a video rather than
+# how it ranks it.
+PLATFORM_TAGS = {
+    "youtube_shorts": ("Shorts",),
+}
+
 # Matched against the clip's own title, so a Monkey clip is not tagged
 # #gtarp. The key is what to look for; the value is what to tag it.
+#
+# Specific beats broad everywhere. Every platform here ranks on whether
+# the tag matches what is actually in the video, and a wrong one is not
+# neutral - it is a demotion. That is why these are matched rather than
+# pasted, and why the list leads with the narrowest tag it can justify.
 CONTENT_TAGS = (
     (("monkey", "omegle", "troll"),
-     ("monkeyapp", "monkeyapptrolling", "omegle")),
-    (("gta", "rp", "fivem", "nopixel", "lifestyle"),
-     ("gtarp", "gta5", "gtaonline")),
+     ("monkeyapp", "monkeyapptrolling", "omegle", "monkeyappfunny")),
+    (("nopixel",), ("nopixel", "nopixelrp")),
+    (("fivem",), ("fivem", "fivemrp")),
+    (("gta", "rp", "lifestyle", "roleplay"),
+     ("gtarp", "gta5", "gtaroleplay", "gtaonline")),
     (("howl", "slot", "gambl", "casino", "stake"),
      ("slots", "gambling", "bigwin")),
     (("react", "watch"), ("reaction", "reacting")),
+    (("fail", "died", "death", "robbed", "crash"),
+     ("streamerfails", "gamingfails")),
 )
 
 # Used to fill up to the platform's limit once the specific ones are in.
-# True of every clip here and searched constantly, but generic enough
-# that leading with them would be the spam signal itself.
-FILLER_TAGS = ("funnymoments", "streamerclips", "clips", "funny",
-               "viral", "fyp")
+# True of every clip here and searched by real people.
+#
+# NOT "viral" or "fyp", which were here and have been taken out. They
+# are reach-bait: they describe nothing about the video, they are the
+# single most recognisable mark of an automated repost account, and
+# every platform in this project treats generic reach tags as a spam
+# signal rather than a request. Asking an algorithm to promote a post
+# is not how any of them work; telling it accurately what the post IS,
+# is.
+FILLER_TAGS = ("funnymoments", "streamerclips", "gamingclips",
+               "twitchclips", "clips", "funny", "gaming")
 
 
 def hashtags_for(title: str, platform: str = "instagram",
@@ -932,6 +958,10 @@ def hashtags_for(title: str, platform: str = "instagram",
             chosen.append(tag)
 
     for tag in ALWAYS_TAGS:
+        add(tag)
+    # Before the content tags: on a platform that needs one to file the
+    # video correctly, it is not competing for a slot, it IS the slot.
+    for tag in PLATFORM_TAGS.get(platform, ()):
         add(tag)
     for needles, tags in CONTENT_TAGS:
         if any(needle in text for needle in needles):
