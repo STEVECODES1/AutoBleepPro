@@ -138,6 +138,61 @@ def _subject_note(video_path: str, folders=()) -> str:
     return ""
 
 
+def _with_tags(caption: str, tags, platform: str) -> str:
+    """Tags after the line, where the platform takes them.
+
+    The model is told not to write its own - hashtags_for picks them from
+    the CLIP and sizes them per platform, and a model inventing tags
+    alongside that produced twenty on a post that may carry two.
+    """
+    from utils.social_promoter import TAG_LIMITS
+
+    if not tags or TAG_LIMITS.get(platform, 0) <= 0:
+        return caption
+    line = " ".join(t if t.startswith("#") else f"#{t}" for t in tags)
+    return f"{caption}\n\n{line}" if line else caption
+
+
+def _model_caption(platform: str, video_path: str, headline: str,
+                   config: dict) -> str:
+    """This platform's caption, written for it. "" when none can be had.
+
+    Cached beside the clip: a clip is offered to each platform hours
+    apart, and writing them per drain would be one API call per platform
+    after all - which is the thing writing them together avoids.
+    """
+    if not (config or {}).get("model_captions", True):
+        return ""
+    try:
+        from autoreel.llm_captions import (PLATFORM_BRIEFS, cached, remember,
+                                           write_captions)
+    except Exception:
+        return ""
+    if platform not in PLATFORM_BRIEFS:
+        return ""
+
+    have = cached(video_path)
+    if platform in have:
+        return have[platform]
+
+    folders = tuple((config or {}).get("note_folders", ()) or ())
+    spoken = ""
+    try:
+        from utils.social_promoter import spoken_line
+
+        spoken = spoken_line(video_path, folders) or ""
+    except Exception:
+        spoken = ""
+
+    written = write_captions(headline, spoken or headline,
+                             sorted(PLATFORM_BRIEFS))
+    if not written:
+        return ""
+    have.update(written)
+    remember(video_path, have)
+    return have.get(platform, "")
+
+
 def caption_for(platform: str, video_path: str, fallback: str,
                 config: dict) -> str:
     """The caption this platform posts with.
@@ -184,8 +239,20 @@ def caption_for(platform: str, video_path: str, fallback: str,
               f"{_subject_note(video_path, folders)}"
     tags = hashtags_for(subject, platform,
                         settings.get("max_hashtags"))
-    caption = build_caption(template, video_path, tags=tags,
-                            folders=folders) or fallback
+    # A line written for THIS platform, if one can be had. One template
+    # posted to four platforms is the most visible mark of an automated
+    # account, and it is what every ranking is tuned to find - X demotes
+    # a dozen hashtags and cuts off at 280, Instagram rewards them,
+    # Facebook reads either as spam, a Short wants a title.
+    #
+    # Falls straight back to the template on anything: a caption that
+    # reads a bit generic is a bad post, and no caption is no post.
+    written = _model_caption(platform, video_path, headline, config)
+    if written:
+        caption = _with_tags(written, tags, platform)
+    else:
+        caption = build_caption(template, video_path, tags=tags,
+                                folders=folders) or fallback
 
     # Instagram and YouTube apply their rules to the TEXT as well as the
     # video. Rumble is not in this set on purpose: that channel is the
