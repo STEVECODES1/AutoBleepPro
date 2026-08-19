@@ -3465,12 +3465,23 @@ def main(argv=None) -> int:
         return 0
 
     if args.check_llm:
-        from autoreel.llm_highlights import check
+        from autoreel.llm_highlights import check_all
 
         clips = cfg.clips or {}
-        ok, detail = check(str(clips.get("llm_provider", "")),
-                           str(clips.get("llm_model", "")))
-        print(f"[LLM] {detail}")
+        # EVERY configured key, not the first one. Checking only the
+        # first reported "gemini answered - the key works" the moment
+        # after a second key was pasted in, and said nothing about it.
+        results = check_all(str(clips.get("llm_provider", "")),
+                            str(clips.get("llm_model", "")))
+        for index, (name, works, detail) in enumerate(results):
+            role = ("" if len(results) < 2 else
+                    "  (first choice)" if index == 0 else "  (backstop)")
+            print(f"[LLM] {detail}{role}")
+        ok = any(works for _n, works, _d in results)
+        if len(results) == 1 and ok:
+            print("[LLM] Only one provider is configured, so a bad day for "
+                  "it is a day of clips picked by the scorer. Add "
+                  "ANTHROPIC_API_KEY or OPENAI_API_KEY with --set-env.")
         if not ok:
             print("[LLM] Clips will still be cut - the scorer picks them "
                   "instead. It is the model pass that adds the judgement.")

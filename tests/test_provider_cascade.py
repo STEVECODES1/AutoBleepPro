@@ -174,3 +174,71 @@ def test_a_junk_response_from_anthropic_is_just_empty(monkeypatch):
     monkeypatch.setattr(llm, "_post", lambda *a, **k: {"error": "nope"})
 
     assert llm._ask_anthropic("k", "m", "p") == ""
+
+
+# ── checking the keys ────────────────────────────────────────────────
+#
+# --check-llm reported "gemini answered - the key works" the moment after
+# a second key was pasted in, and said nothing about the key that had just
+# been added. A backstop nobody has verified gets found out on the day the
+# first provider fails, which is the worst moment available.
+
+def test_every_configured_key_is_checked(no_keys, monkeypatch):
+    from autoreel.llm_highlights import check_all
+
+    no_keys.setenv("GEMINI_API_KEY", "g")
+    no_keys.setenv("OPENAI_API_KEY", "o")
+    asked = []
+
+    def one(provider="", model=""):
+        asked.append(provider)
+        return True, f"{provider} answered"
+
+    monkeypatch.setattr(llm, "check", one)
+
+    results = check_all()
+
+    assert [name for name, _ok, _d in results] == [GEMINI, OPENAI]
+    assert asked == [GEMINI, OPENAI]
+
+
+def test_no_keys_at_all_names_all_three(no_keys):
+    from autoreel.llm_highlights import check_all
+
+    (_name, ok, detail), = check_all()
+
+    assert not ok
+    assert "ANTHROPIC_API_KEY" in detail
+
+
+def test_one_bad_key_does_not_hide_a_good_one(no_keys, monkeypatch):
+    from autoreel.llm_highlights import check_all
+
+    no_keys.setenv("GEMINI_API_KEY", "g")
+    no_keys.setenv("ANTHROPIC_API_KEY", "a")
+    monkeypatch.setattr(
+        llm, "check",
+        lambda provider="", model="": (provider == ANTHROPIC, provider))
+
+    results = check_all()
+
+    assert dict((n, ok) for n, ok, _ in results) == {GEMINI: False,
+                                                     ANTHROPIC: True}
+
+
+def test_a_configured_model_is_not_forced_onto_a_second_provider(
+        no_keys, monkeypatch):
+    """clips.llm_model names a model for ONE provider. Passing
+    'gemini-flash-latest' to OpenAI would report its key as broken."""
+    from autoreel.llm_highlights import check_all
+
+    no_keys.setenv("GEMINI_API_KEY", "g")
+    no_keys.setenv("OPENAI_API_KEY", "o")
+    seen = []
+    monkeypatch.setattr(
+        llm, "check",
+        lambda provider="", model="": (seen.append(model), (True, provider))[1])
+
+    check_all(model="gemini-flash-latest")
+
+    assert seen == ["", ""], "a provider-specific model name was reused"

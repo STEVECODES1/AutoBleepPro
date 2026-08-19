@@ -427,8 +427,28 @@ def _post_detailed(url: str, payload: dict, headers: dict,
         return None, str(exc)
 
 
+def check_all(provider: str = "", model: str = "") -> list:
+    """[(provider, ok, detail)] for EVERY configured key.
+
+    Checking only the first one reported "gemini answered - the key
+    works" the moment after a second key was added, and said nothing
+    about the key that had just been pasted in. A backstop nobody has
+    verified is found out on the day the first provider fails, which is
+    the worst moment available.
+    """
+    found = all_available(provider)
+    if not found:
+        return [("", False, "no GEMINI_API_KEY, OPENAI_API_KEY or "
+                            "ANTHROPIC_API_KEY in .env")]
+    checked = []
+    for name, _key in found:
+        ok, detail = check(name, model if len(found) == 1 else "")
+        checked.append((name, ok, detail))
+    return checked
+
+
 def check(provider: str = "", model: str = "") -> tuple:
-    """(ok, detail) for the configured key. One tiny real request.
+    """(ok, detail) for one configured key. One tiny real request.
 
     A key that is present but wrong looks exactly like a key that works,
     right up until the clips come out chosen by the fallback scorer and
@@ -436,10 +456,17 @@ def check(provider: str = "", model: str = "") -> tuple:
     """
     provider, key = available(provider)
     if not provider:
-        return False, ("no GEMINI_API_KEY or OPENAI_API_KEY in .env")
+        return False, ("no GEMINI_API_KEY, OPENAI_API_KEY or "
+                       "ANTHROPIC_API_KEY in .env")
     model = resolve_model(provider, key, model)
 
-    if provider == GEMINI:
+    if provider == ANTHROPIC:
+        data, error = _post_detailed(
+            "https://api.anthropic.com/v1/messages",
+            {"model": model, "max_tokens": 8,
+             "messages": [{"role": "user", "content": "Reply with: ok"}]},
+            {"x-api-key": key, "anthropic-version": "2023-06-01"})
+    elif provider == GEMINI:
         url = (f"https://generativelanguage.googleapis.com/v1beta/models/"
                f"{model}:generateContent?key={key}")
         data, error = _post_detailed(
