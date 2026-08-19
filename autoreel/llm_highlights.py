@@ -44,6 +44,7 @@ from typing import Optional
 
 GEMINI = "gemini"
 OPENAI = "openai"
+ANTHROPIC = "anthropic"
 
 # Last resort only. Model names are retired faster than a pinned default
 # can be maintained - the first key tried against this hit "gemini-2.5-flash
@@ -52,6 +53,7 @@ OPENAI = "openai"
 DEFAULT_MODELS = {
     GEMINI: "gemini-flash-latest",
     OPENAI: "gpt-4o-mini",
+    ANTHROPIC: "claude-sonnet-5",
 }
 
 # Model families that cannot do this job, whatever they are called.
@@ -61,7 +63,14 @@ _NOT_TEXT = ("embedding", "aqa", "imagen", "veo", "image", "tts", "audio",
 _KEY_NAMES = {
     GEMINI: ("GEMINI_API_KEY", "GOOGLE_API_KEY"),
     OPENAI: ("OPENAI_API_KEY",),
+    ANTHROPIC: ("ANTHROPIC_API_KEY",),
 }
+
+# Tried in this order. Gemini first because it is the only one here that
+# can be shown the FRAMES, which is the whole reason the picks got good;
+# the others are text-only and are the backstop for the days it will not
+# answer.
+PROVIDER_ORDER = (GEMINI, OPENAI, ANTHROPIC)
 
 _TIMEOUT = 90
 
@@ -160,18 +169,29 @@ def api_key(provider: str) -> str:
     return ""
 
 
+def all_available(preferred: str = "") -> list:
+    """[(provider, key)] for every one configured, best first.
+
+    Every one, not the first one. A single provider means a single point
+    of failure, and the failure is silent: the run falls back to a local
+    scorer that cannot tell whether anything was funny and cuts a full
+    set of guesses. A second key turns that from a bad day into a
+    slightly slower one.
+    """
+    order = list(PROVIDER_ORDER)
+    if preferred in order:
+        order = [preferred] + [p for p in order if p != preferred]
+    return [(p, api_key(p)) for p in order if api_key(p)]
+
+
 def available(preferred: str = "") -> tuple:
     """(provider, key) for whichever is configured, or ("", "").
 
     Gemini first when neither is named: its free tier covers this
     workload, so the default costs nothing to have switched on.
     """
-    order = [preferred] if preferred in (GEMINI, OPENAI) else [GEMINI, OPENAI]
-    for provider in order:
-        key = api_key(provider)
-        if key:
-            return provider, key
-    return "", ""
+    found = all_available(preferred)
+    return found[0] if found else ("", "")
 
 
 # ── Which model to use ───────────────────────────────────────────────────
@@ -565,6 +585,32 @@ def _ask_gemini_vision(key: str, model: str, parts: list) -> tuple:
         return "", f"reply had no text: {blocked}"
 
 
+def _ask_anthropic(key: str, model: str, prompt: str) -> str:
+    """Claude. No JSON mode to ask for - parse_reply already copes with a
+    fenced or bare reply, which is what it was written tolerant for."""
+    payload = {
+        "model": model,
+        "max_tokens": 4096,
+        "system": SYSTEM_PROMPT,
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0.4,
+    }
+    data = _post("https://api.anthropic.com/v1/messages", payload,
+                 {"x-api-key": key, "anthropic-version": "2023-06-01"})
+    if not isinstance(data, dict):
+        return ""
+    try:
+        return data["content"][0]["text"]
+    except (KeyError, IndexError, TypeError):
+        return ""
+
+
+def asker_for(provider: str):
+    """The function that talks to this provider."""
+    return {GEMINI: _ask_gemini, OPENAI: _ask_openai,
+            ANTHROPIC: _ask_anthropic}.get(provider, _ask_gemini)
+
+
 def _ask_openai(key: str, model: str, prompt: str) -> str:
     payload = {
         "model": model,
@@ -637,12 +683,44 @@ def rank(candidates: list, count: int, provider: str = "",
     if not candidates or count <= 0:
         return None
 
-    provider, key = available(provider)
-    if not provider:
+    # Every configured provider, not just the first. One provider is one
+    # point of failure, and the failure is silent - the run drops to a
+    # local scorer that cannot tell whether anything was funny. A second
+    # key turns a bad day into a slower one. `ask` being injected means a
+    # caller is driving this directly, so that stays single-provider.
+    configured = [] if ask is not None else all_available(provider)
+    if not configured:
+        # available() is the single-provider answer and stays
+        # authoritative: a caller driving this directly, or a test, names
+        # one provider through it and must not be overridden by whatever
+        # else happens to be in the environment.
+        one, key = available(provider)
+        configured = [(one, key)] if one else []
+    if not configured:
         return None
-    model = resolve_model(provider, key, model)
 
     shortlist = candidates[:MAX_CANDIDATES]
+    picked: list = []
+    for attempt, (provider, key) in enumerate(configured):
+        if attempt:
+            print(f"[Clips] Asking {provider} instead.")
+        picked, looked_at = _ask_one_provider(
+            provider, key, model, shortlist, count, source_path, ask)
+        if picked:
+            return _chosen_from(picked, looked_at, count)
+    return None
+
+
+def _ask_one_provider(provider, key, model, shortlist, count, source_path,
+                      ask) -> tuple:
+    """((index, score, title) list, the shortlist those indices refer to).
+
+    The second half matters: the vision pass narrows the shortlist to the
+    candidates it could attach frames to, and the model's indices are
+    into THAT list. Returning only the picks would have them read against
+    the wrong candidates - a clip chosen at 40 minutes rendered from 12.
+    """
+    model = resolve_model(provider, key, model)
 
     # Vision is Gemini-only here and only when there is a file to sample.
     # It is tried FIRST and falls back to the words on any failure: a
@@ -673,11 +751,11 @@ def rank(candidates: list, count: int, provider: str = "",
 
     if not raw:
         prompt = build_prompt(shortlist, count)
-        ask = ask or (_ask_gemini if provider == GEMINI else _ask_openai)
+        speak = ask or asker_for(provider)
         try:
-            raw = ask(key, model, prompt)
+            raw = speak(key, model, prompt)
         except Exception:
-            return None
+            return [], shortlist
 
     picked = parse_reply(raw, len(shortlist))
     if not picked:
@@ -696,10 +774,10 @@ def rank(candidates: list, count: int, provider: str = "",
         # part that mattered more.
         print("[Clips] The model would not write titles - asking it to "
               "just pick, and titling them here.")
-        ask = ask or (_ask_gemini if provider == GEMINI else _ask_openai)
+        speak = ask or asker_for(provider)
         try:
-            raw = ask(key, model,
-                      build_prompt(shortlist, count) + NUMBERS_ONLY)
+            raw = speak(key, model,
+                        build_prompt(shortlist, count) + NUMBERS_ONLY)
         except Exception:
             raw = ""
         picked = parse_reply(raw, len(shortlist))
@@ -720,9 +798,13 @@ def rank(candidates: list, count: int, provider: str = "",
             print("[Clips] The model answered, and the answer could not be "
                   "read as clip numbers. It said:")
             print(f"[Clips]   {excerpt}")
-        print("[Clips] The scorer's own ranking stands.")
-        return None
+        return [], shortlist
 
+    return picked, shortlist
+
+
+def _chosen_from(picked: list, shortlist: list, count: int) -> list:
+    """The model's picks, as Highlights, in timeline order."""
     picked.sort(key=lambda item: item[1], reverse=True)
     chosen = []
     for index, score, title in picked[:count]:
