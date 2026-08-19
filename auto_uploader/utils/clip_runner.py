@@ -318,6 +318,11 @@ def make_clips(cfg, source_path: str, title: str,
     speed = dict(getattr(cfg.general, "speed", {}) or {})
     from autoreel.crop_strategy import resolve_crop_strategy, resolve_profile
 
+    # Remembered before the auto branch overwrites it: by the time
+    # ClipMaker is built, clips_cfg["profile"] holds the resolved name and
+    # there is no way left to tell whether a person chose it.
+    asked_for_auto = str(clips_cfg.get("profile", "")).strip().lower() in (
+        "", "auto")
     if str(clips_cfg.get("profile", "")).strip().lower() == "auto":
         from autoreel.crop_strategy import profile_for_title
 
@@ -347,6 +352,11 @@ def make_clips(cfg, source_path: str, title: str,
         # captions people read and captions people turn off.
         caption_style=str(clips_cfg.get("caption_style", "word")),
         burn_hook=bool(clips_cfg.get("burn_hook", False)),
+        # "auto" already means "work it out from the video". Working it
+        # out per clip is the same instruction, followed properly: a
+        # profile named explicitly in config is a decision someone made
+        # and is left alone.
+        per_clip_framing=asked_for_auto,
         caption_uppercase=bool(clips_cfg.get("caption_uppercase", True)),
         count=int(count or clips_cfg.get("count", 3)),
         min_seconds=float(clips_cfg.get("min_seconds", 15)),

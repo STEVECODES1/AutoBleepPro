@@ -781,6 +781,16 @@ class ClipMaker:
     crf: int = 20
     caption_style: str = "word"
     caption_uppercase: bool = True
+    # Decide the framing PER CLIP from that clip's own frames, instead of
+    # once for the whole video.
+    #
+    # A stream is not one thing for two hours. This channel opens on a
+    # Monkey call and then plays GTA for a hundred minutes, and one
+    # decision for the whole file is wrong for whichever half loses the
+    # vote - a call cropped as gameplay, or gameplay cropped onto a face.
+    # Set by clip_runner when clips.profile is "auto"; a profile named
+    # explicitly is an instruction and is left alone.
+    per_clip_framing: bool = False
     # The clip's own title, held at the top of the frame for the whole
     # clip. Off by default: it is a real change to how every clip looks,
     # and the person whose account it is should choose it rather than
@@ -849,6 +859,40 @@ class ClipMaker:
             print(f"[Clips] Clip {spec.index:02d}: captions moved "
                   f"{shift:+.2f}s onto the speech.")
         return shift
+
+    def _framing_at(self, source_path: str, spec, fallback: str,
+                    fallback_region):
+        """(strategy, region) for THIS clip, read from its own frames.
+
+        The profile for a whole video is a vote, and a vote produces one
+        answer for a stream that had two shows in it - twenty minutes of
+        Monkey and a hundred of GTA. Whichever half loses gets framed
+        wrong: a call cropped as gameplay, or gameplay cropped onto a
+        face.
+
+        Looking at the clip itself has no such problem. It cannot be
+        outvoted by a different part of the stream, because there is no
+        other part of the clip.
+
+        Falls back to whatever the run decided, on anything unreadable -
+        no numpy, no ffmpeg, a corrupt stretch. A per-clip look is an
+        improvement on a guess, never a requirement.
+        """
+        from autoreel.content_kind import kind_for_video
+        from autoreel.crop_strategy import PROFILES
+
+        try:
+            kind = kind_for_video(source_path, start=spec.start)
+        except Exception:
+            kind = ""
+        profile = PROFILES.get(kind) if kind else None
+        if not profile:
+            return fallback, fallback_region
+        chosen = profile.get("crop_strategy", fallback)
+        if chosen != fallback:
+            print(f"[Clips] Clip {spec.index:02d}: this stretch is {kind} - "
+                  f"framing it as {chosen}, not {fallback}.")
+        return chosen, profile.get("crop_region", fallback_region)
 
     def _say_once(self, message: str) -> None:
         """Print this the first time only.
@@ -975,6 +1019,10 @@ class ClipMaker:
             # stands.
             region = self.region
             clip_strategy = strategy
+            if self.per_clip_framing:
+                strategy, region = self._framing_at(
+                    source_path, spec, strategy, self.region)
+                clip_strategy = strategy
             if strategy in (CROP_REGION, CROP_FACE_PAN) and self.find_faces:
                 # Said ONCE per run, not per clip. Without mediapipe every
                 # clip falls back to the fixed call-pane rectangle and the
