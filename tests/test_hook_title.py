@@ -99,3 +99,63 @@ def test_it_is_off_unless_asked_for():
     from autoreel.clip_maker import ClipMaker
 
     assert ClipMaker(output_dir="x").burn_hook is False
+
+
+# ── turning it on without editing JSON ───────────────────────────────
+
+def _main():
+    import importlib.util
+
+    uploader = os.path.join(_REPO, "auto_uploader")
+    if uploader not in sys.path:
+        sys.path.insert(0, uploader)
+    spec = importlib.util.spec_from_file_location(
+        "_main_hook", os.path.join(uploader, "main.py"))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_the_card_can_be_switched_on_by_command(tmp_path):
+    import json
+
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps({"clips": {"burn_captions": True}}))
+
+    said = _main().set_hook_card(str(path), on=True)
+
+    assert "title" in said
+    live = json.loads(path.read_text())["clips"]
+    assert live["burn_hook"] is True
+    assert live["burn_captions"] is True, "it touched something else"
+
+
+def test_switching_it_off_again(tmp_path):
+    import json
+
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps({"clips": {"burn_hook": True}}))
+
+    _main().set_hook_card(str(path), on=False)
+
+    assert json.loads(path.read_text())["clips"]["burn_hook"] is False
+
+
+def test_no_change_is_reported_as_no_change(tmp_path):
+    import json
+
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps({"clips": {"burn_hook": True}}))
+
+    assert _main().set_hook_card(str(path), on=True) is None
+
+
+def test_a_config_with_no_clips_block_still_works(tmp_path):
+    import json
+
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps({"posting": {}}))
+
+    _main().set_hook_card(str(path), on=True)
+
+    assert json.loads(path.read_text())["clips"]["burn_hook"] is True

@@ -388,6 +388,37 @@ def set_platform_pace(config_file: str, platform: str, per_day=None,
             f"at least {settings.get('min_minutes_between', '?')} min apart.")
 
 
+def set_hook_card(config_file: str, on: bool):
+    """Burn the clip's title across the top of the frame, or stop.
+
+    A command because everything else that lives in clips.* is, and
+    because the person running this is busy - a setting that requires
+    finding one key in 700 lines of untracked JSON is a setting that
+    does not get changed.
+    """
+    try:
+        with open(config_file, "r", encoding="utf-8") as handle:
+            live = json.load(handle)
+    except (OSError, ValueError) as exc:
+        return f"could not read config.json: {exc}"
+
+    clips = live.setdefault("clips", {})
+    if bool(clips.get("burn_hook")) == on:
+        return None
+    clips["burn_hook"] = on
+    try:
+        temporary = config_file + ".tmp"
+        with open(temporary, "w", encoding="utf-8") as handle:
+            json.dump(live, handle, indent=2, ensure_ascii=False)
+            handle.write("\n")
+        os.replace(temporary, config_file)
+    except OSError as exc:
+        return f"could not write config.json: {exc}"
+
+    return ("Clips now carry their title across the top of the frame."
+            if on else "Clips no longer carry a title card.")
+
+
 def set_censor_style(config_file: str, sound: str = "", scope: str = ""):
     """How a flagged word is removed, and how much goes with it.
 
@@ -2404,6 +2435,11 @@ def main(argv=None) -> int:
                              "and spacing are left exactly as they are.")
     parser.add_argument("--disable", metavar="PLATFORM",
                         help="Turn a posting platform OFF in config.json.")
+    parser.add_argument("--hook", metavar="ON_OFF", choices=("on", "off"),
+                        help="Burn each clip's own title across the top of "
+                             "the frame for the whole clip, so a scrolling "
+                             "viewer knows what they are watching before "
+                             "the audio registers.")
     parser.add_argument("--pace", metavar="PLATFORM",
                         help="Change how hard one platform is posted to. "
                              "Use with --per-day and/or --every-minutes. "
@@ -3316,6 +3352,13 @@ def main(argv=None) -> int:
         if said and said.startswith("no such platform"):
             return 1
         return 0
+
+    if args.hook:
+        said = set_hook_card(os.path.join(config_dir, "config.json"),
+                             on=args.hook == "on")
+        print(f"[Config] {said}" if said else
+              f"[Config] the title card was already {args.hook}.")
+        return 1 if said and said.startswith("could not") else 0
 
     if args.pace:
         if args.per_day is None and args.every_minutes is None:
