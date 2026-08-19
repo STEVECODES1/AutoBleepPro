@@ -330,6 +330,64 @@ def set_platform_enabled(config_file: str, platform: str, on: bool):
             if on else f"{platform} is now OFF.")
 
 
+def set_platform_pace(config_file: str, platform: str, per_day=None,
+                      minutes=None):
+    """How hard one platform is posted to: cap per day, gap between posts.
+
+    A command rather than an instruction to edit JSON, for the same
+    reason as --enable: config.json is untracked, so a value already in
+    it is never updated by a pull, and the file is 700 lines long on the
+    machine least convenient for editing it.
+
+    The guard still owns everything else - kill switch, breaker,
+    manual-only. This only moves the two numbers a person actually wants
+    to tune when a platform is doing well.
+
+    Returns a line describing what changed, or a problem to print.
+    """
+    try:
+        with open(config_file, "r", encoding="utf-8") as handle:
+            live = json.load(handle)
+    except (OSError, ValueError) as exc:
+        return f"could not read config.json: {exc}"
+
+    platforms = live.setdefault("posting", {}).setdefault("platforms", {})
+    if platform not in platforms:
+        from publish_guard import LEGACY_PLATFORM_NAMES, SPLIT_PLATFORM_LIMITS
+        older = LEGACY_PLATFORM_NAMES.get(platform)
+        if older and older in platforms:
+            platforms[platform] = {**platforms[older],
+                                   **SPLIT_PLATFORM_LIMITS.get(platform, {})}
+        else:
+            known = ", ".join(sorted(platforms)) or "none configured"
+            return f"no such platform '{platform}'. Known: {known}"
+
+    settings = platforms[platform]
+    if per_day is not None:
+        if int(per_day) < 1:
+            return "a daily cap below 1 would stop the platform - use --disable"
+        settings["daily_cap"] = int(per_day)
+        # A cap written under the other spelling would still be read by
+        # daily_cap_of and would silently win half the time. One name.
+        settings.pop("max_per_day", None)
+    if minutes is not None:
+        if int(minutes) < 0:
+            return "a negative gap makes no sense"
+        settings["min_minutes_between"] = int(minutes)
+
+    try:
+        temporary = config_file + ".tmp"
+        with open(temporary, "w", encoding="utf-8") as handle:
+            json.dump(live, handle, indent=2, ensure_ascii=False)
+            handle.write("\n")
+        os.replace(temporary, config_file)
+    except OSError as exc:
+        return f"could not write config.json: {exc}"
+
+    return (f"{platform}: up to {settings.get('daily_cap', '?')} a day, "
+            f"at least {settings.get('min_minutes_between', '?')} min apart.")
+
+
 def set_censor_style(config_file: str, sound: str = "", scope: str = ""):
     """How a flagged word is removed, and how much goes with it.
 
@@ -2346,6 +2404,15 @@ def main(argv=None) -> int:
                              "and spacing are left exactly as they are.")
     parser.add_argument("--disable", metavar="PLATFORM",
                         help="Turn a posting platform OFF in config.json.")
+    parser.add_argument("--pace", metavar="PLATFORM",
+                        help="Change how hard one platform is posted to. "
+                             "Use with --per-day and/or --every-minutes. "
+                             "The kill switch, the circuit breaker and the "
+                             "manual-only rule all still apply.")
+    parser.add_argument("--per-day", type=int, metavar="N",
+                        help="With --pace: most posts per rolling 24h.")
+    parser.add_argument("--every-minutes", type=int, metavar="M",
+                        help="With --pace: smallest gap between two posts.")
     parser.add_argument("--censor-sound", metavar="HOW",
                         choices=("beep", "silence"),
                         help="What replaces a flagged word: 'beep' drops a "
@@ -3249,6 +3316,16 @@ def main(argv=None) -> int:
         if said and said.startswith("no such platform"):
             return 1
         return 0
+
+    if args.pace:
+        if args.per_day is None and args.every_minutes is None:
+            print("[Config] --pace needs --per-day and/or --every-minutes.")
+            return 1
+        said = set_platform_pace(
+            os.path.join(config_dir, "config.json"), args.pace,
+            per_day=args.per_day, minutes=args.every_minutes)
+        print(f"[Config] {said}")
+        return 1 if said.startswith(("no such", "could not", "a ")) else 0
 
     if args.check_sync is not None:
         # Naming the file is the step most likely to go wrong - the VODs
