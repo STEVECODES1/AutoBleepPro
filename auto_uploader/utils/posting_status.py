@@ -481,6 +481,24 @@ def verify(platforms: Optional[list] = None, reddit_account: str = "",
             results.append(_CHECKS[name]())
         else:
             results.append(Check(name, SKIPPED, "no credential check written"))
+
+    # A FAIL for a platform that is switched off is noise, and noise is
+    # what teaches somebody to scroll past a real FAIL. zernio_tiktok
+    # failed on every run for an account that is deliberately disabled
+    # and never coming back.
+    #
+    # Downgraded, not hidden: the row stays so nothing silently vanishes,
+    # and an OK still shows as OK - knowing a disabled platform's
+    # credentials are good is worth having when switching it on.
+    platforms_cfg = ((cfg_dict or {}).get("posting", {}) or {}).get(
+        "platforms", {}) or {}
+    for index, check in enumerate(results):
+        if check.state != FAILED:
+            continue
+        settings = platforms_cfg.get(check.platform)
+        if isinstance(settings, dict) and not settings.get("enabled", False):
+            results[index] = Check(check.platform, SKIPPED,
+                                   f"off in config - {check.detail}")
     return results
 
 

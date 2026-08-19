@@ -158,3 +158,56 @@ def test_setup_and_verify_agree_on_the_field_order():
 
     assert 'account.get("_id")' in main_body
     assert 'entry.get("_id"' in status_body
+
+
+# ── a FAIL you are meant to ignore ───────────────────────────────────
+
+def _cfg(enabled):
+    return {"posting": {"platforms": {
+        "zernio_tiktok": {"enabled": enabled, "daily_cap": 6}}}}
+
+
+def test_a_disabled_platform_does_not_shout(zernio):
+    """zernio_tiktok failed on every run for an account deliberately
+    switched off and never coming back. A FAIL nobody is meant to act on
+    is what teaches somebody to scroll past a real one."""
+    zernio["publisher"] = FakeZernio(account="")
+
+    check = verify(["zernio_tiktok"], cfg_dict=_cfg(False))[0]
+
+    assert check.state == SKIPPED
+    assert "off in config" in check.detail
+
+
+def test_the_reason_survives_the_downgrade(zernio):
+    """Downgraded, not hidden - the row stays and still says what is
+    wrong, for whenever it does get switched on."""
+    zernio["publisher"] = FakeZernio(account="")
+
+    check = verify(["zernio_tiktok"], cfg_dict=_cfg(False))[0]
+
+    assert "--setup-zernio" in check.detail
+
+
+def test_an_enabled_platform_still_fails_loudly(zernio):
+    zernio["publisher"] = FakeZernio(account="")
+
+    check = verify(["zernio_tiktok"], cfg_dict=_cfg(True))[0]
+
+    assert check.state == FAILED
+
+
+def test_a_disabled_platform_that_works_still_reads_ok(zernio):
+    """Knowing a switched-off platform's credentials are good is worth
+    having on the day it gets switched on."""
+    zernio["publisher"] = FakeZernio()
+
+    check = verify(["zernio_tiktok"], cfg_dict=_cfg(False))[0]
+
+    assert check.state == OK
+
+
+def test_no_config_at_all_changes_nothing(zernio):
+    zernio["publisher"] = FakeZernio(account="")
+
+    assert verify(["zernio_tiktok"])[0].state == FAILED
