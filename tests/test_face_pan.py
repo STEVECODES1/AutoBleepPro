@@ -176,7 +176,7 @@ def test_gameplay_never_reaches_the_face_pan():
     assert resolve_crop_strategy(
         {"clips": {"profile": "auto",
                    "content_title": "stackswopo + gta D10 johnny cox"}}) \
-        == CROP_MOTION
+        != CROP_FACE_PAN
 
 
 # ── the wiring in ClipMaker.make ─────────────────────────────────────

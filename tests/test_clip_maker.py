@@ -486,17 +486,20 @@ def test_the_gta_profile_follows_motion_and_never_faces():
     permanent and is asserted below and again in the next test.
 
     The other half, "gameplay is a locked centre crop", was overridden
-    on request: a locked crop keeps the crosshair and the HUD and misses
-    the fight that made the clip. Motion is frame-to-frame CHANGE, which
-    has no opinion about faces at all, and it is speed-capped and
-    deadzoned so it drifts rather than chases."""
-    from autoreel.crop_strategy import (CROP_FACE, CROP_MOTION,
+    on request and then again by watching the output: motion tracking
+    beat a locked crop but still framed about one clip in three on the
+    camera panning, drifting smoke or a HUD element. A fit crop has
+    nothing to aim, so it cannot aim wrong - whatever the moment was, it
+    is still in the picture."""
+    from autoreel.crop_strategy import (CROP_FACE, CROP_FACE_PAN, CROP_FIT,
                                         resolve_crop_strategy)
 
     resolved = resolve_crop_strategy({"clips": {"profile": "gta"}})
 
-    assert resolved == CROP_MOTION
-    assert resolved != CROP_FACE
+    assert resolved == CROP_FIT
+    # The half that has never changed and must not: no face detector
+    # anywhere near gameplay. GTA is full of NPC faces.
+    assert resolved not in (CROP_FACE, CROP_FACE_PAN)
 
 
 def test_gameplay_still_defaults_to_centre_without_a_profile():
@@ -595,7 +598,7 @@ def test_auto_picks_the_framing_from_the_stream_title():
     completely different things - so every GTA stream went through the
     Monkey rectangle, cropped to the left 46% of a gameplay frame for a
     call window that was not there."""
-    from autoreel.crop_strategy import (CROP_FACE_PAN, CROP_MOTION,
+    from autoreel.crop_strategy import (CROP_FACE_PAN, CROP_FIT,
                                         resolve_crop_strategy)
 
     def framing(title):
@@ -603,7 +606,7 @@ def test_auto_picks_the_framing_from_the_stream_title():
             {"clips": {"profile": "auto", "content_title": title}})
 
     assert framing('"stackswopo + gta D10 johnny cox + Lifestyle RP" 8/12/26') \
-        == CROP_MOTION
+        == CROP_FIT
     assert framing("Stackswopo monkey app trolling pt 1") == CROP_FACE_PAN
 
 

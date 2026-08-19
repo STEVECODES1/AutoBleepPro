@@ -141,15 +141,21 @@ PROFILES: Dict[str, Dict[str, Any]] = {
     # pane from the call - the layout the hand-made CapCut edits use.
     "monkey_stack": {"crop_strategy": CROP_STACK, "stack": DEFAULT_STACK,
                      "content_region": DEFAULT_CONTENT_REGION},
-    # Centred on the action, drifting slowly toward it when something
-    # happens off to one side. A locked centre crop keeps the crosshair
-    # and the HUD and misses the fight that made the clip.
+    # The WHOLE gameplay frame, on a blurred canvas. Nothing cut.
     #
-    # This is MOTION, never faces. GTA is full of NPC faces and a
-    # detector locks onto whichever is nearest the lens - which is why
-    # face tracking stays off for gameplay everywhere in this project.
-    # Frame-to-frame change has no such opinion.
-    "gta": {"crop_strategy": CROP_MOTION},
+    # Motion tracking was the default here and it was better than a
+    # locked centre crop - but "better" still meant one clip in three
+    # framed on the wrong thing, because on gameplay the biggest moving
+    # region is as often the camera panning, drifting smoke or a HUD
+    # element as it is the moment worth clipping. Watched side by side
+    # against fit crops of the same stream, the uncut frame won.
+    #
+    # It also cannot be wrong in the way the others can. A crop that aims
+    # has to aim correctly every time; a fit crop has nothing to aim.
+    # Whatever the moment was, it is still in the picture.
+    #
+    # Set clips.crop_strategy to "motion" to get the tracking back.
+    "gta": {"crop_strategy": CROP_FIT},
     # Layout unknown: keep everything, lose nothing.
     "whole": {"crop_strategy": CROP_FIT},
 }

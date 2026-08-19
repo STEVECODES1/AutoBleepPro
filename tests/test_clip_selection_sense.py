@@ -89,3 +89,41 @@ def test_an_unreadable_length_still_gets_looked_at():
     points = sample_points(0.0, samples=3, spacing=300.0)
 
     assert points == [0.0, 300.0, 600.0]
+
+
+# ── gameplay keeps the whole frame ───────────────────────────────────
+#
+# Watched side by side on a real stream: motion tracking beat a locked
+# centre crop, but still framed about one clip in three on the wrong
+# thing - on gameplay the biggest moving region is as often the camera
+# panning, drifting smoke or a HUD element as it is the moment worth
+# clipping. The uncut frame won.
+
+def test_gameplay_keeps_the_whole_frame():
+    from autoreel.crop_strategy import CROP_FIT, resolve_crop_strategy
+
+    assert resolve_crop_strategy({"clips": {"profile": "gta"}}) == CROP_FIT
+
+
+def test_a_fit_crop_has_nothing_to_aim_wrong():
+    """The reason this is the default rather than a better tracker: a
+    crop that aims has to aim correctly every time."""
+    from autoreel.crop_strategy import PROFILES
+
+    assert not PROFILES["gta"].get("crop_region")
+    assert not PROFILES["gta"].get("content_region")
+
+
+def test_the_tracking_is_still_there_for_anyone_who_wants_it():
+    from autoreel.crop_strategy import CROP_MOTION, resolve_crop_strategy
+
+    assert resolve_crop_strategy(
+        {"clips": {"profile": "gta", "crop_strategy": "motion"}}) == CROP_MOTION
+
+
+def test_a_call_stream_is_untouched_by_this():
+    """Faces are the right signal there and always were."""
+    from autoreel.crop_strategy import CROP_FACE_PAN, resolve_crop_strategy
+
+    assert resolve_crop_strategy(
+        {"clips": {"profile": "monkey"}}) == CROP_FACE_PAN
