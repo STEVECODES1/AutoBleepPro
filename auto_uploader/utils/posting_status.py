@@ -440,7 +440,13 @@ def _check_zernio(platform: str, cfg_dict: Optional[dict] = None) -> Check:
     for entry in found:
         if not isinstance(entry, dict):
             continue
-        if str(entry.get("id", "") or entry.get("account_id", "")) != wanted:
+        # The SAME field, in the same order, that --setup-zernio saves.
+        # It stores `_id` first; comparing against `id` here meant a
+        # correct save never matched, and this check reported a freshly
+        # written id as one the key could not reach - a false alarm
+        # pointing at the command that had just been run.
+        if str(entry.get("_id", "") or entry.get("id", "")
+               or entry.get("account_id", "")) != wanted:
             continue
         name = str(entry.get("username") or entry.get("name") or "")
         return Check(platform, OK, "",

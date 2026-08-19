@@ -133,3 +133,28 @@ def test_an_account_with_no_username_still_passes(zernio):
     check = _check(zernio, FakeZernio(found=[{"id": "acc-1"}]))
 
     assert check.state == OK
+
+
+def test_the_id_field_matches_what_setup_zernio_saves(zernio):
+    """--setup-zernio stores account["_id"]. Comparing against "id" here
+    meant a correct save never matched, and this check called a freshly
+    written id unreachable - a false alarm pointing at the command that
+    had just been run successfully."""
+    check = _check(zernio, FakeZernio(
+        account="6a80c2547755",
+        found=[{"_id": "6a80c2547755", "platform": "twitter",
+                "username": "BinScripts"}]))
+
+    assert check.state == OK
+    assert check.identity == "@BinScripts"
+
+
+def test_setup_and_verify_agree_on_the_field_order():
+    """One list, read the same way by both, or they drift apart again."""
+    main_body = open(os.path.join(_UPLOADER, "main.py"),
+                     encoding="utf-8").read()
+    status_body = open(os.path.join(_UPLOADER, "utils", "posting_status.py"),
+                       encoding="utf-8").read()
+
+    assert 'account.get("_id")' in main_body
+    assert 'entry.get("_id"' in status_body
