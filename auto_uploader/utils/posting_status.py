@@ -403,6 +403,55 @@ def _check_youtube_shorts(cfg_dict: Optional[dict] = None) -> Check:
     return Check("youtube_shorts", OK, detail, identity=custom or title)
 
 
+def _check_zernio(platform: str, cfg_dict: Optional[dict] = None) -> Check:
+    """Key AND account id, because a post needs both.
+
+    The failure this exists for: --posting-status reported every variable
+    present and the guard reported ALLOW, and then every clip was skipped
+    with "zernio_twitter: not configured yet". The key was fine. The
+    account id was missing from config.json, --verify had no check
+    written for this platform, and there was nothing anywhere that said
+    which half was wrong.
+    """
+    from publishers.zernio import ZernioPublisher
+
+    publisher = ZernioPublisher(cfg_dict or {}, destination=platform)
+    if not publisher.token():
+        return Check(platform, MISSING, "ZERNIO_API_KEY")
+    if not publisher.account_id():
+        return Check(
+            platform, FAILED,
+            "the key is set but this account's id is not in config.json - "
+            "run: python main.py --setup-zernio")
+
+    # Read-only: ask the key what it can reach, and check the configured
+    # id is one of them. A stale id survives a key rotation and posts
+    # nowhere - which reads exactly like a broken key.
+    wanted = publisher.account_id()
+    try:
+        found = publisher.accounts()
+    except Exception as exc:
+        return Check(platform, FAILED, str(exc)[:200])
+    if not found:
+        return Check(platform, FAILED,
+                     "the key reached Zernio but no accounts are connected "
+                     "to it - connect the account in Zernio first")
+
+    for entry in found:
+        if not isinstance(entry, dict):
+            continue
+        if str(entry.get("id", "") or entry.get("account_id", "")) != wanted:
+            continue
+        name = str(entry.get("username") or entry.get("name") or "")
+        return Check(platform, OK, "",
+                     identity=f"@{name.lstrip('@')}" if name else wanted)
+
+    return Check(platform, FAILED,
+                 f"the id in config.json ({wanted[:12]}...) is not one of the "
+                 f"{len(found)} account(s) this key can reach - "
+                 "run: python main.py --setup-zernio")
+
+
 _CHECKS = {
     "instagram": _check_instagram,
     "facebook": _check_facebook,
@@ -420,6 +469,8 @@ def verify(platforms: Optional[list] = None, reddit_account: str = "",
             results.append(_check_reddit(reddit_account))
         elif name == "youtube_shorts":
             results.append(_check_youtube_shorts(cfg_dict))
+        elif name.startswith("zernio"):
+            results.append(_check_zernio(name, cfg_dict))
         elif name in _CHECKS:
             results.append(_CHECKS[name]())
         else:
