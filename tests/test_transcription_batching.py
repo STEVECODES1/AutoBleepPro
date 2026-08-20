@@ -1,4 +1,14 @@
-"""Keeping the GPU fed.
+"""Keeping the GPU fed - when the timings can afford it.
+
+OFF by default now. It shipped on, and the burned-in captions came back
+out of sync with the voice on almost every clip. The batched pipeline
+derives each word's timing within its own chunk; that is a real speed win
+and a real cost in exactness at word boundaries, and word boundaries are
+the whole product here - the captions land on them, and so does the mute
+that keeps a slur off Instagram.
+
+The tests below still cover the batched path, because it still exists and
+still has to be correct when someone asks for it.
 
 faster-whisper's ordinary path sends one 30-second window through at a
 time, which leaves most of a GPU idle between windows. Its batched
@@ -273,3 +283,38 @@ def test_another_language_can_be_asked_for():
     speaker.transcribe("a.wav")
 
     assert speaker._model.calls[0]["language"] == "fr"
+
+
+# ── off unless asked for ─────────────────────────────────────────────
+
+def test_batching_is_off_by_default():
+    """A transcript 4x faster and a tenth of a second out is worse than
+    the slow one - a tenth of a second is exactly what "the caption
+    doesn't match the voice" looks like."""
+    from autoreel.transcription import DEFAULT_BATCH_SIZE
+
+    assert DEFAULT_BATCH_SIZE == 1
+
+
+def test_a_default_transcriber_uses_the_sequential_path(monkeypatch):
+    import types
+
+    module = types.ModuleType("faster_whisper")
+    module.WhisperModel = lambda *a, **k: FakeModel()
+    monkeypatch.setitem(sys.modules, "faster_whisper", module)
+    made = []
+    monkeypatch.setattr(transcription, "_batched",
+                        lambda model: made.append(model) or FakeBatched())
+
+    speaker = Transcriber(model_name="base", device="cuda",
+                          backend=BACKEND_FASTER)
+    speaker._load()
+
+    assert not made, "the default asked for batched decoding"
+    assert speaker._batch is None
+
+
+def test_it_can_still_be_turned_on(monkeypatch):
+    speaker, made = _loaded_on("cuda", monkeypatch, batch_size=8)
+
+    assert made and speaker._batch is not None

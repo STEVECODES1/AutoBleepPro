@@ -100,10 +100,20 @@ def default_compute_type(device: str) -> str:
 # GPU idle between them; batching keeps it fed and is the single biggest
 # speed win available on this machine.
 #
-# 8 rather than as-high-as-it-goes: batch size costs VRAM, and a card that
-# runs out mid-stream would fall back to the slow path having already
-# spent the time. Raise it if the card has room.
-DEFAULT_BATCH_SIZE = 8
+# OFF by default. This shipped at 8 and the burned-in captions came back
+# out of sync with the voice on almost every clip.
+#
+# The batched pipeline decodes several chunks at once and derives each
+# word's timing within its own chunk. That is a real speed win and a real
+# cost in exactness at word boundaries - and word boundaries are the whole
+# product here. The captions land on them, and so does the mute that keeps
+# a slur off Instagram. A transcript that is 4x faster and a tenth of a
+# second out is worse than the slow one, because a tenth of a second is
+# exactly what "the caption doesn't match" looks like.
+#
+# Set clips.transcribe_batch_size (or Transcriber(batch_size=...)) above 1
+# to turn it back on for a job where timing does not matter.
+DEFAULT_BATCH_SIZE = 1
 
 
 def _batched(model):
