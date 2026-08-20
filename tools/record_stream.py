@@ -450,21 +450,49 @@ def remember_title(log_path: str, title: str) -> str:
 
 
 def prune_logs(folder: str, keep: int = KEEP_LOGS) -> int:
-    """Delete all but the newest `keep` .log files. Returns how many went."""
+    """Delete all but the newest `keep` .log files. Returns how many went.
+
+    Cannot raise. Four recorders run at once - youtube, twitch, kick and
+    a second channel - and every one of them prunes this same folder. The
+    mtime used to be read inside a sort key, so a file deleted by one of
+    them between another's listdir and its getmtime raised
+    FileNotFoundError where nothing caught it, and the whole recorder
+    exited on the traceback before it had watched anything:
+
+        logs.sort(key=lambda path: os.path.getmtime(path), reverse=True)
+        FileNotFoundError: [WinError 2] The system cannot find the file
+        specified: '...\\Stackswopo youtube live 2026-08-17 16_31.log'
+
+    Tidying up old logs must never be able to stop a recording. Times are
+    read in one pass now, and a file that has gone is simply not in the
+    list - which is the correct answer, because somebody else already
+    deleted it.
+    """
     try:
-        logs = [os.path.join(folder, name) for name in os.listdir(folder)
-                if name.endswith(".log")]
+        names = os.listdir(folder)
     except OSError:
         return 0
-    if len(logs) <= keep:
+
+    dated = []
+    for name in names:
+        if not name.endswith(".log"):
+            continue
+        path = os.path.join(folder, name)
+        try:
+            dated.append((os.path.getmtime(path), path))
+        except OSError:
+            continue
+
+    if len(dated) <= keep:
         return 0
-    logs.sort(key=lambda path: os.path.getmtime(path), reverse=True)
+    dated.sort(reverse=True)
     removed = 0
-    for path in logs[keep:]:
+    for _when, path in dated[keep:]:
         try:
             os.remove(path)
             removed += 1
         except OSError:
+            # Another recorder got there first, or Windows has it open.
             pass
     return removed
 
