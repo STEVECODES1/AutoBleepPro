@@ -363,6 +363,51 @@ _RECORDING_MARKERS = (
 # dead rather than the network being flaky.
 MAX_FRAGMENT_REFUSALS = 40
 
+# A fresh manifest fixes a STALE one. It cannot fix a yt-dlp that YouTube
+# no longer speaks to, and that failure looks identical from here: every
+# fragment 403s, the run is abandoned, the next one starts clean and every
+# fragment 403s again. A whole stream was lost to this - hours of
+#
+#   [download] Got error: HTTP Error 403: Forbidden. Retrying fragment 362
+#
+# and then "Channel is not live (or the recording never started)".
+#
+# Two restarts that never downloaded a single fragment between them is the
+# signal. One restart can legitimately be a stale manifest; two in a row
+# with no progress at all is something the restart cannot reach.
+REFUSAL_RESTARTS_BEFORE_UPDATE = 2
+
+
+def update_yt_dlp(runner=None) -> tuple:
+    """(updated, detail). Bring yt-dlp up to date, once.
+
+    YouTube changes its player and its manifests constantly and yt-dlp
+    follows within days, so "every fragment is refused" is far more often
+    an out-of-date yt-dlp than anything about the stream. This is the
+    single maintenance task a recorder like this needs, and it is not
+    reasonable to expect somebody to know that at 3am while a stream they
+    wanted is going out unrecorded.
+    """
+    import subprocess
+
+    runner = runner or subprocess.run
+    command = [sys.executable, "-m", "pip", "install", "-U", "yt-dlp"]
+    try:
+        done = runner(command, capture_output=True, text=True, timeout=300)
+    except Exception as exc:
+        return False, str(exc)
+    if getattr(done, "returncode", 1) != 0:
+        detail = (getattr(done, "stderr", "") or "").strip().splitlines()
+        return False, (detail[-1] if detail else "pip failed")
+    out = (getattr(done, "stdout", "") or "")
+    if "Successfully installed" in out:
+        version = ""
+        for word in out.split():
+            if word.startswith("yt-dlp-"):
+                version = word[len("yt-dlp-"):]
+        return True, f"updated to {version}" if version else "updated"
+    return True, "already the latest version"
+
 # Logs are kept because "it just stopped" is unanswerable without them -
 # but they are kept FOREVER, one per poll, and a recorder that polls
 # every 60 seconds for days produces thousands. A real folder had 17,311
@@ -772,6 +817,13 @@ class Recorder:
     # from a channel being offline - see _missed_stream.
     last_missed: str = ""
 
+    # How many attempts in a row have been abandoned with every fragment
+    # refused and nothing downloaded. Reset by any real progress. See
+    # REFUSAL_RESTARTS_BEFORE_UPDATE - two of these is not a stale
+    # manifest, it is something a fresh manifest cannot reach.
+    refusal_restarts: int = 0
+    _tried_update: bool = False
+
     # What has already been said, and when. Kept on the recorder rather
     # than inside one attempt because the attempt is what repeats: a
     # channel that is not live restarts yt-dlp every poll, and a problem
@@ -886,6 +938,11 @@ class Recorder:
             # dropped connection. A RUN of refusals with no progress
             # between them ends the process instead.
             refusals = 0
+            # Did this attempt ever actually download anything? A restart
+            # after real progress is a stale manifest doing what stale
+            # manifests do. A restart after NOTHING is a different
+            # problem, and the difference is the whole diagnosis.
+            downloaded_anything = False
             title_tries = 0
             title_next_try = 0.0
             for line in process.stdout:
@@ -911,9 +968,18 @@ class Recorder:
                 if is_fragment_refusal(line):
                     refusals += 1
                     if refusals >= MAX_FRAGMENT_REFUSALS:
-                        self.say(f"The stream's segments are being refused "
-                                 f"({refusals} in a row) - the manifest has "
-                                 f"gone stale. Restarting with a fresh one.")
+                        if downloaded_anything:
+                            self.say(f"The stream's segments are being "
+                                     f"refused ({refusals} in a row) - the "
+                                     f"manifest has gone stale. Restarting "
+                                     f"with a fresh one.")
+                            self.refusal_restarts = 0
+                        else:
+                            self.refusal_restarts += 1
+                            self.say(f"Every segment refused ({refusals} in "
+                                     f"a row, nothing downloaded). "
+                                     f"Restarting.")
+                            self._fix_refusals()
                         process.terminate()
                         break
                 elif is_progress_line(line):
@@ -921,6 +987,7 @@ class Recorder:
                     # scattered through a long recording is normal and
                     # must not end it.
                     refusals = 0
+                    downloaded_anything = True
                 if log:
                     # The log keeps EVERYTHING. Quietening the console is
                     # about being able to read it; throwing away the
@@ -1012,6 +1079,44 @@ class Recorder:
                     if advice:
                         self.say_once(f"fix:{advice[:40]}", f"FIX: {advice}")
                         break
+
+    def _fix_refusals(self) -> None:
+        """Act on a run of attempts that never downloaded anything.
+
+        Restarting is the right answer to a stale manifest and no answer
+        at all to an out-of-date yt-dlp, and from here the two look
+        identical: every fragment 403s, the attempt is abandoned, the next
+        one starts clean and every fragment 403s again. A whole stream was
+        lost to exactly that.
+
+        YouTube changes its player constantly and yt-dlp follows within
+        days, so an update is by far the likeliest fix - and it is not
+        reasonable to expect anybody to know that at 3am while the stream
+        they wanted goes out unrecorded. Once per run, never in a loop.
+        """
+        if self.refusal_restarts < REFUSAL_RESTARTS_BEFORE_UPDATE:
+            return
+        if self._tried_update:
+            self.say_once(
+                "refusals:updated",
+                "Every segment is still being refused after updating "
+                "yt-dlp. That is not a stale manifest and not a version "
+                "problem - the stream may need cookies "
+                "(--cookies-from-browser), or this platform is blocking "
+                "this machine.")
+            return
+
+        self._tried_update = True
+        self.say(f"{self.refusal_restarts} attempts in a row downloaded "
+                 f"nothing at all. That is not a stale manifest - yt-dlp is "
+                 f"most likely out of date. Updating it now...")
+        updated, detail = update_yt_dlp()
+        if updated:
+            self.say(f"yt-dlp {detail}. Trying the stream again.")
+        else:
+            self.say(f"Could not update yt-dlp ({detail}). Run this by hand "
+                     f"and restart the recorder:")
+            self.say("    python -m pip install -U yt-dlp")
 
     # ── Assembling and delivering ────────────────────────────────────────
 
