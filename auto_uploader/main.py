@@ -850,6 +850,38 @@ RUMBLE_UNCONFIRMED = ("FAILED: Rumble finished but the video is not on the "
                       "channel - it did not publish. Run again to retry.")
 
 
+def link_comment_text(cfg) -> str:
+    """The comment to leave under a YouTube upload, or "".
+
+    Composed from youtube.link_comment, which may use {rumble} for the
+    channel. Empty template means the feature is off, which is the
+    shipped default - a comment posted under somebody's video is theirs
+    to opt into, not something to discover after the fact.
+    """
+    template = str(getattr(cfg.youtube, "link_comment", "") or "").strip()
+    if not template:
+        return ""
+    rumble = str(getattr(cfg.rumble, "channel_url", "") or "").strip()
+    text = template.replace("{rumble}", rumble)
+    # A template that asks for a link there is not is worse than no
+    # comment: it posts "Full stream: " and reads as broken.
+    if "{rumble}" in template and not rumble:
+        return ""
+    return text.strip()
+
+
+def _leave_link_comment(cfg, uploader, url: str) -> bool:
+    """Best effort, always. The video is live either way."""
+    text = link_comment_text(cfg)
+    if not text or not _is_link(url):
+        return False
+    try:
+        return bool(uploader.comment(url, text))
+    except Exception as exc:
+        print(f"[YouTube] Could not leave the link comment: {exc}")
+        return False
+
+
 def _is_link(value: str) -> bool:
     """A real URL, not a status marker.
 
@@ -1979,6 +2011,11 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
             if not parallel:
                 print()
             yt_logger.info(f"{filename}: uploaded successfully -> {url}")
+            # The link out. A YouTube description is not clickable from a
+            # phone until somebody taps "more", and a Short has no
+            # description a viewer ever sees - the comment is the only
+            # route from here to the full stream on Rumble.
+            _leave_link_comment(cfg, yt, url)
             notify("YouTube upload complete", url, cfg.general.enable_desktop_notifications)
             with upload_lock:
                 results["youtube"] = url

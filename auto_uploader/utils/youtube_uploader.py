@@ -24,7 +24,49 @@ SCOPES = [
     # doesn't grant - without this, that check 403s with
     # "insufficient authentication scopes" and silently skips itself.
     "https://www.googleapis.com/auth/youtube.readonly",
+    # commentThreads.insert - the pinned-comment-with-a-link that every
+    # creator leaves under their own video. Upload and readonly do not
+    # cover writing a comment, and without this it 403s with
+    # "insufficient authentication scopes".
+    #
+    # Adding a scope INVALIDATES the existing token: Google issues a token
+    # for the scopes that were asked for, and it does not grow one later.
+    # --setup-youtube re-authorises in place; see needs_reauth().
+    "https://www.googleapis.com/auth/youtube.force-ssl",
 ]
+
+
+def needs_reauth(token_path: str) -> bool:
+    """True when the saved token predates a scope this code now needs.
+
+    A token missing a scope fails at the moment it is used, which for a
+    comment is after the video is already live - the upload works, the
+    comment 403s, and the reason is three layers down inside a Google
+    exception. Asked up front instead.
+    """
+    import json
+
+    try:
+        with open(token_path, "r", encoding="utf-8") as handle:
+            saved = json.load(handle)
+    except (OSError, ValueError):
+        return False
+    have = set(saved.get("scopes") or [])
+    return bool(have) and not set(SCOPES) <= have
+
+
+def _video_id(value: str) -> str:
+    """The id out of a watch URL, a youtu.be link, a Short, or a bare id."""
+    import re as _re
+
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    found = _re.search(
+        r"(?:v=|youtu\.be/|/shorts/|/live/|/embed/)([A-Za-z0-9_-]{11})", text)
+    if found:
+        return found.group(1)
+    return text if _re.fullmatch(r"[A-Za-z0-9_-]{11}", text) else ""
 
 
 class YouTubeUploader:
@@ -174,3 +216,45 @@ class YouTubeUploader:
                 print(f"[YouTube] Warning: failed to add video to playlist: {exc}")
 
         return f"https://www.youtube.com/watch?v={video_id}"
+
+    def comment(self, video_url_or_id: str, text: str) -> bool:
+        """Leave a comment on one of your own videos. True if it posted.
+
+        The pinned-link comment every creator leaves under their own
+        upload - "full stream on Rumble: ..." - which is the only route a
+        viewer has to another platform from inside a Short.
+
+        Never raises and never fails an upload. The video is live either
+        way, and a missing comment is worth far less than a run that
+        stopped after publishing.
+
+        PINNING is not in the API - only posting. Pin it by hand once and
+        YouTube keeps it there; the comment itself is what has to be
+        automatic.
+        """
+        video_id = _video_id(video_url_or_id)
+        if not video_id or not str(text or "").strip():
+            return False
+        try:
+            service = self._client()
+            service.commentThreads().insert(
+                part="snippet",
+                body={"snippet": {
+                    "videoId": video_id,
+                    "topLevelComment": {
+                        "snippet": {"textOriginal": str(text).strip()}},
+                }},
+            ).execute()
+        except HttpError as exc:
+            if "insufficientPermissions" in str(exc) or "403" in str(exc):
+                print("[YouTube] Cannot comment - the saved token was issued "
+                      "before this needed comment access. Re-authorise:")
+                print("          python main.py --setup-youtube")
+            else:
+                print(f"[YouTube] Comment failed: {exc}")
+            return False
+        except Exception as exc:
+            print(f"[YouTube] Comment failed: {exc}")
+            return False
+        print("[YouTube] Left a comment with the link.")
+        return True

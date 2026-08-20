@@ -32,6 +32,11 @@ class YouTubeConfig:
     # library stays sortable. On a sixty-second clip that same shape is
     # scaffolding a viewer has to read past, and reads as automation.
     clip_title_format: str = "{title}"
+    # A comment to leave under every YouTube upload, usually the link out
+    # to Rumble. {rumble} is replaced with rumble.channel_url. Empty means
+    # off, which is the shipped default: a comment posted under somebody's
+    # own video is theirs to opt into, not to discover afterwards.
+    link_comment: str = ""
 
 
 @dataclass
@@ -54,6 +59,10 @@ class RumbleConfig:
     skip_if_exists: bool
     # See YouTubeConfig.clip_title_format.
     clip_title_format: str = "{title}"
+    # Where to send people. Rumble publishes no feed, so nothing can read
+    # this off the site - it is typed once and used in the YouTube link
+    # comment.
+    channel_url: str = ""
 
 
 @dataclass
@@ -145,6 +154,7 @@ def load_config(config_path: str = "config.json", env_path: str = ".env") -> App
         tags=list(yt.get("tags", [])),
         playlist_id=os.environ.get("YOUTUBE_PLAYLIST_ID", yt.get("playlist_id", "")),
         thumbnail_path=yt.get("thumbnail_path", ""),
+        link_comment=yt.get("link_comment", ""),
         client_secrets_path=os.environ.get(
             "YOUTUBE_CLIENT_SECRETS_PATH",
             os.path.join(project_root, "client_secrets.json"),
@@ -162,6 +172,7 @@ def load_config(config_path: str = "config.json", env_path: str = ".env") -> App
         description_template=rb["description_template"],
         tags=list(rb.get("tags", [])),
         thumbnail_path=rb.get("thumbnail_path", ""),
+        channel_url=rb.get("channel_url", ""),
         username=os.environ.get("RUMBLE_USERNAME", ""),
         password=os.environ.get("RUMBLE_PASSWORD", ""),
         login_url=rb.get("login_url", "https://rumble.com/login.php"),
