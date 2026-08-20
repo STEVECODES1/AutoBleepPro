@@ -305,3 +305,64 @@ def test_the_real_path_does_not_explode_them(tmp_path, monkeypatch):
 
     assert "#s #t #a" not in said
     assert "# #" not in said
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# ONE VOD CUT FOUR TIMES MAKES FOUR DIFFERENT "Clip 02.mp4"
+#
+#   08-18 07:40  cut ok  OMG GREAT CONTENT ROBBED ...  10 clips
+#   08-18 08:40  cut ok  OMG GREAT CONTENT ROBBED ...   3 clips
+#   08-18 08:56  cut ok  OMG GREAT CONTENT ROBBED ...   4 clips
+#   08-18 21:10  cut ok  OMG GREAT CONTENT ROBBED ...   3 clips
+#
+# Same filenames every time, from completely different moments, each
+# overwriting the last. Everything written BESIDE a clip is keyed by that
+# name, so run four's Clip 02 posted run one's caption - written about
+# something else entirely.
+# ═════════════════════════════════════════════════════════════════════════════
+
+def test_a_recut_clip_does_not_reuse_the_old_caption(tmp_path):
+    import time
+
+    clip = tmp_path / "Stream - Clip 02.mp4"
+    clip.write_bytes(b"the first cut")
+    remember(str(clip), {"instagram": "Bro lost the plot completely"})
+    assert cached(str(clip))
+
+    # Cut again: same name, different moment, different bytes.
+    time.sleep(0.01)
+    clip.write_bytes(b"a completely different moment, longer")
+
+    assert cached(str(clip)) == {}, "it posted the old clip's caption"
+
+
+def test_the_same_clip_still_reuses_its_own(tmp_path):
+    """The cache has to keep working - a clip is offered to each platform
+    hours apart, and re-asking per drain is one call per platform."""
+    clip = tmp_path / "clip.mp4"
+    clip.write_bytes(b"x")
+    remember(str(clip), {"instagram": "he really did that"})
+
+    assert cached(str(clip)) == {"instagram": "he really did that"}
+
+
+def test_the_marker_is_not_served_as_a_caption(tmp_path):
+    clip = tmp_path / "clip.mp4"
+    clip.write_bytes(b"x")
+    remember(str(clip), {"instagram": "a line"})
+
+    assert "_clip" not in cached(str(clip))
+
+
+def test_a_sidecar_from_before_this_existed_is_not_trusted(tmp_path):
+    """No marker means it was written for an unknown cut."""
+    clip = tmp_path / "clip.mp4"
+    clip.write_bytes(b"x")
+    (tmp_path / "clip_captions.json").write_text(
+        json.dumps({"instagram": "written last week"}))
+
+    assert cached(str(clip)) == {}
+
+
+def test_a_missing_clip_has_nothing_cached(tmp_path):
+    assert cached(str(tmp_path / "gone.mp4")) == {}

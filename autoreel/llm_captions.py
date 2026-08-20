@@ -84,29 +84,61 @@ def _sidecar(video_path: str) -> str:
     return os.path.splitext(video_path or "")[0] + "_captions.json"
 
 
+def fingerprint(video_path: str) -> str:
+    """What makes this file THIS clip, cheaply.
+
+    The filename does not. One VOD cut four times produces
+    "... - Clip 02.mp4" four times, from four completely different
+    moments, each one overwriting the last - and everything written
+    beside a clip is keyed by that name. So run four's Clip 02 was
+    reading run one's caption, written about something else entirely.
+
+    Size and mtime, not a content hash: this is checked on every drain of
+    every clip and only has to notice that the bytes CHANGED, which a
+    re-cut always does.
+    """
+    try:
+        stat = os.stat(video_path)
+    except OSError:
+        return ""
+    return f"{stat.st_size}-{int(stat.st_mtime)}"
+
+
 def cached(video_path: str) -> dict:
-    """Captions already written for this clip, or {}.
+    """Captions already written for THIS clip, or {}.
 
     Written once and reused: a clip is offered to each platform at a
     different time, hours apart, and asking again per drain would be one
     API call per platform after all.
+
+    Refused when the file no longer matches the one they were written
+    for. A stale caption is worse than no caption - no caption falls back
+    to the template, a stale one confidently describes a different clip.
     """
     try:
         with open(_sidecar(video_path), "r", encoding="utf-8") as handle:
             found = json.load(handle)
     except (OSError, ValueError):
         return {}
-    return {str(k): str(v) for k, v in (found or {}).items()
-            if isinstance(v, str) and v.strip()}
+    if not isinstance(found, dict):
+        return {}
+    stamped = str(found.get("_clip", ""))
+    if stamped != fingerprint(video_path):
+        # Written for a different cut of this filename.
+        return {}
+    return {str(k): str(v) for k, v in found.items()
+            if not k.startswith("_") and isinstance(v, str) and v.strip()}
 
 
 def remember(video_path: str, captions: dict) -> None:
     """Never fatal: a caption that cannot be cached is still a caption."""
     if not captions:
         return
+    body = {k: v for k, v in captions.items() if not k.startswith("_")}
+    body["_clip"] = fingerprint(video_path)
     try:
         with open(_sidecar(video_path), "w", encoding="utf-8") as handle:
-            json.dump(captions, handle, indent=2, ensure_ascii=False)
+            json.dump(body, handle, indent=2, ensure_ascii=False)
     except OSError:
         pass
 
