@@ -298,8 +298,16 @@ def build_vision_contents(candidates: list, count: int, source_path: str,
     from . import vision_frames
 
     grab = grab or vision_frames.frames_for
-    parts = [{"text": f"Pick AT MOST {count} of these {len(candidates)} "
-                      f"candidates - fewer if fewer are good.\n"}]
+    # The examples go in the VISION prompt too - that is the pass that
+    # actually runs most of the time, and a picker shown the room in one
+    # path and not the other would behave differently depending on
+    # whether the frames could be read.
+    opening = (f"Pick AT MOST {count} of these {len(candidates)} "
+               f"candidates - fewer if fewer are good.\n")
+    examples = hits_block()
+    if examples:
+        opening += examples + "\n"
+    parts = [{"text": opening}]
     for number, highlight in enumerate(candidates, start=1):
         text = for_the_model(highlight.text)[:_MAX_TEXT_CHARS]
         parts.append({"text": (
@@ -368,10 +376,36 @@ def for_the_model(text: str) -> str:
     return clean(" ".join(kept))
 
 
-def build_prompt(candidates: list, count: int, lessons: Optional[list] = None) -> str:
+def hits_path() -> str:
+    """Where the channel's own hits live, beside config.json."""
+    here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    return os.path.join(here, "auto_uploader", "hits.json")
+
+
+def hits_block(path: str = "") -> str:
+    """The channel's biggest posts, as examples. "" when there are none.
+
+    This is the difference between asking somebody to be funny and
+    showing them the room. Without it the model picks against a general
+    idea of funny, competently, and the clips land flat.
+    """
+    try:
+        from .hits import for_prompt, load
+
+        return for_prompt(load(path or hits_path()))
+    except Exception:
+        return ""
+
+
+def build_prompt(candidates: list, count: int, lessons: Optional[list] = None,
+                 hits: Optional[str] = None) -> str:
     """The candidate list, as the model sees it."""
     lines = [f"Pick AT MOST {count} of these {len(candidates)} candidates - "
              f"fewer if fewer are good.", ""]
+    # Before the candidates, because it changes how they are read.
+    examples = hits_block() if hits is None else hits
+    if examples:
+        lines += [examples, ""]
     lessons = learned_lines() if lessons is None else lessons
     if lessons:
         lines += lessons + [""]
