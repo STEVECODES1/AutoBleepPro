@@ -44,6 +44,9 @@ reg add "HKCU\Console" /v QuickEdit /t REG_DWORD /d 0 /f >nul 2>&1
 set LIMIT=%~1
 if "%LIMIT%"=="" set LIMIT=3
 
+REM  An empty second argument is the same as not passing one - the
+REM  scheduled task always passes both, and passing "" must not mean
+REM  "clip a folder called nothing".
 set SOURCE=%~2
 if "%SOURCE%"=="" set SOURCE=https://rumble.com/user/stackswopo10k
 

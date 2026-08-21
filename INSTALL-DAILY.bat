@@ -20,6 +20,15 @@ REM  The clips still need the uploader running to actually go out - START.bat
 REM  opens it and it posts whatever lands in watch_folder on each platform's
 REM  spacing. Leave that window open, or the clips just pile up.
 REM
+REM  Clip a LOCAL FOLDER instead of the Rumble channel - a library of old
+REM  videos that still have funny moments in them:
+REM
+REM    INSTALL-DAILY.bat 05:00 "D:\videos stizz"
+REM
+REM  A folder is only ever READ. The tidy-up that deletes a VOD after
+REM  clipping it refuses any folder except this tool's own download
+REM  folder, so a library cannot be eaten by the daily run.
+REM
 REM  Change the time:  INSTALL-DAILY.bat 07:30
 REM  Remove it again:  schtasks /delete /tn "AutoBleepPro Daily Clips" /f
 REM  See it in Windows: Task Scheduler -> Task Scheduler Library
@@ -30,6 +39,10 @@ cd /d "%~dp0"
 set RUNAT=%~1
 if "%RUNAT%"=="" set RUNAT=05:00
 
+REM  Where to take videos from. Empty means the Rumble channel, which is
+REM  the default and needs no argument.
+set SOURCE=%~2
+
 set TASKNAME=AutoBleepPro Daily Clips
 
 echo ============================================================
@@ -38,6 +51,7 @@ echo ============================================================
 echo  Task    : %TASKNAME%
 echo  Time    : %RUNAT% every day
 echo  Runs    : %~dp0CLIP-VODS.bat
+if "%SOURCE%"=="" (echo  Source  : your Rumble channel) else (echo  Source  : %SOURCE%)
 echo  Cleanup : deletes each VOD once it has been clipped
 echo.
 
@@ -48,7 +62,7 @@ REM  keypress at the end - a scheduled task would sit on that forever - and
 REM  to tidy up the VODs afterwards.
 schtasks /create /f ^
   /tn "%TASKNAME%" ^
-  /tr "cmd /c set AUTOBLEEP_UNATTENDED=1 ^&^& \"%~dp0CLIP-VODS.bat\"" ^
+  /tr "cmd /c set AUTOBLEEP_UNATTENDED=1 ^&^& \"%~dp0CLIP-VODS.bat\" 3 \"%SOURCE%\"" ^
   /sc DAILY ^
   /st %RUNAT%
 
