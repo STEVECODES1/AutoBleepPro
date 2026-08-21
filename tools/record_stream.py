@@ -449,6 +449,38 @@ def remember_title(log_path: str, title: str) -> str:
     return sidecar
 
 
+def source_sidecar(video_path: str) -> str:
+    """Where a recording notes the stream it came from."""
+    return os.path.splitext(video_path or "")[0] + ".source.txt"
+
+
+def remember_source(video_path: str, url: str) -> str:
+    """Write down which stream this recording is, beside it.
+
+    The clip picker can read a stream's CHAT - messages per second,
+    counted and thrown away - and chat is the audience saying out loud
+    what was funny. It is the best signal available and better than
+    anything measured from the audio: a hundred people typing at once is
+    a much better reason to clip something than a loud noise is.
+
+    It has never once run. The chat step needs a URL, and a recording is
+    a local file, so every clip this project has ever made was picked
+    from transcript shape and loudness while the audience's own verdict
+    sat unread.
+
+    One line, written once, is all that was missing.
+    """
+    if not video_path or not str(url or "").strip():
+        return ""
+    path = source_sidecar(video_path)
+    try:
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write(str(url).strip() + "\n")
+    except OSError:
+        return ""
+    return path
+
+
 def prune_logs(folder: str, keep: int = KEEP_LOGS) -> int:
     """Delete all but the newest `keep` .log files. Returns how many went.
 
@@ -1187,6 +1219,8 @@ class Recorder:
         except OSError as exc:
             self.say(f"Could not move the finished file: {exc}")
             return None
+
+        remember_source(destination, self.url)
 
         if join_lost_material(probe_duration(destination), part_lengths):
             # Nothing is deleted on this path. The joined file is still

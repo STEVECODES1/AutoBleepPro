@@ -70,6 +70,26 @@ def _load_segments(cfg, source_path: str) -> Optional[list]:
     return None
 
 
+def source_beside(video_path: str) -> str:
+    """The stream URL a recording was made from, or "".
+
+    Written by the recorder. Also looked for under the name with the
+    _CENSORED_ suffix taken off, because a clip cut from the censored
+    copy is the same stream.
+    """
+    stem = os.path.splitext(video_path or "")[0]
+    for candidate in (stem, stem.split("_CENSORED_")[0]):
+        try:
+            with open(candidate + ".source.txt", "r",
+                      encoding="utf-8") as handle:
+                found = handle.read().strip()
+        except OSError:
+            continue
+        if found.startswith(("http://", "https://")):
+            return found
+    return ""
+
+
 def _journal_for(cfg):
     """A record() bound to this config's logs folder, or a no-op."""
     def write(_cfg, status: str, stage: str, name: str, detail: str = "") -> None:
@@ -394,6 +414,13 @@ def make_clips(cfg, source_path: str, title: str,
     # log is downloaded, counted per second and deleted before this
     # returns - see autoreel/chat_energy. Nothing textual is kept.
     chat: list = []
+    # A recording notes the stream it came from in a sidecar - see
+    # record_stream.remember_source. Without this the chat step only ever
+    # ran when clipping straight from a URL, which is not how any of this
+    # channel's clips are made, so the strongest signal available was
+    # never once read.
+    if not source_url:
+        source_url = source_beside(source_path)
     if source_url and bool(clips_cfg.get("use_chat", True)):
         from autoreel.chat_energy import rates_for_url
 
