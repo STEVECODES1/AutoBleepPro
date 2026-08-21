@@ -165,6 +165,20 @@ class FolderWatcher:
         self._paused = threading.Event()
         self._worker = None
 
+    def consider(self, path: str) -> None:
+        """Offer a file that was ALREADY here when the watch started.
+
+        Through the same stability wait as a file that arrives, which is
+        the whole point. The startup sweep used to call the processor
+        directly, so a video still being written - a 7 GB download in
+        progress, a copy onto the drive - was picked up half finished. A
+        four-hour stream went up as fifty-four minutes that way, and
+        nothing in the log said the file had been truncated, because from
+        the uploader's side it had not been: that was genuinely all there
+        was at the moment it looked.
+        """
+        self._handler._maybe_watch(path)
+
     def _enqueue(self, path: str) -> None:
         depth = self._queue.qsize()
         if depth:

@@ -3781,19 +3781,25 @@ def main(argv=None) -> int:
                       f"Watching {watch_folder} for the next one... "
                       f"(Ctrl+C to stop)\n")
 
+        watcher = FolderWatcher(
+            watch_folder, cfg.general.supported_formats,
+            cfg.general.stability_check_seconds, on_ready,
+        )
+        watcher.start()
+
+        # Offered to the WATCHER, not run directly, and only once it is
+        # running. Calling the processor here skipped the wait for the
+        # file to stop growing, so a video still being written - a 7 GB
+        # download in progress, a copy onto the drive - was picked up
+        # half finished. A four-hour stream went up as fifty-four
+        # minutes that way.
         if already:
             print(f"\n[Watch] {len(already)} video(s) already in this folder - "
                   f"doing those first, then waiting for new ones.")
             for name in already:
                 print(f"         - {name}")
             for name in already:
-                on_ready(os.path.join(watch_folder, name))
-
-        watcher = FolderWatcher(
-            watch_folder, cfg.general.supported_formats,
-            cfg.general.stability_check_seconds, on_ready,
-        )
-        watcher.start()
+                watcher.consider(os.path.join(watch_folder, name))
         try:
             # Clips deferred by a platform's spacing wait here, not in
             # the bin. Checked on a timer rather than only when a new
