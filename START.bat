@@ -66,13 +66,13 @@ echo  Uploader : censor, upload, clip, announce
 echo  Folder   : %~dp0auto_uploader\watch_folder
 echo.
 
-start "AutoBleep RECORDER" cmd /k "cd /d "%~dp0tools" && python record_stream.py "https://www.youtube.com/@stackswopo_/live" "https://www.twitch.tv/stackswopo" "https://www.twitch.tv/stackswopo/clips?range=7d" "https://kick.com/stackswopo1k" "https://www.youtube.com/@OnlyThaGuys26/live" --name "Stackswopo""
+start "AutoBleep RECORDER" cmd /k ""%~dp0_RUN_RECORDER.bat""
 
 REM A moment apart so the two windows do not fight over the console while
 REM they start, and so the recorder's banner is readable.
 timeout /t 3 /nobreak >nul
 
-start "AutoBleep UPLOADER" cmd /k "cd /d "%~dp0auto_uploader" && python main.py --batch && python main.py --watch"
+start "AutoBleep UPLOADER" cmd /k ""%~dp0_RUN_UPLOADER.bat""
 
 echo  Both windows are open. This one can be closed.
 echo.
