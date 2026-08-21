@@ -78,7 +78,24 @@ class YouTubeUploader:
     def _get_credentials(self) -> Credentials:
         creds = None
         if os.path.exists(self.token_path):
-            creds = Credentials.from_authorized_user_file(self.token_path, SCOPES)
+            # The TOKEN'S OWN scopes, not the ones this code would like.
+            #
+            # Passing SCOPES here means a refresh asks for scopes the
+            # refresh token was never granted, and Google answers
+            # invalid_scope: Bad Request. Adding the comment scope did
+            # exactly that - and it did not break commenting, it broke
+            # UPLOADING, the Shorts publisher, the existing-video dedup
+            # check, and --batch refused to run at all. An optional
+            # feature took the whole uploader down.
+            #
+            # So the token keeps working for whatever it was issued for.
+            # A missing scope is the comment's problem, and only the
+            # comment's - see needs_reauth() and comment().
+            try:
+                creds = Credentials.from_authorized_user_file(self.token_path)
+            except Exception:
+                creds = Credentials.from_authorized_user_file(
+                    self.token_path, SCOPES)
 
         if not creds or not creds.valid:
             refreshed = False

@@ -258,3 +258,62 @@ def test_a_comment_that_throws_does_not_fail_the_upload(capsys):
     assert main._leave_link_comment(
         cfg, Uploader(), "https://www.youtube.com/watch?v=UXgZ9nMFFow") is False
     assert "gone" in capsys.readouterr().out
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# ADDING A SCOPE MUST NOT BREAK EVERYTHING ELSE
+#
+#   [Clips] youtube_shorts: ('invalid_scope: Bad Request', ...)
+#   [WARN]  Could not fetch existing YouTube videos (invalid_scope ...)
+#   [ABORTED] Refusing to run --batch without the existing-video dedup
+#             check working
+#
+# Loading a saved token against the CODE's scope list makes a refresh ask
+# for scopes the refresh token was never granted. Adding the comment
+# scope did that, and it did not break commenting - it broke uploading,
+# the Shorts publisher, the dedup check, and --batch outright.
+# ═════════════════════════════════════════════════════════════════════════════
+
+def test_a_saved_token_is_loaded_with_its_own_scopes():
+    """Not with SCOPES, which is what asked Google for something the
+    token never had."""
+    body = open(os.path.join(_UPLOADER, "utils", "youtube_uploader.py"),
+                encoding="utf-8").read()
+    head, _, _ = body.partition("def comment")
+
+    assert "Credentials.from_authorized_user_file(self.token_path)" in head
+
+
+def test_an_old_token_still_uploads(tmp_path, monkeypatch):
+    """The whole point: a token issued before the comment scope existed
+    keeps doing everything it could do yesterday."""
+    import json
+
+    from utils import youtube_uploader as yt
+
+    token = tmp_path / "token.json"
+    token.write_text(json.dumps({
+        "token": "t", "refresh_token": "r", "client_id": "c",
+        "client_secret": "s",
+        "scopes": ["https://www.googleapis.com/auth/youtube.upload"]}))
+
+    asked = []
+
+    class FakeCreds:
+        valid = True
+        expired = False
+        refresh_token = "r"
+
+    def loader(path, scopes=None):
+        asked.append(scopes)
+        return FakeCreds()
+
+    monkeypatch.setattr(yt.Credentials, "from_authorized_user_file",
+                        staticmethod(loader))
+    who = yt.YouTubeUploader.__new__(yt.YouTubeUploader)
+    who.token_path = str(token)
+    who.client_secrets_path = str(tmp_path / "secrets.json")
+
+    who._get_credentials()
+
+    assert asked[0] is None, "it asked for scopes the token does not have"
