@@ -2472,6 +2472,16 @@ def main(argv=None) -> int:
                              "and spacing are left exactly as they are.")
     parser.add_argument("--disable", metavar="PLATFORM",
                         help="Turn a posting platform OFF in config.json.")
+    parser.add_argument("--chat-report", metavar="FILE",
+                        help="Did chat change which moments got picked? "
+                             "Runs the same scorer twice over one video - "
+                             "once blind, once with chat - and shows the "
+                             "difference, plus the chat spikes it did NOT "
+                             "pick. Reports only; nothing is clipped or "
+                             "posted.")
+    parser.add_argument("--chat-url", metavar="URL",
+                        help="With --chat-report: where to read chat from, "
+                             "if the video has no source note beside it.")
     parser.add_argument("--hook", metavar="ON_OFF", choices=("on", "off"),
                         help="Burn each clip's own title across the top of "
                              "the frame for the whole clip, so a scrolling "
@@ -3388,6 +3398,56 @@ def main(argv=None) -> int:
               f"{'on' if args.enable else 'off'}.")
         if said and said.startswith("no such platform"):
             return 1
+        return 0
+
+    if args.chat_report:
+        from autoreel import chat_report as report
+        from utils.clip_runner import _load_segments, source_beside
+
+        video = args.chat_report
+        if not os.path.isfile(video):
+            print(f"[Chat] No such file: {video}")
+            return 1
+
+        segments = _load_segments(cfg, video)
+        if not segments:
+            print("[Chat] No transcript for this video yet - run it through "
+                  "--clips-from first, then this.")
+            return 1
+
+        url = args.chat_url or source_beside(video)
+        if not url:
+            print("[Chat] No source URL for this video. A recording notes "
+                  "one beside it; an older file does not.")
+            print("       Pass one:  --chat-report FILE --chat-url URL")
+            return 1
+
+        print(f"[Chat] Reading chat from {url} (counted, never stored)...")
+        from autoreel.chat_energy import rates_for_url
+
+        rates = rates_for_url(url)
+        if not rates:
+            print("[Chat] No chat replay came back for this stream.")
+
+        clips_cfg = _clip_config(cfg)
+        levels = []
+        if bool(clips_cfg.get("use_audio_energy", True)):
+            try:
+                from autoreel.audio_energy import measure
+
+                print("[Chat] Measuring audio levels...")
+                levels = measure(video)
+            except Exception as exc:
+                print(f"[Chat] Audio levels unavailable ({exc}) - the report "
+                      f"will say so rather than show zeroes.")
+
+        wanted = int(args.clip_count or clips_cfg.get("count", 10) or 10)
+        with_chat, without = report.compare(segments, rates, count=wanted,
+                                            levels=levels)
+        rejected = report.loudest_rejected(segments, rates, with_chat)
+        print()
+        print(report.render(with_chat, without, rejected, rates,
+                            name=os.path.basename(video), levels=levels))
         return 0
 
     if args.hook:
