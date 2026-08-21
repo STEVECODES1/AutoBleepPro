@@ -49,19 +49,49 @@ def words_cache_path(work_dir: str, basename: str) -> str:
     return os.path.join(work_dir, f"{basename}_transcript_words.json")
 
 
+def _source_stamp(source_path: str) -> dict:
+    """What identifies the video this transcript was made from."""
+    try:
+        stat = os.stat(source_path)
+    except OSError:
+        return {}
+    return {"source_size": stat.st_size}
+
+
 def _load_cached_words(path: str, source_path: str):
     """Cached segments, or None if absent/stale/unreadable.
 
-    Stale means older than the video: a re-download or re-encode of the
-    same filename must not silently reuse the previous transcript.
+    Stale means a DIFFERENT video under the same filename - a
+    re-download or a re-encode - which must not silently reuse the
+    previous transcript.
+
+    Judged by SIZE, not by which file is newer. Comparing timestamps
+    meant anything that touched the video after transcribing threw the
+    transcript away: the upload, moving it into uploaded/, Windows
+    updating an mtime on a copy. The run then said "Kept transcript
+    cache: clips are still to be cut from it" and, seconds later,
+    "Nothing rendered - no transcript" - and no clips came out of a
+    stream that had just been transcribed for six minutes.
+
+    Size cannot be changed by touching a file and always changes when
+    the video does, which is exactly the question being asked.
     """
     try:
-        if os.path.getmtime(path) < os.path.getmtime(source_path):
-            return None
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
     except (OSError, ValueError):
         return None
+    if isinstance(data, dict) and data.get("source_size") is not None:
+        if data.get("source_size") != _source_stamp(source_path).get("source_size"):
+            return None
+    else:
+        # Written before the stamp existed: fall back to the old rule
+        # rather than trusting a transcript nothing can vouch for.
+        try:
+            if os.path.getmtime(path) < os.path.getmtime(source_path):
+                return None
+        except OSError:
+            return None
     segments = data.get("segments") if isinstance(data, dict) else None
     if not isinstance(segments, list) or not segments:
         return None
@@ -241,7 +271,8 @@ def censor_video(
             timer.mark("transcribe")
             try:
                 with open(words_path, "w", encoding="utf-8") as f:
-                    json.dump({"segments": result["segments"]}, f)
+                    json.dump({"segments": result["segments"],
+                               **_source_stamp(source_path)}, f)
             except Exception:
                 pass  # a failed cache write must never fail the censor pass
 
