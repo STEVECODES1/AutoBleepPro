@@ -12,15 +12,35 @@ better-profanity==0.7.0
 
 # ── Audio processing ─────────────────────────────────────────────────────────
 pydub==0.25.1
-numpy>=1.24,<2.0
-scipy==1.11.4
+
+# ── Why these three are written twice ────────────────────────────────────────
+# numpy, scipy and Pillow ship COMPILED wheels, one per Python version. The
+# pinned versions below were built before Python 3.13 existed, so on a newer
+# Python pip finds no wheel, downloads the source, and tries to compile it -
+# which needs Visual Studio and fails like this:
+#
+#     ..\meson.build:1:0: ERROR: Unknown compiler(s): [['icl'], ['cl'], ...]
+#     error: metadata-generation-failed
+#
+# That is what a fresh Python 3.14 install did: the whole install stopped at
+# numpy, so NOTHING got installed, and the uploader then died on the first
+# missing import (dotenv) every fifteen seconds.
+#
+# The markers below let pip pick per interpreter: the tested pins on the
+# Pythons they were tested on, and the newest wheels on anything newer. One
+# file, no choosing, and nothing has to be compiled either way.
+numpy>=1.24,<2.0 ; python_version < "3.13"
+numpy>=2.1 ; python_version >= "3.13"
+scipy==1.11.4 ; python_version < "3.13"
+scipy>=1.14 ; python_version >= "3.13"
 
 # ── Video processing ─────────────────────────────────────────────────────────
 moviepy==2.0.0
 
 # ── GUI ──────────────────────────────────────────────────────────────────────
 customtkinter==5.2.2
-Pillow==10.3.0
+Pillow==10.3.0 ; python_version < "3.13"
+Pillow>=11.0 ; python_version >= "3.13"
 
 # ── Optional: drag-and-drop onto the GUI window ──────────────────────────────
 # Not required - Browse always works, and the app says so if this is absent.

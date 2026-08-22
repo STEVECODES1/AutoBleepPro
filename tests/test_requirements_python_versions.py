@@ -1,0 +1,139 @@
+"""A fresh Python 3.14 install stopped the whole project.
+
+    Collecting numpy<2.0,>=1.24 (from -r requirements.txt (line 15))
+      Downloading numpy-1.26.4.tar.gz (15.8 MB)
+      ..\\meson.build:1:0: ERROR: Unknown compiler(s): [['icl'], ['cl'], ...]
+    error: metadata-generation-failed
+    Installation FAILED
+
+numpy, scipy and Pillow ship one compiled wheel per Python version. The
+pinned versions predate 3.13, so pip found no wheel, fell back to the
+source tarball, and tried to invoke a C compiler that is not on a normal
+Windows machine.
+
+pip installs a requirements file as a unit: numpy failing meant NOTHING
+was installed. That is why every package disappeared at once and why the
+uploader then died on the first import it reached - dotenv - fifteen
+seconds apart, forever. One compiled dependency, and the whole system was
+down.
+
+Environment markers fix it without anyone choosing a Python: the tested
+pins apply on the versions they were tested on, and the newest wheels
+apply on anything newer. These tests check that the split is complete and
+that no interpreter ends up with both halves or neither.
+"""
+
+from __future__ import annotations
+
+import os
+
+import pytest
+
+from packaging.requirements import Requirement
+
+_REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+FILES = ("requirements.txt", os.path.join("auto_uploader", "requirements.txt"))
+
+# The three that are written twice, and the compiler error each one would
+# otherwise cause.
+SPLIT = ("numpy", "scipy", "pillow")
+
+PYTHONS = ("3.11", "3.12", "3.13", "3.14")
+
+
+def _requirements(name: str) -> list[Requirement]:
+    parsed = []
+    with open(os.path.join(_REPO, name), encoding="utf-8") as fh:
+        for line in fh:
+            line = line.split("#", 1)[0].strip()
+            if not line:
+                continue
+            parsed.append(Requirement(line))
+    return parsed
+
+
+@pytest.fixture(params=FILES)
+def requirements(request) -> list[Requirement]:
+    return _requirements(request.param)
+
+
+def _selected(reqs: list[Requirement], python: str) -> list[Requirement]:
+    """What pip would actually install on that interpreter."""
+    chosen = []
+    for req in reqs:
+        if req.marker is None or req.marker.evaluate({"python_version": python}):
+            chosen.append(req)
+    return chosen
+
+
+def test_every_line_is_a_valid_requirement(requirements):
+    """A typo in a marker makes pip reject the whole file, which fails the
+    same way the compiler error did: nothing installed."""
+    assert requirements
+
+
+@pytest.mark.parametrize("python", PYTHONS)
+def test_exactly_one_version_of_each_split_package(python):
+    """Both halves selected means pip resolves two conflicting pins and
+    refuses. Neither means the package is silently absent."""
+    reqs = _requirements("requirements.txt")
+    chosen = _selected(reqs, python)
+
+    for package in SPLIT:
+        matches = [r for r in chosen if r.name.lower() == package]
+        assert len(matches) == 1, (
+            f"on Python {python}, {package} resolves to {len(matches)} "
+            f"entries: {[str(m) for m in matches]}")
+
+
+def test_the_new_pythons_are_not_capped_below_the_wheels_that_exist():
+    """numpy 1.26 has no wheel past cp312. Leaving <2.0 in place on 3.13+
+    is exactly the failure this file is fixing."""
+    chosen = _selected(_requirements("requirements.txt"), "3.14")
+    numpy = [r for r in chosen if r.name.lower() == "numpy"][0]
+
+    assert numpy.specifier.contains("2.5.2"), (
+        f"on 3.14 numpy resolves to {numpy} - no wheel exists for that, so "
+        f"pip will try to compile it")
+
+
+def test_the_tested_pins_still_apply_where_they_were_tested():
+    """3.11 and 3.12 must keep the exact versions this project has been
+    running on - a working machine must not be changed by this."""
+    chosen = _selected(_requirements("requirements.txt"), "3.11")
+    numpy = [r for r in chosen if r.name.lower() == "numpy"][0]
+    scipy = [r for r in chosen if r.name.lower() == "scipy"][0]
+
+    assert numpy.specifier.contains("1.26.4")
+    assert not numpy.specifier.contains("2.5.2"), (
+        "3.11 would move to numpy 2, which is not what has been running")
+    assert scipy.specifier.contains("1.11.4")
+
+
+@pytest.mark.parametrize("python", PYTHONS)
+def test_nothing_else_disappears_on_a_newer_python(python):
+    """Only the three compiled ones are allowed to be conditional. A
+    marker accidentally left on anything else means a package that is
+    quietly not installed, which is how this whole outage started."""
+    for name in FILES:
+        for req in _requirements(name):
+            if req.marker is None:
+                continue
+            assert req.name.lower() in SPLIT, (
+                f"{name}: {req} is conditional but is not one of the "
+                f"compiled packages - it would vanish on some Python")
+
+
+def test_the_uploader_list_needs_no_compiler_at_all():
+    """Everything the uploader itself imports is pure Python or ships an
+    abi-none wheel, which is why the uploader can be brought back in a
+    minute without touching the AutoReel half."""
+    names = {r.name.lower() for r in _requirements(FILES[1])}
+
+    for pure in ("python-dotenv", "google-api-python-client", "playwright",
+                 "watchdog", "requests"):
+        assert pure in names, pure
+    assert not (names & set(SPLIT)), (
+        "the uploader list pulled in a compiled package - it can no longer "
+        "be installed on its own when the AutoReel half is broken")

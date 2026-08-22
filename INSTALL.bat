@@ -34,14 +34,48 @@ python -m pip install --upgrade pip
 if errorlevel 1 goto failed
 
 echo.
-echo ---- AutoReel: transcription, clipping, smart crop ----
-python -m pip install -r "%~dp0requirements.txt"
-if errorlevel 1 goto failed
+echo ---- Python in use ----
+python -c "import sys; print('  ', sys.version)"
+python -c "import sys; raise SystemExit(0 if sys.version_info < (3,13) else 1)"
+if errorlevel 1 (
+  echo.
+  echo   This is a NEWER Python than the versions this project was pinned
+  echo   against. requirements.txt handles that - numpy, scipy and Pillow
+  echo   switch to versions that have wheels for it, so nothing has to be
+  echo   compiled. If pip below still tries to build something from source,
+  echo   that is worth telling me about.
+  echo.
+)
 
+REM  ---------------------------------------------------------------------------
+REM  THE UPLOADER GOES FIRST, and this order is deliberate.
+REM
+REM  pip installs a requirements file as a unit. When numpy failed to compile
+REM  on Python 3.14, NOTHING from that file got installed - and because the
+REM  uploader's packages were in the same run, the uploader died too, on
+REM  `No module named 'dotenv'`, every fifteen seconds.
+REM
+REM  Nothing in the uploader's list needs a compiler: it is pure Python and
+REM  abi-none wheels all the way down. So it is installed first and on its
+REM  own. Whatever happens to the AutoReel half afterwards, recording and
+REM  uploading come back.
+REM  ---------------------------------------------------------------------------
 echo.
 echo ---- Uploader: Google APIs, Rumble, watch folder, yt-dlp ----
 python -m pip install -r "%~dp0auto_uploader\requirements.txt"
 if errorlevel 1 goto failed
+
+echo.
+echo ---- AutoReel: transcription, clipping, smart crop ----
+python -m pip install -r "%~dp0requirements.txt"
+if errorlevel 1 (
+  echo.
+  echo   The clipping half did not install. Recording and uploading still
+  echo   work - the packages they need went in above. The pip output says
+  echo   which package failed.
+  echo.
+  set "REEL_FAILED=1"
+)
 
 REM  Rumble has no public API, so uploading is a real browser. Without this
 REM  the browser binary is missing and every Rumble upload fails at launch
@@ -63,9 +97,17 @@ python "%~dp0auto_uploader\utils\deps.py" --check
 if errorlevel 1 goto incomplete
 
 echo.
-echo ========================================
-echo   Installation Complete
-echo ========================================
+if "%REEL_FAILED%"=="1" (
+  echo ========================================
+  echo   Uploader installed - clipping did not
+  echo ========================================
+  echo  Recording and uploading work. Clipping needs the package that
+  echo  failed above.
+) else (
+  echo ========================================
+  echo   Installation Complete
+  echo ========================================
+)
 echo.
 echo  Check it really works, on real video, in about a minute:
 echo      VERIFY.bat

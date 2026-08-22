@@ -273,3 +273,37 @@ def test_a_junk_line_does_not_stop_the_rest(load_dotenv):
     load_dotenv(_env_file("nonsense\nFOO=bar\n"))
 
     assert os.environ["FOO"] == "bar"
+
+
+def test_the_uploader_is_installed_before_the_clipping_half():
+    """pip installs a requirements file as a unit. numpy failing to compile
+    took the uploader down with it - not because the uploader needed numpy,
+    but because they were in the same run. Nothing in the uploader's list
+    needs a compiler, so it goes first and on its own."""
+    body = _body(_read("INSTALL.bat"))
+
+    uploader = body.index("auto_uploader\\requirements.txt")
+    autoreel = body.index('-r "%~dp0requirements.txt"')
+
+    assert uploader < autoreel, (
+        "the clipping half installs first - a compiler failure there would "
+        "stop the uploader being installed at all, which is the outage")
+
+
+def test_a_failed_clipping_install_does_not_abort_the_run():
+    """Recording and uploading must come back even when clipping cannot."""
+    body = _body(_read("INSTALL.bat"))
+    after = body.split('-r "%~dp0requirements.txt"', 1)[1]
+    next_check = after.split("\n\n", 1)[0]
+
+    assert "goto failed" not in next_check, (
+        "a clipping failure aborts the whole install")
+    assert "REEL_FAILED" in next_check
+
+
+def test_the_python_version_is_reported():
+    """The version in use is the first thing worth knowing when a package
+    will not install, and it was invisible."""
+    body = _body(_read("INSTALL.bat"))
+
+    assert "sys.version" in body
