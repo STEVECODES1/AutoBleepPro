@@ -18,19 +18,47 @@ REM ============================================================
 title AutoBleep RECORDER
 cd /d "%~dp0tools"
 
+setlocal
 set RESTARTS=0
 
 :loop
 python record_stream.py "https://www.youtube.com/@stackswopo_/live" "https://www.twitch.tv/stackswopo" "https://www.twitch.tv/stackswopo/clips?range=7d" "https://kick.com/stackswopo1k" "https://www.youtube.com/@OnlyThaGuys26/live" --name "Stackswopo"
 
+REM  Grabbed BEFORE anything else runs. ERRORLEVEL is whatever the LAST
+REM  command set, and `set /a` sets it too - so reading it after the
+REM  counter increments reports the counter's success, not the crash.
+REM  Every "exit 0" in this window's history was that: the recorder died
+REM  of something and the banner said it exited cleanly.
+set "CODE=%ERRORLEVEL%"
+
 set /a RESTARTS+=1
+call :backoff
+
 echo.
 echo ============================================================
-echo  [Keepalive] The recorder STOPPED at %TIME% (exit %errorlevel%).
-echo  [Keepalive] Restart #%RESTARTS% in 10 seconds.
+echo  [Keepalive] The recorder STOPPED at %TIME% (exit %CODE%).
+echo  [Keepalive] Restart #%RESTARTS% in %WAIT% seconds.
 echo  [Keepalive] Scroll up for the reason. Ctrl+C twice to stop
 echo              for good.
 echo ============================================================
 echo.
-timeout /t 10 /nobreak >nul
+timeout /t %WAIT% /nobreak >nul
 goto loop
+
+REM ---------------------------------------------------------------------------
+REM  Back off, but never give up.
+REM
+REM  A crash that happens instantly - a bad import after a pull, a missing
+REM  yt-dlp - restarts every 10 seconds forever. The window fills with
+REM  identical banners, the real error scrolls out of reach, and from across
+REM  the room it looks busy rather than broken.
+REM
+REM  So the wait grows with the restart count and stops at two minutes. It
+REM  never stops retrying: a stream that starts an hour later must still be
+REM  caught, and two minutes of latency on that is nothing.
+REM ---------------------------------------------------------------------------
+:backoff
+set WAIT=10
+if %RESTARTS% GEQ 6 set WAIT=30
+if %RESTARTS% GEQ 21 set WAIT=120
+goto :eof
