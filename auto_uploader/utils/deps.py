@@ -54,6 +54,18 @@ REQUIRED = {
     "yt_dlp": "yt-dlp[default,curl-cffi]",
 }
 
+if sys.version_info >= (3, 13):
+    # audioop left the standard library in 3.13 (PEP 594). pydub imports
+    # it, falls back to `pyaudioop`, and that has never existed - so the
+    # censor pass dies naming a module nobody installed on purpose:
+    #
+    #     ModuleNotFoundError: No module named 'pyaudioop'
+    #
+    # Checked here so it is reported as a missing package with a fix,
+    # rather than as a puzzle in the middle of censoring a stream.
+    REQUIRED["audioop"] = "audioop-lts"
+
+
 # Absent, these cost a feature. Absent, the ones above cost the program.
 OPTIONAL = {
     "plyer": "plyer",           # desktop notifications

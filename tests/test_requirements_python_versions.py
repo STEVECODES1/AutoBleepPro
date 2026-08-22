@@ -50,6 +50,10 @@ SPLIT = ("numpy", "scipy", "pillow", "playwright", "moviepy")
 # only fail through what they pin.
 COMPILED = ("numpy", "scipy", "pillow")
 
+# Present ONLY on the new Pythons, rather than written twice: audioop was
+# in the standard library until 3.13 and is a PyPI package after it.
+NEW_ONLY = ("audioop-lts",)
+
 PYTHONS = ("3.11", "3.12", "3.13", "3.14")
 
 
@@ -134,9 +138,10 @@ def test_nothing_else_disappears_on_a_newer_python(python):
         for req in _requirements(name):
             if req.marker is None:
                 continue
-            assert req.name.lower() in SPLIT, (
-                f"{name}: {req} is conditional but is not one of the "
-                f"compiled packages - it would vanish on some Python")
+            assert req.name.lower() in SPLIT + NEW_ONLY, (
+                f"{name}: {req} is conditional but is neither a version "
+                f"split nor a new-Python-only package - it would vanish "
+                f"on some Python without anyone deciding that")
 
 
 @pytest.mark.parametrize("python", PYTHONS)
@@ -229,3 +234,44 @@ def test_curl_cffi_is_left_to_yt_dlp():
         assert "curl-cffi" not in names, (
             f"{path} pins curl_cffi directly again - it will fight yt-dlp's "
             f"own resolution")
+
+
+# ── the module Python took away ──────────────────────────────────────────
+
+def test_the_audioop_backport_is_installed_on_new_pythons():
+    """audioop was removed from the standard library in 3.13 (PEP 594).
+    pydub imports it and falls back to `pyaudioop`, which has never
+    existed, so censoring dies with
+
+        ModuleNotFoundError: No module named 'pyaudioop'
+
+    naming a module nobody has ever installed on purpose. Muting a word
+    is the whole product, so this is not a degraded feature - it is the
+    product not working."""
+    for path in FILES:
+        chosen = {r.name.lower() for r in _selected(_requirements(path), "3.14")}
+        if "pydub" not in chosen:
+            continue
+        assert "audioop-lts" in chosen, (
+            f"{path} installs pydub on 3.14 with no audioop - censoring "
+            f"will raise on the first clip")
+
+
+def test_the_backport_is_not_forced_on_older_pythons():
+    """audioop-lts requires Python >=3.13. Installing it below that fails
+    the whole requirements file."""
+    for path in FILES:
+        for python in ("3.11", "3.12"):
+            chosen = {r.name.lower()
+                      for r in _selected(_requirements(path), python)}
+            assert "audioop-lts" not in chosen, (
+                f"{path} would install audioop-lts on {python}, which "
+                f"refuses to install there")
+
+
+def test_wherever_pydub_goes_audioop_follows():
+    """Both files install pydub. Fixing one and not the other leaves the
+    failure in place on whichever half runs the censor."""
+    for path in FILES:
+        names = {r.name.lower() for r in _requirements(path)}
+        assert ("pydub" in names) == ("audioop-lts" in names), path

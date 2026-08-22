@@ -378,6 +378,17 @@ def main() -> int:
             before = len(_FAILURES)
             try:
                 stage(clock, work) if needs_clock else stage(work)
+            except ModuleNotFoundError as exc:
+                # The common one, and the one worth answering rather than
+                # reporting. `pyaudioop` in particular names a module
+                # nobody has ever installed on purpose - it is pydub's
+                # fallback after audioop, which Python 3.13 removed.
+                package = {"pyaudioop": "audioop-lts",
+                           "audioop": "audioop-lts"}.get(exc.name or "", "")
+                fix = (f"install it with: python -m pip install {package}"
+                       if package else "run INSTALL.bat")
+                check(False, f"{title.split()[0]} could not run - no module "
+                             f"named '{exc.name}'. {fix}")
             except Exception as exc:
                 check(False, f"{title.split()[0]} raised "
                              f"{type(exc).__name__}: {exc}")

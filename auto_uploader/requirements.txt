@@ -52,6 +52,20 @@ openai-whisper
 # second run stops partway.
 better-profanity==0.7.0
 pydub==0.25.1
+
+# audioop was REMOVED from the standard library in Python 3.13 (PEP 594).
+# pydub imports it, and when that fails falls back to `pyaudioop`, which
+# has never existed - so the censor pass dies with
+#
+#     ModuleNotFoundError: No module named 'pyaudioop'
+#
+# naming a module nobody has ever installed on purpose. audioop-lts is the
+# maintained backport and ships an abi3 wheel, so it covers 3.13 and every
+# version after it. Nothing to compile.
+#
+# Not caught by resolving the dependency tree: pydub declares no
+# dependency on audioop, because until 3.13 it came with Python.
+audioop-lts ; python_version >= "3.13"
 moviepy==2.0.0 ; python_version < "3.13"
 moviepy>=2.2.1 ; python_version >= "3.13"
 

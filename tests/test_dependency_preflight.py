@@ -307,3 +307,18 @@ def test_the_python_version_is_reported():
     body = _body(_read("INSTALL.bat"))
 
     assert "sys.version" in body
+
+
+def test_audioop_is_tracked_on_the_pythons_that_removed_it():
+    """So it is reported as a missing package with a fix, rather than as
+    `No module named 'pyaudioop'` in the middle of censoring a stream."""
+    import importlib
+
+    from utils import deps as fresh
+
+    assert fresh.REQUIRED.get("audioop", "audioop-lts") == "audioop-lts"
+
+    source = _read(os.path.join("auto_uploader", "utils", "deps.py"))
+    assert 'sys.version_info >= (3, 13)' in source
+    assert '"audioop"' in source
+    importlib.reload(fresh)
