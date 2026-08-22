@@ -103,15 +103,39 @@ def _build_string() -> str:
             ["git", "status", "--porcelain", "--untracked-files=no"],
             cwd=here, capture_output=True, text=True, timeout=5)
         if dirty.returncode == 0 and dirty.stdout.strip():
-            # Named, not hinted at. "(+ local edits)" says something is
-            # different and leaves you to find out what, every single run,
-            # which is how it gets ignored.
-            edited = [ln[3:].strip() for ln in dirty.stdout.splitlines()
-                      if ln[3:].strip()]
-            shown = ", ".join(os.path.basename(f) for f in edited[:3])
-            if len(edited) > 3:
-                shown += f", +{len(edited) - 3} more"
-            line += f" (edited: {shown})"
+            # Named, and named usefully. "(+ local edits)" said something
+            # differed and left you to find out what, every run, which is
+            # how it gets ignored. Then naming them by BASENAME produced
+            #
+            #     (edited: .gitkeep, .gitkeep, .gitkeep, +2 more)
+            #
+            # which is worse: five different files, one name, and no clue
+            # what is actually wrong. The folder is what tells them apart,
+            # and the status letter is what says whether they were changed
+            # or deleted - which is the difference between "you edited
+            # something" and "a folder got emptied".
+            changed: dict = {}
+            for entry in dirty.stdout.splitlines():
+                state, _, path = entry[:2].strip(), None, entry[3:].strip()
+                if not path:
+                    continue
+                path = path.strip('"').split(" -> ")[-1]
+                parts = path.replace("\\", "/").split("/")
+                label = "/".join(parts[-2:]) if len(parts) > 1 else path
+                changed.setdefault("gone" if "D" in state else "changed",
+                                   []).append(label)
+
+            pieces = []
+            for word in ("changed", "gone"):
+                names = changed.get(word) or []
+                if not names:
+                    continue
+                shown = ", ".join(names[:3])
+                if len(names) > 3:
+                    shown += f", +{len(names) - 3} more"
+                pieces.append(f"{word}: {shown}")
+            if pieces:
+                line += f" ({'; '.join(pieces)})"
     except Exception:
         pass
     return f"{line} | Python {platform.python_version()}"
@@ -3771,17 +3795,30 @@ def main(argv=None) -> int:
             # did not exist, and telling you to open Chrome on a
             # debugging port cannot help fetch something that is not
             # there. Said once per run.
-            # The first line of the exception only. It used to print
-            # {exc} whole, and a Playwright failure carries a "Call log:"
-            # block with it - so an expected, harmless condition arrived
-            # as six lines of what looks like a crash, at the top of
-            # every run, before anything had gone wrong.
-            why = str(exc).strip().splitlines()[0][:110] if str(exc).strip() else ""
+            # Nothing at all for the two ways this is expected to fail.
+            #
+            # It used to print {exc} whole, and a Playwright failure
+            # carries a "Call log:" block - six lines of apparent crash at
+            # the top of every run. Trimming that to one line still left
+            #
+            #     (direct: Cloudflare served a challenge page instead of
+            #     the feed; browser: could not reach Chrome on http://loca
+            #
+            # cut off mid-URL. Detail that explains nothing and looks
+            # broken is worse than no detail: BOTH of those are the normal
+            # state. Rumble has no feed to serve, and no debugging browser
+            # is meant to be open. Only a genuinely new cause is worth a
+            # word, and then only a few.
+            raw = " ".join(str(exc).split())
+            expected = ("cloudflare" in raw.lower()
+                        or "econnrefused" in raw.lower()
+                        or "could not reach chrome" in raw.lower())
+            why = "" if expected else raw[:70].rsplit(" ", 1)[0]
             _say_once("rumble-feed",
                       f"[Rumble] No channel feed - Rumble publishes no RSS. "
                       f"Using local upload history instead, which covers "
                       f"everything this tool posted."
-                      + (f"\n         ({why})" if why else ""))
+                      + (f"\n         (unexpected: {why}...)" if why else ""))
 
     if batch_folder and existing_videos_fetch_failed and not dry_run:
         print(

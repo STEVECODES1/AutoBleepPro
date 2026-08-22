@@ -93,7 +93,7 @@ def test_uncommitted_edits_are_admitted(monkeypatch):
 
     line = main._build_string()
 
-    assert "edited" in line
+    assert "changed" in line
     assert "main.py" in line, (
         "naming the file is the point - '(+ local edits)' says something "
         "differs and leaves you to find out what, every run")
@@ -140,3 +140,111 @@ def test_untracked_files_are_not_local_edits(monkeypatch):
 
     status = next(c for c in asked if "status" in c)
     assert "--untracked-files=no" in status
+
+
+def test_deleted_files_are_named_as_gone_not_edited(monkeypatch):
+    """Five different .gitkeep files came out as
+
+        (edited: .gitkeep, .gitkeep, .gitkeep, +2 more)
+
+    which is worse than saying nothing: one name for five files, and no
+    clue what is wrong. The folder tells them apart, and the status letter
+    says whether they were changed or deleted - the difference between
+    "you edited something" and "a folder got emptied"."""
+    main = _main()
+
+    class Answer:
+        returncode = 0
+
+        def __init__(self, stdout):
+            self.stdout = stdout
+
+    answers = [Answer("2026-08-17 abc1234"),
+               Answer(" D auto_uploader/watch_folder/.gitkeep\n"
+                      " D auto_uploader/logs/.gitkeep\n")]
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: answers.pop(0))
+
+    line = main._build_string()
+
+    assert "gone:" in line
+    assert "watch_folder/.gitkeep" in line
+    assert "logs/.gitkeep" in line
+    assert line.count(".gitkeep") == 2, "the two files must be told apart"
+
+
+def test_changed_and_deleted_are_reported_separately(monkeypatch):
+    main = _main()
+
+    class Answer:
+        returncode = 0
+
+        def __init__(self, stdout):
+            self.stdout = stdout
+
+    answers = [Answer("2026-08-17 abc1234"),
+               Answer(" M auto_uploader/main.py\n"
+                      " D auto_uploader/logs/.gitkeep\n")]
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: answers.pop(0))
+
+    line = main._build_string()
+
+    assert "changed: auto_uploader/main.py" in line
+    assert "gone: logs/.gitkeep" in line
+
+
+def test_a_rename_reports_where_the_file_landed(monkeypatch):
+    """git prints `old -> new` for a rename. Reporting the old path names
+    something that is no longer there."""
+    main = _main()
+
+    class Answer:
+        returncode = 0
+
+        def __init__(self, stdout):
+            self.stdout = stdout
+
+    answers = [Answer("2026-08-17 abc1234"),
+               Answer('R  auto_uploader/old.py -> auto_uploader/new.py\n')]
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: answers.pop(0))
+
+    line = main._build_string()
+
+    assert "new.py" in line
+    assert "old.py" not in line
+
+
+def test_the_python_version_is_always_there(monkeypatch):
+    """It was the invisible fact behind a whole day of failures."""
+    import platform
+
+    main = _main()
+
+    class Answer:
+        returncode = 0
+
+        def __init__(self, stdout):
+            self.stdout = stdout
+
+    answers = [Answer("2026-08-17 abc1234"), Answer("")]
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: answers.pop(0))
+
+    assert f"Python {platform.python_version()}" in main._build_string()
+
+
+def test_the_commit_subject_is_not_in_the_banner():
+    """The subjects here are sentences, so including %s produced
+
+        Build: 2026-08-22 75bd715 Python 3.13 deleted the module the
+        censor runs on (+ local edits)
+
+    a version line that reads like a crash report and names a Python
+    version that is not the one running."""
+    import os
+
+    source = open(os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "auto_uploader", "main.py"), encoding="utf-8").read()
+    spot = source.index('"git", "log", "-1"')
+
+    assert "%cs %h" in source[spot:spot + 120]
+    assert "%s" not in source[spot:spot + 120]
