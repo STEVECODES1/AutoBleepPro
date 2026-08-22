@@ -46,8 +46,9 @@ and nothing here touches watch_folder or uploaded/.
 """
 
 import glob
-import time
 import os
+import re
+import time
 from dataclasses import dataclass, field
 from typing import Iterable, Optional
 
@@ -233,6 +234,130 @@ def _page_dumps_since(cfg, since_ts: Optional[float]) -> list:
     return sorted(found)
 
 
+# ── The notes beside a video ─────────────────────────────────────────────
+#
+# Every clip carries its caption, its spoken line and its tags in small
+# .txt files named after it. They are read at POST time, once per
+# platform, so they have to outlive the upload to the first one.
+#
+# Nothing ever deleted them. The video went to uploaded/ or was removed,
+# and the notes stayed in the watch folder for good:
+#
+#     Scammer Wop Back To Pay My Dues Sick Again Stackswopo St....txt   x6
+#
+# Two rules, because there are two ways one is finished with:
+#
+#  * the ordinary one - every platform posted, so nothing can still need
+#    it, and it goes at the same moment as the rest of the working files;
+#  * the leftover one - a note whose video no longer exists anywhere.
+#    That is only swept after the queue's own give-up age, because until
+#    then a post could still be waiting to use it.
+
+SIDECAR_SUFFIXES = ("_subject.txt", "_caption.txt", "_line.txt", ".txt")
+
+# Past this, the queue has abandoned any job that could still want one -
+# the same reasoning as VERTICAL_MIN_AGE_S, and the same number.
+ORPHAN_SIDECAR_MIN_AGE_S = 36 * 3600
+
+# A sidecar is one line. Anything substantial that happens to be a .txt in
+# these folders is somebody's own file and is left alone.
+ORPHAN_SIDECAR_MAX_BYTES = 64 * 1024
+
+
+def sidecar_paths(video_path: str) -> list:
+    """Every note file that belongs to this video.
+
+    Includes the ones named after the clip when the path is a "_vertical_"
+    re-frame, because copy_sidecars puts a copy beside each.
+    """
+    if not video_path:
+        return []
+    stem = os.path.splitext(video_path)[0]
+    stems = {stem}
+    plain = os.path.join(
+        os.path.dirname(stem),
+        re.sub(r"^_?vertical[_\s]+", "", os.path.basename(stem), flags=re.I))
+    stems.add(plain)
+    return [base + suffix for base in sorted(stems)
+            for suffix in SIDECAR_SUFFIXES]
+
+
+def _sidecar_stem(name: str) -> str:
+    """The video basename a note belongs to, or "" if it is not a note."""
+    lowered = name.lower()
+    if not lowered.endswith(".txt"):
+        return ""
+    for suffix in SIDECAR_SUFFIXES:
+        if lowered.endswith(suffix):
+            base = name[:len(name) - len(suffix)]
+            break
+    else:                                       # pragma: no cover
+        return ""
+    return re.sub(r"^_?vertical[_\s]+", "", base, flags=re.I)
+
+
+def _folders_to_sweep(cfg) -> list:
+    seen, out = set(), []
+    for folder in (getattr(cfg.general, "watch_folder", ""),
+                   getattr(cfg.general, "censored_folder", ""),
+                   getattr(cfg.general, "uploaded_folder", "")):
+        if folder and folder not in seen and os.path.isdir(folder):
+            seen.add(folder)
+            out.append(folder)
+    return out
+
+
+def prune_orphan_sidecars(cfg, min_age_s: float = ORPHAN_SIDECAR_MIN_AGE_S) -> int:
+    """Delete notes whose video is gone from every folder we know about.
+
+    Returns HOW MANY, not megabytes: a sidecar is one line, so a hundred
+    of them free nothing measurable and would be reported as "0 MB" -
+    which reads as having done nothing at all.
+    """
+    settings = _settings(cfg)
+    if not settings.get("enabled", True) or not settings.get("sidecars", True):
+        return 0
+
+    folders = _folders_to_sweep(cfg)
+    if not folders:
+        return 0
+
+    formats = tuple(getattr(cfg.general, "supported_formats", ()) or ())
+    videos = set()
+    notes = []
+    for folder in folders:
+        try:
+            names = os.listdir(folder)
+        except OSError:
+            continue
+        for name in names:
+            extension = os.path.splitext(name)[1].lower()
+            if extension in formats:
+                stem = re.sub(r"^_?vertical[_\s]+", "",
+                              os.path.splitext(name)[0], flags=re.I)
+                videos.add(stem.lower())
+            elif extension == ".txt":
+                notes.append((folder, name))
+
+    now = time.time()
+    report = CleanupReport()
+    for folder, name in notes:
+        stem = _sidecar_stem(name)
+        if not stem or stem.lower() in videos:
+            continue
+        path = os.path.join(folder, name)
+        try:
+            stat = os.stat(path)
+        except OSError:
+            continue
+        if stat.st_size > ORPHAN_SIDECAR_MAX_BYTES:
+            continue        # somebody's own file, not one of ours
+        if now - stat.st_mtime < min_age_s:
+            continue        # a post could still be queued for it
+        _remove(path, report)
+    return len(report.removed)
+
+
 def cleanup_after_upload(
     cfg,
     video_path: str,
@@ -310,7 +435,25 @@ def cleanup_after_upload(
         for path in _page_dumps_since(cfg, since_ts):
             _remove(path, report, protected)
 
-    # 5. Logs: bounded, never deleted.
+    # 5. The notes beside the video - caption, spoken line, tags.
+    #
+    #    They are read at POST time, once per platform, so they cannot go
+    #    while any platform is still waiting. Once none is, nothing can
+    #    ever read them again and they were being left in the watch folder
+    #    forever, long after the video itself had moved out.
+    if not settings.get("sidecars", True):
+        report.keep("caption notes", "cleanup.sidecars is false")
+    elif pending:
+        report.keep("caption notes",
+                    f"still needed to post {', '.join(sorted(pending))}")
+    else:
+        for path in sidecar_paths(video_path):
+            _remove(path, report, protected)
+        if censored_path:
+            for path in sidecar_paths(censored_path):
+                _remove(path, report, protected)
+
+    # 6. Logs: bounded, never deleted.
     max_mb = float(settings.get("trim_logs_mb", 5) or 0)
     for name in ("youtube.log", "rumble.log"):
         report.freed_mb += trim_log(os.path.join(cfg.general.logs_folder, name), max_mb)

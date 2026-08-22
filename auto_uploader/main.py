@@ -180,6 +180,7 @@ from utils.cleanup import (
     SOURCE_DELETE,
     SOURCE_KEEP,
     cleanup_after_upload,
+    prune_orphan_sidecars,
     prune_uploaded_folder,
     prune_vertical_copies,
     resolve_source_action,
@@ -2362,6 +2363,14 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
         # no queued post is waiting on, and only once they are past the
         # queue's own give-up age - see prune_vertical_copies.
         freed += prune_vertical_copies(cfg)
+        # Notes whose video no longer exists anywhere. The ordinary case
+        # is handled above, at the moment the last platform finishes;
+        # this only catches what an interrupted run left behind, so it
+        # waits out the queue's give-up age first.
+        stranded = prune_orphan_sidecars(cfg)
+        if stranded:
+            print(f"[Cleanup] Removed {stranded} stranded caption note(s) "
+                  f"whose video is no longer anywhere.")
         if freed >= 1:
             print(f"[Cleanup] Freed {freed:.0f} MB of working files.")
         for what, reason in report.kept:
