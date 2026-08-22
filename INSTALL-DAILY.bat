@@ -60,9 +60,25 @@ REM  safe and re-running it is how you change the time.
 REM  AUTOBLEEP_UNATTENDED=1 is what tells CLIP-VODS.bat not to wait on a
 REM  keypress at the end - a scheduled task would sit on that forever - and
 REM  to tidy up the VODs afterwards.
+REM
+REM  The quotes around it are load-bearing. Written the obvious way,
+REM
+REM      set AUTOBLEEP_UNATTENDED=1 && CLIP-VODS.bat
+REM
+REM  cmd takes EVERYTHING between the = and the && as the value, so the
+REM  variable holds "1 " - one, space - and never equals "1". The task then
+REM  reached `pause` with no keyboard attached and sat there forever, which
+REM  also meant the next day's run was skipped as "already running". One
+REM  space; the whole daily job silently ran once and never again.
+REM
+REM      set "AUTOBLEEP_UNATTENDED=1"
+REM
+REM  puts the space outside the value. CLIP-VODS.bat now also strips spaces
+REM  before comparing, so a task installed by the older version of this file
+REM  starts behaving the moment it pulls.
 schtasks /create /f ^
   /tn "%TASKNAME%" ^
-  /tr "cmd /c set AUTOBLEEP_UNATTENDED=1 ^&^& \"%~dp0CLIP-VODS.bat\" 3 \"%SOURCE%\"" ^
+  /tr "cmd /c set \"AUTOBLEEP_UNATTENDED=1\" ^&^& \"%~dp0CLIP-VODS.bat\" 3 \"%SOURCE%\"" ^
   /sc DAILY ^
   /st %RUNAT%
 
