@@ -421,6 +421,17 @@ def make_clips(cfg, source_path: str, title: str,
     # never once read.
     if not source_url:
         source_url = source_beside(source_path)
+    heat: list = []
+    if source_url and bool(clips_cfg.get("use_replay_heat", True)):
+        from autoreel.replay_heat import heat_for_url
+
+        print("[Clips] Checking what people went back and watched again...")
+        heat = heat_for_url(source_url)
+        print(f"[Clips] Most-replayed curve found ({len(heat)}s of it)."
+              if heat else
+              "[Clips] No most-replayed curve on this one - too new or too "
+              "few views for YouTube to publish it yet.")
+
     if source_url and bool(clips_cfg.get("use_chat", True)):
         from autoreel.chat_energy import rates_for_url
 
@@ -432,7 +443,8 @@ def make_clips(cfg, source_path: str, title: str,
 
     base = os.path.splitext(os.path.basename(source_path))[0]
     try:
-        results = maker.make(source_path, segments, basename=base, chat=chat)
+        results = maker.make(source_path, segments, basename=base, chat=chat,
+                             heat=heat)
     except ClipError as exc:
         _journal(cfg, "FAIL", "cut", title or base, str(exc))
         return ClipRun([], [], output_dir, str(exc))

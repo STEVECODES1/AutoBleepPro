@@ -624,6 +624,7 @@ def specs_from_segments(segments: Iterable[dict], count: int = DEFAULT_CLIP_COUN
                         min_gap_seconds: float = DEFAULT_MIN_GAP,
                         energy: Optional[list] = None,
                         chat: Optional[list] = None,
+                        heat: Optional[list] = None,
                         llm_rank: bool = True,
                         llm_provider: str = "",
                         llm_model: str = "",
@@ -644,7 +645,8 @@ def specs_from_segments(segments: Iterable[dict], count: int = DEFAULT_CLIP_COUN
                              skip_intro_seconds=skip_intro_seconds,
                              skip_outro_seconds=skip_outro_seconds,
                              energy=list(energy or []),
-                             chat=list(chat or []))
+                             chat=list(chat or []),
+                             heat=list(heat or []))
     # Spread them out. A fixed 90s gap sounds generous until you ask for
     # twenty clips: on a stream where one guest is on camera for twenty
     # minutes, six clips 90 seconds apart are six versions of the same
@@ -924,7 +926,8 @@ class ClipMaker:
         return resolve_stack(self.config)
 
     def make(self, source_path: str, segments: Iterable[dict],
-             basename: str = "", chat: Optional[list] = None) -> list:
+             basename: str = "", chat: Optional[list] = None,
+             heat: Optional[list] = None) -> list:
         """Render clips for one video. Returns ClipResults, newest last.
 
         A clip that fails to render does not abort the rest: three clips
@@ -949,9 +952,17 @@ class ClipMaker:
                                     self.skip_outro_seconds,
                                     self.min_gap_seconds,
                                     energy, chat,
-                                    self.llm_rank, self.llm_provider,
-                                    self.llm_model,
-                                    source_path, self.use_vision)
+                                    # Named from here on: a new signal
+                                    # inserted into this list once landed
+                                    # llm_rank in `heat` silently, and a
+                                    # boolean read as a heatmap is not a
+                                    # crash - it is wrong clips.
+                                    heat=heat,
+                                    llm_rank=self.llm_rank,
+                                    llm_provider=self.llm_provider,
+                                    llm_model=self.llm_model,
+                                    source_path=source_path,
+                                    use_vision=self.use_vision)
         if not specs:
             return []
 

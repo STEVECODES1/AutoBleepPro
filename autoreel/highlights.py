@@ -146,6 +146,12 @@ class HighlightScorer:
     # Messages-per-second from chat_energy.rates_for_url(). Numbers only -
     # no text, no usernames; the log is deleted before it gets here.
     chat: list = field(default_factory=list)
+    # YouTube's most-replayed curve, from replay_heat.heat_for_url().
+    # Chat is the audience reacting; this is the audience RETURNING -
+    # going back on purpose to watch a stretch again, which costs effort
+    # in a way typing does not. Empty means no opinion, which is the
+    # normal answer for a video too new to have one.
+    heat: list = field(default_factory=list)
 
     # ── Segment scoring ──────────────────────────────────────────────────
 
@@ -308,9 +314,19 @@ class HighlightScorer:
 
         # Divided by the root of the length so a long window has to earn
         # its extra seconds instead of winning by accumulating them.
+        # People going back to watch it again. Capped like chat and for a
+        # sharper reason: a heatmap covers the WHOLE video including its
+        # intro, so letting it dominate would just re-cut whatever was
+        # already popular instead of finding what is good.
+        replayed = 1.0
+        if self.heat:
+            from .replay_heat import heat_bonus
+
+            replayed = heat_bonus(self.heat, start, end)
+
         intensity = base / (duration ** 0.5)
         score = (intensity * placement * boundary * conversation * density
-                 * (0.6 + 0.4 * speech_ratio) * loud * reaction)
+                 * (0.6 + 0.4 * speech_ratio) * loud * reaction * replayed)
 
         text = _clean(" ".join(t for t in (s.get("text", "") for s in segments) if t))
         hook = self.best_line([ordered[peak].get("text", "")]) \
