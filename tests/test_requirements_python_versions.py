@@ -35,9 +35,20 @@ _REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 FILES = ("requirements.txt", os.path.join("auto_uploader", "requirements.txt"))
 
-# The three that are written twice, and the compiler error each one would
-# otherwise cause.
-SPLIT = ("numpy", "scipy", "pillow")
+# Written twice: the version that has wheels for the Python in use.
+#
+# numpy/scipy/pillow are compiled directly. playwright and moviepy are pure
+# Python but PIN something compiled - playwright 1.47 hard-pins
+# greenlet==3.0.3, moviepy 2.0 requires pillow<11 - and neither of those
+# pins has a wheel for 3.13+. A pure-Python package can still need a
+# compiler through what it asks for, which is how greenlet got missed the
+# first time through: only the direct dependencies had been checked.
+SPLIT = ("numpy", "scipy", "pillow", "playwright", "moviepy")
+
+# The subset that is compiled C. These are the ones that genuinely cannot
+# install without a toolchain; playwright and moviepy are pure Python and
+# only fail through what they pin.
+COMPILED = ("numpy", "scipy", "pillow")
 
 PYTHONS = ("3.11", "3.12", "3.13", "3.14")
 
@@ -80,7 +91,10 @@ def test_exactly_one_version_of_each_split_package(python):
     reqs = _requirements("requirements.txt")
     chosen = _selected(reqs, python)
 
+    present = {r.name.lower() for r in reqs}
     for package in SPLIT:
+        if package not in present:
+            continue      # lives in the other requirements file
         matches = [r for r in chosen if r.name.lower() == package]
         assert len(matches) == 1, (
             f"on Python {python}, {package} resolves to {len(matches)} "
@@ -125,6 +139,44 @@ def test_nothing_else_disappears_on_a_newer_python(python):
                 f"compiled packages - it would vanish on some Python")
 
 
+@pytest.mark.parametrize("python", PYTHONS)
+def test_the_transitive_pins_are_split_too(python):
+    """playwright 1.47 -> greenlet==3.0.3 and moviepy 2.0 -> pillow<11 both
+    reach a package with no wheel for 3.13+. The direct requirement looks
+    innocent; what it pins is what fails."""
+    for name in FILES:
+        chosen = _selected(_requirements(name), python)
+        for package in ("playwright", "moviepy"):
+            matches = [r for r in chosen if r.name.lower() == package]
+            if not matches:
+                continue
+            assert len(matches) == 1, (
+                f"{name} on {python}: {package} resolves to "
+                f"{[str(m) for m in matches]}")
+
+
+def test_the_new_pythons_get_the_versions_whose_pins_have_wheels():
+    chosen = _selected(_requirements(FILES[1]), "3.14")
+    playwright = [r for r in chosen if r.name.lower() == "playwright"][0]
+
+    assert not playwright.specifier.contains("1.47.0"), (
+        "1.47.0 pins greenlet==3.0.3, which has to be compiled on 3.14")
+    assert playwright.specifier.contains("1.62.0")
+
+    reel = _selected(_requirements(FILES[0]), "3.14")
+    moviepy = [r for r in reel if r.name.lower() == "moviepy"][0]
+    pillow = [r for r in reel if r.name.lower() == "pillow"][0]
+
+    assert not moviepy.specifier.contains("2.0.0"), (
+        "2.0.0 requires pillow<11, and no pillow below 11 has a 3.14 wheel")
+    assert pillow.specifier.contains("11.3.0"), (
+        "moviepy requires pillow<12, so 11.x is the only version that "
+        "satisfies both it and 3.14")
+    assert not pillow.specifier.contains("12.3.0"), (
+        "moviepy requires pillow<12 - leaving the cap off resolves to 12 "
+        "and pip refuses the whole file")
+
+
 def test_the_uploader_list_needs_no_compiler_at_all():
     """Everything the uploader itself imports is pure Python or ships an
     abi-none wheel, which is why the uploader can be brought back in a
@@ -134,6 +186,6 @@ def test_the_uploader_list_needs_no_compiler_at_all():
     for pure in ("python-dotenv", "google-api-python-client", "playwright",
                  "watchdog", "requests"):
         assert pure in names, pure
-    assert not (names & set(SPLIT)), (
+    assert not (names & set(COMPILED)), (
         "the uploader list pulled in a compiled package - it can no longer "
         "be installed on its own when the AutoReel half is broken")

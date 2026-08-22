@@ -35,12 +35,16 @@ scipy==1.11.4 ; python_version < "3.13"
 scipy>=1.14 ; python_version >= "3.13"
 
 # ── Video processing ─────────────────────────────────────────────────────────
-moviepy==2.0.0
+# 2.0.0 requires pillow<11, and no pillow below 11 has a wheel for
+# 3.13+. 2.2.1 allows pillow<12, which does.
+moviepy==2.0.0 ; python_version < "3.13"
+moviepy>=2.2.1 ; python_version >= "3.13"
 
 # ── GUI ──────────────────────────────────────────────────────────────────────
 customtkinter==5.2.2
 Pillow==10.3.0 ; python_version < "3.13"
-Pillow>=11.0 ; python_version >= "3.13"
+# Capped below 12 because moviepy requires pillow<12.
+Pillow>=11.0,<12 ; python_version >= "3.13"
 
 # ── Optional: drag-and-drop onto the GUI window ──────────────────────────────
 # Not required - Browse always works, and the app says so if this is absent.

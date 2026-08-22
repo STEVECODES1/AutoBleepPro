@@ -7,7 +7,10 @@ google-auth-oauthlib==1.2.1
 google-api-python-client==2.146.0
 
 # Rumble upload via browser automation (no public Rumble API exists)
-playwright==1.47.0
+# 1.47.0 hard-pins greenlet==3.0.3, which has no wheel for 3.13+ and
+# has to be compiled. 1.62.0 asks for greenlet>=3.1.1, which does.
+playwright==1.47.0 ; python_version < "3.13"
+playwright>=1.62.0 ; python_version >= "3.13"
 
 # Folder watching
 watchdog==4.0.2
