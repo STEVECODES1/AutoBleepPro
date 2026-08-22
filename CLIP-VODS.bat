@@ -23,6 +23,13 @@ REM    CLIP-VODS.bat 5                       take 5 VODs instead of 3
 REM    CLIP-VODS.bat 3 "D:\videos stizz"     clip a folder instead of a channel
 REM ============================================================================
 
+REM  Every variable this file sets stays inside this file. Without it
+REM  AUTOBLEEP_STAGE2 survives in an open cmd window, and running
+REM  CLIP-VODS.bat a second time in that same window would see it already
+REM  set, skip the copy below, and go straight back to reading a file that
+REM  git pull is about to rewrite.
+setlocal
+
 cd /d "%~dp0"
 
 REM ---------------------------------------------------------------------------

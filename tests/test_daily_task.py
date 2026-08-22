@@ -198,3 +198,13 @@ def test_the_arguments_reach_the_copy():
             if "call " in ln and "autobleep_clipvods.bat" in ln][0]
 
     assert "%*" in line
+
+
+def test_the_run_does_not_leak_its_variables():
+    """AUTOBLEEP_STAGE2 surviving in an open cmd window would make a second
+    run in that window skip the copy and read the file git is rewriting."""
+    body = _body(_read(CLIPVODS))
+    lines = [ln.strip() for ln in body.splitlines() if ln.strip()]
+
+    assert "setlocal" in lines
+    assert lines.index("setlocal") < lines.index('cd /d "%~dp0"')
