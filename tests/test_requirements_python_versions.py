@@ -189,3 +189,43 @@ def test_the_uploader_list_needs_no_compiler_at_all():
     assert not (names & set(COMPILED)), (
         "the uploader list pulled in a compiled package - it can no longer "
         "be installed on its own when the AutoReel half is broken")
+
+
+# ── the two files must not fight ─────────────────────────────────────────
+
+def _by_name(path: str) -> dict[str, list[str]]:
+    found: dict[str, list[str]] = {}
+    for req in _requirements(path):
+        found.setdefault(req.name.lower(), []).append(str(req))
+    return found
+
+
+def test_a_package_in_both_files_is_specified_the_same_way():
+    """INSTALL.bat runs both files. Where they disagree, the second run
+    undoes the first:
+
+        Successfully uninstalled faster-whisper-1.2.1
+        Successfully installed ... faster-whisper-1.1.1 ...
+
+    Harmless when it finishes. Not harmless when the second run stops
+    partway, which leaves a half-swapped set that matches neither file.
+    """
+    reel, uploader = _by_name(FILES[0]), _by_name(FILES[1])
+
+    for name in sorted(set(reel) & set(uploader)):
+        assert sorted(reel[name]) == sorted(uploader[name]), (
+            f"{name} is '{reel[name]}' in one file and '{uploader[name]}' "
+            f"in the other - whichever installs second wins")
+
+
+def test_curl_cffi_is_left_to_yt_dlp():
+    """It was pinned to 0.15.0 here while the uploader installs
+    yt-dlp[curl-cffi], which resolves what THAT yt-dlp was built against.
+    This file ran second and downgraded it - on the one package Kick
+    recording depends on. yt-dlp's supported range moves; a fixed pin
+    goes stale silently, so it is measured by LINKS.bat instead."""
+    for path in FILES:
+        names = {r.name.lower().replace("_", "-") for r in _requirements(path)}
+        assert "curl-cffi" not in names, (
+            f"{path} pins curl_cffi directly again - it will fight yt-dlp's "
+            f"own resolution")

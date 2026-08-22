@@ -167,3 +167,65 @@ def test_nothing_here_writes_to_the_real_config():
                 writes.append(f"line {node.lineno}")
 
     assert not writes, f"this tool opens a file for writing at {writes}"
+
+
+# ── Cloudflare impersonation, the quiet way Kick dies ────────────────────
+
+def test_no_impersonate_targets_is_reported_as_broken(monkeypatch):
+    """Kick comes back 403 on every request without one, and nothing else
+    says so - it reads as Kick being difficult."""
+    class Done:
+        stdout = "[info] Available impersonate targets\nClient  OS  Source\n----\n"
+        stderr = ""
+    monkeypatch.setattr(check_links.subprocess, "run", lambda *a, **k: Done())
+
+    ok, detail = check_links.impersonation_report()
+
+    assert not ok
+    assert "403" in detail
+    assert "curl-cffi" in detail
+
+
+def test_targets_that_all_read_unavailable_are_not_counted(monkeypatch):
+    """The failure that cost an evening: curl_cffi installs and imports
+    perfectly while every target is unusable because the versions do not
+    match."""
+    class Done:
+        stdout = ("[info] Available impersonate targets\n"
+                  "Client      OS        Source\n"
+                  "----\n"
+                  "Chrome-133  Macos-15  curl_cffi (unavailable)\n"
+                  "Safari-18   Ios-18    curl_cffi (unavailable)\n")
+        stderr = ""
+    monkeypatch.setattr(check_links.subprocess, "run", lambda *a, **k: Done())
+
+    ok, detail = check_links.impersonation_report()
+
+    assert not ok
+    assert "unavailable" in detail
+
+
+def test_working_impersonation_is_counted(monkeypatch):
+    class Done:
+        stdout = ("[info] Available impersonate targets\n"
+                  "Client      OS        Source\n"
+                  "--------------------------\n"
+                  "Chrome-133  Macos-15  curl_cffi\n"
+                  "Safari-18   Ios-18    curl_cffi\n")
+        stderr = ""
+    monkeypatch.setattr(check_links.subprocess, "run", lambda *a, **k: Done())
+
+    ok, detail = check_links.impersonation_report()
+
+    assert ok
+    assert "2 impersonate target" in detail
+
+
+def test_yt_dlp_being_absent_is_not_a_crash(monkeypatch):
+    def explode(*a, **k):
+        raise FileNotFoundError("yt-dlp")
+    monkeypatch.setattr(check_links.subprocess, "run", explode)
+
+    ok, detail = check_links.impersonation_report()
+
+    assert not ok and "could not ask yt-dlp" in detail

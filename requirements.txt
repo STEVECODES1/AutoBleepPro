@@ -66,7 +66,26 @@ tqdm==4.66.4
 #   Linux:   sudo apt install ffmpeg
 
 # Browser TLS fingerprint, for the sites behind Cloudflare (Kick, Rumble).
-# PINNED deliberately: 0.16 installs and imports perfectly while yt-dlp
-# reports every impersonate target as unavailable, so `pip install -U`
-# on this package silently breaks a working setup.
-curl_cffi==0.15.0
+#
+# NOT pinned here any more, and that is the fix rather than the omission.
+# This file pinned curl_cffi==0.15.0 while the uploader installs
+# `yt-dlp[default,curl-cffi]`, which resolves whatever THAT yt-dlp was
+# built against. The two fought, and this file won by running second:
+#
+#     Successfully uninstalled curl_cffi-0.16.1
+#     Successfully installed ... curl_cffi-0.15.0 ...
+#
+# yt-dlp 2026.8.19 declares curl-cffi>=0.5.10,<0.17 and pins 0.16.0 in its
+# own pin-curl-cffi extra - so 0.15.0 is a downgrade below the version
+# yt-dlp is tested against, on the one package Kick recording depends on.
+#
+# The pin existed because curl_cffi 0.16 once installed and imported
+# perfectly while yt-dlp reported every impersonate target as unavailable.
+# That is a real failure and it cost an evening, but it is a failure to
+# MEASURE, not to guess at from a version number - yt-dlp's supported
+# range moves, and a fixed pin here goes stale silently.
+#
+# So it is measured instead. LINKS.bat runs
+#     python -m yt_dlp --list-impersonate-targets
+# and says so if the list is empty or every target reads (unavailable),
+# which is exactly the state that breaks Kick.

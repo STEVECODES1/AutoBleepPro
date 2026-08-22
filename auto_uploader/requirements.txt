@@ -36,7 +36,7 @@ python-dotenv==1.0.1
 # JIT a Triton kernel and warns on every call when there's no CUDA
 # toolkit. openai-whisper stays listed as the fallback so existing
 # installs keep working.
-faster-whisper
+faster-whisper==1.1.1
 openai-whisper
 
 # GPU acceleration for faster-whisper (NVIDIA only). Not installed by
@@ -45,9 +45,15 @@ openai-whisper
 #     pip install nvidia-cublas-cu12 nvidia-cudnn-cu12
 # On a GPU, large-v3 transcribes a multi-hour stream in a fraction of the
 # CPU time, which is what makes the most accurate model practical.
-better-profanity
-pydub
-moviepy
+# Pinned identically to ../requirements.txt on purpose. Left loose here,
+# pip installed the newest and then the AutoReel run downgraded it moments
+# later - faster-whisper 1.2.1 in, 1.2.1 out, 1.1.1 in. Churn that looks
+# like an install problem and can leave a half-swapped set behind if the
+# second run stops partway.
+better-profanity==0.7.0
+pydub==0.25.1
+moviepy==2.0.0 ; python_version < "3.13"
+moviepy>=2.2.1 ; python_version >= "3.13"
 
 # Health checks (--health): CPU/RAM stats; disk checks work without it
 psutil==7.2.2

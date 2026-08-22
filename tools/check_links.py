@@ -210,6 +210,46 @@ def js_runtime_warning() -> str:
             f"unavailable. {hint}.")
 
 
+def impersonation_report() -> tuple[bool, str]:
+    """Can yt-dlp still pretend to be a browser?
+
+    Kick sits behind Cloudflare and every request is refused - "HTTP Error
+    403: Forbidden" - unless yt-dlp can present a real browser's TLS
+    fingerprint, which it does through curl_cffi.
+
+    The failure worth catching is the quiet one: curl_cffi installed and
+    importing perfectly while yt-dlp reports every target as
+    (unavailable), because the two versions do not match. Nothing warns.
+    Kick simply stops recording, and it reads as Kick being difficult.
+
+    This is why curl_cffi is no longer pinned by hand - yt-dlp's supported
+    range moves, and a fixed pin goes stale without saying so. Measured
+    here instead.
+    """
+    try:
+        done = subprocess.run(list(YTDLP) + ["--list-impersonate-targets"],
+                              capture_output=True, text=True, timeout=90)
+    except Exception as exc:
+        return False, f"could not ask yt-dlp: {exc}"
+
+    rows = [ln for ln in done.stdout.splitlines()
+            if ln.strip() and not ln.startswith(("[info]", "Client", "---"))]
+    available = [r for r in rows if "unavailable" not in r.lower()]
+
+    if not rows:
+        return False, ("yt-dlp lists NO impersonate targets. Kick will come "
+                       "back 403 on every request. Fix with:\n"
+                       "        python -m pip install -U "
+                       "\"yt-dlp[default,curl-cffi]\"")
+    if not available:
+        return False, (f"all {len(rows)} impersonate targets read "
+                       f"(unavailable) - curl_cffi is installed but its "
+                       f"version does not match this yt-dlp. Kick will 403. "
+                       f"Fix with:\n        python -m pip install -U "
+                       f"\"yt-dlp[default,curl-cffi]\"")
+    return True, f"{len(available)} impersonate target(s) available"
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--record-test", nargs="?", const="", default=None,
@@ -254,6 +294,12 @@ def main() -> int:
         print(f"  All {len(results)} links resolve. "
               f"{len(live)} live right now.")
 
+    ok_impersonate, impersonate = impersonation_report()
+    kick = [u for u, _, _ in results if platform_of(u) == "kick"]
+    if kick:
+        print(f"\n  {'  ' if ok_impersonate else '! '}Cloudflare bypass "
+              f"(Kick): {impersonate}")
+
     warning = js_runtime_warning()
     if warning:
         print(f"\n  NOTE: {warning}")
@@ -268,7 +314,7 @@ def main() -> int:
             return 1
 
     print()
-    return 1 if broken else 0
+    return 1 if (broken or (kick and not ok_impersonate)) else 0
 
 
 if __name__ == "__main__":
