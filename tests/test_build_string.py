@@ -77,7 +77,7 @@ def test_a_failed_git_call_falls_back_too(monkeypatch):
 
 
 def test_uncommitted_edits_are_admitted(monkeypatch):
-    """A checkout with local changes is not the commit it names, and that
+    """A checkout with edits is not the commit it names, and that
     difference is exactly what this line gets asked about."""
     main = _main()
 
@@ -87,11 +87,17 @@ def test_uncommitted_edits_are_admitted(monkeypatch):
         def __init__(self, stdout):
             self.stdout = stdout
 
-    answers = [Answer("2026-08-17 abc1234 a commit subject"),
+    answers = [Answer("2026-08-17 abc1234"),
                Answer(" M auto_uploader/main.py\n")]
     monkeypatch.setattr(subprocess, "run", lambda *a, **k: answers.pop(0))
 
-    assert main._build_string().endswith("(+ local edits)")
+    line = main._build_string()
+
+    assert "edited" in line
+    assert "main.py" in line, (
+        "naming the file is the point - '(+ local edits)' says something "
+        "differs and leaves you to find out what, every run")
+
 
 
 def test_a_clean_checkout_is_not_marked_dirty(monkeypatch):
@@ -106,7 +112,10 @@ def test_a_clean_checkout_is_not_marked_dirty(monkeypatch):
     answers = [Answer("2026-08-17 abc1234 a commit subject"), Answer("")]
     monkeypatch.setattr(subprocess, "run", lambda *a, **k: answers.pop(0))
 
-    assert main._build_string() == "2026-08-17 abc1234 a commit subject"
+    line = main._build_string()
+
+    assert line.startswith("2026-08-17 abc1234")
+    assert "edited" not in line
 
 
 def test_untracked_files_are_not_local_edits(monkeypatch):

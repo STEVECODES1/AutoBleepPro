@@ -25,6 +25,7 @@ os.environ.setdefault("ABSL_MIN_LOG_LEVEL", "2")
 
 import argparse
 import json
+import platform
 import re
 import shutil
 import sys
@@ -56,7 +57,22 @@ from datetime import datetime
 # already current. A constant somebody has to remember to edit reports
 # the last time it was EDITED, not the code in front of you.
 #
-# So it is read from the checkout instead - the commit, and its subject.
+# So it is read from the checkout instead: the date and the commit hash,
+# which is exactly enough to say which code this is.
+#
+# NOT the commit subject. It used to include %s, and the subjects here are
+# sentences - so the banner read
+#
+#     Build: 2026-08-22 75bd715 Python 3.13 deleted the module the censor
+#     runs on (+ local edits)
+#
+# which looks like a crash report and names a Python version that is not
+# the one running. A version line that alarms people is worse than none.
+#
+# The interpreter IS worth printing, because it was the invisible fact
+# behind a whole day of failures: a fresh Python 3.14 with nothing
+# installed, and no line anywhere said which Python was in use.
+#
 # BUILD_FALLBACK is only for a copy with no git around it (an extract, a
 # zip), where being obviously vague beats being confidently stale.
 BUILD_FALLBACK = "2026-08-17 (no git checkout - version unknown)"
@@ -68,7 +84,7 @@ def _build_string() -> str:
     here = os.path.dirname(os.path.abspath(__file__))
     try:
         out = subprocess.run(
-            ["git", "log", "-1", "--format=%cs %h %s"],
+            ["git", "log", "-1", "--format=%cs %h"],
             cwd=here, capture_output=True, text=True, timeout=5)
     except Exception:
         return BUILD_FALLBACK
@@ -87,10 +103,18 @@ def _build_string() -> str:
             ["git", "status", "--porcelain", "--untracked-files=no"],
             cwd=here, capture_output=True, text=True, timeout=5)
         if dirty.returncode == 0 and dirty.stdout.strip():
-            line += " (+ local edits)"
+            # Named, not hinted at. "(+ local edits)" says something is
+            # different and leaves you to find out what, every single run,
+            # which is how it gets ignored.
+            edited = [ln[3:].strip() for ln in dirty.stdout.splitlines()
+                      if ln[3:].strip()]
+            shown = ", ".join(os.path.basename(f) for f in edited[:3])
+            if len(edited) > 3:
+                shown += f", +{len(edited) - 3} more"
+            line += f" (edited: {shown})"
     except Exception:
         pass
-    return line
+    return f"{line} | Python {platform.python_version()}"
 
 
 BUILD = _build_string()
@@ -3747,13 +3771,17 @@ def main(argv=None) -> int:
             # did not exist, and telling you to open Chrome on a
             # debugging port cannot help fetch something that is not
             # there. Said once per run.
+            # The first line of the exception only. It used to print
+            # {exc} whole, and a Playwright failure carries a "Call log:"
+            # block with it - so an expected, harmless condition arrived
+            # as six lines of what looks like a crash, at the top of
+            # every run, before anything had gone wrong.
+            why = str(exc).strip().splitlines()[0][:110] if str(exc).strip() else ""
             _say_once("rumble-feed",
-                      f"[Rumble] No channel feed to check - Rumble does not "
-                      f"publish RSS, so the configured rss_url returns a web "
-                      f"page. ({exc})\n"
-                      f"         Dedup falls back to local upload history, "
-                      f"which already covers everything this tool uploaded. "
-                      f"The only gap is a video you put on Rumble by hand.")
+                      f"[Rumble] No channel feed - Rumble publishes no RSS. "
+                      f"Using local upload history instead, which covers "
+                      f"everything this tool posted."
+                      + (f"\n         ({why})" if why else ""))
 
     if batch_folder and existing_videos_fetch_failed and not dry_run:
         print(

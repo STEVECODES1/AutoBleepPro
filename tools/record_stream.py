@@ -44,6 +44,7 @@ import re
 import shutil
 import subprocess
 import sys
+import threading
 import time
 from dataclasses import dataclass, field
 from typing import Optional
@@ -68,6 +69,11 @@ SAFE_CHARS = " -_.,'!()[]"
 # echoing yt-dlp's per-minute countdown. Long enough to be quiet
 # overnight, short enough to prove the window is still alive.
 WAIT_HEARTBEAT_S = 1800
+
+# Lines that are true of the RUN, not of one channel. Every watcher runs
+# on its own thread and would otherwise print them all at once.
+_SAID_FOR_EVERYONE: set = set()
+_EVERYONE_LOCK = threading.Lock()
 
 # A five-hour stream is roughly this much at 1080p. Checked before
 # starting, because running out of disk four hours in loses the lot.
@@ -894,6 +900,28 @@ class Recorder:
     def say(self, message: str) -> None:
         print(f"[{time.strftime('%H:%M:%S')}] {message}", flush=True)
 
+    def say_once_for_everyone(self, key: str, message: str) -> bool:
+        """Say this once for the whole run, not once per channel.
+
+        Five channels are watched, each on its own thread, and each was
+        printing the same sentence at the same second:
+
+            Not live yet - checking every 60s. This window can stay open
+            for days; each check is one page fetch, so it costs
+            practically no data.       x4
+            Holding the machine awake for the recording.   x4
+
+        The same paragraph five times is not five facts. It made an idle
+        recorder look like something going wrong, and it is the reason
+        this window reads as busy when it is doing nothing at all.
+        """
+        with _EVERYONE_LOCK:
+            if key in _SAID_FOR_EVERYONE:
+                return False
+            _SAID_FOR_EVERYONE.add(key)
+        self.say(message)
+        return True
+
     def say_once(self, key: str, message: str,
                  every_seconds: float = REPEAT_AFTER_S) -> bool:
         """Say this only if it has not been said recently. True if said.
@@ -1087,15 +1115,24 @@ class Recorder:
                         now = time.time()
                         if not waiting_since:
                             waiting_since = last_heartbeat = now
-                            self.say(f"Not live yet - checking every "
-                                     f"{self.poll_seconds}s. This window can "
-                                     "stay open for days; each check is one "
-                                     "page fetch, so it costs practically no "
-                                     "data.")
+                            self.say_once_for_everyone(
+                                "not-live-yet",
+                                f"Nothing live. Checking every "
+                                f"{self.poll_seconds}s from now on, quietly - "
+                                f"nothing more prints until a stream starts. "
+                                f"On YouTube the recording still begins at the "
+                                f"stream's first second, so the check interval "
+                                f"costs no footage.")
                         elif now - last_heartbeat >= WAIT_HEARTBEAT_S:
-                            self.say(f"Still waiting "
-                                     f"({(now - waiting_since) / 3600:.1f}h). "
-                                     f"Full detail: {log_path or 'the log'}")
+                            # Per channel would be five identical lines
+                            # every half hour, all night.
+                            if self.say_once(
+                                    "still-waiting",
+                                    f"Still watching "
+                                    f"({(now - waiting_since) / 3600:.1f}h). "
+                                    f"Full detail: {log_path or 'the log'}",
+                                    every_seconds=WAIT_HEARTBEAT_S):
+                                pass
                             last_heartbeat = now
                         continue
 
@@ -1466,7 +1503,9 @@ class Recorder:
             # still sleep normally during the wait between streams.
             with KeepAwake() as awake:
                 if resumes == 0 and awake.active:
-                    self.say("Holding the machine awake for the recording.")
+                    self.say_once_for_everyone(
+                        "keep-awake",
+                        "Holding the machine awake for the recording.")
                 code = self._run(self.download_args(target, wait=(resumes == 0)),
                                  log_path)
             ended = time.time()
