@@ -9,7 +9,42 @@ import os
 from dataclasses import dataclass, field
 from typing import Optional
 
-from dotenv import load_dotenv
+try:
+    from dotenv import load_dotenv
+except ImportError:  # pragma: no cover - exercised by the test below
+    # python-dotenv reads KEY=VALUE out of a text file. That is worth a
+    # dependency, not worth the whole uploader: it died in a restart loop
+    # on `No module named 'dotenv'`, and every credential in .env was
+    # sitting there readable the entire time.
+    #
+    # utils.deps installs it before this import is reached. If that could
+    # not run - no network, no pip - the .env still loads.
+    def load_dotenv(dotenv_path=None, override=False, **_kw):
+        """Enough of the format to load a real .env: KEY=VALUE a line at a
+        time, `export` allowed, # comments and blank lines skipped, one
+        layer of matching quotes stripped."""
+        if not dotenv_path or not os.path.exists(dotenv_path):
+            return False
+        try:
+            with open(dotenv_path, "r", encoding="utf-8") as handle:
+                lines = handle.readlines()
+        except OSError:
+            return False
+        for line in lines:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            if line.startswith("export "):
+                line = line[len("export "):].lstrip()
+            key, _, value = line.partition("=")
+            key, value = key.strip(), value.strip()
+            if not key:
+                continue
+            if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+                value = value[1:-1]
+            if override or key not in os.environ:
+                os.environ[key] = value
+        return True
 
 
 @dataclass

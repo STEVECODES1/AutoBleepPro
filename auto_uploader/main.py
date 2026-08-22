@@ -34,6 +34,19 @@ from concurrent.futures import ThreadPoolExecutor
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+# Before the imports below, because one of them is where a missing
+# package actually surfaces - as a bare ModuleNotFoundError, fifteen
+# seconds apart, forever, inside the keepalive loop. utils.deps needs
+# nothing but the standard library, says what is missing, and installs
+# it.
+#
+# Only when this file IS the program. The tests import it, and a test run
+# must never start pip.
+if __name__ == "__main__":
+    from utils import deps as _deps
+
+    _deps.ensure()
+
 from datetime import datetime
 
 # The version line exists to prove which code is actually running, so it
