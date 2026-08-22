@@ -49,11 +49,19 @@ def test_start_launches_the_keepalives_not_python_directly():
 
 def test_a_restart_is_announced_loudly():
     """A silent restart loop hides a crash that repeats forever, which is
-    the same failure wearing a different hat."""
+    the same failure wearing a different hat.
+
+    This used to assert the banner contained "%errorlevel%" - which it
+    did, and which was the bug. ERRORLEVEL is whatever the LAST command
+    set, the counter increment happens first, and `set /a` sets it too,
+    so the banner printed the counter's success and every crash read
+    "exit 0". The code is captured into CODE the instant the process
+    exits now; test_keepalive_exit_codes.py holds that down properly.
+    """
     body = _read("_RUN_RECORDER.bat")
 
     assert "STOPPED" in body
-    assert "%errorlevel%" in body
+    assert "%CODE%" in body, "the banner stopped reporting an exit code"
     assert "RESTARTS" in body
 
 
