@@ -370,6 +370,13 @@ class Transcriber:
                 and self._resolved_device == "cuda"
                 and int(self.batch_size or 1) > 1):
             self._batch = _batched(self._model)
+
+        # Said once per load, because it is the one fact that separates a
+        # twenty-minute censor pass from a six-hour one, and nothing was
+        # printing it.
+        print(f"[Transcribe] {self.model_name} ready on "
+              f"{self._resolved_device.upper()}"
+              f"{' (' + self._resolved_compute + ')' if self._resolved_compute else ''}.")
         return self._model
 
     def release(self) -> None:

@@ -1988,7 +1988,22 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
         if not (platform_wants_censoring and cfg.general.censor_before_upload):
             return vertical_path(video_path)
         if "path" not in _censored:
-            print(f"[Censor] Transcribing + scanning for profanity (model={cfg.general.censor_model})...")
+            # The DEVICE, not only the model. This line named large-v3
+            # and nothing else, so a run that had quietly fallen back to
+            # the CPU looked exactly like one on the GPU - and the
+            # difference is minutes against hours on a four-hour VOD.
+            # There was no way to tell which you were watching until it
+            # either finished or did not.
+            _where = cfg.general.censor_device or "auto"
+            if _where == "auto":
+                try:
+                    from autoreel.transcription import detect_device
+
+                    _where = f"auto -> {detect_device()[0]}"
+                except Exception:
+                    _where = "auto"
+            print(f"[Censor] Transcribing + scanning for profanity "
+                  f"(model={cfg.general.censor_model}, device={_where})...")
             censor_result = censor_video(
                 video_path, cfg.general.censored_folder,
                 model_name=cfg.general.censor_model,

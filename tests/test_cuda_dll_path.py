@@ -249,3 +249,48 @@ def test_a_ctranslate2_that_raises_does_not_break_detection(monkeypatch):
     monkeypatch.setitem(sys.modules, "ctranslate2", fake)
 
     assert transcription.detect_device()[0] == "cpu"
+
+
+# ── say which device is doing the work ───────────────────────────────────
+
+def test_the_model_announces_where_it_loaded(monkeypatch, capsys):
+    """Nothing printed it. A run that had quietly fallen back to the CPU
+    looked exactly like one on the GPU, and the difference is minutes
+    against hours on a four-hour VOD - there was no way to tell which you
+    were watching until it either finished or did not."""
+    module = types.ModuleType("faster_whisper")
+
+    class Model:
+        def transcribe(self, *a, **k):      # pragma: no cover
+            raise AssertionError("not called")
+
+    module.WhisperModel = lambda *a, **k: Model()
+    monkeypatch.setitem(sys.modules, "faster_whisper", module)
+    monkeypatch.setattr(transcription, "_batched", lambda model: None)
+
+    speaker = transcription.Transcriber(
+        model_name="large-v3", device="cpu",
+        backend=transcription.BACKEND_FASTER)
+    speaker._load()
+
+    printed = capsys.readouterr().out
+    assert "large-v3 ready on CPU" in printed
+
+
+def test_the_censor_line_names_the_device_too():
+    source = open(os.path.join(_REPO, "auto_uploader", "main.py"),
+                  encoding="utf-8").read()
+    spot = source.index("Transcribing + scanning for profanity")
+
+    assert "device=" in source[spot:spot + 200]
+
+
+def test_an_auto_device_resolves_to_what_it_actually_picked():
+    """"device=auto" answers nothing. It has to say which one auto chose."""
+    source = open(os.path.join(_REPO, "auto_uploader", "main.py"),
+                  encoding="utf-8").read()
+    spot = source.index("Transcribing + scanning for profanity")
+    before = source[spot - 700:spot]
+
+    assert "detect_device()" in before
+    assert "auto ->" in before
