@@ -61,6 +61,72 @@ VERBATIM_PROMPT = (
 )
 
 
+def cuda_dll_directories() -> list:
+    """Windows: where pip put the CUDA DLLs that ctranslate2 needs.
+
+    `pip install nvidia-cublas-cu12 nvidia-cudnn-cu12` does NOT put those
+    DLLs anywhere Windows looks. They land in
+
+        ...\\site-packages\\nvidia\\cublas\\bin\\cublas64_12.dll
+        ...\\site-packages\\nvidia\\cudnn\\bin\\cudnn64_9.dll
+
+    and the OS loader searches PATH, not site-packages. So the packages
+    install, pip reports "Requirement already satisfied", and ctranslate2
+    still says
+
+        Library cublas64_12.dll is not found or cannot be loaded
+
+    which reads as a missing install and is not one. PyTorch registers
+    these directories when it is imported, which is why the problem looks
+    intermittent - it depends on whether something pulled torch in first.
+
+    Empty everywhere except Windows with those packages present.
+    """
+    if os.name != "nt":
+        return []
+    try:
+        import nvidia
+    except Exception:
+        return []
+    import glob
+
+    found = []
+    for base in list(getattr(nvidia, "__path__", []) or []):
+        for candidate in sorted(glob.glob(os.path.join(base, "*", "bin"))):
+            if os.path.isdir(candidate) and candidate not in found:
+                found.append(candidate)
+    return found
+
+
+_REGISTERED_DLL_DIRS: list = []
+
+
+def register_cuda_dlls() -> list:
+    """Put those directories on the loader's search path. Idempotent.
+
+    Must run BEFORE ctranslate2 is imported - it resolves its CUDA
+    libraries as the module loads, and a directory added afterwards is
+    too late.
+
+    os.add_dll_directory is the supported mechanism on Python 3.8+;
+    PATH is appended to as well because some loaders still consult it.
+    """
+    if _REGISTERED_DLL_DIRS:
+        return list(_REGISTERED_DLL_DIRS)
+    for directory in cuda_dll_directories():
+        try:
+            os.add_dll_directory(directory)
+        except (OSError, AttributeError) as exc:
+            # Not fatal: without it the GPU is unavailable and the CPU
+            # fallback still produces a transcript.
+            print(f"[Transcribe] Could not register {directory} for CUDA "
+                  f"({type(exc).__name__}: {exc}).")
+            continue
+        os.environ["PATH"] = directory + os.pathsep + os.environ.get("PATH", "")
+        _REGISTERED_DLL_DIRS.append(directory)
+    return list(_REGISTERED_DLL_DIRS)
+
+
 def _has_faster_whisper() -> bool:
     try:
         import faster_whisper  # noqa: F401
@@ -222,6 +288,10 @@ class Transcriber:
         self._resolved_device = self.device or detect_device()[0]
 
         if self.backend == BACKEND_FASTER:
+            # Before the import: ctranslate2 resolves its CUDA libraries
+            # as it loads, so a directory added afterwards is too late.
+            if self._resolved_device == "cuda":
+                register_cuda_dlls()
             from faster_whisper import WhisperModel
 
             compute = self.compute_type or default_compute_type(self._resolved_device)
@@ -247,9 +317,15 @@ class Transcriber:
                 if self._resolved_device != "cuda":
                     raise
                 print(f"[Transcribe] GPU unavailable for {self.model_name} "
-                      f"({exc}). Falling back to CPU - this is much slower. "
-                      "Install the CUDA runtime with: pip install "
-                      "nvidia-cublas-cu12 nvidia-cudnn-cu12")
+                      f"({exc}). Falling back to CPU - this is much slower.")
+                if os.name == "nt" and not cuda_dll_directories():
+                    print("[Transcribe] The CUDA runtime is not installed: "
+                          "pip install nvidia-cublas-cu12 nvidia-cudnn-cu12")
+                elif os.name == "nt":
+                    print(f"[Transcribe] The CUDA DLLs ARE installed "
+                          f"({len(cuda_dll_directories())} folder(s) found) "
+                          f"but could not be loaded. Check the GPU driver "
+                          f"version, or run: python main.py --gpu-check")
                 self._resolved_device = "cpu"
                 self._resolved_compute = default_compute_type("cpu")
                 self._model = WhisperModel(
