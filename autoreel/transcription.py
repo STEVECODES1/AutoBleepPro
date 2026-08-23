@@ -197,6 +197,13 @@ class Transcriber:
     # captions on an English stream. Set it to another code if the
     # channel ever changes language; do not set it back to None.
     language: Optional[str] = "en"
+    # Words to expect - names and the flagged vocabulary. See
+    # autoreel/hotwords.py for why this matters more here than for a
+    # general transcriber: the censor cannot mute a word the transcript
+    # never contained. Encoded into the same prompt region as
+    # VERBATIM_PROMPT and truncated separately, so it adds to that
+    # instruction rather than replacing it.
+    hotwords: Optional[str] = None
     _model: Any = field(default=None, init=False, repr=False)
     _batch: Any = field(default=None, init=False, repr=False)
     _resolved_device: str = field(default="", init=False, repr=False)
@@ -340,6 +347,11 @@ class Transcriber:
                 # decode drops. Missing a slur is more expensive here
                 # than the extra minutes.
                 beam_size=5)
+            # Only when there are some: faster-whisper opens a sot_prev
+            # block for a non-empty hotword string, and an empty one would
+            # cost prompt space for nothing.
+            if self.hotwords:
+                shared["hotwords"] = self.hotwords
 
             if self._batch is not None:
                 try:

@@ -267,6 +267,24 @@ def censor_video(
 
             transcriber = _get_transcriber(model_name, device,
                                            reuse=bool(speed.get("reuse_model", True)))
+            # Tell it the words it is about to hear. The censor can only
+            # mute what the transcript contains, and shouted overlapping
+            # gameplay speech is exactly where Whisper drops or softens a
+            # slur - see autoreel/hotwords.py.
+            #
+            # Best-effort: a hotword list that cannot be built is a
+            # slightly worse transcript, not a failed censor pass.
+            try:
+                from autoreel.hotwords import build as build_hotwords
+
+                transcriber.hotwords = build_hotwords(
+                    config=None,
+                    engine=ComplianceEngine(custom_words=tuple(custom_words),
+                                            only_categories=tuple(only_categories)))
+            except Exception as exc:
+                print(f"[Censor] Could not build the hotword list "
+                      f"({type(exc).__name__}: {exc}). Transcribing without "
+                      f"it - this is slightly less accurate, not broken.")
             result = transcriber.transcribe(raw_audio_path)
             timer.mark("transcribe")
             try:
