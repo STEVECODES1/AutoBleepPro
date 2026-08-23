@@ -985,6 +985,23 @@ def _is_link(value: str) -> bool:
     return str(value or "").strip().lower().startswith(("http://", "https://"))
 
 
+def _rumble_channel_url(cfg) -> str:
+    """The channel's listing page, however it was configured.
+
+    Prefers rumble.channel_url; falls back to rss_url with its filename
+    stripped, since that is the only other place the channel is named -
+    even though Rumble does not actually publish an RSS feed at that
+    address (see channel_vods.listing_url). Shared so the pre-upload
+    dedup check and the post-upload verification agree on where "the
+    channel" is.
+    """
+    channel = str(getattr(cfg.rumble, "channel_url", "") or "").strip()
+    if not channel:
+        channel = str(getattr(cfg.rumble, "rss_url", "") or "").replace(
+            "/index.xml", "")
+    return channel
+
+
 def _confirm_on_rumble(url: str, title: str, cfg) -> str:
     """Turn an unconfirmed Rumble upload into a verified answer.
 
@@ -1012,12 +1029,7 @@ def _confirm_on_rumble(url: str, title: str, cfg) -> str:
         print(f"           sent: {title}")
         print(f"           got:  {url}")
 
-    channel = str(getattr(cfg.rumble, "channel_url", "") or "").strip()
-    if not channel:
-        # Derived from the configured feed address, which is the only
-        # place the channel is named today.
-        channel = str(getattr(cfg.rumble, "rss_url", "") or "").replace(
-            "/index.xml", "")
+    channel = _rumble_channel_url(cfg)
     if not channel:
         print("[Rumble] Cannot verify - no channel URL configured. Treating "
               "as uploaded; check https://rumble.com/account/content.")
@@ -1891,6 +1903,33 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
             rb_match = find_existing_video(existing_rumble_videos, now, stream_title)
             if rb_match:
                 existing_rb = existing_rb_match_url = rb_match.url
+        if not existing_rb:
+            # existing_rumble_videos above is always empty - Rumble
+            # publishes no RSS feed (see _rumble_channel_url), so that
+            # branch has never once matched anything. This is the only
+            # check that can actually find a video already on the
+            # channel, and it is what stops a file that RUMBLE_UNCONFIRMED
+            # on a previous run from being blindly re-uploaded: the
+            # video may well have landed and only failed to show up on
+            # the page in time to be confirmed then. A duplicate costs
+            # gigabytes of upload and a second live copy on the channel;
+            # one more page fetch here is cheap by comparison.
+            try:
+                from utils.channel_vods import find_on_channel
+
+                channel_url = _rumble_channel_url(cfg)
+                if channel_url:
+                    found = find_on_channel(channel_url, rb_title)
+                    if found:
+                        existing_rb = existing_rb_match_url = found
+                        print(f"[Rumble] Found already on the channel -> "
+                              f"{found}. Skipping the upload.")
+            except Exception as exc:
+                # Never blocks the upload - worst case here is the
+                # existing "try to upload, verify after" path runs as
+                # it always has.
+                print(f"[Rumble] Could not check the channel before "
+                      f"uploading ({exc}). Uploading normally.")
     if existing_rb:
         note = " (would skip on a real run)" if dry_run else ""
         print(f"[Rumble] Video already exists on Rumble -> {existing_rb}{note}")
@@ -2019,7 +2058,29 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
                 print("[Censor] Reusing a censored copy from a previous attempt.")
             elif censor_result.was_censored:
                 verb = "Silenced" if cfg.general.censor_bleep_method == "silence" else "Bleeped"
-                print(f"[Censor] {verb} {censor_result.violation_count} word(s): {', '.join(censor_result.censored_words)}")
+                # Capped, not the raw list. censor_video already prints a
+                # categorized, capped breakdown per category (see
+                # _report_risk) - this line used to print EVERY instance,
+                # uncapped, in one unbroken line. On a stream with heavy
+                # profanity that is hundreds of slurs dumped into the
+                # console at once, which buries every progress line after
+                # it and is exactly the kind of text that ends up
+                # screenshotted and pasted somewhere it shouldn't be.
+                #
+                # Counted by distinct word, not by instance: "77 words"
+                # when the stream said "nigga" 70 times and "shit" 7 times
+                # is a worse summary than "shit x7, nigga x70".
+                from collections import Counter
+
+                counts = Counter(w.strip().lower()
+                                 for w in censor_result.censored_words)
+                shown = ", ".join(
+                    f"{word} x{n}" if n > 1 else word
+                    for word, n in counts.most_common(8))
+                if len(counts) > 8:
+                    shown += f", +{len(counts) - 8} more distinct word(s)"
+                print(f"[Censor] {verb} {censor_result.violation_count} "
+                      f"word(s) ({len(counts)} distinct): {shown}")
                 notify(
                     "Video censored before upload",
                     f"{filename}: {censor_result.violation_count} word(s) censored",
