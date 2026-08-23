@@ -78,6 +78,36 @@ from datetime import datetime
 BUILD_FALLBACK = "2026-08-17 (no git checkout - version unknown)"
 
 
+def _gpu_probe_wav() -> str:
+    """Two seconds of speech-shaped tone, written to a temp WAV.
+
+    A tone rather than silence: the transcriber runs with VAD on, and
+    silence is trimmed away before it reaches the model - which would
+    skip the decode this check exists to perform.
+    """
+    import math
+    import tempfile
+    import wave
+
+    rate = 16_000
+    frames = bytearray()
+    for index in range(rate * 2):
+        # Two tones in the speech band, so the VAD keeps it.
+        value = (math.sin(2 * math.pi * 220 * index / rate) * 0.4
+                 + math.sin(2 * math.pi * 440 * index / rate) * 0.3)
+        sample = max(-32768, min(32767, int(value * 32767)))
+        frames += sample.to_bytes(2, "little", signed=True)
+
+    handle, path = tempfile.mkstemp(suffix="_gpucheck.wav")
+    os.close(handle)
+    with wave.open(path, "wb") as out:
+        out.setnchannels(1)
+        out.setsampwidth(2)
+        out.setframerate(rate)
+        out.writeframes(bytes(frames))
+    return path
+
+
 def _build_string() -> str:
     import subprocess
 
@@ -3245,9 +3275,48 @@ def main(argv=None) -> int:
         print(f"[OK] Loaded on {transcriber._resolved_device.upper()} "
               f"in {_t.time() - started:.0f}s using "
               f"{transcriber._resolved_compute or 'default'} precision.")
+
+        # Loading is not the test. ctranslate2 opens its CUDA libraries
+        # LAZILY - the first real decode is what needs cuBLAS - so a
+        # machine missing the runtime loads the model perfectly and then
+        # dies mid-transcript. This check used to stop here and report
+        # "[OK] Loaded on CUDA" on exactly the machine that could not
+        # transcribe, which is worse than not checking.
+        loaded_on = transcriber._resolved_device
+        print("\nTranscribing two seconds of audio to prove it can "
+              "actually decode...")
+        probe = _gpu_probe_wav()
+        try:
+            started = _t.time()
+            transcriber.transcribe(probe)
+            print(f"[OK] Decoded on {transcriber._resolved_device.upper()} "
+                  f"in {_t.time() - started:.1f}s.")
+        except Exception as exc:
+            print(f"[FAIL] Loaded, but could not decode: {exc}")
+            return 1
+        finally:
+            try:
+                os.remove(probe)
+            except OSError:
+                pass
+
         if transcriber._resolved_device != "cuda" and wanted == "cuda":
-            print("     It fell back to CPU - censoring will work but be slow.")
-            print("     Fix with: pip install nvidia-cublas-cu12 nvidia-cudnn-cu12")
+            from autoreel.transcription import cuda_dll_directories
+
+            if loaded_on == "cuda":
+                print("     It loaded on the GPU and fell back to the CPU "
+                      "while decoding - that is the lazy CUDA load failing.")
+            else:
+                print("     It fell back to CPU - censoring works but is slow.")
+            folders = cuda_dll_directories()
+            if os.name == "nt" and folders:
+                print(f"     The CUDA DLLs are installed ({len(folders)} "
+                      f"folder(s) found) and were registered. If this "
+                      f"persists the GPU driver is likely too old for "
+                      f"CUDA 12.")
+            else:
+                print("     Fix with: pip install nvidia-cublas-cu12 "
+                      "nvidia-cudnn-cu12")
         transcriber.release()
         return 0
 
