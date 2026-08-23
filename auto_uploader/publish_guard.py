@@ -326,11 +326,19 @@ class PublishGuard:
             "consecutive_failures", 3))
         failures = self.consecutive_failures(platform)
         if breaker > 0 and failures >= breaker:
-            return Decision(
-                False,
-                f"circuit breaker open for {platform}: {failures} consecutive "
-                "failures. Something is wrong at the account or credential "
-                "level - fix it, then clear with reset_failures()")
+            # Open - but not forever. See _trial_wait_seconds.
+            waited = now - self.last_failure_at(platform)
+            wait_for = self._trial_wait_seconds(platform, failures, breaker)
+            if waited < wait_for:
+                left = (wait_for - waited) / 60.0
+                return Decision(
+                    False,
+                    f"circuit breaker open for {platform}: {failures} "
+                    f"consecutive failures. Trying one post again in "
+                    f"{left:.0f} min. Clear it now with "
+                    f"--reset-failures {platform}")
+            # Half-open: one attempt through. A success clears the
+            # breaker; a failure pushes the next trial further out.
 
         recent = self._recent_posts(platform, now)
         cap = daily_cap_of(settings)
@@ -368,12 +376,57 @@ class PublishGuard:
         now = time.time() if now is None else now
         self._state["posts"].setdefault(platform, []).append(now)
         self._state["failures"][platform] = 0    # success clears the breaker
+        self._state.setdefault("failed_at", {}).pop(platform, None)
         self._save()
+
+    def last_failure_at(self, platform: str) -> float:
+        """When this platform last failed, 0.0 if never.
+
+        Absent from older state files, which is why it defaults to 0 -
+        that reads as "long ago" and lets the first trial through
+        immediately, which is the right answer for a breaker that has
+        been stuck open since before this existed.
+        """
+        stamps = self._state.setdefault("failed_at", {})
+        try:
+            return float(stamps.get(platform, 0.0) or 0.0)
+        except (TypeError, ValueError):
+            return 0.0
+
+    def _trial_wait_seconds(self, platform: str, failures: int,
+                            breaker: int) -> float:
+        """How long an open breaker waits before letting ONE post through.
+
+        The original rule was that it never does: three failures running
+        means something is wrong at the account or credential level, and
+        an auto-reset would walk straight back into it every hour, which
+        is itself how an account gets flagged.
+
+        That reasoning holds, and the conclusion did not. A breaker that
+        only a person can clear is an outage that lasts until somebody
+        notices - and Instagram and YouTube Shorts sat blocked for days
+        after three failures, on an account whose owner is not watching
+        the console.
+
+        So: not a reset, and not a retry loop. ONE post is let through per
+        window, and the window DOUBLES with each further failure - an hour,
+        two, four, up to a day. A genuinely broken credential is attempted
+        about five times a day and then less; a passing platform glitch
+        clears itself in an hour with nobody involved.
+        """
+        settings = (self.config.get("circuit_breaker") or {})
+        base = float(settings.get("trial_after_minutes", 60) or 0) * 60.0
+        if base <= 0:
+            return float("inf")      # opt out: manual clearing only
+        cap = float(settings.get("max_trial_wait_minutes", 24 * 60)) * 60.0
+        extra = max(0, int(failures) - int(breaker))
+        return min(cap, base * (2 ** min(extra, 16)))
 
     def record_failure(self, platform: str) -> int:
         """Call after a failed post. Returns the new consecutive count."""
         count = self.consecutive_failures(platform) + 1
         self._state["failures"][platform] = count
+        self._state.setdefault("failed_at", {})[platform] = time.time()
         self._save()
         return count
 
@@ -387,8 +440,10 @@ class PublishGuard:
         """
         if platform is None:
             self._state["failures"] = {}
+            self._state["failed_at"] = {}
         else:
             self._state["failures"].pop(platform, None)
+            self._state.setdefault("failed_at", {}).pop(platform, None)
         self._save()
 
     # ── Publisher-facing API ─────────────────────────────────────────────

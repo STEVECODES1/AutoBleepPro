@@ -544,13 +544,24 @@ def test_legacy_state_layout_is_absorbed_not_discarded(tmp_path):
 
 
 def test_legacy_failure_counts_are_absorbed(tmp_path):
+    """The count is read back from the older shape.
+
+    It no longer keeps the breaker shut, and that is deliberate: an old
+    state file has no failure TIMESTAMP, so there is nothing to say the
+    failures were recent. Instagram and youtube_shorts sat blocked for
+    days on exactly this - three transient rejections, then a breaker only
+    a person could clear, on an account nobody was watching. A state file
+    with no timestamp reads as "long ago" and gets one trial post, which
+    either clears it or starts the backoff. See test_breaker_recovery.py.
+    """
     state = tmp_path / "s.json"
     state.write_text(json.dumps({
         "x": {"posts": [], "consecutive_failures": 3, "circuit_open": True},
     }))
     guard = PublishGuard(config=make_config(tmp_path), state_path=str(state))
     assert guard.consecutive_failures("x") == 3
-    assert not guard.check("x", now=NOW)
+    assert guard.last_failure_at("x") == 0.0
+    assert guard.check("x", now=NOW).allowed
 
 
 def test_old_posts_outside_the_window_do_not_count(tmp_path):
