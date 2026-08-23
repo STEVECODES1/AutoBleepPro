@@ -132,6 +132,33 @@ def _batched(model):
         return None
 
 
+# A GPU that cannot actually compute, as opposed to one that cannot load
+# a model. ctranslate2 opens its CUDA libraries LAZILY - the first real
+# decode is what needs cuBLAS - so a machine with the driver but without
+# the runtime loads WhisperModel perfectly and then dies mid-transcript:
+#
+#     Library cublas64_12.dll is not found or cannot be loaded
+#
+# That killed a finished four-hour recording after the audio had already
+# been extracted. The load-time fallback below could not help, because
+# nothing had failed at load time.
+_CUDA_TROUBLE = (
+    "cublas", "cudnn", "cuda", "libcu", "cufft", "curand",
+    "no kernel image", "device-side", "gpu", "out of memory",
+)
+
+
+def looks_like_a_gpu_problem(exc: BaseException) -> bool:
+    """Whether this failure is the GPU's, and so worth retrying on a CPU.
+
+    Deliberately narrow: a bug in our own code must not be retried into
+    silence. Only failures that name a CUDA library, the device, or its
+    memory qualify.
+    """
+    text = f"{type(exc).__name__}: {exc}".lower()
+    return any(needle in text for needle in _CUDA_TROUBLE)
+
+
 def _normalise_faster_whisper(segments_iter, info) -> dict:
     """CTranslate2 Segment/Word objects -> the Whisper-shaped dict the
     rest of the codebase already consumes."""
@@ -243,7 +270,45 @@ class Transcriber:
 
     # ── Transcription ────────────────────────────────────────────────────
 
+    def _fall_back_to_cpu(self, exc: BaseException) -> bool:
+        """Move this Transcriber onto the CPU. False if it is already there.
+
+        Everything is dropped and reloaded: the model, the batched
+        pipeline and the resolved device all belong to the GPU that just
+        failed, and reusing any of them fails the same way.
+        """
+        if self._resolved_device != "cuda":
+            return False
+        print(f"[Transcribe] The GPU failed during transcription ({exc}). "
+              f"Reloading {self.model_name} on the CPU and trying again - "
+              f"this is much slower but it finishes.\n"
+              f"[Transcribe] To get the GPU back: pip install "
+              f"nvidia-cublas-cu12 nvidia-cudnn-cu12")
+        self.release()
+        self.device = "cpu"
+        self._resolved_device = "cpu"
+        self._resolved_compute = ""
+        self.compute_type = None
+        self._load()
+        return True
+
     def transcribe(self, audio_path: str, vad_filter: bool = True) -> dict:
+        """Transcribe, falling back to the CPU if the GPU fails mid-run.
+
+        One retry only, and only for a failure that names CUDA - see
+        looks_like_a_gpu_problem. A transcript produced slowly is the
+        whole job; a GPU is an optimisation.
+        """
+        try:
+            return self._transcribe_once(audio_path, vad_filter)
+        except Exception as exc:
+            if not looks_like_a_gpu_problem(exc):
+                raise
+            if not self._fall_back_to_cpu(exc):
+                raise
+        return self._transcribe_once(audio_path, vad_filter)
+
+    def _transcribe_once(self, audio_path: str, vad_filter: bool = True) -> dict:
         """Return a Whisper-style result: {'segments': [...]}, each
         segment carrying word-level timestamps.
 

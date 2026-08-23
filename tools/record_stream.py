@@ -590,9 +590,12 @@ _CURL_CFFI_FIX = (
     "Kick sits behind Cloudflare, and yt-dlp needs a browser TLS "
     "fingerprint to get past it. THE VERSION MATTERS - 0.16 installs and "
     "imports fine while yt-dlp reports every impersonate target as "
-    "unavailable, so `pip install -U curl_cffi` makes a working setup stop "
-    "working:\n"
-    "        python -m pip install \"curl_cffi==0.15.0\"\n"
+    "unavailable.\n"
+    "    Do NOT pin a curl_cffi version by hand. This advice used to name "
+    "one, and it went stale: yt-dlp moved on, and the pin then DOWNGRADED "
+    "below what yt-dlp is built against - breaking the very thing it was "
+    "meant to protect. Let yt-dlp pick the version it was built for:\n"
+    "        python -m pip install -U \"yt-dlp[default,curl-cffi]\"\n"
     "    If curl_cffi is ALREADY installed and this still fails, the yt-dlp "
     "being run is the standalone .exe, which bundles its own Python and "
     "cannot see it. Check with:\n"
@@ -613,7 +616,30 @@ _CLOCK_FIX = (
     "time automatically\" off and back on -> Sync now.\n"
     "    Check the time zone while you are there.")
 
-KNOWN_FIXES = (
+# The machine is offline, or DNS is. Nothing here is a site problem, and
+# nothing is installable - so this must be matched BEFORE the Kick rule,
+# which otherwise claims a dropped internet connection is Cloudflare and
+# tells you to install a package.
+#
+# That is exactly what it did through a real outage: every DNS failure on
+# a kick.com URL printed eight lines of curl_cffi installation advice.
+_OFFLINE_FIX = (
+    "This machine could not look up the address at all - that is the "
+    "internet connection or DNS, not the site and not anything installed "
+    "here. Nothing to fix in this project: the recorder keeps retrying and "
+    "picks the stream back up on its own when the connection returns.")
+
+_OFFLINE_MARKERS = (
+    "could not resolve host",
+    "failed to resolve",
+    "getaddrinfo failed",
+    "temporary failure in name resolution",
+    "name or service not known",
+    "[errno 11001]",
+    "no address associated with hostname",
+)
+
+KNOWN_FIXES = tuple((marker, _OFFLINE_FIX) for marker in _OFFLINE_MARKERS) + (
     ("no impersonate target is available", _CURL_CFFI_FIX),
     # Before the Kick rule: this arrives on a Kick URL but has nothing to
     # do with Cloudflare, and the curl_cffi advice sends you to install a
@@ -639,6 +665,11 @@ def known_fix(line: str) -> str:
     attach installation advice to a working recording.
     """
     lowered = line.lower()
+    # First, because being offline explains every other error on the line
+    # and none of them are worth acting on until it is back.
+    for marker in _OFFLINE_MARKERS:
+        if marker in lowered:
+            return _OFFLINE_FIX
     if "no impersonate target is available" in lowered:
         return _CURL_CFFI_FIX
     # A TLS date failure is not a site problem and is worth naming even
