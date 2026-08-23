@@ -138,8 +138,23 @@ def _has_faster_whisper() -> bool:
 def detect_device() -> tuple[str, str]:
     """Pick the fastest available device: NVIDIA GPU (CUDA) if present, else CPU.
 
-    torch is optional - faster-whisper does not need it - so a missing
-    torch means CPU rather than an ImportError.
+    Asks the library that is ACTUALLY going to run the model, not torch.
+
+    torch is optional here - faster-whisper does not need it - and this
+    used to consult only torch. On a machine with a working GPU but no
+    torch that reported
+
+        Detected      : CPU (16 CPU cores)
+        [WARN] config asks for CUDA but no GPU was detected.
+
+    seconds before ctranslate2 loaded large-v3 on CUDA and decoded on it.
+    Cosmetic where censor_device is set to "cuda" by hand. Not cosmetic on
+    the default, censor_device=null, which means "auto" - that machine
+    would have transcribed every stream on its CPU while owning a GPU
+    that worked, and nothing would have looked wrong.
+
+    torch is still tried first, because it names the card and that is
+    worth printing. ctranslate2 only counts them.
     """
     try:
         import torch
@@ -148,6 +163,17 @@ def detect_device() -> tuple[str, str]:
             return "cuda", torch.cuda.get_device_name(0)
     except Exception:
         pass
+
+    # The one that matters: ctranslate2 is what faster-whisper runs on.
+    try:
+        import ctranslate2
+
+        count = int(ctranslate2.get_cuda_device_count())
+        if count > 0:
+            return "cuda", f"{count} CUDA device(s) via ctranslate2"
+    except Exception:
+        pass
+
     return "cpu", f"{os.cpu_count()} CPU cores"
 
 

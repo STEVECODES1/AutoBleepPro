@@ -185,3 +185,67 @@ def test_it_stops_telling_you_to_install_what_is_already_installed():
 
     assert "not cuda_dll_directories()" in after
     assert "ARE installed" in after
+
+
+# ── which device gets detected ───────────────────────────────────────────
+
+def test_a_gpu_is_found_through_ctranslate2_without_torch(monkeypatch):
+    """torch is optional - faster-whisper does not need it - and asking
+    only torch reported
+
+        Detected      : CPU (16 CPU cores)
+        [WARN] config asks for CUDA but no GPU was detected.
+
+    seconds before ctranslate2 loaded large-v3 on CUDA and decoded on it.
+    """
+    monkeypatch.setitem(sys.modules, "torch", None)
+    fake = types.ModuleType("ctranslate2")
+    fake.get_cuda_device_count = lambda: 1
+    monkeypatch.setitem(sys.modules, "ctranslate2", fake)
+
+    device, label = transcription.detect_device()
+
+    assert device == "cuda"
+    assert "ctranslate2" in label
+
+
+def test_torch_still_wins_when_it_is_there(monkeypatch):
+    """It names the card, which is worth printing; ctranslate2 only counts
+    them."""
+    fake_torch = types.ModuleType("torch")
+    fake_torch.cuda = types.SimpleNamespace(
+        is_available=lambda: True,
+        get_device_name=lambda index: "GeForce RTX 4090")
+    monkeypatch.setitem(sys.modules, "torch", fake_torch)
+
+    device, label = transcription.detect_device()
+
+    assert device == "cuda"
+    assert label == "GeForce RTX 4090"
+
+
+def test_no_gpu_anywhere_is_still_cpu(monkeypatch):
+    monkeypatch.setitem(sys.modules, "torch", None)
+    fake = types.ModuleType("ctranslate2")
+    fake.get_cuda_device_count = lambda: 0
+    monkeypatch.setitem(sys.modules, "ctranslate2", fake)
+
+    device, label = transcription.detect_device()
+
+    assert device == "cpu"
+    assert "CPU cores" in label
+
+
+def test_a_ctranslate2_that_raises_does_not_break_detection(monkeypatch):
+    """get_supported_compute_types raises outright on a machine whose
+    driver is too old. Detection must degrade to CPU, not crash."""
+    monkeypatch.setitem(sys.modules, "torch", None)
+    fake = types.ModuleType("ctranslate2")
+
+    def explode():
+        raise RuntimeError("CUDA driver version is insufficient")
+
+    fake.get_cuda_device_count = explode
+    monkeypatch.setitem(sys.modules, "ctranslate2", fake)
+
+    assert transcription.detect_device()[0] == "cpu"

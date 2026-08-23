@@ -3258,9 +3258,10 @@ def main(argv=None) -> int:
 
         wanted = cfg.general.censor_device or device
         if wanted == "cuda" and device != "cuda":
-            print("\n[WARN] config asks for CUDA but no GPU was detected. Either "
-                  "torch is not installed (pip install torch) or the driver is "
-                  "not visible. The censor pass will fall back to CPU.")
+            print("\n[WARN] config asks for CUDA but no GPU was detected by "
+                  "torch or ctranslate2. The load below is the real test - "
+                  "if it says CUDA, the GPU is fine and only the detection "
+                  "was wrong.")
 
         print(f"\nLoading {cfg.general.censor_model} on {wanted}... "
               "(first run downloads the model)")
