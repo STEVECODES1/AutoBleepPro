@@ -216,14 +216,33 @@ def _model_caption(platform: str, video_path: str, headline: str,
 #
 # {rumble} is the configured rumble.channel_url. An empty promo line, or
 # a channel_url nobody has set, adds nothing at all.
+# What each destination gets when config.json says nothing.
+#
+# auto_uploader/config.json is GITIGNORED - it is the live file, with the
+# credentials paths and the per-machine folders in it - so a block added
+# to the shipped template never reaches a machine that already has one.
+# Every setting that only exists in the template is a setting that works
+# here and nowhere real.
+#
+# So the default lives in code. A config that wants something else says
+# so and wins; a config that says nothing still gets a working pointer.
+DEFAULT_PROMOS = {
+    "tiktok": "Full uncensored streams on Rumble: {rumble}",
+    "twitter": "",
+}
+
+
 def promo_line(platform: str, config: dict) -> str:
     """The 'where to find more' line for this destination, or ''."""
     settings = (config or {}).get("zernio", {}) or {}
-    promos = settings.get("promote", {}) or {}
+    promos = settings.get("promote", {})
     if not isinstance(promos, dict):
-        return ""
+        promos = {}
     key = platform[len("zernio_"):] if platform.startswith("zernio_") else platform
-    template = str(promos.get(key, "") or "").strip()
+    if key in promos:
+        template = str(promos.get(key) or "").strip()
+    else:
+        template = str(DEFAULT_PROMOS.get(key, "") or "").strip()
     if not template:
         return ""
     channel = str(((config or {}).get("rumble", {}) or {}).get(

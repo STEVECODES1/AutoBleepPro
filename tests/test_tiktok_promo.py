@@ -64,10 +64,14 @@ def test_a_platform_with_no_promo_configured_gets_none(config):
     assert promo_line("instagram", config) == ""
 
 
-def test_a_broken_promo_block_is_not_a_crash(config):
+def test_a_broken_promo_block_falls_back_rather_than_crashing(config):
+    """A malformed value is not an instruction to post nothing - it is a
+    config that cannot be read, and the default is still better than
+    silently dropping the pointer off every clip."""
     config["zernio"]["promote"] = "not a mapping"
 
-    assert promo_line("zernio_tiktok", config) == ""
+    assert promo_line("zernio_tiktok", config) == (
+        "Full uncensored streams on Rumble: rumble.com/user/stackswopo10k")
 
 
 # ── how it joins the caption ─────────────────────────────────────────────
@@ -164,3 +168,40 @@ def test_tiktok_keeps_its_own_cap_and_spacing():
 
     assert tiktok["daily_cap"] < twitter["daily_cap"]
     assert tiktok["min_minutes_between"] > twitter["min_minutes_between"]
+
+
+# ── it has to work on a config that predates the feature ─────────────────
+
+def test_a_config_with_no_promote_block_still_points_at_rumble():
+    """config.json is gitignored: it is the live file, so a block added to
+    the shipped template never reaches a machine that already has one.
+    Every setting that exists only in the template works here and nowhere
+    real."""
+    older = {"rumble": {"channel_url": "https://rumble.com/user/BinScripts"},
+             "zernio": {"caption_template": "{title}"}}
+
+    assert promo_line("zernio_tiktok", older) == (
+        "Full uncensored streams on Rumble: https://rumble.com/user/BinScripts")
+
+
+def test_a_config_that_says_otherwise_still_wins():
+    """The default is a floor, not an override."""
+    explicit = {"rumble": {"channel_url": "https://rumble.com/user/BinScripts"},
+                "zernio": {"promote": {"tiktok": "watch more: {rumble}"}}}
+
+    assert promo_line("zernio_tiktok", explicit).startswith("watch more:")
+
+
+def test_turning_it_off_in_config_is_respected():
+    """An empty string is an answer, not a missing value."""
+    off = {"rumble": {"channel_url": "https://rumble.com/user/BinScripts"},
+           "zernio": {"promote": {"tiktok": ""}}}
+
+    assert promo_line("zernio_tiktok", off) == ""
+
+
+def test_x_still_gets_nothing_by_default():
+    older = {"rumble": {"channel_url": "https://rumble.com/user/BinScripts"},
+             "zernio": {}}
+
+    assert promo_line("zernio_twitter", older) == ""
