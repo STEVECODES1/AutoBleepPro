@@ -122,7 +122,18 @@ class GeneralConfig:
     censor_custom_words: tuple
     censored_folder: str
     censor_padding_ms: int = 250
-    censor_mute_whole_segment: bool = True
+    # OFF. On, a flagged hate-speech word takes the WHOLE Whisper
+    # segment with it - and a segment is a sentence, not a word, so one
+    # slur silences several seconds of a clip. That is what "too much
+    # audio is cut" sounds like: the word goes, and so does the setup and
+    # the punchline around it.
+    #
+    # The word-level path already pads generously into the SILENCE either
+    # side and stops at the neighbouring word, so muting only the word
+    # does not leave a syllable audible. The shipped config.json has said
+    # false for a while; this default is what a config predating the key
+    # got instead, and it silently won.
+    censor_mute_whole_segment: bool = False
     # Optional; defaulted so older config.json files keep loading.
     filename_channel_prefixes: tuple = ()
     cleanup: dict = None
@@ -250,7 +261,7 @@ def load_config(config_path: str = "config.json", env_path: str = ".env") -> App
         censor_custom_words=tuple(gen.get("censor_custom_words", [])),
         censored_folder=_resolve_path(project_root, gen.get("censored_folder", "./censored")),
         censor_padding_ms=int(gen.get("censor_padding_ms", 250)),
-        censor_mute_whole_segment=bool(gen.get("censor_mute_whole_segment", True)),
+        censor_mute_whole_segment=bool(gen.get("censor_mute_whole_segment", False)),
     )
 
     # The posting block's paths are resolved against the config file, not

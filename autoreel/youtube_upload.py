@@ -44,7 +44,7 @@ except ImportError:
 # ── Channel identity ────────────────────────────────────────────────────────
 
 CHANNEL_HANDLE  = "@BinScript"
-CHANNEL_RUMBLE  = "rumble.com/c/BinScripts"
+CHANNEL_RUMBLE  = "rumble.com/user/BinScripts"
 CHANNEL_TAGLINE = "Raw stream moments, no filter."
 
 # Base tags always attached to every upload.

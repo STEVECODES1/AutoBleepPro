@@ -3015,6 +3015,27 @@ def main(argv=None) -> int:
             accounts_block = block.setdefault("accounts", {})
             for platform, account_id in found.items():
                 accounts_block.setdefault(platform, {})["account_id"] = account_id
+
+            # And turn them ON. Finding the account and then printing a
+            # line asking somebody to go and edit JSON is not setup - it
+            # is homework, and a connected TikTok that posts nothing
+            # looks exactly like a broken one.
+            #
+            # Enabling is not publishing: PublishGuard still holds every
+            # post to its own cap, spacing, breaker and kill switch, and
+            # it remains the only thing that decides whether a clip goes
+            # out. This flips one flag it reads.
+            platforms_block = raw.setdefault("posting", {}).setdefault(
+                "platforms", {})
+            switched = []
+            for destination, platform in sorted(DESTINATIONS.items()):
+                if platform not in found:
+                    continue
+                entry = platforms_block.setdefault(destination, {})
+                if not entry.get("enabled"):
+                    switched.append(destination)
+                entry["enabled"] = True
+
             with open(config_file, "w", encoding="utf-8") as handle:
                 json.dump(raw, handle, indent=2, ensure_ascii=False)
         except (OSError, ValueError) as exc:
@@ -3029,9 +3050,15 @@ def main(argv=None) -> int:
             if platform not in found:
                 continue
             settings = (cfg.posting.get("platforms") or {}).get(destination, {})
-            print(f"[Zernio]   posting.platforms.{destination}.enabled = true"
-                  f"   ({settings.get('daily_cap', '?')}/day, every "
+            state = "TURNED ON" if destination in switched else "already on"
+            print(f"[Zernio]   {destination}: {state} "
+                  f"({settings.get('daily_cap', '?')}/day, every "
                   f"{settings.get('min_minutes_between', '?')} min)")
+        if switched:
+            print(f"[Zernio] {len(switched)} destination(s) will start posting "
+                  f"clips on the next run. Nothing is posted right now, and "
+                  f"every post still goes through the caps and spacing above.")
+            print("[Zernio] To stop one: python main.py --posting-status")
         return 0
 
     if args.backfill:

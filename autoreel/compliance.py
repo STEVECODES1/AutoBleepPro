@@ -100,6 +100,24 @@ def _matcher(phrases):
 # slop, small enough that a neighbouring word stays intelligible.
 NEIGHBOUR_BLEED_MS = 120
 
+# No single mute may run longer than this.
+#
+# The point of the censor is to take the word and hand the audience the
+# next line immediately. A mute long enough to notice is a mute long
+# enough to scroll past - on a sixty-second clip, a second of dead air is
+# a sixtieth of the whole thing spent on nothing.
+#
+# This is a backstop, not the normal path: word-level mutes come out
+# around 400-900ms. It exists because a bad word timestamp or a merged
+# run of flagged words can produce a span far longer than any word, and
+# silencing eight seconds of a clip is worse than the word surviving.
+#
+# It does NOT apply to a mute_whole_segment expansion. That is somebody
+# explicitly asking for the sentence, for a platform that acts on context
+# rather than on the audible word - a decision, not a runaway - and
+# capping it would quietly turn the feature off instead of bounding it.
+MAX_MUTE_MS = 2_000
+
 
 @dataclass
 class Violation:
@@ -282,6 +300,8 @@ class ComplianceEngine:
         Overlaps are merged afterwards, so the rebuild stays correct and
         the track length is preserved exactly.
         """
+        # (start_ms, end_ms, bounded) - bounded is False for a span the
+        # caller explicitly asked to cover a whole sentence.
         spans: list = []
         for violation in violations:
             start = violation.start
@@ -310,16 +330,28 @@ class ComplianceEngine:
             start_ms = max(0, min(start_ms, total_ms))
             end_ms = max(0, min(end_ms, total_ms))
             if end_ms > start_ms:
-                spans.append((start_ms, end_ms))
+                spans.append((start_ms, end_ms, not whole_segment))
 
         spans.sort()
         merged: list = []
-        for start_ms, end_ms in spans:
+        for start_ms, end_ms, bounded in spans:
             if merged and start_ms <= merged[-1][1]:
-                merged[-1] = (merged[-1][0], max(merged[-1][1], end_ms))
+                # A deliberate whole-sentence mute overlapping a word-level
+                # one keeps its exemption: the sentence was asked for.
+                merged[-1] = (merged[-1][0], max(merged[-1][1], end_ms),
+                              merged[-1][2] and bounded)
             else:
-                merged.append((start_ms, end_ms))
-        return merged
+                merged.append((start_ms, end_ms, bounded))
+
+        # Trimmed from the END, so the word's own start - which is what
+        # the timing is anchored to - keeps its padding, and what gets
+        # given back is the tail that was running into the next line.
+        out = []
+        for start_ms, end_ms, bounded in merged:
+            if bounded and end_ms - start_ms > MAX_MUTE_MS:
+                end_ms = start_ms + MAX_MUTE_MS
+            out.append((start_ms, end_ms))
+        return out
 
     def censor_audio(self, audio_segment, violations: Iterable[Violation], method: str = "beep"):
         """Return a copy of `audio_segment` with each violation censored.

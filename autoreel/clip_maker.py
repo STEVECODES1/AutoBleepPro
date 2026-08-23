@@ -102,7 +102,7 @@ _RECORDER_PREFIX = re.compile(r"^howl\b(?=\s+\d)", re.IGNORECASE)
 # ── Watermark ────────────────────────────────────────────────────────────
 
 # Burned into every clip bottom-left so viewers know where to find us.
-WATERMARK_TEXT = "rumble.com/c/BinScripts"
+WATERMARK_TEXT = "rumble.com/user/BinScripts"
 
 # font size relative to 1080px wide frame — small but legible on phone.
 WATERMARK_FONTSIZE = 28

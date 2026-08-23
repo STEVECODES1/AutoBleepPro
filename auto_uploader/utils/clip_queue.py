@@ -202,6 +202,57 @@ def _model_caption(platform: str, video_path: str, headline: str,
     return have.get(platform, "")
 
 
+# Where to send people, per destination.
+#
+# Stackswopo's clips do numbers on TikTok in other people's hands - the
+# reposts run 45K to 200K likes - and none of those posts sends anyone to
+# the Rumble channel. A clip that travels without a destination is
+# somebody else's traffic.
+#
+# TikTok does not make a caption link clickable, so this is written to be
+# read and typed, not tapped. Kept out of X by default: 280 characters is
+# the whole budget there and a URL eats a fifth of it, and X demotes posts
+# carrying an external link.
+#
+# {rumble} is the configured rumble.channel_url. An empty promo line, or
+# a channel_url nobody has set, adds nothing at all.
+def promo_line(platform: str, config: dict) -> str:
+    """The 'where to find more' line for this destination, or ''."""
+    settings = (config or {}).get("zernio", {}) or {}
+    promos = settings.get("promote", {}) or {}
+    if not isinstance(promos, dict):
+        return ""
+    key = platform[len("zernio_"):] if platform.startswith("zernio_") else platform
+    template = str(promos.get(key, "") or "").strip()
+    if not template:
+        return ""
+    channel = str(((config or {}).get("rumble", {}) or {}).get(
+        "channel_url", "") or "").strip()
+    if "{rumble}" in template and not channel:
+        # Naming a channel nobody configured would post the literal
+        # "{rumble}" under every clip.
+        return ""
+    return template.replace("{rumble}", channel).strip()
+
+
+def with_promo(caption: str, platform: str, config: dict,
+               limit: int = 0) -> str:
+    """Append the promo line if it fits, and if it is not already there.
+
+    Never truncates the caption to make room: the line that was written
+    for the clip earns the post, and the pointer is the extra.
+    """
+    line = promo_line(platform, config)
+    if not line:
+        return caption
+    if line.lower() in (caption or "").lower():
+        return caption
+    joined = f"{caption.rstrip()}\n\n{line}" if caption.strip() else line
+    if limit and len(joined) > int(limit):
+        return caption
+    return joined
+
+
 def caption_for(platform: str, video_path: str, fallback: str,
                 config: dict) -> str:
     """The caption this platform posts with.
@@ -271,7 +322,22 @@ def caption_for(platform: str, video_path: str, fallback: str,
         from autoreel.safe_text import clean_lines
 
         caption = clean_lines(caption)
-    return caption
+
+    # Last, so the pointer survives the cleaner and the tag builder and
+    # is measured against what actually gets posted.
+    return with_promo(caption, platform, config,
+                      limit=_char_limit(platform))
+
+
+def _char_limit(platform: str) -> int:
+    """What this destination will keep, 0 for no limit worth enforcing."""
+    if not platform.startswith("zernio"):
+        return 0
+    try:
+        from publishers.zernio import CHAR_LIMITS, DESTINATIONS
+    except Exception:
+        return 0
+    return int(CHAR_LIMITS.get(DESTINATIONS.get(platform, ""), 0) or 0)
 
 
 # Platforms whose CLIP AUDIO gets bleeped before it is posted.
@@ -304,7 +370,10 @@ CENSOR_AUDIO_DEFAULTS = {
     "instagram": "slurs",
     "facebook": "slurs",
     "zernio_twitter": "slurs",
-    "zernio_tiktok": "slurs",
+    # "all", like Shorts. TikTok does not ban swearing outright, but its
+    # For You eligibility standards discourage it - and reach on TikTok is
+    # the entire reason the account exists. Same treatment as Shorts.
+    "zernio_tiktok": "all",
 }
 
 # Which compliance categories each mode bleeps. Empty tuple = all.
