@@ -432,8 +432,21 @@ def _censored_clip(platform: str, video_path: str, config: dict) -> tuple:
             custom_words=tuple(general.get("censor_custom_words", ()) or ()),
             device=general.get("censor_device") or None,
             padding_ms=int(general.get("censor_padding_ms", 250)),
+            # False - must match utils/config.py's GeneralConfig default
+            # exactly. This read a raw dict straight off config.json
+            # instead of the typed AppConfig, and defaulted to True here
+            # while config.py had already been fixed to default to
+            # False - so a config.json missing the key (any file
+            # written before the setting existed, which is every one
+            # already on disk, since config.json is gitignored and
+            # never gets this fix through a pull) got word-level mutes
+            # on the FULL STREAM and whole-SENTENCE mutes on every CLIP
+            # cut from it, from the exact same source audio. Reported
+            # back in those words: "the original audio sounds fine and
+            # caption fine" (the typed-config path, already correct)
+            # against clips that were not (this path, still wrong).
             mute_whole_segment=bool(
-                general.get("censor_mute_whole_segment", True)),
+                general.get("censor_mute_whole_segment", False)),
             only_categories=scope)
     except Exception as exc:
         # A clip that cannot be censored must not go out UNcensored to a

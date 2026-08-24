@@ -623,3 +623,98 @@ def test_two_different_clips_are_still_two_clips(publisher, posting, clips):
     publisher.offer(posting, CONFIG, clips[1], platforms=("instagram",))
 
     assert len(FakePublisher.posted) == 2
+
+
+# ═════════════════════════════════════════════════════════════════════════
+# A clip cut from a stream had a DIFFERENT mute default than the stream
+# itself, even after the stream's own default was already fixed.
+#
+# "the original audio sounds fine and caption fine" (the full stream, via
+# the typed AppConfig - already fixed to default False) against clips
+# (via this function, which read the raw config dict straight off disk
+# and defaulted to True if the key was missing). config.json is
+# gitignored, so any file already on disk that predates this setting
+# never picks up the fix through a pull - and it never had the key to
+# begin with, so it hit exactly this default.
+# ═════════════════════════════════════════════════════════════════════════
+
+def test_a_clip_gets_word_level_muting_by_default(tmp_path, monkeypatch):
+    """The exact bug: a config.json with no censor_mute_whole_segment key
+    at all - every one already on disk before this setting existed."""
+    from utils import clip_queue
+
+    raw = tmp_path / "raw.mp4"
+    raw.write_bytes(b"x")
+
+    captured = {}
+
+    class Result:
+        output_path = str(raw)
+        violation_count = 0
+
+    def fake_censor_video(*args, **kwargs):
+        captured.update(kwargs)
+        return Result()
+
+    monkeypatch.setattr("utils.censor.censor_video", fake_censor_video)
+
+    clip_queue._censored_clip("youtube_shorts", str(raw),
+                              {"general": {}})   # no key at all
+
+    assert captured["mute_whole_segment"] is False
+
+
+def test_a_clip_matches_whatever_the_stream_level_default_is(tmp_path,
+                                                              monkeypatch):
+    """Guards against the two defaults drifting apart again - this reads
+    config.py's own default rather than hardcoding False a second time,
+    so a future change to one is caught if the other is not updated."""
+    from utils.config import GeneralConfig
+    import dataclasses
+
+    stream_level_default = {
+        f.name: f.default for f in dataclasses.fields(GeneralConfig)
+    }["censor_mute_whole_segment"]
+
+    from utils import clip_queue
+
+    raw = tmp_path / "raw.mp4"
+    raw.write_bytes(b"x")
+    captured = {}
+
+    class Result:
+        output_path = str(raw)
+        violation_count = 0
+
+    monkeypatch.setattr(
+        "utils.censor.censor_video",
+        lambda *a, **k: captured.update(k) or Result())
+
+    clip_queue._censored_clip("youtube_shorts", str(raw), {"general": {}})
+
+    assert captured["mute_whole_segment"] == stream_level_default
+
+
+def test_a_config_that_explicitly_asks_for_whole_sentence_still_gets_it(
+        tmp_path, monkeypatch):
+    """The default changed; an explicit choice in config.json must still
+    be honoured either way."""
+    from utils import clip_queue
+
+    raw = tmp_path / "raw.mp4"
+    raw.write_bytes(b"x")
+    captured = {}
+
+    class Result:
+        output_path = str(raw)
+        violation_count = 0
+
+    monkeypatch.setattr(
+        "utils.censor.censor_video",
+        lambda *a, **k: captured.update(k) or Result())
+
+    clip_queue._censored_clip(
+        "youtube_shorts", str(raw),
+        {"general": {"censor_mute_whole_segment": True}})
+
+    assert captured["mute_whole_segment"] is True
