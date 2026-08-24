@@ -1761,7 +1761,16 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
         is_clip = bool(seconds and seconds <= float(
             clip_cfg.get("treat_as_clip_under_seconds", CLIP_MAX_SECONDS)))
 
-    if is_clip and not only_platform:
+    # Remembered before the assignment below can overwrite it: once
+    # only_platform is "rumble", nothing downstream can tell whether that
+    # came from an actual --only rumble on the command line or from this
+    # clip-routing decision setting it internally. The dispatch print
+    # further down used to say "--only rumble" unconditionally either
+    # way - which is a real flag that names a real reason for the CLI
+    # case, and a flat lie for a clip, where no flag was ever passed and
+    # the actual reason was already announced two lines up.
+    routed_as_clip = is_clip and not only_platform
+    if routed_as_clip:
         print(f"[Clip] {filename} is {seconds / 60:.1f} min - treating it as a "
               "clip: Rumble + social announcement, NOT the YouTube channel. "
               "(clips.route_clips_separately in config.json turns this off.)")
@@ -1812,6 +1821,28 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
             print(f"[Clip] Title from the clip itself: {stream_title}")
         else:
             stream_title = _clip_title(video_path)
+            # clip_title() strips "- Clip NN" for readability, which is
+            # right for a caption someone will read. It is wrong here:
+            # this string becomes the video's own upload TITLE and the
+            # Rumble dedup key. When a clip's filename is just
+            # "<stream title> - Clip NN" with nothing else distinguishing
+            # it - the shape a stream's own clips get whenever one has no
+            # spoken-line caption of its own - stripping the number
+            # collapses EVERY such clip from the same stream onto the
+            # identical title. The first one uploads; every clip after it
+            # then reads as "already exists" and is never uploaded at
+            # all, silently, clip after clip.
+            #
+            # Appended unconditionally rather than only when a collision
+            # is detected - detecting one would mean comparing against
+            # the parent stream's title, which is not available here, and
+            # a clip number is always a safe, cheap, guaranteed-unique
+            # thing to add regardless of whether the clip's own name
+            # happened to already be distinct.
+            match = re.search(r"[-\s]+clip\s*(\d+)\s*$",
+                              os.path.splitext(filename)[0], re.I)
+            if match:
+                stream_title = f"{stream_title} (Clip {int(match.group(1))})"
             print(f"[Clip] Title from the filename: {stream_title}")
     else:
         stream_title = get_stream_title(video_path, cli_title, cfg, allow_prompt)
@@ -2266,7 +2297,13 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
     # --- Dispatch ---
     jobs = []
     if "youtube" not in active_platforms:
-        print("[YouTube] Skipped - --only rumble.")
+        if routed_as_clip:
+            # Already explained above - repeating it here with the wrong
+            # reason ("--only rumble", a flag that was never passed) is
+            # how a working, deliberate design decision reads as a bug.
+            pass
+        else:
+            print("[YouTube] Skipped - --only rumble.")
     elif existing_yt:
         results["youtube"] = existing_yt  # already announced above
     else:
