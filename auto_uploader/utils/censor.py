@@ -14,6 +14,7 @@ re-encoding it - see utils/ffmpeg_tools.py. That is the single biggest
 speed win in this pipeline and it also stops the picture being degraded.
 """
 
+import hashlib
 import json
 import os
 import sys
@@ -180,11 +181,20 @@ def _render(source_path: str, clean_audio_path: str, output_video_path: str,
     return "moviepy"
 
 
-def _report_risk(violations) -> None:
+def _report_risk(violations, mute_whole_segment: bool = False) -> None:
     """Print what was flagged, worst category first.
 
     A muted slur is still worth seeing before publishing: YouTube acts on
     the surrounding context, which no audio filter can remove.
+
+    `mute_whole_segment` decides the WORDING, not just a detail: this
+    used to print "(whole sentence muted)" unconditionally for every
+    high-severity hit, which was accurate while that setting defaulted
+    to True and became a flat lie the moment it defaulted to False - the
+    word gets a normal ~1s padded mute now, same as any other flagged
+    word, and the log kept claiming otherwise. Reading a log that says
+    "whole sentence muted" while the audio only dips for a second is
+    exactly how "the fix didn't do anything" gets reported back.
     """
     from autoreel.compliance import HIGH_SEVERITY_CATEGORIES
 
@@ -199,13 +209,45 @@ def _report_risk(violations) -> None:
         marker = "!! HIGH RISK" if category in HIGH_SEVERITY_CATEGORIES else "  "
         print(f"[Censor] {marker} {category}: {len(hits)} hit(s)")
         if category in HIGH_SEVERITY_CATEGORIES:
+            extent = ("whole sentence muted" if mute_whole_segment
+                      else "word muted")
             for v in hits[:10]:
                 stamp = f"{int(v.start // 60):02d}:{int(v.start % 60):02d}"
-                print(f"[Censor]      {stamp}  {v.word.strip()!r}  (whole sentence muted)")
+                print(f"[Censor]      {stamp}  {v.word.strip()!r}  ({extent})")
             if len(hits) > 10:
                 print(f"[Censor]      ... and {len(hits) - 10} more")
             print("[Censor]      Muting the audio does NOT make the video policy-safe - "
                   "YouTube judges context. Review these timestamps before publishing.")
+
+
+def _settings_fingerprint(padding_ms: int, mute_whole_segment: bool,
+                          only_categories: tuple, custom_words: tuple) -> str:
+    """A short, stable fingerprint of every setting that changes what
+    actually gets muted - not just which model transcribed it or whether
+    the method is a beep or silence.
+
+    Only bleep_method and model_name were ever in the cache key.
+    padding_ms and mute_whole_segment were not - so the fix that made
+    mute_whole_segment default to False instead of True (word-level
+    mutes instead of whole sentences) changed NOTHING for a video that
+    had already been censored once: censor_video saw the same cached
+    filename still sitting on disk and reused it, over-muted audio and
+    all, forever. "Changing the config appears to do nothing on any file
+    that was already processed" is the exact failure this project's own
+    comments already warned about, for the two settings it forgot to
+    cover - and a CLIP cut from that stale source inherits the same
+    over-muted audio even on a run built from the fixed code.
+
+    Included, not the raw strings: only_categories and custom_words can
+    both change what gets flagged, and belong here for the same reason.
+    """
+    payload = repr((
+        int(padding_ms),
+        bool(mute_whole_segment),
+        tuple(sorted(str(c).lower() for c in (only_categories or ()))),
+        tuple(sorted(str(w).lower() for w in (custom_words or ()))),
+    ))
+    return hashlib.sha1(payload.encode("utf-8")).hexdigest()[:10]
 
 
 def censor_video(
@@ -241,14 +283,16 @@ def censor_video(
     # "silence" (nor a "tiny"-model pass reused after switching to "base").
     # Without this, changing the config appears to do nothing on any file
     # that was already processed.
-    cache_key = f"{bleep_method}-{model_name}"
+    cache_key = (f"{bleep_method}-{model_name}-"
+                f"{_settings_fingerprint(padding_ms, mute_whole_segment, only_categories, custom_words)}")
     output_video_path = os.path.join(work_dir, f"{basename}_CENSORED_{cache_key}.mp4")
 
     if os.path.exists(output_video_path) and os.path.getsize(output_video_path) > 0:
         # Already censored on a previous attempt with these exact settings
         # (e.g. an earlier run got this far, then failed on the actual
         # upload) - re-transcribing with Whisper is expensive, so reuse it.
-        print(f"[Censor] Reusing existing censored copy ({cache_key}) - no re-render.")
+        print(f"[Censor] Reusing existing censored copy "
+              f"(model={model_name}, method={bleep_method}) - no re-render.")
         return CensorResult(output_path=output_video_path, was_censored=True,
                             violation_count=-1, censored_words=[])
 
@@ -321,7 +365,7 @@ def censor_video(
         if not os.path.exists(raw_audio_path):
             _extract_audio(source_path, raw_audio_path)   # cache hit skipped it
             timer.mark("audio extract")
-        _report_risk(violations)
+        _report_risk(violations, mute_whole_segment=mute_whole_segment)
 
         audio_segment = AudioSegment.from_wav(raw_audio_path)
         censored_audio = engine.censor_audio(audio_segment, violations, method=bleep_method)
