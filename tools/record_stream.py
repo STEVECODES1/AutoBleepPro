@@ -866,6 +866,91 @@ def leftover_fragments(staging: str, base: str) -> list:
         and os.path.getsize(os.path.join(staging, name)) > 0)
 
 
+def abandoned_part_files(staging: str, base: str) -> list:
+    """A segment yt-dlp was still writing when its process stopped.
+
+    yt-dlp writes to "<name>.part" while downloading and renames it to
+    "<name>" ONLY on a clean finish - a finish this recorder never asks
+    for. Every segment here is stopped on purpose: a stale manifest
+    (process.terminate()), the outer loop giving up on a resume, Ctrl+C,
+    the keepalive loop restarting the whole recorder, a crash, a power
+    cut. None of those is a clean finish, so the rename never runs, and
+    existing_segments()/leftover_fragments() were never taught to look
+    for a finished recording still wearing yt-dlp's own ".part" name -
+    they correctly treat ".part" as "still being written" and skip it,
+    which is right for a file that IS still being written and wrong for
+    one whose writer has already exited.
+
+    --hls-use-mpegts is the reason this is safe to recover at all: every
+    byte written so far is a valid, playable .ts. The content was never
+    in danger - only its filename was one rename short of being found.
+
+    Only ever called after the writer's process has exited
+    (process.wait() has returned, or the process is gone entirely because
+    this is a sweep on startup) - so nothing is still appending to these
+    files and renaming them is safe.
+    """
+    if not os.path.isdir(staging):
+        return []
+    prefix = f"{base}.part"
+    return sorted(
+        os.path.join(staging, name) for name in os.listdir(staging)
+        if name.startswith(prefix) and name.lower().endswith(".part")
+        and os.path.getsize(os.path.join(staging, name)) > 0)
+
+
+def recover_abandoned_parts(staging: str, base: str) -> list:
+    """Rename yt-dlp's still-.part-suffixed segments back to finished ones.
+
+    Renamed, not copied - a segment can be gigabytes, and a rename is
+    instant where a copy is not. os.replace is atomic on both Windows and
+    POSIX, so this can never leave a half-renamed file behind.
+    """
+    recovered = []
+    for path in abandoned_part_files(staging, base):
+        finished = path[: -len(".part")]
+        try:
+            os.replace(path, finished)
+        except OSError:
+            continue
+        recovered.append(finished)
+    return recovered
+
+
+# Our own segment name is "<recorder name> <date> <time>.partNN.<ext>". A
+# recording orphaned by a crash still wears that full shape, plus yt-dlp's
+# trailing ".part" - this is what turns "some leftover file" back into
+# "the base a whole earlier session was recording under".
+_ABANDONED_BASE = re.compile(r"^(.*)\.part\d+\.[A-Za-z0-9]+$")
+
+
+def sweep_abandoned_recordings(staging: str, name: str) -> list:
+    """Every earlier recording under THIS name that never got finalised.
+
+    Not just a process that this run itself terminated - one that never
+    came back at all: the recorder was killed, lost power, or the
+    keepalive loop restarted it mid-recording, all of which skip
+    finalise() entirely and leave the recording exactly where
+    abandoned_part_files describes. Matched on the recorder's own name
+    prefix so one platform's sweep can never pick up another's files, and
+    a date-and-time-stamped base can never collide with the fresh one
+    this call is about to create.
+    """
+    if not os.path.isdir(staging):
+        return []
+    prefix = f"{safe_name(name)} "
+    bases = set()
+    for filename in os.listdir(staging):
+        if not filename.startswith(prefix) or not filename.lower().endswith(".part"):
+            continue
+        if os.path.getsize(os.path.join(staging, filename)) <= 0:
+            continue
+        match = _ABANDONED_BASE.match(filename[: -len(".part")])
+        if match:
+            bases.add(match.group(1))
+    return sorted(bases)
+
+
 def build_concat_list(segments: list, list_path: str) -> str:
     """ffmpeg's concat demuxer input file.
 
@@ -927,6 +1012,7 @@ class Recorder:
     # that survives the restart was printing its whole explanation every
     # sixty seconds. Ten hours of that buries everything else.
     _said: dict = field(default_factory=dict, repr=False)
+    _swept_orphans: bool = field(default=False, repr=False)
 
     def say(self, message: str) -> None:
         print(f"[{time.strftime('%H:%M:%S')}] {message}", flush=True)
@@ -1250,6 +1336,11 @@ class Recorder:
 
     def finalise(self, base: str) -> Optional[str]:
         """Join the segments and move the result into the watch folder."""
+        recovered = recover_abandoned_parts(self.staging, base)
+        if recovered:
+            self.say(f"Recovered {len(recovered)} segment(s) yt-dlp never "
+                     f"finished renaming after this recording was stopped - "
+                     f"the content is intact, only the rename never ran.")
         segments = existing_segments(self.staging, base)
         if not segments:
             # The merge may simply not have run. The halves still hold the
@@ -1517,6 +1608,23 @@ class Recorder:
     def record_one_stream(self) -> Optional[str]:
         """Wait for the channel to go live, record it, deliver it."""
         os.makedirs(self.staging, exist_ok=True)
+
+        if not self._swept_orphans:
+            # Once per process, not once per poll: a recovery that keeps
+            # failing (a full disk, a corrupt file) must not run ffmpeg
+            # over a multi-gigabyte file again every poll interval
+            # forever. The common case - recovering after a crash or a
+            # restart - only ever needs to happen once anyway.
+            self._swept_orphans = True
+            for orphan_base in sweep_abandoned_recordings(self.staging, self.name):
+                self.say(f"Found a recording that never finished from an "
+                         f"earlier run ({orphan_base}) - recovering it "
+                         f"before waiting for the next stream.")
+                recovered_path = self.finalise(orphan_base)
+                if recovered_path:
+                    self.say(f"Recovered and delivered: "
+                             f"{os.path.basename(recovered_path)}")
+
         base = f"{safe_name(self.name)} {time.strftime('%Y-%m-%d %H_%M')}"
         log_path = os.path.join(self.staging, f"{base}.log")
 
