@@ -30,6 +30,7 @@ Two ways to authenticate:
 
 import os
 import re
+import shutil
 import time
 from typing import Callable, Optional
 
@@ -155,6 +156,49 @@ def _set_file_via_cdp(page, selector: str, file_path: str) -> bool:
         return int(count or 0) > 0
     except Exception:
         return False
+
+
+def _rumble_friendly_alias(video_path: str) -> tuple:
+    """(the path to actually hand Rumble, whether it needs cleaning up).
+
+    Confirmed by hand: a .ts recording attached CLEANLY over CDP - the
+    browser's own input.files held it, nothing about the attach failed -
+    and Rumble's upload form still answered "Please select a valid video
+    file", with the title, tags and category already filled in around
+    it. Renaming the EXACT SAME BYTES to end in .mp4, nothing else, let
+    the identical file upload. Rumble's client-side check reads the
+    filename, not the container - and .ts is what --hls-use-mpegts
+    produces and what this project uses everywhere else specifically
+    because it survives an abrupt stop.
+
+    So a .ts file is offered to Rumble under a .mp4-named ALIAS of the
+    same bytes: a hard link where the filesystem allows it (instant, no
+    matter the file's size - a stream recording can be gigabytes and
+    this must not double the disk it occupies), a real copy where a hard
+    link is not possible (crossing drives). Neither touches the original
+    - the alias is a second name for the same data, or a copy of it, and
+    is removed once the upload is done. Any other extension is handed to
+    Rumble unchanged; .ts is the one this was confirmed on.
+    """
+    if os.path.splitext(video_path)[1].lower() != ".ts":
+        return video_path, False
+
+    alias = os.path.splitext(video_path)[0] + "._rumble_upload.mp4"
+    try:
+        if os.path.exists(alias):
+            os.remove(alias)
+        os.link(video_path, alias)
+        return alias, True
+    except OSError:
+        pass
+    try:
+        shutil.copyfile(video_path, alias)
+        return alias, True
+    except OSError:
+        # No alias possible - upload the original and let Rumble's own
+        # validation be whatever it is going to be. A missing workaround
+        # must never be why the upload does not even attempt.
+        return video_path, False
 
 
 class RumbleUploader:
@@ -908,116 +952,131 @@ class RumbleUploader:
     ) -> str:
         page.goto(self.upload_url, timeout=60_000)
 
-        # "Filedata" is Rumble's actual field id (confirmed via a
-        # community open-source Rumble uploader); type-based fallback
-        # first in case it's changed since, then this specific id.
-        # CDP first: a stream recording is far past Playwright's 50 MB
-        # ceiling for an attached browser, and that path fails outright.
-        if not _set_file_via_cdp(page, "input[type='file'], #Filedata", video_path):
-            file_input = page.locator("input[type='file']").or_(
-                page.locator("#Filedata")).first
-            file_input.set_input_files(video_path)
-
-        # Rumble starts processing/uploading immediately after file select;
-        # wait for the metadata form (title field) to become available.
-        title_field = page.get_by_label("Title").or_(page.locator("input[name='title']"))
-        title_field.wait_for(state="visible", timeout=120_000)
-        title_field.fill(title)
-
-        description_field = page.get_by_label("Description").or_(page.locator("textarea[name='description']"))
-        if description_field.count() > 0:
-            description_field.fill(description)
-
-        tags_field = page.get_by_label("Tags").or_(page.locator("input[name='tags']"))
-        if tags_field.count() > 0:
-            tags_field.fill(", ".join(t.lstrip("#") for t in tags))
-
-        self._set_visibility(page, privacy)
-
-        if thumbnail_path and os.path.exists(thumbnail_path):
-            thumb_input = page.locator("input[type='file'][accept*='image']")
-            if thumb_input.count() > 0:
-                # Thumbnails are small, so the plain path is fine here -
-                # but go through CDP too when it works, for consistency.
-                if not _set_file_via_cdp(
-                        page, "input[type='file'][accept*='image']", thumbnail_path):
-                    thumb_input.first.set_input_files(thumbnail_path)
-
-        # CATEGORIES is a REQUIRED field on Rumble's upload form (marked
-        # with a red asterisk) - without it the submit button never becomes
-        # active, and the click loop below spins forever. Select it from
-        # the primary/secondary category <select> dropdowns.
-        self._select_categories(page)
-
-        self._accept_terms(page)
-
-        # Wait for the file transfer itself to finish BEFORE trying to
-        # submit - Rumble shows a "N% (x MB/s)" indicator during upload and
-        # the submit button isn't meaningfully clickable until it's done.
-        # (Previously this raced the upload and burned ~60 futile click
-        # retries against a still-uploading form.)
-        self._wait_for_upload_complete(
-            page, progress_callback, upload_timeout_for(video_path))
-
-        # Rumble shows "Please select at least one category" inline when
-        # the required category didn't take. Catch that here with a clear
-        # message rather than letting the submit click fail opaquely.
+        # See _rumble_friendly_alias just above the class - a .ts file
+        # attaches CLEANLY over CDP and is then refused by Rumble's own
+        # extension check. The alias must survive the WHOLE upload -
+        # Chrome reads it over the entire transfer, which is minutes for
+        # a real recording - so it is only removed once this method is
+        # completely done: success, failure, or an exception.
+        upload_path, alias_made = _rumble_friendly_alias(video_path)
         try:
-            if page.get_by_text(re.compile(r"select at least one category", re.I)).count() > 0:
-                print("[Rumble] Category still unset - retrying category selection before submit.")
-                self._select_categories(page)
-                page.wait_for_timeout(800)
-        except Exception:
-            pass
+            # "Filedata" is Rumble's actual field id (confirmed via a
+            # community open-source Rumble uploader); type-based fallback
+            # first in case it's changed since, then this specific id.
+            # CDP first: a stream recording is far past Playwright's 50 MB
+            # ceiling for an attached browser, and that path fails outright.
+            if not _set_file_via_cdp(page, "input[type='file'], #Filedata", upload_path):
+                file_input = page.locator("input[type='file']").or_(
+                    page.locator("#Filedata")).first
+                file_input.set_input_files(upload_path)
 
-        try:
-            submitted_url = self._submit(page, title)
-        except Exception as exc:
-            # Dump the live page so the actual submit-button markup can be
-            # inspected instead of guessed at - blind selector guessing has
-            # cost several failed runs already.
-            dump_path = self._dump_page(page)
-            visible = self._describe_buttons(page)
-            raise RuntimeError(
-                "Rumble upload form never became submittable. "
-                f"Page HTML saved to: {dump_path}\n"
-                f"Buttons/inputs currently on the page: {visible}\n"
-                "The video may still be uploaded on Rumble's side - check your Rumble "
-                "account before retrying, and send the dumped HTML if this keeps happening."
-            ) from exc
+            # Rumble starts processing/uploading immediately after file select;
+            # wait for the metadata form (title field) to become available.
+            title_field = page.get_by_label("Title").or_(page.locator("input[name='title']"))
+            title_field.wait_for(state="visible", timeout=120_000)
+            title_field.fill(title)
 
-        # Rumble doesn't redirect after submit - it shows a "Direct Link"
-        # box on the same upload.php page (observed in a real run, where
-        # waiting for a redirect burned 120s per file and then recorded
-        # upload.php as the "video URL"). Scrape the real link instead.
-        direct_url = submitted_url
-        deadline = time.time() + 45
-        while time.time() < deadline and not direct_url:
-            direct_url = self._find_video_url(page, title)
-            if not direct_url:
-                page.wait_for_timeout(2000)
+            description_field = page.get_by_label("Description").or_(page.locator("textarea[name='description']"))
+            if description_field.count() > 0:
+                description_field.fill(description)
 
-        if progress_callback:
-            progress_callback(100)
+            tags_field = page.get_by_label("Tags").or_(page.locator("input[name='tags']"))
+            if tags_field.count() > 0:
+                tags_field.fill(", ".join(t.lstrip("#") for t in tags))
 
-        if direct_url:
-            return direct_url
+            self._set_visibility(page, privacy)
 
-        # The upload succeeded - never report the upload page itself as the
-        # video URL. That string gets written into the dedup history and
-        # posted to Discord, so a wrong-but-plausible link is worse than an
-        # honest "couldn't read it": it looks like a working link and isn't.
-        # Not always fatal - runs have ended here with the video still
-        # published fine. But one run navigated away to rumble.com/videos
-        # and the video never appeared at all, so this is worth checking
-        # rather than reporting as a clean success.
-        print("[Rumble] WARNING: Rumble never showed a video link. The upload has "
-              "usually still landed, but one run ended here with no video "
-              "created at all.")
-        print("[Rumble]          Verify at https://rumble.com/account/content "
-              "before assuming it published.")
-        self._dump_page(page)
-        return UPLOADED_NO_URL
+            if thumbnail_path and os.path.exists(thumbnail_path):
+                thumb_input = page.locator("input[type='file'][accept*='image']")
+                if thumb_input.count() > 0:
+                    # Thumbnails are small, so the plain path is fine here -
+                    # but go through CDP too when it works, for consistency.
+                    if not _set_file_via_cdp(
+                            page, "input[type='file'][accept*='image']", thumbnail_path):
+                        thumb_input.first.set_input_files(thumbnail_path)
+
+            # CATEGORIES is a REQUIRED field on Rumble's upload form (marked
+            # with a red asterisk) - without it the submit button never becomes
+            # active, and the click loop below spins forever. Select it from
+            # the primary/secondary category <select> dropdowns.
+            self._select_categories(page)
+
+            self._accept_terms(page)
+
+            # Wait for the file transfer itself to finish BEFORE trying to
+            # submit - Rumble shows a "N% (x MB/s)" indicator during upload and
+            # the submit button isn't meaningfully clickable until it's done.
+            # (Previously this raced the upload and burned ~60 futile click
+            # retries against a still-uploading form.)
+            self._wait_for_upload_complete(
+                page, progress_callback, upload_timeout_for(video_path))
+
+            # Rumble shows "Please select at least one category" inline when
+            # the required category didn't take. Catch that here with a clear
+            # message rather than letting the submit click fail opaquely.
+            try:
+                if page.get_by_text(re.compile(r"select at least one category", re.I)).count() > 0:
+                    print("[Rumble] Category still unset - retrying category selection before submit.")
+                    self._select_categories(page)
+                    page.wait_for_timeout(800)
+            except Exception:
+                pass
+
+            try:
+                submitted_url = self._submit(page, title)
+            except Exception as exc:
+                # Dump the live page so the actual submit-button markup can be
+                # inspected instead of guessed at - blind selector guessing has
+                # cost several failed runs already.
+                dump_path = self._dump_page(page)
+                visible = self._describe_buttons(page)
+                raise RuntimeError(
+                    "Rumble upload form never became submittable. "
+                    f"Page HTML saved to: {dump_path}\n"
+                    f"Buttons/inputs currently on the page: {visible}\n"
+                    "The video may still be uploaded on Rumble's side - check your Rumble "
+                    "account before retrying, and send the dumped HTML if this keeps happening."
+                ) from exc
+
+            # Rumble doesn't redirect after submit - it shows a "Direct Link"
+            # box on the same upload.php page (observed in a real run, where
+            # waiting for a redirect burned 120s per file and then recorded
+            # upload.php as the "video URL"). Scrape the real link instead.
+            direct_url = submitted_url
+            deadline = time.time() + 45
+            while time.time() < deadline and not direct_url:
+                direct_url = self._find_video_url(page, title)
+                if not direct_url:
+                    page.wait_for_timeout(2000)
+
+            if progress_callback:
+                progress_callback(100)
+
+            if direct_url:
+                return direct_url
+
+            # The upload succeeded - never report the upload page itself as the
+            # video URL. That string gets written into the dedup history and
+            # posted to Discord, so a wrong-but-plausible link is worse than an
+            # honest "couldn't read it": it looks like a working link and isn't.
+            # Not always fatal - runs have ended here with the video still
+            # published fine. But one run navigated away to rumble.com/videos
+            # and the video never appeared at all, so this is worth checking
+            # rather than reporting as a clean success.
+            print("[Rumble] WARNING: Rumble never showed a video link. The upload has "
+                  "usually still landed, but one run ended here with no video "
+                  "created at all.")
+            print("[Rumble]          Verify at https://rumble.com/account/content "
+                  "before assuming it published.")
+            self._dump_page(page)
+            return UPLOADED_NO_URL
+        finally:
+            if alias_made:
+                try:
+                    os.remove(upload_path)
+                except OSError:
+                    pass
+
 
     def _find_video_url(self, page, title: str = ""):
         """The published video's URL from the success page.
