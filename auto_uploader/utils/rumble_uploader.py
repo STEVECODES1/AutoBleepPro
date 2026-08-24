@@ -103,7 +103,33 @@ def _set_file_via_cdp(page, selector: str, file_path: str) -> bool:
     DOM.setFileInputFiles is the CDP command underneath, and it takes a
     PATH that the browser opens itself. Chrome is local, so there is no
     transfer at all and no size limit.
+
+    VERIFIED, not assumed. This used to return True the moment the CDP
+    command was SENT - which is not the same thing as the browser
+    actually accepting a file. A stale nodeId from a page that had
+    re-rendered its upload form, a path Chrome could not read, or a
+    selector matching the wrong element could all send successfully and
+    leave the input's own .files list empty. Nothing downstream could
+    tell: the code went on to fill in the title, the tags and the
+    category exactly as it always does - all of that is plain DOM text
+    entry and works regardless of whether a file was ever attached - and
+    only Rumble's own client-side validation ever caught it, silently,
+    on screen, in a browser window nobody was watching: "SELECT VIDEO TO
+    UPLOAD" still showing, "Please select a valid video file" under it,
+    and every metadata field filled in as if the upload had worked.
+
+    The check reads .files.length back through the SAME CDP session and
+    the SAME nodeId the file was set on - not a fresh Playwright query,
+    which could resolve a DIFFERENT element if the page has more than one
+    file input (Rumble's page has at least two: the video and the
+    thumbnail).
     """
+    if not os.path.isfile(file_path):
+        # Nothing downstream should have called this with a path that
+        # does not exist, but failing fast and honestly here beats
+        # sending a CDP command for it and discovering the same thing
+        # through a silent, unverified "success".
+        return False
     try:
         cdp = page.context.new_cdp_session(page)
         document = cdp.send("DOM.getDocument", {"depth": -1, "pierce": True})
@@ -114,7 +140,19 @@ def _set_file_via_cdp(page, selector: str, file_path: str) -> bool:
             return False
         cdp.send("DOM.setFileInputFiles", {
             "files": [os.path.abspath(file_path)], "nodeId": node_id})
-        return True
+
+        resolved = cdp.send("DOM.resolveNode", {"nodeId": node_id})
+        object_id = (resolved.get("object") or {}).get("objectId")
+        if not object_id:
+            return False
+        result = cdp.send("Runtime.callFunctionOn", {
+            "objectId": object_id,
+            "functionDeclaration":
+                "function() { return this.files ? this.files.length : 0; }",
+            "returnByValue": True,
+        })
+        count = (result.get("result") or {}).get("value", 0)
+        return int(count or 0) > 0
     except Exception:
         return False
 
