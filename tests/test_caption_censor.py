@@ -66,6 +66,61 @@ def test_masking_keeps_the_first_letter_and_the_punctuation():
     assert mask_word("...") == "..."
 
 
+# ═════════════════════════════════════════════════════════════════════════════
+# THE SAME BUG, IN THE HOOK
+#
+# The fix above only ever touched the scrolling phrases. The hook - a
+# transcript quote or LLM title pinned across the top of the frame for the
+# clip's ENTIRE length - went through none of it, because it is not built
+# from `words_in_range`/`censor_words` at all: it is a raw string handed
+# straight to `build_ass` and only ASS-escaped. A real clip went out with
+# "GET DOWN LIKE JAMES BROWN, NIGGA" burned across the top, full size, for
+# all 45 seconds - worse exposure than the scrolling case this file was
+# named for, and on every platform that clip's file reaches, not just
+# Rumble.
+# ═════════════════════════════════════════════════════════════════════════════
+
+def test_a_slur_in_the_hook_never_reaches_the_screen(tmp_path):
+    path = str(tmp_path / "clip.ass")
+    segments = [{"start": 0.0, "end": 3.0, "words": _words("get", "down")}]
+
+    written = caption_file_for_clip(
+        path, segments, 0.0, 3.0,
+        hook="Get down like James Brown, nigga")
+
+    assert written
+    with open(written, encoding="utf-8") as handle:
+        body = handle.read()
+    hook_line = next(l for l in body.splitlines() if ",Hook,," in l)
+    assert "nigga" not in hook_line.lower()
+    assert "n***" not in hook_line.lower(), "a starred stump still reads as the word"
+    assert "GET DOWN LIKE JAMES BROWN" in hook_line, "the rest of the line survives"
+
+
+def test_ordinary_profanity_in_the_hook_is_masked_not_dropped(tmp_path):
+    path = str(tmp_path / "clip.ass")
+
+    written = caption_file_for_clip(
+        path, [], 0.0, 3.0, hook="holy shit that was insane")
+
+    with open(written, encoding="utf-8") as handle:
+        body = handle.read()
+    hook_line = next(l for l in body.splitlines() if ",Hook,," in l)
+    assert "SHIT" not in hook_line
+    assert "S***" in hook_line
+    assert "INSANE" in hook_line
+
+
+def test_a_hook_that_is_only_a_slur_burns_nothing(tmp_path):
+    """Dropping the one word it had leaves nothing worth pinning - better
+    than an empty banner is no banner, same as no hook at all."""
+    path = str(tmp_path / "clip.ass")
+
+    written = caption_file_for_clip(path, [], 0.0, 3.0, hook="nigga")
+
+    assert written is None
+
+
 def test_censoring_happens_inside_the_caption_writer(tmp_path):
     """Not at the call site. A renderer that can be asked for uncensored
     captions will eventually be asked for them."""

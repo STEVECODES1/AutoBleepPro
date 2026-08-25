@@ -431,6 +431,19 @@ def caption_file_for_clip(path: str, segments: Iterable[dict],
     """
     phrases = group_words(censor_words(
         words_in_range(segments, start, end, shift)))
+    # The hook is a raw transcript quote (or an LLM title, which is meant
+    # to avoid this but is not guaranteed to). It went through none of
+    # the above - censor_words only ever touched the scrolling phrases -
+    # so a slur spoken anywhere in the clip could be pinned across the
+    # top of the frame, full size, for the clip's entire length, on
+    # every platform this file goes out to including the ones that ban
+    # for exactly that. Same treatment as a title anywhere else: masked
+    # or dropped, never burned in raw.
+    hook = str(style.get("hook", "")).strip()
+    if hook:
+        from .safe_text import clean_title
+
+        style["hook"] = clean_title(hook, fallback="")
     # A clip with a hook and no speech still wants the hook. Returning
     # None on "no phrases" would have thrown the title away on exactly
     # the clips that need one most - the ones where nothing is said and
