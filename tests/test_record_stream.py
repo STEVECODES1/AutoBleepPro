@@ -100,3 +100,68 @@ def test_the_retry_only_fires_on_a_found_stream():
 
     assert "self.last_missed" in body, "it retries whatever the reason"
     assert "missed_tries" in body
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# ONE BAD PASS USED TO END THE SOURCE FOR GOOD
+#
+# Several threads all hit PermissionError at once writing to the log on an
+# external drive under heavy load - a transient hiccup, not a real failure.
+# _source_loop had no try/except around record_one_stream(), so the
+# exception killed the thread outright: Python printed "Exception in
+# thread record-youtube" and that source never recorded again until the
+# whole process was restarted. A window left open for days needs to
+# survive one bad moment, not stop silently at the first one.
+# ═════════════════════════════════════════════════════════════════════════════
+
+def test_a_crash_in_one_pass_does_not_kill_the_source():
+    import threading
+
+    from record_stream import _source_loop
+
+    stop = threading.Event()
+    calls = []
+    said = []
+
+    class FakeRecorder:
+        poll_seconds = 0.01
+
+        def record_one_stream(self):
+            calls.append(1)
+            if len(calls) == 1:
+                raise PermissionError(13, "Permission denied")
+            stop.set()
+
+        def say(self, message):
+            said.append(message)
+
+    _source_loop(FakeRecorder(), False, stop)
+
+    assert len(calls) == 2, "the loop stopped after the crash instead of trying again"
+    assert any("PermissionError" in m for m in said), \
+        "the crash happened silently"
+
+
+def test_once_mode_still_tries_exactly_once_even_on_a_crash():
+    """--once means one pass and exit - a crash must not turn that into a
+    silent retry loop it was never asked for."""
+    import threading
+
+    from record_stream import _source_loop
+
+    stop = threading.Event()
+    calls = []
+
+    class FakeRecorder:
+        poll_seconds = 0.01
+
+        def record_one_stream(self):
+            calls.append(1)
+            raise RuntimeError("boom")
+
+        def say(self, message):
+            pass
+
+    _source_loop(FakeRecorder(), True, stop)
+
+    assert calls == [1]

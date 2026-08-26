@@ -1781,7 +1781,22 @@ def _source_loop(recorder: "Recorder", once: bool, stop) -> None:
     """Record one source forever. One of these runs per URL."""
     try:
         while not stop.is_set():
-            recorder.record_one_stream()
+            try:
+                recorder.record_one_stream()
+            except Exception as exc:
+                # An uncaught exception here used to end the thread for
+                # good - Python prints "Exception in thread record-x"
+                # and that source never records again until the whole
+                # process is restarted, with nothing louder than a
+                # traceback scrolled past in a window nobody is
+                # watching. A drive that stutters under load, antivirus
+                # mid-scan, one bad permission check - none of that
+                # should cost every recording after it from one source
+                # that happens to run for days unattended.
+                recorder.say(f"ERROR: {type(exc).__name__}: {exc} - this "
+                             f"source crashed but the window is still "
+                             f"open. Trying again in "
+                             f"{recorder.poll_seconds}s.")
             if once:
                 return
             stop.wait(recorder.poll_seconds)
