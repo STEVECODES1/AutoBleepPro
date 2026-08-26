@@ -570,6 +570,25 @@ def _refusal(data: dict) -> str:
     return ""
 
 
+# Failures worth one retry: rate-limited (429), the provider's own
+# servers erroring out (5xx - this is what actually happened on a real
+# run: "HTTP 503: This model is currently experiencing high demand...
+# usually temporary" - Gemini's own message says try again, and nothing
+# here was doing that), or a slow reply that just needed longer. NOT a
+# 400 or 401 - a bad request or a bad key fails exactly the same way a
+# second time, so retrying those only doubles how long it takes the
+# caller to find out.
+_RETRY_CODES = ("429", "500", "502", "503", "504")
+
+
+def _is_transient(problem: str) -> bool:
+    text = str(problem or "")
+    if any(f"HTTP {code}" in text for code in _RETRY_CODES):
+        return True
+    lowered = text.lower()
+    return "timed out" in lowered or "could not reach the api" in lowered
+
+
 def _ask_gemini(key: str, model: str, prompt: str) -> str:
     url = (f"https://generativelanguage.googleapis.com/v1beta/models/"
            f"{model}:generateContent?key={key}")
@@ -580,7 +599,18 @@ def _ask_gemini(key: str, model: str, prompt: str) -> str:
         "generationConfig": {"responseMimeType": "application/json",
                              "temperature": 0.4},
     }
-    data = _post(url, payload, {})
+    # _post_detailed rather than _post: the text pass used to swallow a
+    # busy/overloaded provider the same as a bad key or a bad prompt, so
+    # a 503 here got one silent attempt and nothing else - "the model
+    # was asked twice and said nothing at all" was really "the model
+    # was briefly down and never asked again". The vision pass already
+    # retried a busy model; this path never did.
+    data, problem = _post_detailed(url, payload, {})
+    if problem and _is_transient(problem):
+        print(f"[Clips] Gemini said {problem} - waiting 20s and trying "
+              f"once more...")
+        time.sleep(_BUSY_RETRY_SECONDS)
+        data, problem = _post_detailed(url, payload, {})
     if not isinstance(data, dict):
         return ""
     try:
@@ -618,19 +648,16 @@ def _ask_gemini_vision(key: str, model: str, parts: list) -> tuple:
     images = sum(1 for part in parts if "inline_data" in part)
     megabytes = len(json.dumps(payload)) / 1e6
 
-    # 429 here is "this model is busy", not "you are over quota" - it is
-    # the free tier being shared and it clears in seconds. Falling
-    # straight back to the words threw away the whole vision pass over a
-    # spike that a single wait would have ridden out.
+    # 429/5xx here is "this model is busy or briefly down", not "you are
+    # over quota" - both clear on their own. Falling straight back to
+    # the words threw away the whole vision pass over a spike a single
+    # wait would have ridden out. This used to only recognise 429 - a
+    # real run got "HTTP 503: high demand... usually temporary" and
+    # never retried at all, because "503" matched neither check.
     data, problem = _post_detailed(url, payload, {}, timeout=_VISION_TIMEOUT)
-    # A timeout gets the same second chance as a busy model. It used to
-    # get none, so one slow response threw away the entire vision pass -
-    # and what came back instead was ten clips chosen on the transcript,
-    # spaced evenly across the stream, most of them about nothing.
-    if problem and ("429" in str(problem) or "timed out" in str(problem).lower()):
-        why_waiting = ("The model is busy" if "429" in str(problem)
-                       else "That took too long")
-        print(f"[Clips] {why_waiting} - waiting 20s and trying once more...")
+    if problem and _is_transient(problem):
+        print(f"[Clips] Gemini said {problem} - waiting 20s and trying "
+              f"once more...")
         time.sleep(_BUSY_RETRY_SECONDS)
         data, problem = _post_detailed(url, payload, {},
                                        timeout=_VISION_TIMEOUT)

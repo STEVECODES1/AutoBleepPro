@@ -258,6 +258,75 @@ def test_a_timeout_gets_the_same_second_chance_as_a_busy_model(monkeypatch):
     assert reply == "{}" and why == ""
 
 
+# ═════════════════════════════════════════════════════════════════════════════
+# THE REAL FAILURE, VERBATIM
+#
+# A real run got "HTTP 503: This model is currently experiencing high
+# demand. Spikes in demand are usually temporary. Please try again
+# later." - Gemini's own message says this clears on its own - and the
+# retry check only ever looked for "429" or "timed out". "503" matched
+# neither, so it fell straight to "going on the words instead" without
+# once trying the retry that already existed for exactly this kind of
+# failure. The text-only fallback that ran after had no retry logic at
+# all, and used _post (which throws the HTTP status away), so a busy
+# Gemini failed the vision pass AND both text attempts silently - which
+# is why the model was "asked twice and said nothing at all" and the
+# run fell back to the scorer picking one clip with no opinion behind it.
+# ═════════════════════════════════════════════════════════════════════════════
+
+def test_a_503_is_waited_out_like_a_429(monkeypatch):
+    import autoreel.llm_highlights as llm
+
+    calls = []
+
+    def flaky(url, payload, headers, timeout=None):
+        calls.append(1)
+        if len(calls) == 1:
+            return None, ("HTTP 503: This model is currently experiencing "
+                          "high demand. Spikes in demand are usually "
+                          "temporary. Please try again later.")
+        return {"candidates": [{"content": {"parts": [{"text": "{}"}]}}]}, ""
+
+    monkeypatch.setattr(llm, "_post_detailed", flaky)
+    monkeypatch.setattr(llm.time, "sleep", lambda s: None)
+
+    reply, why = llm._ask_gemini_vision("k", "m", [{"text": "x"}])
+
+    assert len(calls) == 2, "the 503 was never recognised as worth a retry"
+    assert reply == "{}" and why == ""
+
+
+def test_the_text_only_pass_also_retries_a_busy_gemini(monkeypatch):
+    """_ask_gemini used _post, which cannot see the HTTP status at all -
+    a 503 there got one silent attempt and nothing else, ever."""
+    import autoreel.llm_highlights as llm
+
+    calls = []
+
+    def flaky(url, payload, headers, timeout=None):
+        calls.append(1)
+        if len(calls) == 1:
+            return None, "HTTP 503: high demand"
+        return {"candidates": [{"content": {"parts": [{"text": "picked"}]}}]}, ""
+
+    monkeypatch.setattr(llm, "_post_detailed", flaky)
+    monkeypatch.setattr(llm.time, "sleep", lambda s: None)
+
+    reply = llm._ask_gemini("k", "m", "prompt")
+
+    assert len(calls) == 2, "the text pass never retried a busy model"
+    assert reply == "picked"
+
+
+def test_a_bad_key_is_not_retried():
+    """A 401 fails the exact same way twice - retrying just doubles the
+    wait before the caller finds out the key is wrong."""
+    from autoreel.llm_highlights import _is_transient
+
+    assert not _is_transient("HTTP 401: API key not valid")
+    assert not _is_transient("HTTP 400: Your credit balance is too low")
+
+
 def test_the_vision_call_gets_longer_than_a_text_call(monkeypatch):
     """Dozens of JPEGs in one body, which the model has to receive AND
     look at before it answers a word."""
