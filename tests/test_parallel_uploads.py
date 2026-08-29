@@ -230,6 +230,38 @@ def test_parallel_can_be_turned_off(scene, tmp_path):
 # are already behind it - not the moment the thread merely starts.
 # ═════════════════════════════════════════════════════════════════════════════
 
+def test_rumbles_dispatch_does_not_wait_on_youtubes_censor_pass(scene, tmp_path,
+                                                                 monkeypatch):
+    """The bug this whole feature was almost undone by: yt_source used to
+    be resolved on the MAIN thread before either upload was dispatched,
+    which meant the real censor pass (transcription - minutes on a long
+    VOD) ran before Rumble's thread even started. Rumble's "head start"
+    was happening after YouTube had already finished getting ready -
+    the opposite of what was asked for."""
+    main, cfg, video, recorder = scene
+    CENSOR_SECONDS = 0.3
+
+    def slow_censor(*args, **kwargs):
+        time.sleep(CENSOR_SECONDS)
+
+        class R:
+            output_path = video
+            violation_count = 0
+            was_censored = False
+            censored_words = []
+        return R()
+
+    monkeypatch.setattr(main, "censor_video", slow_censor)
+
+    started = time.monotonic()
+    run(main, cfg, video, tmp_path)
+
+    rumble_start = recorder.spans["rumble"][0] - started
+    assert rumble_start < CENSOR_SECONDS / 2, (
+        f"Rumble did not start until {rumble_start:.2f}s in - it was "
+        f"still waiting on YouTube's censor pass")
+
+
 def test_rumble_starts_before_youtube(scene, tmp_path):
     main, cfg, video, recorder = scene
 

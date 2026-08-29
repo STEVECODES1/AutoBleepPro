@@ -2185,12 +2185,21 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
                 print(f"[{label}] Uploading... {pct}%", flush=True)
         return report
 
-    # Resolved BEFORE anything starts. upload_path_for() runs the censor
-    # pass on first use and caches it; asked for concurrently by two
-    # threads it would transcribe the same video twice, on one GPU.
-    yt_source = rb_source = ""
-    if "youtube" in active_platforms and not existing_yt:
-        yt_source = upload_path_for(cfg.youtube.censor_uploads)
+    # Rumble's source ONLY, resolved here on the main thread, before
+    # anything is dispatched. Rumble is normally uncensored, so this is
+    # near-instant - it exists mainly so a config where Rumble DOES want
+    # censoring still transcribes once rather than racing do_youtube for
+    # the same cache entry (upload_path_for() checks that cache before
+    # doing any work, so whichever of the two runs first here or in
+    # do_youtube's thread wins it cleanly).
+    #
+    # YouTube's source is deliberately NOT resolved here - see
+    # do_youtube(). It used to be, and that ran the censor pass
+    # (transcription, minutes on a long VOD) on the MAIN thread before
+    # either upload started, which blocked Rumble's dispatch behind the
+    # one thing Rumble does not need at all. Rumble's whole "head start"
+    # was happening after YouTube had already finished getting ready.
+    rb_source = ""
     if "rumble" in active_platforms and not existing_rb:
         rb_source = upload_path_for(cfg.rumble.censor_uploads)
 
@@ -2214,6 +2223,15 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
 
     def do_youtube(parallel: bool) -> None:
         try:
+            # Resolved HERE, not before dispatch - this is the slow part
+            # (transcription, minutes on a long VOD) and it runs in
+            # YouTube's own thread so it overlaps with Rumble's browser
+            # upload instead of gating Rumble's start behind it. By the
+            # time this finishes, Rumble - dispatched at the same moment
+            # with nothing to wait on - is normally already well under
+            # way, so the head-start wait below is usually an instant
+            # pass rather than an actual delay.
+            yt_source = upload_path_for(cfg.youtube.censor_uploads)
             if parallel and rumble_will_run:
                 got_going = rumble_upload_started.wait(
                     timeout=RUMBLE_HEAD_START_TIMEOUT)
