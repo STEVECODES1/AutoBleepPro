@@ -186,6 +186,12 @@ AUTOCLIP_SECONDS = 300
 # Size observations for files still being copied in, kept between passes.
 _AUTOCLIP_SEEN: dict = {}
 
+# How long YouTube waits for Rumble to actually start sending bytes
+# before giving up and starting anyway. A login page that changed or a
+# stuck browser must not hold YouTube hostage forever over an upload
+# that was never going to move.
+RUMBLE_HEAD_START_TIMEOUT = 600
+
 # Notices that are true for the whole run and would otherwise print on
 # every pass. --batch followed by --watch is one process saying the same
 # paragraph twice before it has done anything, which trains you to skim
@@ -2188,8 +2194,33 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
     if "rumble" in active_platforms and not existing_rb:
         rb_source = upload_path_for(cfg.rumble.censor_uploads)
 
+    # Rumble first, deliberately - not just submitted first, actually
+    # given a head start. Rumble's browser path spends minutes logging
+    # in, filling the form and picking categories before a single byte
+    # of the file moves; if YouTube's upload starts at the same moment,
+    # its transfer competes with Rumble's for bandwidth from the first
+    # second, on the platform whose upload is already the more fragile
+    # of the two. This event is set the first time Rumble's OWN progress
+    # callback fires - which only happens once the browser is genuinely
+    # sending the file, after all the login/form/category setup is
+    # already done - and YouTube waits on it before starting its own.
+    #
+    # Bounded rather than unconditional: a Rumble that never gets that
+    # far (a login page that changed, a stuck login) must not hold
+    # YouTube hostage forever over an upload that was never going to
+    # start moving bytes to begin with.
+    rumble_will_run = "rumble" in active_platforms and not existing_rb
+    rumble_upload_started = threading.Event()
+
     def do_youtube(parallel: bool) -> None:
         try:
+            if parallel and rumble_will_run:
+                got_going = rumble_upload_started.wait(
+                    timeout=RUMBLE_HEAD_START_TIMEOUT)
+                if not got_going:
+                    print(f"[YouTube] Rumble still hasn't started sending "
+                          f"the file after {RUMBLE_HEAD_START_TIMEOUT}s - "
+                          f"starting anyway rather than waiting forever.")
             yt = YouTubeUploader(cfg.youtube.client_secrets_path, cfg.youtube.token_path)
 
             def yt_on_retry(attempt, delay, exc):
@@ -2238,6 +2269,16 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
 
     def do_rumble(parallel: bool) -> None:
         try:
+            base_progress = progress_reporter("Rumble", parallel)
+
+            def rb_progress(pct: int) -> None:
+                # First call means the browser is genuinely sending bytes
+                # now - login, form-fill and category-picking are already
+                # behind it. That is the "head start" YouTube is waiting
+                # on, not just this thread having been started.
+                rumble_upload_started.set()
+                base_progress(pct)
+
             rb = RumbleUploader(
                 cfg.rumble.username, cfg.rumble.password, cfg.rumble.login_url, cfg.rumble.upload_url,
                 cdp_url=cfg.rumble.cdp_url,
@@ -2252,7 +2293,7 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
                 lambda: rb.upload(
                     rb_source, rb_title, rb_description, cfg.rumble.tags,
                     privacy=cfg.rumble.privacy, thumbnail_path=cfg.rumble.thumbnail_path or None,
-                    progress_callback=progress_reporter("Rumble", parallel),
+                    progress_callback=rb_progress,
                 ),
                 max_retries=cfg.general.max_retries, delays=cfg.general.retry_delays, on_retry=rb_on_retry,
             )
@@ -2293,9 +2334,25 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
                 results["rumble"] = f"FAILED: {exc}"
         finally:
             record("rumble", rb_title)
+            # A Rumble that fails before ever reaching a real transfer
+            # (a login page that changed, a stuck login) would otherwise
+            # never fire rb_progress at all, and YouTube would sit
+            # waiting the full head-start timeout for an upload that was
+            # already over. Idempotent if it was already set on success.
+            rumble_upload_started.set()
 
     # --- Dispatch ---
+    # Rumble appended first and submitted first - it wants to be the one
+    # already under way, not just the one asked for first.
     jobs = []
+    if "rumble" not in active_platforms:
+        print("[Rumble] Skipped - --only youtube.")
+    elif existing_rb:
+        print(f"[Rumble] Already on the channel - skipping: {existing_rb}")
+        results["rumble"] = existing_rb
+    else:
+        jobs.append(("rumble", do_rumble))
+
     if "youtube" not in active_platforms:
         if routed_as_clip:
             # Already explained above - repeating it here with the wrong
@@ -2309,19 +2366,15 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
     else:
         jobs.append(("youtube", do_youtube))
 
-    if "rumble" not in active_platforms:
-        print("[Rumble] Skipped - --only youtube.")
-    elif existing_rb:
-        print(f"[Rumble] Already on the channel - skipping: {existing_rb}")
-        results["rumble"] = existing_rb
-    else:
-        jobs.append(("rumble", do_rumble))
-
     parallel = len(jobs) > 1 and bool(
         (cfg.general.speed or {}).get("parallel_uploads", True))
     if parallel:
-        print(f"[Upload] YouTube and Rumble together - the slower of the two "
-              f"is the wait, not the sum.")
+        if rumble_will_run:
+            print(f"[Upload] Rumble first - YouTube waits for it to "
+                  f"actually start sending the file before joining in.")
+        else:
+            print(f"[Upload] YouTube and Rumble together - the slower of "
+                  f"the two is the wait, not the sum.")
         with ThreadPoolExecutor(max_workers=len(jobs)) as pool:
             futures = [pool.submit(job, True) for _, job in jobs]
             for future in futures:

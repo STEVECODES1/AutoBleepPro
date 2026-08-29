@@ -84,9 +84,15 @@ def scene(tmp_path, monkeypatch):
 
             def upload(self, path, *args, **kwargs):
                 started = time.monotonic()
+                callback = kwargs.get("progress_callback")
+                # Fired near-immediately, matching a real upload's first
+                # progress tick - the moment bytes actually start moving,
+                # not the moment the transfer finishes. Rumble's head
+                # start for YouTube is keyed off exactly this.
+                if callback:
+                    callback(1)
                 time.sleep(UPLOAD_SECONDS)
                 recorder.span(platform, started, time.monotonic())
-                callback = kwargs.get("progress_callback")
                 if callback:
                     callback(100)
                 return f"https://{platform}.example/watch"
@@ -209,3 +215,123 @@ def test_parallel_can_be_turned_off(scene, tmp_path):
     run(main, cfg, video, tmp_path)
 
     assert not recorder.overlapped(), "parallel_uploads: false was ignored"
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# RUMBLE FIRST
+#
+# "make sure the first thing to do is upload to rumble ... and when its
+# uploading you can start the other". Both still run concurrently - that
+# part of the design is right, the two uploads really are independent -
+# but Rumble is meant to be the one already moving before YouTube's
+# transfer starts competing with it for bandwidth. Keyed off Rumble's own
+# progress callback rather than a fixed delay: that only fires once the
+# browser is genuinely sending bytes, after login/form-fill/category-pick
+# are already behind it - not the moment the thread merely starts.
+# ═════════════════════════════════════════════════════════════════════════════
+
+def test_rumble_starts_before_youtube(scene, tmp_path):
+    main, cfg, video, recorder = scene
+
+    run(main, cfg, video, tmp_path)
+
+    rumble_start = recorder.spans["rumble"][0]
+    youtube_start = recorder.spans["youtube"][0]
+    assert rumble_start <= youtube_start, \
+        "YouTube started no later than Rumble - Rumble was not given the lead"
+
+
+def test_youtube_waits_for_rumbles_first_progress_tick(scene, tmp_path,
+                                                        monkeypatch):
+    """A Rumble that is slow to even START sending (a long login, a slow
+    form fill) must make YouTube wait for it - not just be submitted
+    after it into a thread pool that runs both immediately anyway."""
+    main, cfg, video, recorder = scene
+    DELAY = 0.3
+
+    class SlowToStart:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def upload(self, path, *args, **kwargs):
+            started = time.monotonic()
+            time.sleep(DELAY)
+            callback = kwargs.get("progress_callback")
+            if callback:
+                callback(1)
+            recorder.span("rumble", started, time.monotonic())
+            if callback:
+                callback(100)
+            return "https://rumble.example/watch"
+
+        def get_service(self):
+            return None
+
+    monkeypatch.setattr(main, "RumbleUploader", SlowToStart)
+
+    run(main, cfg, video, tmp_path)
+
+    youtube_start = recorder.spans["youtube"][0]
+    rumble_start = recorder.spans["rumble"][0]
+    assert youtube_start >= rumble_start + DELAY - 0.05, \
+        "YouTube started before Rumble's transfer actually began"
+
+
+def test_a_failed_rumble_releases_youtube_immediately(scene, tmp_path,
+                                                       monkeypatch):
+    """A Rumble that fails before ever reaching a real transfer (bad
+    login, changed page) must not make YouTube sit through the full
+    head-start timeout for an upload that was already over."""
+    main, cfg, video, recorder = scene
+
+    class DiesImmediately:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def upload(self, *args, **kwargs):
+            raise RuntimeError("could not even log in")
+
+        def get_service(self):
+            return None
+
+    monkeypatch.setattr(main, "RumbleUploader", DiesImmediately)
+
+    started = time.monotonic()
+    results = run(main, cfg, video, tmp_path)
+    elapsed = time.monotonic() - started
+
+    assert results["youtube"].startswith("https://youtube")
+    assert elapsed < main.RUMBLE_HEAD_START_TIMEOUT, \
+        "YouTube waited out the full head-start timeout for a dead Rumble"
+
+
+def test_giving_up_on_a_stuck_rumble_after_the_timeout(scene, tmp_path,
+                                                        monkeypatch, capsys):
+    """Rumble that never calls its progress callback AND never finishes
+    (or fails) within the window - a genuinely stuck browser - must not
+    hold YouTube forever either."""
+    main, cfg, video, recorder = scene
+    monkeypatch.setattr(main, "RUMBLE_HEAD_START_TIMEOUT", 0.1)
+
+    class NeverReports:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def upload(self, path, *args, **kwargs):
+            started = time.monotonic()
+            time.sleep(UPLOAD_SECONDS)
+            recorder.span("rumble", started, time.monotonic())
+            # No progress_callback call at all - it never even gets
+            # that far, but it does eventually return.
+            return "https://rumble.example/watch"
+
+        def get_service(self):
+            return None
+
+    monkeypatch.setattr(main, "RumbleUploader", NeverReports)
+
+    results = run(main, cfg, video, tmp_path)
+
+    assert results["youtube"].startswith("https://youtube")
+    out = capsys.readouterr().out
+    assert "starting anyway" in out
