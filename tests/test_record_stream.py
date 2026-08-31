@@ -142,6 +142,33 @@ def test_a_crash_in_one_pass_does_not_kill_the_source():
         "the crash happened silently"
 
 
+def test_a_crash_in_fetch_clips_does_not_kill_the_whole_recorder(
+        monkeypatch, tmp_path, capsys):
+    """fetch_clips() runs in the MAIN thread, not one of the per-source
+    ones - an uncaught exception here used to end main() entirely,
+    taking every recording thread down with it even though their own
+    crash handling (test above) was working fine and would have kept
+    them recording. A drive dropping out mid os.makedirs() must cost
+    one poll, not the whole recorder."""
+    import record_stream
+
+    def boom(*a, **k):
+        raise FileNotFoundError(
+            "[WinError 3] The system cannot find the path specified: 'D:\\'")
+
+    monkeypatch.setattr(record_stream, "fetch_clips", boom)
+
+    code = record_stream.main([
+        "https://www.twitch.tv/stackswopo/clips?range=7d",
+        "--once", "--staging", str(tmp_path / "s"),
+        "--watch-folder", str(tmp_path / "w"),
+    ])
+
+    assert code == 0, "the crash propagated out of main() instead of being caught"
+    out = capsys.readouterr().out
+    assert "ERROR" in out and "still running" in out
+
+
 def test_once_mode_still_tries_exactly_once_even_on_a_crash():
     """--once means one pass and exit - a crash must not turn that into a
     silent retry loop it was never asked for."""

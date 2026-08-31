@@ -1880,8 +1880,23 @@ def main(argv: Optional[list] = None) -> int:
         # cadence in this thread while the recorders run in theirs.
         while True:
             for url in clip_pages:
-                fetch_clips(url, args.staging, args.watch_folder,
-                            name=label(url), limit=args.clip_limit)
+                try:
+                    fetch_clips(url, args.staging, args.watch_folder,
+                                name=label(url), limit=args.clip_limit)
+                except Exception as exc:
+                    # This ran uncaught for a long time. It lives in the
+                    # MAIN thread, not one of the per-source ones, so an
+                    # exception here does not just end one recording - it
+                    # ends the whole process, main() and all, taking the
+                    # per-source threads down with it even though THEIR
+                    # own crash handling was working fine and they would
+                    # have kept recording. A drive that drops out mid
+                    # os.makedirs() must cost this one poll, not the
+                    # entire recorder.
+                    print(f"[{time.strftime('%H:%M:%S')}] ERROR: "
+                          f"{type(exc).__name__}: {exc} - checking "
+                          f"{url} for clips failed, but the recorder "
+                          f"is still running. Trying again next poll.")
             if args.once and not threads:
                 return 0
             if not threads and not clip_pages:
