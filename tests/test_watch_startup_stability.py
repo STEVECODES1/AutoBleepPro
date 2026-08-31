@@ -115,3 +115,65 @@ def test_the_startup_sweep_goes_through_the_watcher():
 
     assert "watcher.consider(os.path.join(watch_folder, name))" in body
     assert "on_ready(os.path.join(watch_folder, name))" not in body
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# THE DRIVE DROPPED OUT WHILE IT WAS WAITING
+#
+# On an external disk under load, D:\ genuinely disappears for a moment -
+# [WinError 3], PermissionError - and comes back. _wait_for_stable only
+# ever caught FileNotFoundError, so anything else killed the thread
+# outright, and because the _pending.discard() at the end never ran, that
+# path stayed in _pending forever: _maybe_watch() then refused to queue
+# that video again for the entire life of the process. Silent, permanent,
+# and one dropped USB connection away at all times.
+# ═════════════════════════════════════════════════════════════════════════════
+
+def test_a_drive_that_blinks_does_not_kill_the_stability_wait(tmp_path,
+                                                              monkeypatch):
+    import time
+
+    import utils.file_watcher as fw
+
+    video = tmp_path / "stream.ts"
+    video.write_bytes(b"x" * 1000)
+
+    real_getsize = os.path.getsize
+    calls = {"n": 0}
+
+    def flaky(path):
+        calls["n"] += 1
+        if calls["n"] in (2, 3):
+            raise OSError(3, "The system cannot find the path specified")
+        return real_getsize(path)
+
+    monkeypatch.setattr(fw.os.path, "getsize", flaky)
+
+    watcher, done = _watcher(tmp_path, seconds=1)
+    watcher.consider(str(video))
+    time.sleep(4)
+
+    assert done, ("the drive blinking killed the wait - the file was never "
+                  "processed")
+
+
+def test_a_crashed_stability_wait_still_frees_the_path(tmp_path, monkeypatch):
+    """A path left in _pending is a video that can never be queued again."""
+    import time
+
+    import utils.file_watcher as fw
+
+    video = tmp_path / "stream.ts"
+    video.write_bytes(b"x" * 1000)
+
+    def explode(path):
+        raise RuntimeError("something nobody predicted")
+
+    monkeypatch.setattr(fw.os.path, "getsize", explode)
+
+    watcher, done = _watcher(tmp_path, seconds=1)
+    watcher.consider(str(video))
+    time.sleep(0.5)
+
+    assert str(video) not in watcher._handler._pending, \
+        "the path stayed pending, so this video is stuck forever"

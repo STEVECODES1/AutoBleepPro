@@ -98,35 +98,50 @@ class _NewVideoHandler(FileSystemEventHandler):
         """Poll file size until it hasn't changed for `stability_seconds`,
         which is a simple, dependency-free way to detect 'done writing'
         without needing OS-specific file-lock APIs."""
-        last_size = -1
-        stable_since = None
-        # A file being written very slowly - a network drive, a stalled
-        # download - would otherwise hold this thread for days, and the
-        # path stays in _pending so it can never be re-queued either.
-        deadline = time.time() + MAX_STABILITY_WAIT_S
-        while True:
-            try:
-                size = os.path.getsize(path)
-            except FileNotFoundError:
-                return  # file disappeared (renamed/deleted) before it stabilized
-            now = time.time()
-            if size != last_size:
-                last_size = size
-                stable_since = now
-            elif stable_since and (now - stable_since) >= self.stability_seconds:
-                break
-            if now >= deadline:
-                print(f"[Watch] {os.path.basename(path)} is still growing "
-                      f"after {MAX_STABILITY_WAIT_S / 60:.0f} min - giving up "
-                      "on it for now. It will be picked up by --batch once "
-                      "it has finished.")
-                with self._lock:
-                    self._pending.discard(path)
-                return
-            time.sleep(1)
+        try:
+            last_size = -1
+            stable_since = None
+            # A file being written very slowly - a network drive, a stalled
+            # download - would otherwise hold this thread for days, and the
+            # path stays in _pending so it can never be re-queued either.
+            deadline = time.time() + MAX_STABILITY_WAIT_S
+            while True:
+                try:
+                    size = os.path.getsize(path)
+                except FileNotFoundError:
+                    return  # file disappeared (renamed/deleted) before it stabilized
+                except OSError:
+                    # The DRIVE dropped out mid-wait, not the file. On an
+                    # external disk under load that is a real, repeated
+                    # event ([WinError 3] 'D:\\', PermissionError) and it
+                    # comes back a moment later. Only FileNotFoundError
+                    # was caught here, so anything else killed this
+                    # thread outright - and because the discard below
+                    # never ran, the path stayed in _pending forever and
+                    # that video could never be queued again for the life
+                    # of the process. Treat it as "size unknown, keep
+                    # waiting"; `deadline` still bounds the whole wait.
+                    size = last_size
+                now = time.time()
+                if size != last_size:
+                    last_size = size
+                    stable_since = now
+                elif stable_since and (now - stable_since) >= self.stability_seconds:
+                    break
+                if now >= deadline:
+                    print(f"[Watch] {os.path.basename(path)} is still growing "
+                          f"after {MAX_STABILITY_WAIT_S / 60:.0f} min - giving up "
+                          "on it for now. It will be picked up by --batch once "
+                          "it has finished.")
+                    return
+                time.sleep(1)
+        finally:
+            # On EVERY exit - stabilised, vanished, timed out, or crashed
+            # on something nobody predicted. A path left in _pending is a
+            # video _maybe_watch() will refuse to queue ever again.
+            with self._lock:
+                self._pending.discard(path)
 
-        with self._lock:
-            self._pending.discard(path)
         self.on_ready(path)
 
 

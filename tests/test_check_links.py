@@ -91,24 +91,32 @@ def test_success_means_live():
 
 def test_the_urls_come_from_the_recorder_itself():
     """A checker testing a different list from the one being watched is
-    worse than no checker."""
+    worse than no checker.
+
+    Down to two sources as of 2026-08-31 - @OnlyThaGuys26, Kick and the
+    Twitch clips page were all dropped from _RUN_RECORDER.bat to cut
+    concurrent drive load, so they are correctly absent here too - this
+    function reads the .bat directly rather than a copy of the list,
+    which is the point of the test."""
     urls = check_links.watched_urls()
 
-    assert len(urls) == 5
+    assert len(urls) == 2
     for expected in ("youtube.com/@stackswopo_/live",
-                     "twitch.tv/stackswopo",
-                     "kick.com/stackswopo1k",
-                     "youtube.com/@OnlyThaGuys26/live"):
+                     "twitch.tv/stackswopo"):
         assert any(expected in url for url in urls), expected
+    assert not any("OnlyThaGuys26" in url for url in urls)
+    assert not any("kick.com" in url for url in urls)
+    assert not any("/clips" in url for url in urls)
 
 
 def test_the_clips_page_is_recognised_as_a_playlist():
+    """is_clips_url() itself, not against watched_urls() - the Twitch
+    clips page was dropped from _RUN_RECORDER.bat to cut concurrent
+    drive load, so there is no longer one in the watched list to find."""
     from record_stream import is_clips_url
 
-    urls = check_links.watched_urls()
-    clips = [u for u in urls if is_clips_url(u)]
-
-    assert len(clips) == 1
+    assert is_clips_url("https://www.twitch.tv/stackswopo/clips?range=7d")
+    assert not is_clips_url("https://www.twitch.tv/stackswopo")
 
 
 def test_an_empty_clips_page_is_healthy():

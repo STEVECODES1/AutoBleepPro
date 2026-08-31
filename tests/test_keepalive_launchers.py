@@ -80,13 +80,23 @@ def test_it_waits_before_restarting():
 
 def test_every_watched_channel_survived_the_move():
     """The URLs moved from START.bat into the wrapper - losing one would
-    mean a platform silently stops being recorded."""
+    mean a platform silently stops being recorded.
+
+    Down to two sources as of 2026-08-31: @OnlyThaGuys26, Kick and the
+    Twitch clips page were all dropped - four simultaneous sources plus
+    a VOD download plus GPU transcription overloaded the drive's write
+    throughput on a real night and cost real recording time. If any of
+    them come back it should be a decision made here, not an accident
+    this test lets slide back in."""
     body = _read("_RUN_RECORDER.bat")
 
     for url in ("youtube.com/@stackswopo_/live",
-                "twitch.tv/stackswopo",
-                "twitch.tv/stackswopo/clips",
-                "kick.com/stackswopo1k",
-                "youtube.com/@OnlyThaGuys26/live"):
+                "twitch.tv/stackswopo"):
         assert url in body, url
+    assert "youtube.com/@OnlyThaGuys26/live" not in body, \
+        "removed deliberately to cut concurrent load on the drive"
+    assert "kick.com/stackswopo1k" not in body, \
+        "removed deliberately to cut concurrent load on the drive"
+    assert "twitch.tv/stackswopo/clips" not in body, \
+        "removed deliberately to cut concurrent load on the drive"
     assert '--name "Stackswopo"' in body

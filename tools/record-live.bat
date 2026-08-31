@@ -6,16 +6,16 @@ REM  Double-click this file. It does not matter what folder you are in: the
 REM  cd below jumps to wherever this .bat lives, which is why running
 REM  record_stream.py by hand from C:\Users\<you> fails and this does not.
 REM
-REM  Five sources, one window:
+REM  Two sources, one window:
 REM    - the Stackswopo YouTube livestream
 REM    - the Twitch livestream
-REM    - the Kick livestream
-REM    - the OnlyThaGuys YouTube livestream
-REM    - the Twitch clips page (last 7 days)
 REM
-REM  Live streams are RECORDED as they happen. The clips page is DOWNLOADED
-REM  instead - clips are already finished videos - and an archive file means
-REM  a clip is only ever fetched once, however many times this runs.
+REM  The OnlyThaGuys YouTube livestream, the Kick livestream and the
+REM  Twitch clips page all used to be here too. Dropped 2026-08-31: four
+REM  simultaneous recordings plus a VOD download plus GPU transcription
+REM  overloaded the drive's write throughput on a real night and cost
+REM  real recording time. Add any back only as a deliberate decision,
+REM  not by copying this file forward unchanged.
 REM
 REM  Everything lands in auto_uploader\watch_folder, so a finished stream
 REM  flows straight into the normal upload path with nothing to move by hand.
@@ -36,9 +36,6 @@ cd /d "%~dp0"
 start "Stackswopo (YouTube + Twitch)" python record_stream.py ^
     "https://www.youtube.com/@stackswopo_/live" ^
     "https://www.twitch.tv/stackswopo" ^
-    "https://www.twitch.tv/stackswopo/clips?range=7d" ^
-    "https://kick.com/stackswopo1k" ^
-    "https://www.youtube.com/@OnlyThaGuys26/live" ^
     --name "Stackswopo"
 
 REM Every source delivers to the same watch_folder, and the uploader
@@ -49,7 +46,7 @@ echo.
 echo Recorder started in its own window.
 echo It waits for either channel to go live, records the full stream (retrying
 echo through network drops), then delivers the finished file to
-echo auto_uploader\watch_folder. New Twitch clips are picked up as they appear.
+echo auto_uploader\watch_folder.
 echo.
 echo While it is waiting it stays quiet on purpose - one line every 30 minutes
 echo rather than a countdown every minute. The full yt-dlp output is still

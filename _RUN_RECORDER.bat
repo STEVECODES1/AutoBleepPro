@@ -21,8 +21,14 @@ cd /d "%~dp0tools"
 setlocal
 set RESTARTS=0
 
+REM  Down to two sources as of 2026-08-31. Four simultaneous recordings
+REM  plus a VOD download plus GPU transcription overloaded the drive's
+REM  write throughput on a real night and cost real recording time.
+REM  @OnlyThaGuys26, the Twitch clips page and Kick were all dropped -
+REM  add any back only as a deliberate decision, not by copying this
+REM  file forward unchanged.
 :loop
-python record_stream.py "https://www.youtube.com/@stackswopo_/live" "https://www.twitch.tv/stackswopo" "https://www.twitch.tv/stackswopo/clips?range=7d" "https://kick.com/stackswopo1k" "https://www.youtube.com/@OnlyThaGuys26/live" --name "Stackswopo"
+python record_stream.py "https://www.youtube.com/@stackswopo_/live" "https://www.twitch.tv/stackswopo" --name "Stackswopo"
 
 REM  Grabbed BEFORE anything else runs. ERRORLEVEL is whatever the LAST
 REM  command set, and `set /a` sets it too - so reading it after the
