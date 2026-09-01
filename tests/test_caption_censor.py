@@ -300,21 +300,40 @@ def test_instagram_bleeps_slurs_and_keeps_the_swearing():
     assert engine._flag_reason("fuck") is None
 
 
-def test_youtube_still_bleeps_everything():
-    """YouTube demonetises over ordinary language too, and a channel is
-    harder to get back than a post."""
+def test_every_platform_bleeps_slurs_and_leaves_the_swearing():
+    """Shorts and TikTok were "all" - every ordinary swear muted too.
+
+    On a channel whose speech is mostly ordinary swearing that is a hole
+    in the audio every few seconds, and the clips came back unwatchable.
+    Slurs are the line that actually costs a channel and that line is
+    still held; the rest is the voice people are there for."""
     import sys
 
     sys.path.insert(0, os.path.join(_REPO, "auto_uploader"))
     from autoreel.compliance import ComplianceEngine
     from utils.clip_queue import CENSOR_AUDIO_DEFAULTS, _CENSOR_SCOPES
 
-    assert CENSOR_AUDIO_DEFAULTS["youtube_shorts"] == "all"
-    engine = ComplianceEngine(
-        only_categories=_CENSOR_SCOPES[CENSOR_AUDIO_DEFAULTS["youtube_shorts"]])
+    for platform, mode in CENSOR_AUDIO_DEFAULTS.items():
+        assert mode == "slurs", f"{platform} is back to muting everything"
+        engine = ComplianceEngine(only_categories=_CENSOR_SCOPES[mode])
+        assert engine._flag_reason("nigga") == "hate_speech", platform
+        assert engine._flag_reason("faggot") == "hate_speech", platform
+        assert engine._flag_reason("shit") is None, platform
+        assert engine._flag_reason("fuck") is None, platform
 
-    assert engine._flag_reason("shit") == "profanity"
-    assert engine._flag_reason("nigga") == "hate_speech"
+
+def test_the_stream_and_its_clips_agree_on_what_counts():
+    """The full VOD passed no category filter at all, so it meant "all"
+    with no way to say otherwise - a stream muted every swear while a
+    clip cut from that same stream muted only slurs."""
+    from utils.clip_queue import scope_categories
+    from utils.config import GeneralConfig
+
+    assert GeneralConfig.censor_categories == "slurs"
+    assert scope_categories("slurs") == ("hate_speech",)
+    # A typo must over-censor and be noticed, never quietly publish one.
+    assert scope_categories("sluurs") == ()
+    assert scope_categories("") == ()
 
 
 def test_rumble_is_left_uncensored():

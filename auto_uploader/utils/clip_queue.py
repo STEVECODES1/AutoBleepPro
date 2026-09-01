@@ -384,19 +384,45 @@ def _char_limit(platform: str) -> int:
 # Rumble is absent on purpose. It is the uncensored channel, that is the
 # whole point of the split, and its audience is there for exactly what
 # the other platforms will not take.
+# What each platform actually bleeps.
+#
+# Every one of these is "slurs" now. Shorts and TikTok were "all", which
+# muted ordinary swearing too - and on a channel whose speech is mostly
+# ordinary swearing that is a mute every few seconds. One real clip
+# logged 13 hate_speech hits and another 7 profanity hits; under "all"
+# every one of those became a hole in the audio. The clips came back
+# unwatchable, which is worse for reach than the language ever was.
+#
+# The risk this trades away is real and worth naming: YouTube can
+# demonetise over language and TikTok's For You eligibility discourages
+# it. Neither BANS it - slurs are the line that actually costs a
+# channel, and that line is still held here.
 CENSOR_AUDIO_DEFAULTS = {
-    "youtube_shorts": "all",
+    "youtube_shorts": "slurs",
     "instagram": "slurs",
     "facebook": "slurs",
     "zernio_twitter": "slurs",
-    # "all", like Shorts. TikTok does not ban swearing outright, but its
-    # For You eligibility standards discourage it - and reach on TikTok is
-    # the entire reason the account exists. Same treatment as Shorts.
-    "zernio_tiktok": "all",
+    "zernio_tiktok": "slurs",
 }
 
 # Which compliance categories each mode bleeps. Empty tuple = all.
-_CENSOR_SCOPES = {"all": (), "slurs": ("hate_speech",)}
+# "all" is every category the compliance engine knows; "slurs" is
+# hate speech only. Public because the full-VOD upload path in main.py
+# resolves the same setting - a stream and a clip cut from that stream
+# disagreeing about what counts would be indefensible.
+CENSOR_SCOPES = {"all": (), "slurs": ("hate_speech",)}
+
+# The old private name, kept because tests and callers import it.
+_CENSOR_SCOPES = CENSOR_SCOPES
+
+
+def scope_categories(mode: str) -> tuple:
+    """Categories to bleep for a scope name. Unknown names bleep all.
+
+    Falling back to "all" on a typo is deliberate: a misspelled scope
+    should over-censor and be noticed, not silently publish a slur.
+    """
+    return CENSOR_SCOPES.get(str(mode or "").strip().lower(), ())
 
 
 def _censored_clip(platform: str, video_path: str, config: dict) -> tuple:

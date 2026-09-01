@@ -119,15 +119,19 @@ def test_it_shows_the_shorts_TITLE_separately_from_the_description(main, cfg,
 
 
 def test_it_says_whether_the_audio_gets_bleeped(main, cfg, capsys):
-    """Shorts went up uncensored and nothing said so - and the two
-    platforms are censored DIFFERENTLY, which the preview has to make
-    obvious. Instagram removed a post under hateful conduct while its
-    ordinary swearing broke nothing."""
+    """Shorts went up uncensored and nothing said so.
+
+    Every social platform is on "slurs" now - Instagram removed a post
+    under hateful conduct while its ordinary swearing broke nothing, and
+    that is the line everywhere. The preview still has to say it out
+    loud, because "bleeped" and "as recorded" are the two ways a clip
+    can go out and only one of them is safe on these platforms."""
     main._preview_post(cfg, cfg.clip)
 
     out = capsys.readouterr().out
-    assert "every flagged word" in out, "the Shorts bleep is not shown"
-    assert "slurs only" in out, "Instagram's slur-only bleep is not shown"
+    assert "slurs only" in out, "the slur-only bleep is not shown"
+    assert "ordinary swearing kept" in out, \
+        "the preview does not say the swearing survives"
 
 
 def test_it_names_a_platform_that_is_switched_off(main, cfg, capsys):

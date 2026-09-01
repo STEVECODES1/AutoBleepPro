@@ -192,13 +192,17 @@ def test_the_shipped_config_says_so_too():
 
 # ── the clips that need clean audio get it ───────────────────────────────
 
-def test_shorts_and_tiktok_both_bleep_everything():
-    """Both are reach plays. YouTube demonetises over spoken language and
-    TikTok's For You standards discourage it."""
+def test_shorts_and_tiktok_bleep_slurs_not_every_swear():
+    """Both were "all". YouTube does demonetise over spoken language and
+    TikTok's For You standards do discourage it - but neither BANS it,
+    and muting every swear on a channel made of swearing put a hole in
+    the audio every few seconds. The clips came back unwatchable, which
+    costs more reach than the language does. Slurs are the line that
+    actually takes a channel away, and that line still holds."""
     from utils.clip_queue import CENSOR_AUDIO_DEFAULTS
 
-    assert CENSOR_AUDIO_DEFAULTS["youtube_shorts"] == "all"
-    assert CENSOR_AUDIO_DEFAULTS["zernio_tiktok"] == "all"
+    assert CENSOR_AUDIO_DEFAULTS["youtube_shorts"] == "slurs"
+    assert CENSOR_AUDIO_DEFAULTS["zernio_tiktok"] == "slurs"
 
 
 def test_rumble_is_still_untouched():

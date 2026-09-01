@@ -280,16 +280,18 @@ def test_the_model_announces_where_it_loaded(monkeypatch, capsys):
 def test_the_censor_line_names_the_device_too():
     source = open(os.path.join(_REPO, "auto_uploader", "main.py"),
                   encoding="utf-8").read()
-    spot = source.index("Transcribing + scanning for profanity")
+    # The line now names the scope too - "...scanning for slurs" or
+    # "...for profanity" depending on general.censor_categories.
+    spot = source.index("Transcribing + scanning for")
 
-    assert "device=" in source[spot:spot + 200]
+    assert "device=" in source[spot:spot + 300]
 
 
 def test_an_auto_device_resolves_to_what_it_actually_picked():
     """"device=auto" answers nothing. It has to say which one auto chose."""
     source = open(os.path.join(_REPO, "auto_uploader", "main.py"),
                   encoding="utf-8").read()
-    spot = source.index("Transcribing + scanning for profanity")
+    spot = source.index("Transcribing + scanning for")
     before = source[spot - 700:spot]
 
     assert "detect_device()" in before

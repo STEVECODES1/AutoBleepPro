@@ -2078,7 +2078,12 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
                     _where = f"auto -> {detect_device()[0]}"
                 except Exception:
                     _where = "auto"
-            print(f"[Censor] Transcribing + scanning for profanity "
+            from utils.clip_queue import scope_categories
+
+            _scope = cfg.general.censor_categories
+            _only = scope_categories(_scope)
+            print(f"[Censor] Transcribing + scanning for "
+                  f"{'slurs' if _only else 'profanity'} "
                   f"(model={cfg.general.censor_model}, device={_where})...")
             censor_result = censor_video(
                 video_path, cfg.general.censored_folder,
@@ -2089,6 +2094,9 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
                 speed=cfg.general.speed,
                 padding_ms=cfg.general.censor_padding_ms,
                 mute_whole_segment=cfg.general.censor_mute_whole_segment,
+                # Was omitted entirely, which meant every category - so
+                # the whole VOD got a mute on every ordinary swear.
+                only_categories=_only,
             )
             _censored["path"] = censor_result.output_path
             if censor_result.violation_count == -1:

@@ -134,6 +134,15 @@ class GeneralConfig:
     # false for a while; this default is what a config predating the key
     # got instead, and it silently won.
     censor_mute_whole_segment: bool = False
+    # WHICH words the full-stream upload bleeps: "slurs" (hate speech
+    # only) or "all" (every flagged word, ordinary swearing included).
+    #
+    # This path passed no category filter at all, so it meant "all" with
+    # no way to say otherwise - every swear on a channel made of swearing
+    # became a hole in the audio of the whole VOD. The clip path has had
+    # a per-platform version of this setting for a while; this is the
+    # same decision for the stream, and it defaults the same way.
+    censor_categories: str = "slurs"
     # Optional; defaulted so older config.json files keep loading.
     filename_channel_prefixes: tuple = ()
     cleanup: dict = None
@@ -262,6 +271,7 @@ def load_config(config_path: str = "config.json", env_path: str = ".env") -> App
         censored_folder=_resolve_path(project_root, gen.get("censored_folder", "./censored")),
         censor_padding_ms=int(gen.get("censor_padding_ms", 250)),
         censor_mute_whole_segment=bool(gen.get("censor_mute_whole_segment", False)),
+        censor_categories=str(gen.get("censor_categories", "slurs")),
     )
 
     # The posting block's paths are resolved against the config file, not
