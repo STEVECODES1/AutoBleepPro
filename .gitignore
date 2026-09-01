@@ -50,6 +50,13 @@ cookies.txt
 *.bak
 /clip_memory.json
 
+# What this channel has been heard saying, kept so the next transcript
+# is biased toward the words it really uses - see autoreel/vocabulary.py.
+# It normally lives under auto_uploader/censored/ and is already covered
+# by that rule; named here as well because it is a list of slurs with
+# counts beside them and it must never end up in a commit by accident.
+vocabulary.json
+
 # Your live settings. Tracked as config.example.json instead, so a
 # pull can never collide with a switch you flipped locally.
 /auto_uploader/config.json

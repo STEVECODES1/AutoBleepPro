@@ -91,16 +91,39 @@ def names_from(config: Optional[dict] = None) -> list:
 
 
 def build(config: Optional[dict] = None, engine=None,
-          include_profanity: bool = True, limit: int = MAX_HOTWORDS) -> str:
+          include_profanity: bool = True, limit: int = MAX_HOTWORDS,
+          work_dir: str = "") -> str:
     """The hotword string to hand faster-whisper, or "" for none.
 
-    Names come first: they are the ones a wrong guess makes visible, in a
-    caption or a title, and if anything has to be dropped by the cap it
-    should be the tail of the profanity list rather than the channel's
-    own name.
+    Order is the whole design, because the cap throws away the tail:
+
+    1. NAMES. A wrong guess at these is visible - it ends up in a burned
+       caption or a title - and there are only a handful of them.
+    2. WHAT THIS CHANNEL HAS ACTUALLY BEEN HEARD SAYING, most-said
+       first, from autoreel/vocabulary.py. This is the half that used to
+       be missing: the cap meant 32 words chosen by whatever order the
+       category dictionaries happened to yield, so a channel that says
+       one slur four hundred times a week and has never said another was
+       biasing the decode toward both equally.
+    3. The rest of the flagged vocabulary, as before, to fill whatever
+       budget is left on a machine with no history yet.
+
+    A word already in the list is not repeated - _clean keeps the first
+    occurrence - so the learned ordering wins without crowding anything
+    out that would otherwise have fitted.
     """
     words = names_from(config)
     if include_profanity:
+        if work_dir:
+            try:
+                from autoreel.vocabulary import learned, ledger_path
+
+                words += learned(ledger_path(work_dir), limit=limit)
+            except Exception:
+                # No history, an unreadable file, anything at all: fall
+                # through to the static list, which is what this did
+                # before there was a history to read.
+                pass
         words += flagged_vocabulary(engine)
     words = _clean(words)[:max(0, int(limit))]
     return " ".join(words)

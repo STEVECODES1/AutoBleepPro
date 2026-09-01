@@ -2681,6 +2681,12 @@ def main(argv=None) -> int:
     parser.add_argument("--clips", metavar="FILE",
                         help="Render vertical clips with burned-in captions from "
                              "an already-uploaded video, ready to post by hand.")
+    parser.add_argument("--vocabulary", action="store_true",
+                        help="What this channel has been heard saying, "
+                             "most-said first. The censor writes this as "
+                             "it goes and the next transcript is biased "
+                             "toward these words, so a slur it has heard "
+                             "before is one it is less likely to miss.")
     parser.add_argument("--clip-report", action="store_true",
                         help="What happened to every clip: cut, posted, "
                              "waiting, or failed and why. Reads "
@@ -3661,6 +3667,20 @@ def main(argv=None) -> int:
 
         print()
         print(report(cfg.general.logs_folder))
+        return 0
+
+    if args.vocabulary:
+        from autoreel.vocabulary import learned, ledger_path, summary
+
+        path = ledger_path(cfg.general.censored_folder)
+        print()
+        print(f"[Vocabulary] {summary(path)}")
+        words = learned(path)
+        if words:
+            print(f"[Vocabulary] Fed to the transcriber, most-said first:")
+            print(f"             {', '.join(words[:40])}")
+            print(f"[Vocabulary] Kept at {path} - gitignored, and it holds "
+                  f"no chat, no names and no viewers.")
         return 0
 
     if args.clips_from:

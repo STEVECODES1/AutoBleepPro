@@ -324,7 +324,12 @@ def censor_video(
                 transcriber.hotwords = build_hotwords(
                     config=None,
                     engine=ComplianceEngine(custom_words=tuple(custom_words),
-                                            only_categories=tuple(only_categories)))
+                                            only_categories=tuple(only_categories)),
+                    # What this channel has actually been heard saying,
+                    # most-said first - see autoreel/vocabulary.py. The
+                    # cap is small and this is what decides who spends
+                    # it.
+                    work_dir=work_dir)
             except Exception as exc:
                 print(f"[Censor] Could not build the hotword list "
                       f"({type(exc).__name__}: {exc}). Transcribing without "
@@ -376,6 +381,20 @@ def censor_video(
         timer.mark(f"render [{strategy}]")
         if timer.enabled:
             print(f"[Timing] {timer.summary()}")
+
+        # Write down what was actually heard, so the NEXT transcript is
+        # biased toward the words this channel really uses rather than
+        # an arbitrary slice of the category lists. Counts instances,
+        # not distinct words - see autoreel/vocabulary.py.
+        try:
+            from autoreel.vocabulary import ledger_path, remember
+
+            remember(ledger_path(work_dir),
+                     [v.word for v in violations],
+                     {str(v.word or "").strip().lower(): getattr(v, "category", "")
+                      for v in violations})
+        except Exception:
+            pass
 
         return CensorResult(
             output_path=output_video_path,
