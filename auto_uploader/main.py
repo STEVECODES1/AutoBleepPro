@@ -2126,6 +2126,11 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
                     shown += f", +{len(counts) - 8} more distinct word(s)"
                 print(f"[Censor] {verb} {censor_result.violation_count} "
                       f"word(s) ({len(counts)} distinct): {shown}")
+                # Kept for the receipt at the end of the run, which is
+                # outside this closure and cannot see censor_result.
+                _censored["note"] = (
+                    f"{verb.lower()} {censor_result.violation_count} word(s) "
+                    f"({len(counts)} distinct)")
                 notify(
                     "Video censored before upload",
                     f"{filename}: {censor_result.violation_count} word(s) censored",
@@ -2148,6 +2153,9 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
         return vertical_path(_censored["path"])
 
     run_started_at = time.time()
+    # Counted here so the receipt at the very end can report it - the
+    # clip block's own `delivered` does not outlive its try.
+    clips_delivered = 0
     stage_timer = StageTimer(filename,
                              enabled=bool((cfg.general.speed or {}).get('stage_timings', True)))
     results = {}
@@ -2519,6 +2527,7 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
             try:
                 from utils.clip_runner import make_clips, print_run
 
+
                 # The source is still where it was: retire_source() now
                 # runs after this. The fallback stays for a re-run over a
                 # video that was already moved to uploaded/ on an earlier
@@ -2532,6 +2541,10 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
                                  count=(cfg.clips or {}).get("count"))
                 print_run(run)
                 delivered = _deliver_clips(run, cfg)
+                # Hoisted onto the run's own record so the receipt at the
+                # end can say how many were cut - `delivered` itself dies
+                # with this try block.
+                clips_delivered = delivered or 0
                 if delivered:
                     print(f"[Clips] {delivered} clip(s) moved into "
                           f"{cfg.general.watch_folder} - they will be posted "
@@ -2605,6 +2618,30 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
         print(f"[Timing] {stage_timer.summary()}")
         print(f"[Timing] {filename}: total wall time "
               f"{time.time() - run_started_at:.1f}s")
+
+    # The receipt. LAST, and outside every other condition, because this
+    # is the one place where what happened to this video is completely
+    # known - both uploads and every clip destination have reported in.
+    # Sent whether or not anything was newly uploaded: "everything was
+    # already up, nothing to do" is a real answer, and the announcement
+    # path deliberately stays silent about it.
+    try:
+        from utils.job_report import JobReport, report_job
+
+        report_job(cfg, JobReport(
+            title=yt_title or filename,
+            filename=filename,
+            # Both halves: the stream's own destinations and every clip
+            # platform the queue answered for.
+            destinations={**results, **(clip_reels or {})},
+            clips_made=clips_delivered,
+            clips_folder=str(cfg.general.watch_folder or ""),
+            censor_note=str(_censored.get("note", "") or ""),
+            seconds=time.time() - run_started_at,
+            is_clip=bool(is_clip),
+        ))
+    except Exception as exc:
+        print(f"[Report] Could not post the receipt: {exc}")
 
     return results
 

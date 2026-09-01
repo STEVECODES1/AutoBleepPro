@@ -7,7 +7,7 @@
     "category_id": "20",
     "made_for_kids": false,
     "title_format": "\"{title}\" {date} Stackswopo Stream",
-    "description_template": "This stream first aired on [DATE] with the title \"[STREAM TITLE]\" on the Stackswopo channel.\n\n📌 Also on Rumble (BinScripts): https://rumble.com/user/BinScripts\n🎮 Main channel: https://www.youtube.com/@stackswopo_\n📺 Twitch: https://www.twitch.tv/stackswopo\n\nThis is a replay of one of my own past streams, archived here so it stays available.\n\nThe stream contains live reactions, jokes, and real-life conversations in my usual unfiltered style.\n\n🔥 Missed the original broadcast? Enjoy the full replay with every moment, from the funny bits to the wild reactions.\n🎥 Want more? Check the channel for additional past streams, full VODs, and highlights.\n\n👍 If you enjoy these replays, consider subscribing!\n\nTags: #StacksWopo #StreamReplay #FullVOD #GamingHighlights #FunnyMoments #GTA5 #GTAOnline #Roleplay #StreamerMoments #UncutReplay #Entertainment",
+    "description_template": "This stream first aired on [DATE] with the title \"[STREAM TITLE]\" on the Stackswopo channel.\n\n\ud83d\udccc Also on Rumble (BinScripts): https://rumble.com/user/BinScripts\n\ud83c\udfae Main channel: https://www.youtube.com/@stackswopo_\n\ud83d\udcfa Twitch: https://www.twitch.tv/stackswopo\n\nThis is a replay of one of my own past streams, archived here so it stays available.\n\nThe stream contains live reactions, jokes, and real-life conversations in my usual unfiltered style.\n\n\ud83d\udd25 Missed the original broadcast? Enjoy the full replay with every moment, from the funny bits to the wild reactions.\n\ud83c\udfa5 Want more? Check the channel for additional past streams, full VODs, and highlights.\n\n\ud83d\udc4d If you enjoy these replays, consider subscribing!\n\nTags: #StacksWopo #StreamReplay #FullVOD #GamingHighlights #FunnyMoments #GTA5 #GTAOnline #Roleplay #StreamerMoments #UncutReplay #Entertainment",
     "tags": [
       "StacksWopo",
       "StreamReplay",
@@ -39,7 +39,7 @@
     "primary_category": "Gaming",
     "secondary_category": "Grand Theft Auto V",
     "title_format": "\"{title}\" {date} Stackswopo Stream",
-    "description_template": "My YouTube Channel: https://www.youtube.com/@StackswopoGames\nInstagram: https://www.instagram.com/stackswopomanz/\nMonkeyAPP Content: https://www.youtube.com/@BinScript\nStack's Channel: https://www.youtube.com/@stackswopo_\nStack's Twitch Channel: https://www.twitch.tv/stackswopo\nOnlyThaGuys Channel: https://www.youtube.com/@OnlyThaGuys26\n\nThis stream first aired on [DATE] with the title \"[STREAM TITLE]\" on the Stackswopo channel.\n\nThis is a replay of one of my own past streams, archived here so it stays available.\n\nThe stream contains live reactions, jokes, and real-life conversations in my usual unfiltered style.\n\n🔥 Missed the original broadcast? Enjoy the full replay with every moment, from the funny bits to the wild reactions.\n🎥 Want more? Check the channel for additional past streams, full VODs, and highlights.\n\n👍 If you enjoy these replays, consider subscribing!\n\nTags: #StacksWopo #StreamReplay #FullVOD #GamingHighlights #FunnyMoments #GTA5 #GTAOnline #Roleplay #StreamerMoments #UncutReplay #Entertainment",
+    "description_template": "My YouTube Channel: https://www.youtube.com/@StackswopoGames\nInstagram: https://www.instagram.com/stackswopomanz/\nMonkeyAPP Content: https://www.youtube.com/@BinScript\nStack's Channel: https://www.youtube.com/@stackswopo_\nStack's Twitch Channel: https://www.twitch.tv/stackswopo\nOnlyThaGuys Channel: https://www.youtube.com/@OnlyThaGuys26\n\nThis stream first aired on [DATE] with the title \"[STREAM TITLE]\" on the Stackswopo channel.\n\nThis is a replay of one of my own past streams, archived here so it stays available.\n\nThe stream contains live reactions, jokes, and real-life conversations in my usual unfiltered style.\n\n\ud83d\udd25 Missed the original broadcast? Enjoy the full replay with every moment, from the funny bits to the wild reactions.\n\ud83c\udfa5 Want more? Check the channel for additional past streams, full VODs, and highlights.\n\n\ud83d\udc4d If you enjoy these replays, consider subscribing!\n\nTags: #StacksWopo #StreamReplay #FullVOD #GamingHighlights #FunnyMoments #GTA5 #GTAOnline #Roleplay #StreamerMoments #UncutReplay #Entertainment",
     "tags": [
       "StacksWopo",
       "StreamReplay",
@@ -130,7 +130,7 @@
     "_censor_style_comment": "How a flagged word is removed. 'silence' takes the audio out; 'beep' drops a tone over it, which announces itself and is the loudest thing in a clip that is mostly talking. censor_mute_whole_segment true mutes the whole line around a SLUR rather than just the word - safer for YouTube, which acts on context, but the clip lurches to the next line. Change both with: python main.py --censor-sound silence --censor-scope word"
   },
   "_platform_limits_comment": "What each platform ITSELF allows in 24h, so a cap above it is not a policy choice but posts that will fail: Instagram 50 (Content Publishing API rejects the 51st), X ~16/day on the free tier's 500/month, Reddit and Facebook have no published hard number but act on burst rate rather than volume. Rumble has no API cap - clips.count is what decides how many go there, currently 10 per stream. Caps below sit at or under those.",
-  "_posting_comment": "Short-form clip publishing. Instagram and Facebook are ENABLED — credentials confirmed live. X stays disabled until the 401 Unauthorized is fixed (go to developer.twitter.com → your app → User authentication settings → set Read+Write → regenerate Access Token+Secret → update .env). Reddit is manual-only until a separate account is configured. Create the kill_switch_file to halt ALL posting immediately. For one run, `python main.py --announce-all` turns announcing on everywhere it can actually run (and prints why the rest stay manual); `--no-announce` turns it off everywhere. Neither edits this file.",
+  "_posting_comment": "Short-form clip publishing. Instagram and Facebook are ENABLED \u2014 credentials confirmed live. X stays disabled until the 401 Unauthorized is fixed (go to developer.twitter.com \u2192 your app \u2192 User authentication settings \u2192 set Read+Write \u2192 regenerate Access Token+Secret \u2192 update .env). Reddit is manual-only until a separate account is configured. Create the kill_switch_file to halt ALL posting immediately. For one run, `python main.py --announce-all` turns announcing on everywhere it can actually run (and prints why the rest stay manual); `--no-announce` turns it off everywhere. Neither edits this file.",
   "posting": {
     "enabled": true,
     "kill_switch_file": "./STOP_POSTING",
@@ -199,7 +199,7 @@
     "vertical": true,
     "share_to_feed": true,
     "_link_comment": "Instagram captions NEVER make URLs clickable - not on the app, not on the web. Only the profile bio link is tappable. So the caption points at the bio instead of printing a URL nobody can tap, and the URLs are kept short and readable for anyone typing them. Put the monkey channel in your IG bio link for this to pay off.",
-    "caption_template": "{title} 🤣🤣🤣💀💀💀\n\n{tags}\n\nYouTube: @BinScript\nRumble: rumble.com/user/BinScripts",
+    "caption_template": "{title} \ud83e\udd23\ud83e\udd23\ud83e\udd23\ud83d\udc80\ud83d\udc80\ud83d\udc80\n\n{tags}\n\nYouTube: @BinScript\nRumble: rumble.com/user/BinScripts",
     "_tags_comment": "{tags} is filled per clip and per platform - specific tags matched to what is in the clip first, generic ones after, capped at what each platform rewards. Set max_hashtags on a platform block to override."
   },
   "clips": {
@@ -288,6 +288,11 @@
     "content_optimizer": {
       "enabled": true,
       "transcribe_if_missing": false
+    },
+    "_job_report_comment": "One structured Discord post per finished video: every platform it reached, every one that refused and why, clips cut, what was bleeped, how long it took. This is the operator's receipt, not an announcement - it reports failures, so point it at your own channel. Set DISCORD_JOB_WEBHOOK_URL in .env for a private channel, or it falls back to DISCORD_WEBHOOK_URL.",
+    "job_report": {
+      "enabled": true,
+      "webhook_url": ""
     }
   },
   "youtube_shorts": {
