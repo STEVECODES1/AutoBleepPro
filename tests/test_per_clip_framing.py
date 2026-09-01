@@ -21,8 +21,8 @@ if _REPO not in sys.path:
 
 from autoreel import clip_maker  # noqa: E402
 from autoreel.clip_maker import ClipMaker, ClipSpec  # noqa: E402
-from autoreel.crop_strategy import (CROP_FACE_PAN, CROP_FIT,  # noqa: E402
-                                    CROP_MOTION)
+from autoreel.crop_strategy import (CROP_CENTER, CROP_FACE_PAN,  # noqa: E402
+                                    CROP_FIT, CROP_MOTION)
 
 
 def _maker(**kw):
@@ -44,14 +44,16 @@ def test_a_call_inside_a_gameplay_stream_is_framed_as_a_call(monkeypatch):
     assert region, "the call pane rectangle came with it"
 
 
-def test_gameplay_inside_a_call_stream_keeps_the_whole_frame(monkeypatch):
+def test_gameplay_inside_a_call_stream_gets_the_gameplay_framing(monkeypatch):
+    """A stream that starts on the call and moves to GTA: the gameplay
+    stretch must not keep the call pane's rectangle."""
     _at(monkeypatch, "gta")
 
     strategy, _ = _maker()._framing_at(
         "/v.mp4", ClipSpec(start=4000.0, end=4020.0, index=9),
         CROP_FACE_PAN, {"x": 0.0, "y": 0.0, "width": 0.5, "height": 1.0})
 
-    assert strategy == CROP_FIT
+    assert strategy == CROP_CENTER
 
 
 def test_the_run_s_own_decision_stands_when_nothing_can_be_read(monkeypatch):
@@ -88,7 +90,7 @@ def test_it_says_so_only_when_it_disagrees(monkeypatch, capsys):
     _at(monkeypatch, "gta")
 
     _maker()._framing_at("/v.mp4", ClipSpec(start=0.0, end=10.0, index=3),
-                         CROP_FIT, None)
+                         CROP_CENTER, None)
     assert capsys.readouterr().out == "", "a clip that agrees is not news"
 
     _maker()._framing_at("/v.mp4", ClipSpec(start=0.0, end=10.0, index=4),

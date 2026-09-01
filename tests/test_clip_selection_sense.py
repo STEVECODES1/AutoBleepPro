@@ -91,23 +91,30 @@ def test_an_unreadable_length_still_gets_looked_at():
     assert points == [0.0, 300.0, 600.0]
 
 
-# ── gameplay keeps the whole frame ───────────────────────────────────
+# ── gameplay fills the phone screen ──────────────────────────────────
 #
-# Watched side by side on a real stream: motion tracking beat a locked
-# centre crop, but still framed about one clip in three on the wrong
-# thing - on gameplay the biggest moving region is as often the camera
-# panning, drifting smoke or a HUD element as it is the moment worth
-# clipping. The uncut frame won.
+# This setting has been round the houses: centre -> motion -> fit ->
+# centre. Motion framed about one clip in three on the camera panning or
+# drifting smoke rather than the moment. `fit` fixed that by aiming at
+# nothing - but measured on a real posted clip, the uncut 16:9 frame was
+# ~31% of the 9:16 canvas, the rest blurred filler, captions floating in
+# the blur. Nothing cut, nothing visible either. Centre keeps what GTA
+# puts in the middle - the character, the nametags, the action - and
+# fills the screen the format is actually watched on.
 
-def test_gameplay_keeps_the_whole_frame():
-    from autoreel.crop_strategy import CROP_FIT, resolve_crop_strategy
+def test_gameplay_fills_the_phone_screen():
+    """`fit` kept the whole frame and cost the whole screen: measured on
+    a real posted clip the picture was ~31% of the canvas and the rest
+    was blur, captions included."""
+    from autoreel.crop_strategy import CROP_CENTER, resolve_crop_strategy
 
-    assert resolve_crop_strategy({"clips": {"profile": "gta"}}) == CROP_FIT
+    assert resolve_crop_strategy({"clips": {"profile": "gta"}}) == CROP_CENTER
 
 
-def test_a_fit_crop_has_nothing_to_aim_wrong():
-    """The reason this is the default rather than a better tracker: a
-    crop that aims has to aim correctly every time."""
+def test_the_centre_crop_has_no_rectangle_to_get_wrong():
+    """It aims at the middle of the frame and nowhere else - there is no
+    measured region to drift, go stale, or be inherited from the call
+    layout, which is how gameplay ended up framed on a browser before."""
     from autoreel.crop_strategy import PROFILES
 
     assert not PROFILES["gta"].get("crop_region")

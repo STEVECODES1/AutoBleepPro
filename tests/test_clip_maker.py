@@ -478,25 +478,27 @@ def test_the_stacked_layout_is_still_available():
         {"clips": {"profile": "monkey_stack"}}) == CROP_STACK
 
 
-def test_the_gta_profile_follows_motion_and_never_faces():
-    """The standing rule has two halves and only one of them moved.
+def test_the_gta_profile_is_a_centre_crop_and_never_faces():
+    """The standing rule has two halves and only one of them ever moved.
 
     Gameplay must NEVER get face tracking - GTA is full of NPC faces and
     a detector locks onto whichever is nearest the lens. That half is
     permanent and is asserted below and again in the next test.
 
-    The other half, "gameplay is a locked centre crop", was overridden
-    on request and then again by watching the output: motion tracking
-    beat a locked crop but still framed about one clip in three on the
-    camera panning, drifting smoke or a HUD element. A fit crop has
-    nothing to aim, so it cannot aim wrong - whatever the moment was, it
-    is still in the picture."""
-    from autoreel.crop_strategy import (CROP_FACE, CROP_FACE_PAN, CROP_FIT,
+    The other half went centre -> motion -> fit -> centre. `fit` was
+    chosen because a crop that aims can aim wrong and a fit crop has
+    nothing to aim. True, and beside the point: measured on a real
+    posted clip, the uncut 16:9 frame filled about 31% of the 9:16
+    canvas, the rest blurred filler, with the burned-in captions landing
+    in the blur instead of on the picture. Nothing was cut and nobody
+    could see any of it. Short-form is watched on an upright phone;
+    filling that screen is the format, not a preference."""
+    from autoreel.crop_strategy import (CROP_CENTER, CROP_FACE, CROP_FACE_PAN,
                                         resolve_crop_strategy)
 
     resolved = resolve_crop_strategy({"clips": {"profile": "gta"}})
 
-    assert resolved == CROP_FIT
+    assert resolved == CROP_CENTER
     # The half that has never changed and must not: no face detector
     # anywhere near gameplay. GTA is full of NPC faces.
     assert resolved not in (CROP_FACE, CROP_FACE_PAN)
@@ -598,7 +600,7 @@ def test_auto_picks_the_framing_from_the_stream_title():
     completely different things - so every GTA stream went through the
     Monkey rectangle, cropped to the left 46% of a gameplay frame for a
     call window that was not there."""
-    from autoreel.crop_strategy import (CROP_FACE_PAN, CROP_FIT,
+    from autoreel.crop_strategy import (CROP_CENTER, CROP_FACE_PAN,
                                         resolve_crop_strategy)
 
     def framing(title):
@@ -606,7 +608,7 @@ def test_auto_picks_the_framing_from_the_stream_title():
             {"clips": {"profile": "auto", "content_title": title}})
 
     assert framing('"stackswopo + gta D10 johnny cox + Lifestyle RP" 8/12/26') \
-        == CROP_FIT
+        == CROP_CENTER
     assert framing("Stackswopo monkey app trolling pt 1") == CROP_FACE_PAN
 
 

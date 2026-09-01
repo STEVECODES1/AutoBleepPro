@@ -141,21 +141,25 @@ PROFILES: Dict[str, Dict[str, Any]] = {
     # pane from the call - the layout the hand-made CapCut edits use.
     "monkey_stack": {"crop_strategy": CROP_STACK, "stack": DEFAULT_STACK,
                      "content_region": DEFAULT_CONTENT_REGION},
-    # The WHOLE gameplay frame, on a blurred canvas. Nothing cut.
+    # The centre of the gameplay frame, filling the phone screen.
     #
-    # Motion tracking was the default here and it was better than a
-    # locked centre crop - but "better" still meant one clip in three
-    # framed on the wrong thing, because on gameplay the biggest moving
-    # region is as often the camera panning, drifting smoke or a HUD
-    # element as it is the moment worth clipping. Watched side by side
-    # against fit crops of the same stream, the uncut frame won.
+    # This was CROP_FIT for a while, on the reasoning that a fit crop
+    # "cannot be wrong" - nothing is cut, so whatever the moment was, it
+    # is still in the picture. That argument is true and it is not the
+    # one that matters. Measured on a real posted clip, the uncut 16:9
+    # frame occupies about 31% of a 9:16 canvas: a thin band of picture
+    # with blurred filler above and below it, and the burned-in captions
+    # sitting in the blur rather than on the video. Nothing was lost and
+    # nobody could see any of it.
     #
-    # It also cannot be wrong in the way the others can. A crop that aims
-    # has to aim correctly every time; a fit crop has nothing to aim.
-    # Whatever the moment was, it is still in the picture.
+    # Short-form is watched on a phone held upright. Filling that screen
+    # is not a nicety, it is the format. GTA puts the character, the
+    # nametags and the action centre-screen, so the centre slice keeps
+    # what the clip is about and throws away sky and pavement.
     #
-    # Set clips.crop_strategy to "motion" to get the tracking back.
-    "gta": {"crop_strategy": CROP_FIT},
+    # Set clips.crop_strategy to "fit" to get the uncut frame back, or
+    # "motion" for the tracking crop.
+    "gta": {"crop_strategy": CROP_CENTER},
     # Layout unknown: keep everything, lose nothing.
     "whole": {"crop_strategy": CROP_FIT},
 }
