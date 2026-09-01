@@ -71,8 +71,25 @@ DEFAULT_FONT_SIZE = 62
 HOOK_FONT_SIZE = 54
 # Clear of a phone's top UI and of most gameplay HUDs.
 HOOK_MARGIN_V = 150
-DEFAULT_MAX_WORDS = 4
-DEFAULT_MAX_CHARS = 20
+# A caption may use TWO lines, so a phrase gets roughly twice the room a
+# single line allows before it has to break.
+#
+# One line of 20 characters was cutting sentences in half. Real captions
+# off a posted clip: "I HAVEN'T FIGURED IT" (exactly 20 - "out" went to
+# the next phrase), "YOU GOT DIALYSIS" then "IT HOW OFTEN?", "A**
+# WEIGHS?", "A POUND?". Every one of those is a fragment, and a fragment
+# on screen for two seconds reads as a transcription error even when the
+# transcript was right - which it was. The words were never wrong; there
+# was nowhere to put them.
+MAX_LINES = 2
+
+# What one line can hold. This is the number that is actually bounded by
+# the frame - see fits_in_frame - and it has NOT changed. Two lines of
+# the same width is the whole difference.
+MAX_CHARS_PER_LINE = 20
+
+DEFAULT_MAX_WORDS = 7
+DEFAULT_MAX_CHARS = MAX_CHARS_PER_LINE * MAX_LINES
 
 # Width one uppercase character takes, as a fraction of font size, for
 # Arial Bold. Used by fits_in_frame below.
@@ -82,9 +99,14 @@ _CHAR_WIDTH_EM = 0.58
 _SIDE_MARGINS = 160
 
 
-def fits_in_frame(max_chars: int = DEFAULT_MAX_CHARS,
+def fits_in_frame(max_chars: int = MAX_CHARS_PER_LINE,
                   font_size: int = DEFAULT_FONT_SIZE) -> bool:
-    """Whether the longest allowed line fits between the margins."""
+    """Whether ONE line of this many characters fits between the margins.
+
+    Per LINE, not per phrase - a phrase is allowed MAX_LINES of these.
+    The number that has to stay inside the frame is the width of a
+    single rendered line, and that is what this bounds.
+    """
     return max_chars * font_size * _CHAR_WIDTH_EM <= (
         PLAY_RES_X - _SIDE_MARGINS)
 
@@ -252,8 +274,13 @@ def group_words(words: Iterable[dict],
         if not current:
             start = w_start
 
-        candidate = " ".join(current + [text])
-        too_long = len(candidate) > max_chars and current
+        # Measured as LINES, not as a character total. A 40 character
+        # budget over two 20 character lines is not the same thing: two
+        # long words in a row fill one line each and leave a third to
+        # wrap onto, which is exactly the overflow the character limit
+        # was there to prevent.
+        too_long = current and not lays_out_in_lines(current + [text],
+                                                     max_chars)
         too_many = len(current) >= max_words
         too_slow = current and (w_end - start) > max_seconds
         if too_long or too_many or too_slow:
@@ -324,6 +351,74 @@ def _ass_escape(text: str) -> str:
                 .replace("\n", " "))
 
 
+def lays_out_in_lines(words: Iterable[str],
+                      max_chars: int = DEFAULT_MAX_CHARS,
+                      max_chars_per_line: int = MAX_CHARS_PER_LINE) -> bool:
+    """Whether these words fit in at most MAX_LINES lines of that width.
+
+    The same greedy fill the renderer gets from break_after, asked as a
+    question. A plain character total cannot answer it: "aa" plus two
+    eighteen-character words is 40 characters and needs three lines.
+    """
+    lines, width = 1, 0
+    for word in words:
+        added = len(word) + (1 if width else 0)
+        if width and width + added > max_chars_per_line:
+            lines += 1
+            width = len(word)
+            if lines > max(1, max_chars // max_chars_per_line):
+                return False
+        else:
+            width += added
+    return True
+
+
+def break_after(words: Iterable[str],
+                max_chars_per_line: int = MAX_CHARS_PER_LINE) -> int:
+    """Index of the last word on line one, or -1 to keep one line.
+
+    The break is computed ONCE per phrase and reused for every
+    word-highlight frame of it, which is the whole reason this exists
+    rather than leaving the wrapping to the renderer. The lit word is
+    drawn at HIGHLIGHT_SCALE - 112% - so an auto-wrapped line re-flows
+    as the highlight moves along it, and the caption visibly jumps
+    between one and two lines while somebody is reading it.
+
+    Greedy: fill line one, the rest goes to line two. Balancing the two
+    reads better on paper and worse on screen, because it moves the
+    break as the phrase grows.
+    """
+    words = list(words)
+    if not words:
+        return -1
+    width = 0
+    for index, word in enumerate(words):
+        added = len(word) + (1 if width else 0)
+        if width and width + added > max_chars_per_line:
+            return index - 1
+        width += added
+    return -1
+
+
+def _joined(parts: list, split_at: int) -> str:
+    """The rendered words, with an ASS hard break after `split_at`."""
+    out = ""
+    for index, part in enumerate(parts):
+        if index:
+            out += "\\N" if index == split_at + 1 else " "
+        out += part
+    return out
+
+
+def _wrapped(text: str, uppercase: bool) -> str:
+    """A plain phrase, escaped and broken over at most MAX_LINES lines."""
+    shown = (text or "").upper() if uppercase else (text or "")
+    words = [_ass_escape(w) for w in shown.split()]
+    if not words:
+        return ""
+    return _joined(words, break_after(words))
+
+
 def _word_lines(phrase: Phrase, uppercase: bool) -> list:
     """One Dialogue per word: the whole phrase, that word lit up.
 
@@ -335,11 +430,13 @@ def _word_lines(phrase: Phrase, uppercase: bool) -> list:
     """
     words = phrase.words or []
     if not words:
-        text = phrase.text.upper() if uppercase else phrase.text
-        return [(phrase.start, phrase.end, _ass_escape(text))]
+        return [(phrase.start, phrase.end, _wrapped(phrase.text, uppercase))]
 
     rendered = [(_ass_escape(w.upper() if uppercase else w), a, b)
                 for w, a, b in words]
+    # Once, from the PLAIN words, so every frame of this phrase breaks in
+    # the same place however the highlight moves.
+    split_at = break_after([text for text, _a, _b in rendered])
     lines = []
     for index, (_text, w_start, _w_end) in enumerate(rendered):
         stop = (rendered[index + 1][1] if index + 1 < len(rendered)
@@ -355,7 +452,7 @@ def _word_lines(phrase: Phrase, uppercase: bool) -> list:
                     f"{{\\c{PLAIN_COLOUR}\\fscx100\\fscy100}}")
             else:
                 parts.append(text)
-        lines.append((w_start, stop, " ".join(parts)))
+        lines.append((w_start, stop, _joined(parts, split_at)))
     return lines
 
 
@@ -402,8 +499,8 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         if style == STYLE_WORD:
             events = _word_lines(phrase, uppercase)
         else:
-            text = phrase.text.upper() if uppercase else phrase.text
-            events = [(phrase.start, phrase.end, _ass_escape(text))]
+            events = [(phrase.start, phrase.end,
+                       _wrapped(phrase.text, uppercase))]
         for begin, stop, text in events:
             lines.append(
                 f"Dialogue: 0,{_ass_time(begin)},{_ass_time(stop)},"

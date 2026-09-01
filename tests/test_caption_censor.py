@@ -160,25 +160,69 @@ def test_a_broken_compliance_import_is_not_swallowed(monkeypatch):
 def test_the_longest_allowed_line_fits_in_the_frame():
     """28 characters at 84px is roughly 1400px of text in a 920px space.
     Every clip went out with the first and last words sliced off - the
-    thumbnails read "VOULD HAVE BE" and "MEET HIM IN REA"."""
-    from autoreel.captions import (DEFAULT_FONT_SIZE, DEFAULT_MAX_CHARS,
+    thumbnails read "VOULD HAVE BE" and "MEET HIM IN REA".
+
+    Bounded PER LINE. A phrase may use MAX_LINES of these; what has to
+    stay inside the frame is one rendered line."""
+    from autoreel.captions import (DEFAULT_FONT_SIZE, MAX_CHARS_PER_LINE,
                                    fits_in_frame)
 
-    assert fits_in_frame(DEFAULT_MAX_CHARS, DEFAULT_FONT_SIZE), (
-        f"{DEFAULT_MAX_CHARS} chars at {DEFAULT_FONT_SIZE}px runs off the "
+    assert fits_in_frame(MAX_CHARS_PER_LINE, DEFAULT_FONT_SIZE), (
+        f"{MAX_CHARS_PER_LINE} chars at {DEFAULT_FONT_SIZE}px runs off the "
         f"edge - the two numbers are a pair")
     assert not fits_in_frame(28, 84), "the old pair has to stay a failure"
 
 
-def test_a_long_line_is_broken_into_phrases():
-    from autoreel.captions import group_words
+def test_no_rendered_line_is_wider_than_the_frame_allows():
+    """The phrase may be two lines long; neither of them may be too wide.
+
+    Checked on the BROKEN lines rather than the whole phrase - a 40
+    character phrase is fine, a 40 character line is not."""
+    from autoreel.captions import MAX_CHARS_PER_LINE, break_after, group_words
 
     words = [{"word": w, "start": i * 0.3, "end": i * 0.3 + 0.25}
              for i, w in enumerate(
                  "absolutely everybody watching this right now".split())]
 
     for phrase in group_words(words):
-        assert len(phrase.text) <= 24, f"too wide: {phrase.text!r}"
+        parts = phrase.text.split()
+        split_at = break_after(parts)
+        first = parts if split_at < 0 else parts[:split_at + 1]
+        rest = [] if split_at < 0 else parts[split_at + 1:]
+        for line in (" ".join(first), " ".join(rest)):
+            assert len(line) <= MAX_CHARS_PER_LINE, f"too wide: {line!r}"
+
+
+def test_two_long_words_do_not_overflow_onto_a_third_line():
+    """A character total cannot catch this: "aa" plus two eighteen
+    character words is 40 characters - inside the budget - and needs
+    three lines to render. The budget is counted in LINES for exactly
+    this reason."""
+    from autoreel.captions import lays_out_in_lines
+
+    assert not lays_out_in_lines(["aa", "c" * 18, "d" * 18])
+    assert lays_out_in_lines(["i", "haven't", "figured", "it", "out", "yet"])
+    # One word wider than a line has nowhere better to go - it must not
+    # be refused forever, or the phrase containing it never closes.
+    assert lays_out_in_lines(["supercalifragilisticexpialidocious"])
+
+
+def test_a_phrase_can_now_hold_a_whole_short_sentence():
+    """The bug this fixes: one line of 20 characters cut sentences in
+    half. "I HAVEN'T FIGURED IT" went out with "out" on the next
+    caption, and a fragment reads as a transcription error even when the
+    transcript was right."""
+    from autoreel.captions import group_words
+
+    said = "i haven't figured it out yet".split()
+    words = [{"word": w, "start": i * 0.3, "end": i * 0.3 + 0.25}
+             for i, w in enumerate(said)]
+
+    phrases = group_words(words)
+
+    assert len(phrases) == 1, \
+        f"still fragmenting: {[p.text for p in phrases]}"
+    assert phrases[0].text == "i haven't figured it out yet"
 
 
 # ═════════════════════════════════════════════════════════════════════════════
