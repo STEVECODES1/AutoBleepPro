@@ -1,0 +1,1239 @@
+diff --git a/.env.example b/.env.example
+index daa88fa9..94a5f8f4 100644
+--- a/.env.example
++++ b/.env.example
+@@ -157,3 +157,7 @@ AGENT_IMPORT_ROOTS=
+ 
+ # Authentication for the community resource preview renderer; use the same value for the website RESOURCE_PREVIEW_TOKEN.
+ RESOURCE_PREVIEW_TOKEN=
++
++# Optional BinScripts fal.ai resolver (leave unset unless a host adapter is configured)
++# FAL_KEY=
++# FAL_MODEL_ID=
+diff --git a/package.json b/package.json
+index 02f62fa0..d38e6fb0 100644
+--- a/package.json
++++ b/package.json
+@@ -12,6 +12,7 @@
+     "node": ">=24 <25"
+   },
+   "scripts": {
++    "verify:binscripts": "tsx src/reframe/safe-focus.verify.ts && tsx src/reframe/geometry-focus.verify.ts && tsx src/workflows/binscripts/binscripts.verify.ts && tsx src/workflows/binscripts/compiler.verify.ts && tsx src/workflows/binscripts/adapters.verify.ts",
+     "verify:agent-local-media": "tsx desktop/agent-local-media.verify.ts && tsx desktop/agent-path-import.verify.ts && tsx desktop/agent-path-import.e2e.verify.ts && tsx src/agent/tools/agent-path-import-tools.verify.ts",
+     "sync:mediapipe": "node scripts/sync-mediapipe.mjs",
+     "sync:whisper-cli": "node scripts/sync-whisper-cli.mjs",
+diff --git a/src/reframe/geometry-focus.ts b/src/reframe/geometry-focus.ts
+index 1e91dcdf..a41bf436 100644
+--- a/src/reframe/geometry-focus.ts
++++ b/src/reframe/geometry-focus.ts
+@@ -15,6 +15,15 @@ import {
+   type DetectedKeyframe,
+ } from './detect';
+ import type { VisualGeometryAsset } from '../geometry/visual-geometry';
++import {
++  focalPointOnPath,
++  safeFocalPoint,
++  type NormalizedPoint,
++  type SafeAreaInsets,
++  type TrackedFocalPoint,
++} from './safe-focus';
++
++export type GeometryFocusMode = 'subject' | 'face' | 'center';
+ 
+ export interface GeometryFocusOptions {
+   /** Item-local timeline frame at which reframing starts. */
+@@ -28,12 +37,23 @@ export interface GeometryFocusOptions {
+   smooth?: number;
+   /** Aspect-derived crop magnification applied to every keyframe. */
+   magnification?: number;
++  /** Select subject, face, or an explicit compatibility center fallback. */
++  focusMode?: GeometryFocusMode;
++  /** User-selected focal point; takes priority over geometry selection. */
++  selectedFocalPoint?: NormalizedPoint;
++  /** Tracker-produced item-local path; takes priority over a static selection. */
++  trackedFocalPath?: readonly TrackedFocalPoint[];
++  /** Enables crop/safe-area clamping when source and output dimensions are set. */
++  framing?: {
++    source: { width: number; height: number };
++    output: { width: number; height: number };
++    safeArea: SafeAreaInsets;
++  };
+ }
+ 
+ const clamp01 = (x: number): number => Math.max(0, Math.min(1, x));
+ 
+-/** Subject center of one geometry segment, or face center, or frame center. */
+-function focalOf(geometry: VisualGeometryAsset, sourceSec: number): { x: number; y: number } {
++function geometryAt(geometry: VisualGeometryAsset, sourceSec: number) {
+   let best: VisualGeometryAsset['segments'][number] | null = null;
+   for (const segment of geometry.segments) {
+     // Left-closed, right-open (with left tolerance): a boundary time belongs to
+@@ -48,19 +68,19 @@ function focalOf(geometry: VisualGeometryAsset, sourceSec: number): { x: number;
+     const lastSegment = geometry.segments[geometry.segments.length - 1]!;
+     if (sourceSec >= lastSegment.endSec) best = lastSegment;
+   }
+-  if (!best) return { x: 0.5, y: 0.5 };
+-  if (best.zone.subject) {
+-    return {
+-      x: clamp01(best.zone.subject.x + best.zone.subject.w / 2),
+-      y: clamp01(best.zone.subject.y + best.zone.subject.h / 2),
+-    };
+-  }
+-  if (best.zone.face) {
+-    return {
+-      x: clamp01(best.zone.face.x + best.zone.face.w / 2),
+-      y: clamp01(best.zone.face.y + best.zone.face.h / 2),
+-    };
+-  }
++  return best;
++}
++
++function centerOf(rect: { x: number; y: number; w: number; h: number }): NormalizedPoint {
++  return { x: clamp01(rect.x + rect.w / 2), y: clamp01(rect.y + rect.h / 2) };
++}
++
++/** Explicit geometry selection; subject mode falls back to face, then center. */
++function focalOf(segment: ReturnType<typeof geometryAt>, mode: GeometryFocusMode): NormalizedPoint {
++  if (mode === 'center' || !segment) return { x: 0.5, y: 0.5 };
++  if (mode === 'face') return segment.zone.face ? centerOf(segment.zone.face) : { x: 0.5, y: 0.5 };
++  if (segment.zone.subject) return centerOf(segment.zone.subject);
++  if (segment.zone.face) return centerOf(segment.zone.face);
+   return { x: 0.5, y: 0.5 };
+ }
+ 
+@@ -86,7 +106,20 @@ export function focalFramesFromGeometry(
+   };
+   const raw = frames.map((frame) => {
+     const sourceFrame = sourceFrameAt(item, frame);
+-    return focalOf(geometry, fps > 0 ? sourceFrame / fps : 0);
++    const segment = geometryAt(geometry, fps > 0 ? sourceFrame / fps : 0);
++    const tracked = focalPointOnPath(options.trackedFocalPath ?? [], frame);
++    const desired = tracked ?? options.selectedFocalPoint ?? focalOf(segment, options.focusMode ?? 'subject');
++    if (!options.framing) return desired;
++    const region = segment?.zone.subject ?? segment?.zone.face;
++    const focalRegion = region
++      ? { x: region.x, y: region.y, width: region.w, height: region.h }
++      : { x: desired.x, y: desired.y, width: 0, height: 0 };
++    return safeFocalPoint({
++      ...options.framing,
++      desiredFocalPoint: desired,
++      focalRegion,
++      magnification: options.magnification,
++    }).focalPoint;
+   });
+   const points = smoothFocalPath(raw, options.smooth ?? DEFAULT_REFRAME_SMOOTH);
+   const magnification = Math.max(0.05, Math.min(16, options.magnification ?? 1));
+diff --git a/src/reframe/safe-focus.ts b/src/reframe/safe-focus.ts
+new file mode 100644
+index 00000000..fe758afa
+--- /dev/null
++++ b/src/reframe/safe-focus.ts
+@@ -0,0 +1,159 @@
++export interface NormalizedPoint {
++  x: number;
++  y: number;
++}
++
++export interface NormalizedRect extends NormalizedPoint {
++  width: number;
++  height: number;
++}
++
++export interface SafeAreaInsets {
++  top: number;
++  right: number;
++  bottom: number;
++  left: number;
++}
++
++export interface TrackedFocalPoint extends NormalizedPoint {
++  frame: number;
++}
++
++export interface SafeFocalResult {
++  focalPoint: NormalizedPoint;
++  visibleCrop: NormalizedRect;
++  safeCrop: NormalizedRect;
++  regionInsideSafeArea: boolean;
++}
++
++const clamp = (value: number, min: number, max: number): number => Math.max(min, Math.min(max, value));
++const clamp01 = (value: number): number => clamp(value, 0, 1);
++
++const normalizedInsets = (insets: SafeAreaInsets): SafeAreaInsets => ({
++  top: clamp01(insets.top),
++  right: clamp01(insets.right),
++  bottom: clamp01(insets.bottom),
++  left: clamp01(insets.left),
++});
++
++/** Linear sampling of a user-selected or tracker-produced focal path. */
++export function focalPointOnPath(path: readonly TrackedFocalPoint[], frame: number): NormalizedPoint | null {
++  if (!path.length) return null;
++  const ordered = [...path].sort((a, b) => a.frame - b.frame || a.x - b.x || a.y - b.y);
++  if (frame <= ordered[0]!.frame) return { x: clamp01(ordered[0]!.x), y: clamp01(ordered[0]!.y) };
++  const last = ordered[ordered.length - 1]!;
++  if (frame >= last.frame) return { x: clamp01(last.x), y: clamp01(last.y) };
++  for (let index = 1; index < ordered.length; index += 1) {
++    const right = ordered[index]!;
++    if (frame > right.frame) continue;
++    const left = ordered[index - 1]!;
++    const progress = (frame - left.frame) / Math.max(1, right.frame - left.frame);
++    return {
++      x: clamp01(left.x + (right.x - left.x) * progress),
++      y: clamp01(left.y + (right.y - left.y) * progress),
++    };
++  }
++  return { x: clamp01(last.x), y: clamp01(last.y) };
++}
++
++/** Base cover crop in source-normalized coordinates, reduced by magnification. */
++export function cropSizeForAspect(
++  sourceWidth: number,
++  sourceHeight: number,
++  outputWidth: number,
++  outputHeight: number,
++  magnification = 1,
++): { width: number; height: number } {
++  if (!(sourceWidth > 0 && sourceHeight > 0 && outputWidth > 0 && outputHeight > 0)) {
++    throw new Error('Crop dimensions must be positive');
++  }
++  const sourceAspect = sourceWidth / sourceHeight;
++  const outputAspect = outputWidth / outputHeight;
++  const zoom = clamp(magnification, 0.05, 16);
++  const base = sourceAspect > outputAspect
++    ? { width: outputAspect / sourceAspect, height: 1 }
++    : { width: 1, height: sourceAspect / outputAspect };
++  return { width: clamp01(base.width / zoom), height: clamp01(base.height / zoom) };
++}
++
++function axisCenter(
++  desired: number,
++  regionStart: number,
++  regionEnd: number,
++  cropSize: number,
++  safeStart: number,
++  safeEnd: number,
++): number {
++  const sourceMin = cropSize / 2;
++  const sourceMax = 1 - cropSize / 2;
++  const regionMinCenter = regionEnd - cropSize * safeEnd;
++  const regionMaxCenter = regionStart - cropSize * safeStart;
++  const feasibleMin = Math.max(sourceMin, regionMinCenter);
++  const feasibleMax = Math.min(sourceMax, regionMaxCenter);
++  if (feasibleMin <= feasibleMax) return clamp(desired, feasibleMin, feasibleMax);
++  // The region is larger than the safe window or touches incompatible source
++  // bounds. Center the best possible crop on the region instead of reverting to
++  // a blind composition-center crop.
++  return clamp((regionStart + regionEnd) / 2, sourceMin, sourceMax);
++}
++
++const contains = (outer: NormalizedRect, inner: NormalizedRect): boolean => {
++  const epsilon = 1e-9;
++  return inner.x + epsilon >= outer.x
++    && inner.y + epsilon >= outer.y
++    && inner.x + inner.width <= outer.x + outer.width + epsilon
++    && inner.y + inner.height <= outer.y + outer.height + epsilon;
++};
++
++/**
++ * Clamp a selected/tracked focal point so the focal region remains visible and
++ * inside the output safe area whenever geometry makes that possible.
++ */
++export function safeFocalPoint(input: {
++  source: { width: number; height: number };
++  output: { width: number; height: number };
++  desiredFocalPoint: NormalizedPoint;
++  focalRegion: NormalizedRect;
++  safeArea: SafeAreaInsets;
++  magnification?: number;
++}): SafeFocalResult {
++  const cropSize = cropSizeForAspect(
++    input.source.width,
++    input.source.height,
++    input.output.width,
++    input.output.height,
++    input.magnification,
++  );
++  const safe = normalizedInsets(input.safeArea);
++  if (safe.left + safe.right >= 1 || safe.top + safe.bottom >= 1) {
++    throw new Error('Safe-area insets must leave a positive interior');
++  }
++  const region: NormalizedRect = {
++    x: clamp01(input.focalRegion.x),
++    y: clamp01(input.focalRegion.y),
++    width: clamp(input.focalRegion.width, 0, 1 - clamp01(input.focalRegion.x)),
++    height: clamp(input.focalRegion.height, 0, 1 - clamp01(input.focalRegion.y)),
++  };
++  const center = {
++    x: axisCenter(input.desiredFocalPoint.x, region.x, region.x + region.width, cropSize.width, safe.left, 1 - safe.right),
++    y: axisCenter(input.desiredFocalPoint.y, region.y, region.y + region.height, cropSize.height, safe.top, 1 - safe.bottom),
++  };
++  const visibleCrop: NormalizedRect = {
++    x: center.x - cropSize.width / 2,
++    y: center.y - cropSize.height / 2,
++    width: cropSize.width,
++    height: cropSize.height,
++  };
++  const safeCrop: NormalizedRect = {
++    x: visibleCrop.x + cropSize.width * safe.left,
++    y: visibleCrop.y + cropSize.height * safe.top,
++    width: cropSize.width * (1 - safe.left - safe.right),
++    height: cropSize.height * (1 - safe.top - safe.bottom),
++  };
++  return {
++    focalPoint: center,
++    visibleCrop,
++    safeCrop,
++    regionInsideSafeArea: contains(safeCrop, region),
++  };
++}
+diff --git a/src/reframe/safe-focus.verify.ts b/src/reframe/safe-focus.verify.ts
+new file mode 100644
+index 00000000..6ac69c5b
+--- /dev/null
++++ b/src/reframe/safe-focus.verify.ts
+@@ -0,0 +1,39 @@
++import assert from 'node:assert/strict';
++import { focalPointOnPath, safeFocalPoint } from './safe-focus';
++
++const subject = { x: 0.74, y: 0.18, width: 0.12, height: 0.34 };
++const vertical = safeFocalPoint({
++  source: { width: 1920, height: 1080 },
++  output: { width: 1080, height: 1920 },
++  desiredFocalPoint: { x: 0.8, y: 0.35 },
++  focalRegion: subject,
++  safeArea: { top: 0.05, right: 0.05, bottom: 0.05, left: 0.05 },
++});
++
++assert.equal(vertical.regionInsideSafeArea, true, 'non-centered subject must fit the vertical action-safe crop');
++assert.ok(vertical.focalPoint.x > 0.7, 'vertical reframe follows the right-side subject instead of center-cropping');
++assert.ok(subject.x >= vertical.visibleCrop.x && subject.x + subject.width <= vertical.visibleCrop.x + vertical.visibleCrop.width,
++  'subject remains in the visible crop');
++assert.ok(subject.x >= vertical.safeCrop.x && subject.x + subject.width <= vertical.safeCrop.x + vertical.safeCrop.width,
++  'subject remains inside horizontal safe bounds');
++assert.ok(subject.y >= vertical.safeCrop.y && subject.y + subject.height <= vertical.safeCrop.y + vertical.safeCrop.height,
++  'subject remains inside vertical safe bounds');
++
++assert.deepEqual(
++  focalPointOnPath([{ frame: 30, x: 0.8, y: 0.4 }, { frame: 0, x: 0.2, y: 0.2 }], 15),
++  { x: 0.5, y: 0.30000000000000004 },
++  'tracked paths are sorted and interpolated deterministically',
++);
++
++const impossible = safeFocalPoint({
++  source: { width: 1920, height: 1080 },
++  output: { width: 1080, height: 1920 },
++  desiredFocalPoint: { x: 0.1, y: 0.5 },
++  focalRegion: { x: 0.05, y: 0.1, width: 0.8, height: 0.8 },
++  safeArea: { top: 0.05, right: 0.05, bottom: 0.05, left: 0.05 },
++});
++assert.equal(impossible.regionInsideSafeArea, false, 'oversized subjects report that safe containment is impossible');
++assert.ok(impossible.visibleCrop.x >= 0 && impossible.visibleCrop.x + impossible.visibleCrop.width <= 1,
++  'best-effort crop remains within source bounds');
++
++console.log('safe-focus.verify: all assertions passed');
+diff --git a/src/workflows/binscripts/adapters.verify.ts b/src/workflows/binscripts/adapters.verify.ts
+new file mode 100644
+index 00000000..15d6c814
+--- /dev/null
++++ b/src/workflows/binscripts/adapters.verify.ts
+@@ -0,0 +1,63 @@
++import assert from 'node:assert/strict';
++import { buildAutoBleepArgs, parseAutoBleepCliOutput } from './autobleep-cli.js';
++import { extractFalMediaUrl, generateFalMedia } from './fal-client.js';
++import { BinScriptsAssetResolutionError } from './resolvers.js';
++
++// AutoBleepPro CLI stdout parsing (progress → stderr, paths → stdout).
++assert.deepEqual(
++  parseAutoBleepCliOutput('/tmp/out/stream_CLEAN.mp4\n/tmp/out/stream_CLEAN.srt\n/tmp/out/stream_CLEAN.txt\n'),
++  {
++    outputVideo: '/tmp/out/stream_CLEAN.mp4',
++    srt: '/tmp/out/stream_CLEAN.srt',
++    txt: '/tmp/out/stream_CLEAN.txt',
++  },
++  'parses video + SRT + TXT output paths from stdout',
++);
++assert.deepEqual(parseAutoBleepCliOutput('loading model…\n/out/a_CLEAN.srt\n'), {
++  outputVideo: undefined,
++  srt: '/out/a_CLEAN.srt',
++  txt: undefined,
++}, 'ignores non-path lines and missing artifacts');
++
++assert.deepEqual(
++  buildAutoBleepArgs('in.mp4', { outputDir: 'out', srt: true, txt: true, method: 'beep', sensitivity: 40, customWords: ['brand1'], model: 'base', trimSilence: true }),
++  ['in.mp4', '-o', 'out', '--method', 'beep', '--srt', '--txt', '--sensitivity', '40', '--custom-words', 'brand1', '--model', 'base', '--trim-silence'],
++  'builds the documented CLI argument order',
++);
++assert.deepEqual(buildAutoBleepArgs('in.mp4', { outputDir: 'out' }), ['in.mp4', '-o', 'out'], 'minimal args');
++
++// fal.ai response URL extraction across media shapes.
++assert.equal(extractFalMediaUrl({ images: [{ url: 'https://fal/x.jpg' }] }, 'image'), 'https://fal/x.jpg');
++assert.equal(extractFalMediaUrl({ audio: { url: 'https://fal/x.mp3' } }, 'audio'), 'https://fal/x.mp3');
++assert.equal(extractFalMediaUrl({ video: { url: 'https://fal/x.mp4' } }, 'video'), 'https://fal/x.mp4');
++assert.equal(extractFalMediaUrl({ url: 'https://fal/z.jpg' }, 'image'), 'https://fal/z.jpg');
++assert.equal(extractFalMediaUrl({ images: [] }, 'image'), null, 'empty images returns null');
++assert.equal(extractFalMediaUrl(null, 'image'), null, 'null payload returns null');
++
++// fal client uses the injectable fetch and correct auth header.
++const seen: { url: string; headers: Record<string, string> }[] = [];
++const fakeFetch = (async (url: string, init: RequestInit) => {
++  seen.push({ url: String(url), headers: (init.headers ?? {}) as Record<string, string> });
++  return new Response(JSON.stringify({ images: [{ url: 'https://fal/gen.jpg' }] }), { status: 200 });
++}) as typeof fetch;
++const generated = await generateFalMedia({
++  apiKey: 'k:s',
++  model: 'fal-ai/flux/schnell',
++  prompt: 'test',
++  mediaKind: 'image',
++  requestName: 'thumb',
++  baseUrl: 'https://fal.run',
++  fetchImpl: fakeFetch,
++});
++assert.equal(generated.url, 'https://fal/gen.jpg');
++assert.equal(seen[0]!.url, 'https://fal.run/fal-ai/flux/schnell');
++assert.equal(seen[0]!.headers['Authorization'], 'Key k:s');
++
++// Non-OK responses surface as a typed resolution error.
++const failingFetch = (async () => new Response('{"detail":"User is locked. Reason: TOP_UP."}', { status: 402 })) as typeof fetch;
++await assert.rejects(
++  () => generateFalMedia({ apiKey: 'k:s', model: 'm', prompt: 'p', mediaKind: 'image', requestName: 'x', fetchImpl: failingFetch }),
++  BinScriptsAssetResolutionError,
++);
++
++console.log('binscripts adapters: OK');
+diff --git a/src/workflows/binscripts/autobleep-cli.ts b/src/workflows/binscripts/autobleep-cli.ts
+new file mode 100644
+index 00000000..0ae7077b
+--- /dev/null
++++ b/src/workflows/binscripts/autobleep-cli.ts
+@@ -0,0 +1,79 @@
++import { spawn } from 'node:child_process';
++import { BinScriptsAssetResolutionError } from './resolvers.js';
++
++export interface AutoBleepCliOptions {
++  /** Python interpreter; defaults to `python`. */
++  python?: string;
++  /** Path to AutoBleepPro's cli.py; defaults to `cli.py` on PATH/CWD. */
++  scriptPath?: string;
++  outputDir: string;
++  method?: 'beep' | 'silence';
++  srt?: boolean;
++  txt?: boolean;
++  sensitivity?: number;
++  customWords?: string[];
++  model?: string;
++  trimSilence?: boolean;
++}
++
++export interface AutoBleepCliResult {
++  outputVideo?: string;
++  srt?: string;
++  txt?: string;
++  stdout: string;
++  stderr: string;
++}
++
++/**
++ * Parse AutoBleepPro CLI stdout. Progress goes to stderr, output paths to
++ * stdout (one per line); the censored video has a video extension and the
++ * `--srt`/`--txt` artifacts carry those extensions.
++ */
++export function parseAutoBleepCliOutput(stdout: string): Pick<AutoBleepCliResult, 'outputVideo' | 'srt' | 'txt'> {
++  const out = {
++    outputVideo: undefined as string | undefined,
++    srt: undefined as string | undefined,
++    txt: undefined as string | undefined,
++  };
++  for (const line of stdout.split(/\r?\n/).map((l) => l.trim()).filter(Boolean)) {
++    if (/\.srt$/i.test(line)) out.srt = line;
++    else if (/\.txt$/i.test(line)) out.txt = line;
++    else if (/\.(mp4|mov|avi|mkv|webm)$/i.test(line)) out.outputVideo = line;
++  }
++  return out;
++}
++
++export function buildAutoBleepArgs(inputPath: string, options: AutoBleepCliOptions): string[] {
++  const args = [inputPath, '-o', options.outputDir];
++  if (options.method) args.push('--method', options.method);
++  if (options.srt) args.push('--srt');
++  if (options.txt) args.push('--txt');
++  if (options.sensitivity != null) args.push('--sensitivity', String(options.sensitivity));
++  if (options.customWords?.length) args.push('--custom-words', options.customWords.join(','));
++  if (options.model) args.push('--model', options.model);
++  if (options.trimSilence) args.push('--trim-silence');
++  return args;
++}
++
++/** Run `python cli.py <input> …` and resolve with the parsed output paths. */
++export function runAutoBleepProCli(inputPath: string, options: AutoBleepCliOptions): Promise<AutoBleepCliResult> {
++  return new Promise<AutoBleepCliResult>((resolve, reject) => {
++    const python = options.python ?? 'python';
++    const script = options.scriptPath ?? 'cli.py';
++    const child = spawn(python, [script, ...buildAutoBleepArgs(inputPath, options)], {
++      stdio: ['ignore', 'pipe', 'pipe'],
++    });
++    let stdout = '';
++    let stderr = '';
++    child.stdout.on('data', (chunk) => { stdout += chunk.toString(); });
++    child.stderr.on('data', (chunk) => { stderr += chunk.toString(); });
++    child.on('error', (err) => reject(new BinScriptsAssetResolutionError(`AutoBleepPro failed to start: ${err.message}`)));
++    child.on('close', (code) => {
++      if (code !== 0) {
++        reject(new BinScriptsAssetResolutionError(`AutoBleepPro exited ${code}: ${stderr.slice(-400)}`));
++        return;
++      }
++      resolve({ ...parseAutoBleepCliOutput(stdout), stdout, stderr });
++    });
++  });
++}
+diff --git a/src/workflows/binscripts/binscripts.verify.ts b/src/workflows/binscripts/binscripts.verify.ts
+new file mode 100644
+index 00000000..90bfc8f1
+--- /dev/null
++++ b/src/workflows/binscripts/binscripts.verify.ts
+@@ -0,0 +1,80 @@
++import assert from 'node:assert/strict';
++import type { TimelineState } from '../../editor/types';
++import { compileBinScriptsEditPlan } from './compiler';
++import { BINSCRIPTS_PLATFORM_PRESETS } from './presets';
++import { resolveBinScriptsEditPlan } from './resolve-plan';
++import { createAutoBleepProResolver, projectAssetResolver } from './resolvers';
++import type { BinScriptsDraftEditPlanV1, BinScriptsEditPlanV1 } from './types';
++
++const state: TimelineState = {
++  fps: 30,
++  width: 1920,
++  height: 1080,
++  selectedId: null,
++  assets: [
++    { id: 'bleep', name: 'Bleep', kind: 'audio', src: '/media/uploads/bleep.wav', durationInFrames: 15 },
++    { id: 'reaction', name: 'Reaction', kind: 'image', src: '/media/uploads/reaction.png', durationInFrames: 300 },
++    { id: 'sfx', name: 'Pop', kind: 'audio', src: '/media/uploads/pop.wav', durationInFrames: 12 },
++  ],
++  items: [{
++    id: 'source', track: 'V1', startFrame: 100, durationInFrames: 300, name: 'Monkey App source', kind: 'video',
++    src: '/media/uploads/source.mp4', volume: 0.8,
++    transcript: [
++      { text: 'keep', start: 0, end: 100 },
++      { text: 'cut', start: 100, end: 200 },
++      { text: 'also', start: 200, end: 300 },
++    ],
++  }],
++};
++
++const plan: BinScriptsEditPlanV1 = {
++  version: 1,
++  sourceItemId: 'source',
++  targetPreset: 'youtube-shorts',
++  cuts: [{ id: 'cut-1', wordIndices: [2, 1] }],
++  bleeps: [{ id: 'bleep-1', startFrame: 50, endFrame: 130, track: 'A2', asset: { assetId: 'bleep', name: 'Bleep' } }],
++  reactions: [{ id: 'reaction-1', startFrame: 200, endFrame: 240, track: 'V2', asset: { assetId: 'reaction', name: 'Reaction' } }],
++  captions: {},
++  zooms: [{ id: 'zoom-1', startFrame: 220, endFrame: 280, magnification: 1.4, focalPointX: 0.78, focalPointY: 0.35 }],
++  soundEffects: [{ id: 'sfx-1', atFrame: 999, track: 'A3', asset: { assetId: 'sfx', name: 'Pop' } }],
++};
++
++const first = compileBinScriptsEditPlan(plan, state);
++const second = compileBinScriptsEditPlan(plan, state);
++assert.deepEqual(first, second, 'compiler output is deterministic');
++assert.deepEqual(first.actions[0], { type: 'setCanvas', width: 1080, height: 1920, fit: 'cover' });
++assert.deepEqual(first.actions[1], { type: 'deleteWords', id: 'source', idxs: [1, 2] });
++assert.ok(first.actions.some((action) => action.type === 'setCaptions'), 'caption cue uses the existing caption action');
++assert.equal(first.actions.filter((action) => action.type === 'reframeKeyframe').length, 3, 'zoom cue uses sparse reframe actions');
++assert.equal(first.warnings.filter((warning) => warning.code === 'cue-clamped').length, 2, 'out-of-source bleep and SFX are reported');
++assert.equal(first.exportPreset?.id, 'youtube-shorts');
++
++assert.throws(() => compileBinScriptsEditPlan({ ...plan, reactions: [{ ...plan.reactions![0]!, id: 'zoom-1' }] }, state),
++  /Cue ids must be unique/, 'timeline item ids cannot collide across cue categories');
++
++const draft: BinScriptsDraftEditPlanV1 = {
++  version: 1,
++  sourceItemId: 'source',
++  bleeps: [{
++    id: 'profanity-1', startFrame: 120, endFrame: 130, track: 'A2',
++    asset: { kind: 'auto-bleep-pro', name: 'AutoBleepPro clean bleep', preset: 'default' },
++  }],
++  soundEffects: [{
++    id: 'sfx-project', atFrame: 140, track: 'A3',
++    asset: { kind: 'project-asset', assetId: 'sfx', name: 'Pop' },
++  }],
++};
++const resolved = await resolveBinScriptsEditPlan(draft, [
++  projectAssetResolver,
++  createAutoBleepProResolver({ resolveImportedAsset: async () => ({ assetId: 'bleep', name: 'Imported AutoBleepPro bleep' }) }),
++]);
++assert.equal(resolved.bleeps![0]!.asset.assetId, 'bleep');
++assert.equal(resolved.soundEffects![0]!.asset.assetId, 'sfx');
++
++assert.deepEqual(
++  Object.fromEntries(Object.entries(BINSCRIPTS_PLATFORM_PRESETS).map(([id, preset]) => [id, `${preset.canvas.width}x${preset.canvas.height}`])),
++  { 'youtube-long': '1920x1080', 'youtube-shorts': '1080x1920', 'rumble-regular': '1920x1080', 'rumble-shorts': '1080x1920' },
++);
++assert.equal(BINSCRIPTS_PLATFORM_PRESETS['rumble-shorts'].classification.maximumDurationSeconds, 180);
++
++console.log('binscripts.verify: all assertions passed');
+diff --git a/src/workflows/binscripts/compiler.ts b/src/workflows/binscripts/compiler.ts
+new file mode 100644
+index 00000000..b7830770
+--- /dev/null
++++ b/src/workflows/binscripts/compiler.ts
+@@ -0,0 +1,197 @@
++import type { AtomicAction } from '../../editor/reducerActions.js';
++import type { MediaAsset, TimelineItem, TimelineState } from '../../editor/types.js';
++import type {
++  BinScriptsCompileWarning,
++  BinScriptsEditPlanV1,
++  FrameRange,
++  ResolvedCueAsset,
++} from './types.js';
++import { binScriptsPlatformPreset, type BinScriptsExportPreset } from './presets.js';
++
++export interface BinScriptsCompileResult {
++  actions: AtomicAction[];
++  warnings: BinScriptsCompileWarning[];
++  exportPreset?: BinScriptsExportPreset;
++}
++
++export class BinScriptsCompileError extends Error {
++  constructor(message: string) {
++    super(message);
++    this.name = 'BinScriptsCompileError';
++  }
++}
++
++const finiteInt = (value: number, label: string): number => {
++  if (!Number.isFinite(value)) throw new BinScriptsCompileError(`${label} must be finite`);
++  return Math.round(value);
++};
++
++const cueRange = (
++  range: FrameRange,
++  cueId: string,
++  timelineStart: number,
++  timelineEnd: number,
++  warnings: BinScriptsCompileWarning[],
++) => {
++  const rawStart = finiteInt(range.startFrame, `${cueId}.startFrame`);
++  const rawEnd = finiteInt(range.endFrame, `${cueId}.endFrame`);
++  if (rawEnd <= rawStart) throw new BinScriptsCompileError(`${cueId}.endFrame must be after startFrame`);
++  const startFrame = Math.max(timelineStart, Math.min(timelineEnd - 1, rawStart));
++  const endFrame = Math.max(startFrame + 1, Math.min(timelineEnd, rawEnd));
++  if (startFrame !== rawStart || endFrame !== rawEnd) warnings.push({
++    cueId,
++    code: 'cue-clamped',
++    message: `Cue ${cueId} was clamped to the source clip bounds.`,
++  });
++  return { startFrame, endFrame };
++};
++
++const resolveAsset = (
++  timeline: TimelineState,
++  ref: ResolvedCueAsset,
++  allowedKinds: MediaAsset['kind'][],
++): MediaAsset => {
++  const asset = timeline.assets?.find((candidate) => candidate.id === ref.assetId);
++  if (!asset) throw new BinScriptsCompileError(`Resolved asset ${ref.assetId} is not in the project media pool`);
++  if (!allowedKinds.includes(asset.kind)) {
++    throw new BinScriptsCompileError(`Asset ${ref.assetId} has incompatible kind ${asset.kind}`);
++  }
++  return asset;
++};
++
++const mediaItem = (
++  cueId: string,
++  track: string,
++  durationInFrames: number,
++  asset: MediaAsset,
++  name: string,
++): Omit<TimelineItem, 'startFrame'> => ({
++  id: `binscripts:${cueId}`,
++  track,
++  durationInFrames,
++  name,
++  kind: asset.kind as TimelineItem['kind'],
++  src: asset.src,
++  sourceAssetId: asset.id,
++  sourceRevision: asset.sourceRevision,
++  sourceContentHash: asset.sourceContentHash,
++  srcInFrame: 0,
++});
++
++/** Compile one reviewable, undo-groupable plan into existing editor reducer actions. */
++export function compileBinScriptsEditPlan(
++  plan: BinScriptsEditPlanV1,
++  timeline: TimelineState,
++): BinScriptsCompileResult {
++  if (plan.version !== 1) throw new BinScriptsCompileError('Unsupported BinScripts edit-plan version');
++  const source = timeline.items.find((item) => item.id === plan.sourceItemId);
++  if (!source) throw new BinScriptsCompileError(`Source item ${plan.sourceItemId} was not found`);
++  if (source.kind !== 'audio' && source.kind !== 'video') {
++    throw new BinScriptsCompileError('BinScripts source item must be audio or video');
++  }
++
++  const actions: AtomicAction[] = [];
++  const warnings: BinScriptsCompileWarning[] = [];
++  const timelineEnd = source.startFrame + source.durationInFrames;
++  const exportPreset = plan.targetPreset ? binScriptsPlatformPreset(plan.targetPreset) : undefined;
++  if (exportPreset) actions.push({ type: 'setCanvas', width: exportPreset.canvas.width, height: exportPreset.canvas.height, fit: 'cover' });
++
++  const cueIds = [
++    ...(plan.cuts ?? []), ...(plan.bleeps ?? []), ...(plan.reactions ?? []),
++    ...(plan.zooms ?? []), ...(plan.soundEffects ?? []),
++  ].map((cue) => cue.id);
++  if (new Set(cueIds).size !== cueIds.length) throw new BinScriptsCompileError('Cue ids must be unique across the edit plan');
++
++  const cutIndices = new Set<number>();
++  for (const cue of [...(plan.cuts ?? [])].sort((a, b) => a.id.localeCompare(b.id))) {
++    for (const rawIndex of cue.wordIndices) {
++      const index = finiteInt(rawIndex, `${cue.id}.wordIndices`);
++      if (!source.transcript || index < 0 || index >= source.transcript.length) {
++        throw new BinScriptsCompileError(`${cue.id} references missing transcript word ${index}`);
++      }
++      if (cutIndices.has(index)) warnings.push({
++        cueId: cue.id,
++        code: 'duplicate-word-index',
++        message: `Transcript word ${index} was already selected by another cut cue.`,
++      });
++      cutIndices.add(index);
++    }
++  }
++  if (cutIndices.size) actions.push({ type: 'deleteWords', id: source.id, idxs: [...cutIndices].sort((a, b) => a - b) });
++
++  for (const cue of [...(plan.bleeps ?? [])].sort((a, b) => a.startFrame - b.startFrame || a.id.localeCompare(b.id))) {
++    const range = cueRange(cue, cue.id, source.startFrame, timelineEnd, warnings);
++    const asset = resolveAsset(timeline, cue.asset, ['audio']);
++    const localStart = range.startFrame - source.startFrame;
++    const localEnd = range.endFrame - source.startFrame;
++    const baseVolume = source.volume ?? 1;
++    actions.push(
++      { type: 'setKeyframe', id: source.id, prop: 'volume', frame: Math.max(0, localStart - 1), value: baseVolume },
++      { type: 'setKeyframe', id: source.id, prop: 'volume', frame: localStart, value: 0 },
++      { type: 'setKeyframe', id: source.id, prop: 'volume', frame: Math.max(localStart, localEnd - 1), value: 0 },
++      { type: 'setKeyframe', id: source.id, prop: 'volume', frame: localEnd, value: baseVolume },
++      { type: 'add', startFrame: range.startFrame, item: mediaItem(cue.id, cue.track, range.endFrame - range.startFrame, asset, cue.asset.name) },
++    );
++  }
++
++  for (const cue of [...(plan.reactions ?? [])].sort((a, b) => a.startFrame - b.startFrame || a.id.localeCompare(b.id))) {
++    const range = cueRange(cue, cue.id, source.startFrame, timelineEnd, warnings);
++    const asset = resolveAsset(timeline, cue.asset, ['video', 'image', 'gif']);
++    actions.push({
++      type: 'add',
++      startFrame: range.startFrame,
++      item: { ...mediaItem(cue.id, cue.track, range.endFrame - range.startFrame, asset, cue.asset.name), transform: cue.transform },
++    });
++  }
++
++  if (plan.captions) actions.push({
++    type: 'setCaptions',
++    track: plan.captions.track,
++    captions: {
++      enabled: true,
++      sourceItemId: source.id,
++      template: plan.captions.template ?? 'bold-outline',
++      pacing: plan.captions.pacing ?? 'phrase',
++      motionPreset: plan.captions.motionPreset ?? 'word-pop',
++    },
++  });
++
++  for (const cue of [...(plan.zooms ?? [])].sort((a, b) => a.startFrame - b.startFrame || a.id.localeCompare(b.id))) {
++    const range = cueRange(cue, cue.id, source.startFrame, timelineEnd, warnings);
++    if (!Number.isFinite(cue.magnification) || cue.magnification < 1 || cue.magnification > 16) {
++      throw new BinScriptsCompileError(`${cue.id}.magnification must be between 1 and 16`);
++    }
++    const localStart = range.startFrame - source.startFrame;
++    const localEnd = range.endFrame - source.startFrame;
++    const middle = Math.round((localStart + localEnd) / 2);
++    const focalPointX = cue.focalPointX ?? 0.5;
++    const focalPointY = cue.focalPointY ?? 0.5;
++    if (![focalPointX, focalPointY].every((value) => Number.isFinite(value) && value >= 0 && value <= 1)) {
++      throw new BinScriptsCompileError(`${cue.id} focal points must be between 0 and 1`);
++    }
++    actions.push(
++      { type: 'reframeKeyframe', id: source.id, frame: localStart, focalPointX, focalPointY, magnification: 1 },
++      { type: 'reframeKeyframe', id: source.id, frame: middle, focalPointX, focalPointY, magnification: cue.magnification },
++      { type: 'reframeKeyframe', id: source.id, frame: localEnd, focalPointX, focalPointY, magnification: 1 },
++    );
++  }
++
++  for (const cue of [...(plan.soundEffects ?? [])].sort((a, b) => a.atFrame - b.atFrame || a.id.localeCompare(b.id))) {
++    const asset = resolveAsset(timeline, cue.asset, ['audio']);
++    const rawStart = finiteInt(cue.atFrame, `${cue.id}.atFrame`);
++    const startFrame = Math.max(source.startFrame, Math.min(timelineEnd - 1, rawStart));
++    if (startFrame !== rawStart) warnings.push({
++      cueId: cue.id,
++      code: 'cue-clamped',
++      message: `Cue ${cue.id} was clamped to the source clip bounds.`,
++    });
++    const durationInFrames = Math.max(1, finiteInt(cue.durationInFrames ?? asset.durationInFrames, `${cue.id}.durationInFrames`));
++    actions.push({
++      type: 'add',
++      startFrame,
++      item: { ...mediaItem(cue.id, cue.track, durationInFrames, asset, cue.asset.name), volume: cue.volume ?? 1 },
++    });
++  }
++
++  return { actions, warnings, exportPreset };
++}
+diff --git a/src/workflows/binscripts/compiler.verify.ts b/src/workflows/binscripts/compiler.verify.ts
+new file mode 100644
+index 00000000..9cc3e9de
+--- /dev/null
++++ b/src/workflows/binscripts/compiler.verify.ts
+@@ -0,0 +1,79 @@
++import assert from 'node:assert/strict';
++import { reduce } from '../../editor/reducerTimeline.js';
++import type { TimelineState } from '../../editor/types.js';
++import { BinScriptsCompileError, compileBinScriptsEditPlan } from './compiler.js';
++import type { BinScriptsEditPlanV1 } from './types.js';
++
++const timeline: TimelineState = {
++  fps: 30,
++  width: 1920,
++  height: 1080,
++  selectedId: null,
++  items: [{
++    id: 'gameplay',
++    track: 'V1',
++    startFrame: 10,
++    durationInFrames: 150,
++    name: 'Monkey session',
++    kind: 'video',
++    src: '/media/gameplay.mp4',
++    volume: 0.8,
++    transcript: [
++      { text: 'this', start: 0, end: 1000 },
++      { text: 'um', start: 1000, end: 2000 },
++      { text: 'works', start: 2000, end: 5000 },
++    ],
++  }],
++  assets: [
++    { id: 'bleep', name: 'AutoBleepPro output', kind: 'audio', src: '/media/bleep.wav', durationInFrames: 30 },
++    { id: 'reaction', name: 'Reaction', kind: 'image', src: '/media/reaction.png', durationInFrames: 90 },
++    { id: 'whoosh', name: 'Whoosh', kind: 'audio', src: '/media/whoosh.wav', durationInFrames: 18 },
++  ],
++};
++
++const plan: BinScriptsEditPlanV1 = {
++  version: 1,
++  sourceItemId: 'gameplay',
++  cuts: [{ id: 'remove-filler', wordIndices: [1] }],
++  bleeps: [{ id: 'bleep-1', startFrame: 30, endFrame: 38, track: 'A2', asset: { assetId: 'bleep', name: 'Bleep' } }],
++  reactions: [{ id: 'reaction-1', startFrame: 45, endFrame: 60, track: 'V2', asset: { assetId: 'reaction', name: 'Reaction' }, transform: { scale: 0.35, x: 25, y: 20 } }],
++  captions: { track: 'C1' },
++  zooms: [{ id: 'zoom-1', startFrame: 70, endFrame: 90, magnification: 1.4 }],
++  soundEffects: [{ id: 'whoosh-1', atFrame: 100, track: 'A1', asset: { assetId: 'whoosh', name: 'Whoosh' }, volume: 0.7 }],
++};
++
++const compiled = compileBinScriptsEditPlan(plan, timeline);
++assert.equal(compiled.warnings.length, 0);
++assert.deepEqual(compiled.actions[0], { type: 'deleteWords', id: 'gameplay', idxs: [1] });
++assert.equal(compiled.actions.filter((action) => action.type === 'setKeyframe').length, 4);
++assert.equal(compiled.actions.filter((action) => action.type === 'reframeKeyframe').length, 3);
++assert.equal(compiled.actions.filter((action) => action.type === 'add').length, 3);
++assert.equal(compiled.actions.filter((action) => action.type === 'setCaptions').length, 1);
++
++const applied = compiled.actions.reduce((state, action) => reduce(state, action), timeline);
++const source = applied.items.find((item) => item.id === 'gameplay')!;
++assert.deepEqual(source.deletedWordIdx, [1]);
++assert.deepEqual(source.keyframes?.volume?.map(({ frame, value }) => [frame, value]), [
++  [19, 0.8], [20, 0], [27, 0], [28, 0.8],
++]);
++assert.deepEqual(source.zoom?.reframeCurve?.keyframes.map(({ frame, magnification }) => [frame, magnification]), [
++  [60, 1], [70, 1.4], [80, 1],
++]);
++assert.equal(applied.items.find((item) => item.id === 'binscripts:reaction-1')?.sourceAssetId, 'reaction');
++assert.equal(applied.items.find((item) => item.id === 'binscripts:whoosh-1')?.volume, 0.7);
++assert.equal(applied.tracks?.C1?.captions?.sourceItemId, 'gameplay');
++assert.equal(applied.tracks?.C1?.captions?.template, 'bold-outline');
++
++const deterministic = compileBinScriptsEditPlan({
++  ...plan,
++  soundEffects: [...plan.soundEffects!].reverse(),
++  cuts: [{ id: 'z', wordIndices: [1] }, { id: 'a', wordIndices: [0] }],
++}, timeline);
++assert.deepEqual(deterministic.actions[0], { type: 'deleteWords', id: 'gameplay', idxs: [0, 1] });
++
++assert.throws(
++  () => compileBinScriptsEditPlan({ ...plan, reactions: [{ ...plan.reactions![0]!, asset: { assetId: 'missing', name: 'Missing' } }] }, timeline),
++  BinScriptsCompileError,
++);
++
++console.log('BinScripts edit-plan compiler: OK');
+diff --git a/src/workflows/binscripts/fal-client.ts b/src/workflows/binscripts/fal-client.ts
+new file mode 100644
+index 00000000..2e203dee
+--- /dev/null
++++ b/src/workflows/binscripts/fal-client.ts
+@@ -0,0 +1,71 @@
++import { BinScriptsAssetResolutionError } from './resolvers.js';
++
++export type FalMediaKind = 'audio' | 'image' | 'video';
++
++export interface FalGenerateInput {
++  apiKey: string;
++  model: string;
++  prompt: string;
++  mediaKind: FalMediaKind;
++  requestName: string;
++  /** Defaults to https://fal.run. */
++  baseUrl?: string;
++  /** Injectable fetch for tests; defaults to global fetch. */
++  fetchImpl?: typeof fetch;
++}
++
++export interface FalGenerateOutput {
++  url: string;
++  mediaKind: FalMediaKind;
++}
++
++/**
++ * Pull a media URL out of the shapes fal.ai returns for images, audio, and
++ * video. Handles `{images:[{url}]}`, `{audio:{url}}`, `{video:{url}}`, and a
++ * bare `{url}` fallback.
++ */
++export function extractFalMediaUrl(payload: unknown, mediaKind: FalMediaKind): string | null {
++  if (!payload || typeof payload !== 'object') return null;
++  const record = payload as Record<string, unknown>;
++  if (Array.isArray(record.images)) {
++    const first = record.images[0] as Record<string, unknown> | undefined;
++    if (first && typeof first.url === 'string') return first.url;
++  }
++  for (const key of [mediaKind, 'audio', 'image', 'video']) {
++    const field = record[key];
++    if (field && typeof field === 'object') {
++      const url = (field as Record<string, unknown>).url;
++      if (typeof url === 'string') return url;
++    }
++  }
++  if (typeof record.url === 'string') return record.url;
++  return null;
++}
++
++/** POST one prompt to fal.ai and return the generated media URL. */
++export async function generateFalMedia(input: FalGenerateInput): Promise<FalGenerateOutput> {
++  const baseUrl = (input.baseUrl ?? 'https://fal.run').replace(/\/+$/, '');
++  const fetchImpl = input.fetchImpl ?? fetch;
++  const response = await fetchImpl(`${baseUrl}/${input.model}`, {
++    method: 'POST',
++    headers: {
++      Authorization: `Key ${input.apiKey}`,
++      'Content-Type': 'application/json',
++    },
++    body: JSON.stringify({ prompt: input.prompt }),
++  });
++  if (!response.ok) {
++    const body = await response.text().catch(() => '');
++    throw new BinScriptsAssetResolutionError(
++      `fal.ai request "${input.requestName}" failed (${response.status}): ${body.slice(0, 240)}`,
++    );
++  }
++  const payload = (await response.json()) as unknown;
++  const url = extractFalMediaUrl(payload, input.mediaKind);
++  if (!url) {
++    throw new BinScriptsAssetResolutionError(
++      `fal.ai request "${input.requestName}" returned no ${input.mediaKind} URL`,
++    );
++  }
++  return { url, mediaKind: input.mediaKind };
++}
+diff --git a/src/workflows/binscripts/index.ts b/src/workflows/binscripts/index.ts
+new file mode 100644
+index 00000000..1ca84d09
+--- /dev/null
++++ b/src/workflows/binscripts/index.ts
+@@ -0,0 +1,7 @@
++export * from './autobleep-cli.js';
++export * from './compiler.js';
++export * from './fal-client.js';
++export * from './presets.js';
++export * from './resolve-plan.js';
++export * from './resolvers.js';
++export * from './types.js';
+diff --git a/src/workflows/binscripts/presets.ts b/src/workflows/binscripts/presets.ts
+new file mode 100644
+index 00000000..d55619f9
+--- /dev/null
++++ b/src/workflows/binscripts/presets.ts
+@@ -0,0 +1,67 @@
++import type { SafeAreaInsets } from '../../reframe/safe-focus.js';
++
++export type BinScriptsPlatformPresetId =
++  | 'youtube-long'
++  | 'youtube-shorts'
++  | 'rumble-regular'
++  | 'rumble-shorts';
++
++export interface BinScriptsExportPreset {
++  id: BinScriptsPlatformPresetId;
++  platform: 'youtube' | 'rumble';
++  format: 'long-form' | 'shorts';
++  canvas: { width: number; height: number; aspectRatio: '16:9' | '9:16' };
++  export: {
++    container: 'mp4';
++    videoCodec: 'h264';
++    progressive: true;
++    audioCodec: 'aac';
++    audioSampleRateHz: 48_000;
++  };
++  /** Conservative project action-safe area, not a platform UI guarantee. */
++  safeArea: SafeAreaInsets;
++  classification: { maximumDurationSeconds?: number; minimumAspectRatio?: '1:1' };
++  notes: readonly string[];
++}
++
++const ACTION_SAFE: SafeAreaInsets = { top: 0.05, right: 0.05, bottom: 0.05, left: 0.05 };
++const DELIVERY = {
++  container: 'mp4' as const,
++  videoCodec: 'h264' as const,
++  progressive: true as const,
++  audioCodec: 'aac' as const,
++  audioSampleRateHz: 48_000 as const,
++};
++
++export const BINSCRIPTS_PLATFORM_PRESETS: Readonly<Record<BinScriptsPlatformPresetId, BinScriptsExportPreset>> = {
++  'youtube-long': {
++    id: 'youtube-long', platform: 'youtube', format: 'long-form',
++    canvas: { width: 1920, height: 1080, aspectRatio: '16:9' },
++    export: DELIVERY, safeArea: ACTION_SAFE, classification: {},
++    notes: ['Standard desktop delivery uses 16:9 at 1920×1080.'],
++  },
++  'youtube-shorts': {
++    id: 'youtube-shorts', platform: 'youtube', format: 'shorts',
++    canvas: { width: 1080, height: 1920, aspectRatio: '9:16' },
++    export: DELIVERY, safeArea: ACTION_SAFE,
++    classification: { maximumDurationSeconds: 180, minimumAspectRatio: '1:1' },
++    notes: ['Square or vertical uploads up to three minutes classify as Shorts; this preset chooses 9:16.'],
++  },
++  'rumble-regular': {
++    id: 'rumble-regular', platform: 'rumble', format: 'long-form',
++    canvas: { width: 1920, height: 1080, aspectRatio: '16:9' },
++    export: DELIVERY, safeArea: ACTION_SAFE, classification: {},
++    notes: ['Keep regular Rumble exports at 16:9.'],
++  },
++  'rumble-shorts': {
++    id: 'rumble-shorts', platform: 'rumble', format: 'shorts',
++    canvas: { width: 1080, height: 1920, aspectRatio: '9:16' },
++    export: DELIVERY, safeArea: ACTION_SAFE,
++    classification: { maximumDurationSeconds: 180, minimumAspectRatio: '1:1' },
++    notes: ['Rumble Shorts are at most 180 seconds and 1:1 or taller; 9:16 is recommended.', '720×1280 is the documented minimum frame/thumbnail guidance; this preset exports 1080×1920.'],
++  },
++};
++
++export function binScriptsPlatformPreset(id: BinScriptsPlatformPresetId): BinScriptsExportPreset {
++  return BINSCRIPTS_PLATFORM_PRESETS[id];
++}
+diff --git a/src/workflows/binscripts/resolve-plan.ts b/src/workflows/binscripts/resolve-plan.ts
+new file mode 100644
+index 00000000..d174a597
+--- /dev/null
++++ b/src/workflows/binscripts/resolve-plan.ts
+@@ -0,0 +1,27 @@
++import type { BinScriptsAssetRequest, BinScriptsAssetResolver } from './resolvers.js';
++import { resolveBinScriptsAsset } from './resolvers.js';
++import type { BinScriptsDraftEditPlanV1, BinScriptsEditPlanV1 } from './types.js';
++
++/** Resolve all external media requests in stable cue order before compilation. */
++export async function resolveBinScriptsEditPlan(
++  draft: BinScriptsDraftEditPlanV1,
++  resolvers: readonly BinScriptsAssetResolver[],
++): Promise<BinScriptsEditPlanV1> {
++  const resolveCues = async <Cue extends { id: string; asset: BinScriptsAssetRequest }>(
++    cues: readonly Cue[] | undefined,
++    purpose: 'bleep' | 'reaction' | 'sound-effect',
++  ) => {
++    const resolved = new Map<string, Awaited<ReturnType<typeof resolveBinScriptsAsset>>>();
++    for (const cue of [...(cues ?? [])].sort((a, b) => a.id.localeCompare(b.id))) {
++      resolved.set(cue.id, await resolveBinScriptsAsset(cue.asset, { cueId: cue.id, purpose }, resolvers));
++    }
++    return (cues ?? []).map((cue) => ({ ...cue, asset: resolved.get(cue.id)! }));
++  };
++
++  return {
++    ...draft,
++    bleeps: await resolveCues(draft.bleeps, 'bleep'),
++    reactions: await resolveCues(draft.reactions, 'reaction'),
++    soundEffects: await resolveCues(draft.soundEffects, 'sound-effect'),
++  };
++}
+diff --git a/src/workflows/binscripts/resolvers.ts b/src/workflows/binscripts/resolvers.ts
+new file mode 100644
+index 00000000..e39ee479
+--- /dev/null
++++ b/src/workflows/binscripts/resolvers.ts
+@@ -0,0 +1,90 @@
++import type { ResolvedCueAsset } from './types.js';
++
++export type BinScriptsAssetPurpose = 'bleep' | 'reaction' | 'sound-effect';
++
++export type BinScriptsAssetRequest =
++  | { kind: 'project-asset'; assetId: string; name: string }
++  | { kind: 'auto-bleep-pro'; name: string; preset?: string }
++  | { kind: 'fal-generation'; name: string; mediaKind: 'audio' | 'image' | 'video'; prompt: string; model?: string };
++
++export interface BinScriptsAssetResolverContext {
++  cueId: string;
++  purpose: BinScriptsAssetPurpose;
++}
++
++export interface BinScriptsAssetResolver {
++  readonly id: string;
++  supports(request: BinScriptsAssetRequest): boolean;
++  resolve(request: BinScriptsAssetRequest, context: BinScriptsAssetResolverContext): Promise<ResolvedCueAsset>;
++}
++
++export class BinScriptsAssetResolutionError extends Error {
++  constructor(message: string) {
++    super(message);
++    this.name = 'BinScriptsAssetResolutionError';
++  }
++}
++
++export const projectAssetResolver: BinScriptsAssetResolver = {
++  id: 'project-asset',
++  supports: (request) => request.kind === 'project-asset',
++  resolve: async (request) => {
++    if (request.kind !== 'project-asset') throw new BinScriptsAssetResolutionError('Unsupported project asset request');
++    return { assetId: request.assetId, name: request.name };
++  },
++};
++
++/**
++ * AutoBleepPro integration boundary. No public API/CLI contract is assumed:
++ * the host adapter must locate/export the bleep and import it into the media
++ * pool, then return that existing project asset reference.
++ */
++export function createAutoBleepProResolver(adapter: {
++  resolveImportedAsset(request: Extract<BinScriptsAssetRequest, { kind: 'auto-bleep-pro' }>, context: BinScriptsAssetResolverContext): Promise<ResolvedCueAsset>;
++}): BinScriptsAssetResolver {
++  return {
++    id: 'auto-bleep-pro-adapter',
++    supports: (request) => request.kind === 'auto-bleep-pro',
++    resolve: async (request, context) => {
++      if (request.kind !== 'auto-bleep-pro') throw new BinScriptsAssetResolutionError('Unsupported AutoBleepPro request');
++      return adapter.resolveImportedAsset(request, context);
++    },
++  };
++}
++
++export const FAL_ENV_PLACEHOLDERS = {
++  apiKey: 'FAL_KEY',
++  defaultModel: 'FAL_MODEL_ID',
++} as const;
++
++/** Optional fal.ai boundary; transport and endpoint contracts remain host-owned. */
++export function createFalGenerationResolver(options: {
++  env: Partial<Record<(typeof FAL_ENV_PLACEHOLDERS)[keyof typeof FAL_ENV_PLACEHOLDERS], string>>;
++  generate(request: Extract<BinScriptsAssetRequest, { kind: 'fal-generation' }>, context: BinScriptsAssetResolverContext, config: { apiKey: string; model: string }): Promise<ResolvedCueAsset>;
++}): BinScriptsAssetResolver {
++  return {
++    id: 'fal-generation-adapter',
++    supports: (request) => request.kind === 'fal-generation',
++    resolve: async (request, context) => {
++      if (request.kind !== 'fal-generation') throw new BinScriptsAssetResolutionError('Unsupported fal.ai request');
++      const apiKey = options.env.FAL_KEY;
++      const model = request.model ?? options.env.FAL_MODEL_ID;
++      if (!apiKey || !model) {
++        throw new BinScriptsAssetResolutionError('fal.ai generation requires FAL_KEY and a request model or FAL_MODEL_ID');
++      }
++      return options.generate(request, context, { apiKey, model });
++    },
++  };
++}
++
++export async function resolveBinScriptsAsset(
++  request: BinScriptsAssetRequest,
++  context: BinScriptsAssetResolverContext,
++  resolvers: readonly BinScriptsAssetResolver[],
++): Promise<ResolvedCueAsset> {
++  const resolver = resolvers.find((candidate) => candidate.supports(request));
++  if (!resolver) throw new BinScriptsAssetResolutionError(`No resolver supports ${request.kind} for cue ${context.cueId}`);
++  const resolved = await resolver.resolve(request, context);
++  if (!resolved.assetId || !resolved.name) throw new BinScriptsAssetResolutionError(`Resolver ${resolver.id} returned an incomplete asset`);
++  return resolved;
++}
+diff --git a/src/workflows/binscripts/types.ts b/src/workflows/binscripts/types.ts
+new file mode 100644
+index 00000000..5abe276b
+--- /dev/null
++++ b/src/workflows/binscripts/types.ts
+@@ -0,0 +1,78 @@
++import type { CaptionMotionPreset, CaptionPacing, CaptionTemplate } from '../../captions/types.js';
++import type { TrackId } from '../../editor/types.js';
++import type { BinScriptsPlatformPresetId } from './presets.js';
++import type { BinScriptsAssetRequest } from './resolvers.js';
++
++export interface FrameRange {
++  startFrame: number;
++  endFrame: number;
++}
++
++export interface ResolvedCueAsset {
++  assetId: string;
++  /** Human-readable label used for the created timeline item. */
++  name: string;
++}
++
++export interface TranscriptCutCue {
++  id: string;
++  wordIndices: number[];
++}
++
++export interface BleepCue<Asset = ResolvedCueAsset> extends FrameRange {
++  id: string;
++  asset: Asset;
++  track: TrackId;
++}
++
++export interface ReactionCue<Asset = ResolvedCueAsset> extends FrameRange {
++  id: string;
++  asset: Asset;
++  track: TrackId;
++  transform?: { scale?: number; x?: number; y?: number; opacity?: number };
++}
++
++export interface SoundEffectCue<Asset = ResolvedCueAsset> {
++  id: string;
++  atFrame: number;
++  durationInFrames?: number;
++  asset: Asset;
++  track: TrackId;
++  volume?: number;
++}
++
++export interface ZoomCue extends FrameRange {
++  id: string;
++  magnification: number;
++  focalPointX?: number;
++  focalPointY?: number;
++}
++
++export interface CaptionCue {
++  track?: TrackId;
++  template?: CaptionTemplate;
++  pacing?: CaptionPacing;
++  motionPreset?: CaptionMotionPreset;
++}
++
++/** Provider-neutral plan. External systems resolve media before compilation. */
++export interface BinScriptsEditPlanV1<Asset = ResolvedCueAsset> {
++  version: 1;
++  sourceItemId: string;
++  targetPreset?: BinScriptsPlatformPresetId;
++  cuts?: TranscriptCutCue[];
++  bleeps?: BleepCue<Asset>[];
++  reactions?: ReactionCue<Asset>[];
++  captions?: CaptionCue;
++  zooms?: ZoomCue[];
++  soundEffects?: SoundEffectCue<Asset>[];
++}
++
++/** Pre-compilation plan whose media references still need host resolution. */
++export type BinScriptsDraftEditPlanV1 = BinScriptsEditPlanV1<BinScriptsAssetRequest>;
++
++export interface BinScriptsCompileWarning {
++  cueId: string;
++  code: 'duplicate-word-index' | 'cue-clamped';
++  message: string;
++}
