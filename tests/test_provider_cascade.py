@@ -22,7 +22,8 @@ import pytest  # noqa: E402
 from autoreel import llm_highlights as llm  # noqa: E402
 from autoreel.highlights import Highlight  # noqa: E402
 from autoreel.llm_highlights import (ANTHROPIC, CEREBRAS, GEMINI,  # noqa: E402
-                                     OPENAI, all_available, asker_for, rank)
+                                     OPENAI, XKIRO, all_available,
+                                     asker_for, rank)
 
 GOOD = '{"clips":[{"index":1,"score":90,"title":"picked"}]}'
 
@@ -30,7 +31,7 @@ GOOD = '{"clips":[{"index":1,"score":90,"title":"picked"}]}'
 @pytest.fixture
 def no_keys(monkeypatch):
     for name in ("GEMINI_API_KEY", "GOOGLE_API_KEY", "OPENAI_API_KEY",
-                 "ANTHROPIC_API_KEY", "CEREBRAS_API_KEY"):
+                 "ANTHROPIC_API_KEY", "CEREBRAS_API_KEY", "XKIRO_API_KEY"):
         monkeypatch.delenv(name, raising=False)
     return monkeypatch
 
@@ -211,7 +212,7 @@ def test_no_keys_at_all_names_every_provider(no_keys):
 
     assert not ok
     for name in ("GEMINI_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY",
-                 "CEREBRAS_API_KEY"):
+                 "CEREBRAS_API_KEY", "XKIRO_API_KEY"):
         assert name in detail
 
 
@@ -344,3 +345,165 @@ def test_the_no_key_message_is_derived_from_the_key_table(no_keys):
     for provider in llm.PROVIDER_ORDER:
         for var in llm._KEY_NAMES[provider]:
             assert var in names, f"{var} missing from the no-key message"
+
+
+# ── talking to xKiro ─────────────────────────────────────────────────
+#
+# An OpenAI-shaped gateway. Two traps, both measured against the live API:
+#
+#   * model ids carry a ':free' SUFFIX that is part of the id, and the
+#     catalogue is 100+ models mixing free and paid under the same family
+#     names - so auto-picking by quality alone starts billing;
+#   * it answers HTTP 403 (Cloudflare code 1010) to the default urllib
+#     User-Agent, like Cerebras.
+#
+# It is also, with Gemini, one of only two providers here that can be
+# shown the frames.
+
+def test_xkiro_is_tried_second_because_it_can_see(no_keys):
+    """A second vision-capable provider is the point of it. Text-only
+    backstops come after."""
+    no_keys.setenv("GEMINI_API_KEY", "g")
+    no_keys.setenv("XKIRO_API_KEY", "x")
+    no_keys.setenv("CEREBRAS_API_KEY", "c")
+    no_keys.setenv("OPENAI_API_KEY", "o")
+
+    assert [p for p, _ in all_available()] == [GEMINI, XKIRO, CEREBRAS,
+                                               OPENAI]
+
+
+def test_free_models_outrank_paid_ones():
+    """The billing guard. On this gateway `qwen3.8-max` and
+    `qwen3.8-max:free` are both listed, so ranking on quality alone
+    would quietly move a run onto a paid model."""
+    ranked = llm.usable_models([
+        "qwen/qwen3.8-max",          # paid, best-sounding
+        "qwen/qwen3.8-max:free",     # same family, free
+        "qwen/qwen3.8-omni-flash",   # paid flash, normally preferred
+        "qwen/qwen3.8-omni-flash:free",
+    ])
+
+    assert ranked[0].endswith(":free"), f"a paid model was picked: {ranked[0]}"
+    last_free = max(i for i, n in enumerate(ranked) if n.endswith(":free"))
+    first_paid = min(i for i, n in enumerate(ranked)
+                     if not n.endswith(":free"))
+    assert last_free < first_paid, "a paid model outranked a free one"
+
+
+def test_the_xkiro_default_is_pinned_and_free():
+    """It is pinned rather than chosen off a 100+ model catalogue that
+    contains paid entries."""
+    assert llm.DEFAULT_MODELS[XKIRO].endswith(":free")
+
+
+def test_xkiro_has_its_own_caller():
+    assert asker_for(XKIRO) is llm._ask_xkiro
+
+
+def test_only_vision_capable_providers_get_the_frames():
+    """vision_asker_for returning None is how the caller knows to use the
+    words - it is not a failure."""
+    assert llm.vision_asker_for(GEMINI) is llm._ask_gemini_vision
+    assert llm.vision_asker_for(XKIRO) is llm._ask_xkiro_vision
+    for text_only in (CEREBRAS, OPENAI, ANTHROPIC):
+        assert llm.vision_asker_for(text_only) is None
+
+
+def test_vision_providers_matches_the_vision_dispatch_table():
+    """A provider in one and not the other would either be sent frames it
+    cannot read, or silently skipped."""
+    for provider in llm.VISION_PROVIDERS:
+        assert llm.vision_asker_for(provider) is not None
+    for provider in llm.PROVIDER_ORDER:
+        if provider not in llm.VISION_PROVIDERS:
+            assert llm.vision_asker_for(provider) is None
+
+
+def test_gemini_parts_convert_to_openai_blocks():
+    """The same bytes in a different envelope - Gemini's inline_data
+    becomes a data: URI."""
+    parts = [{"text": "hello"},
+             {"inline_data": {"mime_type": "image/jpeg", "data": "QUJD"}}]
+
+    blocks = llm.to_openai_content(parts)
+
+    assert blocks[0] == {"type": "text", "text": "hello"}
+    assert blocks[1]["type"] == "image_url"
+    assert blocks[1]["image_url"]["url"] == "data:image/jpeg;base64,QUJD"
+
+
+def test_conversion_survives_junk_parts():
+    """build_vision_contents falls back to text-only parts on a candidate
+    whose frames could not be read, so odd shapes do reach this."""
+    assert llm.to_openai_content([None, {}, {"nope": 1}, {"text": "a"}]) == \
+        [{"type": "text", "text": "a"}]
+
+
+def test_xkiro_carries_a_user_agent_it_will_accept(monkeypatch):
+    """The default urllib UA is a 403 here, not a bad key."""
+    sent = {}
+
+    def note(url, payload, headers):
+        sent.update(url=url, payload=payload, headers=headers)
+        return {"choices": [{"message": {"content": GOOD}}]}
+
+    monkeypatch.setattr(llm, "_post", note)
+
+    assert llm._ask_xkiro("k", "qwen/qwen3.8-omni-flash:free", "p") == GOOD
+    assert sent["url"] == "https://api.xkiro.com/v1/chat/completions"
+    assert sent["headers"]["Authorization"] == "Bearer k"
+    assert sent["headers"]["User-Agent"] == llm._USER_AGENT
+    assert sent["payload"]["max_tokens"] > 0
+
+
+def test_xkiro_vision_sends_the_frames_and_the_vision_prompt(monkeypatch):
+    sent = {}
+
+    def note(url, payload, headers, timeout=None):
+        sent.update(url=url, payload=payload, timeout=timeout)
+        return {"choices": [{"message": {"content": GOOD}}]}, ""
+
+    monkeypatch.setattr(llm, "_post_detailed", note)
+
+    reply, why = llm._ask_xkiro_vision("k", "m", [
+        {"text": "pick"},
+        {"inline_data": {"mime_type": "image/jpeg", "data": "QUJD"}}])
+
+    assert (reply, why) == (GOOD, "")
+    assert sent["url"] == "https://api.xkiro.com/v1/chat/completions"
+    assert sent["timeout"] == llm._VISION_TIMEOUT
+    content = sent["payload"]["messages"][1]["content"]
+    assert any(b.get("type") == "image_url" for b in content), \
+        "the frames were dropped"
+    assert llm.VISION_NOTE in sent["payload"]["messages"][0]["content"]
+
+
+def test_a_busy_xkiro_gets_one_retry_not_a_dead_pass(monkeypatch):
+    """The measured failure was an HTTP 500 that cleared immediately."""
+    calls = []
+
+    def flaky(*_a, **_k):
+        calls.append(1)
+        if len(calls) == 1:
+            return None, "HTTP 500: A server error occurred"
+        return {"choices": [{"message": {"content": GOOD}}]}, ""
+
+    monkeypatch.setattr(llm, "_post_detailed", flaky)
+    monkeypatch.setattr(llm.time, "sleep", lambda s: None)
+
+    reply, why = llm._ask_xkiro_vision("k", "m", [{"text": "x"}])
+
+    assert len(calls) == 2, "it gave up on the first 500"
+    assert (reply, why) == (GOOD, "")
+
+
+def test_xkiro_vision_reports_why_it_failed(monkeypatch):
+    """An empty reply must carry a reason - \"came back empty\" is not
+    something an operator can act on."""
+    monkeypatch.setattr(llm, "_post_detailed",
+                        lambda *a, **k: (None, "HTTP 400: model has no vision"))
+
+    reply, why = llm._ask_xkiro_vision("k", "m", [{"text": "x"}])
+
+    assert reply == ""
+    assert "no vision" in why

@@ -46,6 +46,7 @@ GEMINI = "gemini"
 OPENAI = "openai"
 ANTHROPIC = "anthropic"
 CEREBRAS = "cerebras"
+XKIRO = "xkiro"
 
 # Last resort only. Model names are retired faster than a pinned default
 # can be maintained - the first key tried against this hit "gemini-2.5-flash
@@ -56,6 +57,11 @@ DEFAULT_MODELS = {
     OPENAI: "gpt-4o-mini",
     ANTHROPIC: "claude-sonnet-5",
     CEREBRAS: "gpt-oss-120b",
+    # The ':free' suffix is part of the id on this gateway, not a flag -
+    # dropping it is a 404. This one is pinned rather than auto-picked
+    # because the catalogue carries 100+ models including PAID ones and
+    # choosing off it could quietly start billing.
+    XKIRO: "qwen/qwen3.8-omni-flash:free",
 }
 
 # Model families that cannot do this job, whatever they are called.
@@ -67,18 +73,40 @@ _KEY_NAMES = {
     OPENAI: ("OPENAI_API_KEY",),
     ANTHROPIC: ("ANTHROPIC_API_KEY",),
     CEREBRAS: ("CEREBRAS_API_KEY",),
+    XKIRO: ("XKIRO_API_KEY",),
 }
 
-# Tried in this order. Gemini first because it is the only one here that
-# can be shown the FRAMES, which is the whole reason the picks got good;
-# the others are text-only and are the backstop for the days it will not
-# answer.
+# Tried in this order.
 #
-# Cerebras next, ahead of the other two text-only providers: it is the
-# fastest of them by a wide margin and its free tier covers this workload,
-# so a Gemini refusal costs seconds rather than a failed run. Measured on
-# the live API: 0.017s total for a short completion.
-PROVIDER_ORDER = (GEMINI, CEREBRAS, OPENAI, ANTHROPIC)
+# Gemini first: it can be shown the FRAMES, which is the whole reason the
+# picks got good.
+#
+# xKiro second because it can ALSO be shown the frames - verified against
+# the live API, qwen3.8-omni-flash reads an image and describes it - so
+# the vision pass stops being a single point of failure and a Gemini
+# refusal costs a retry elsewhere rather than the whole pass. It is free,
+# fast, and returns clean content with no reasoning overhead.
+#
+# Cerebras third: fastest text-only backstop, free. Then the paid two.
+#
+# VISION_PROVIDERS is what the vision pass is allowed to use. It is a
+# separate list because being able to answer about words says nothing
+# about being able to answer about pictures.
+PROVIDER_ORDER = (GEMINI, XKIRO, CEREBRAS, OPENAI, ANTHROPIC)
+VISION_PROVIDERS = (GEMINI, XKIRO)
+
+# The OpenAI-shaped providers, and where each one lives. Adding another
+# is a line here rather than a new branch in check().
+_CHAT_URLS = {
+    OPENAI: "https://api.openai.com/v1/chat/completions",
+    CEREBRAS: "https://api.cerebras.ai/v1/chat/completions",
+    XKIRO: "https://api.xkiro.com/v1/chat/completions",
+}
+
+# Providers whose models think before they answer. Their replies can carry
+# a `reasoning` field and no `content` at all if the budget runs out, so
+# callers must not read an empty `content` as "the model had no opinion".
+_REASONING_PROVIDERS = (CEREBRAS,)
 
 _TIMEOUT = 90
 
@@ -211,8 +239,14 @@ def _model_rank(name: str) -> tuple:
     model. Flash-class first because the work is reading a few thousand
     words and returning a short list - a reasoning-heavy model would cost
     more and take longer to reach the same answer.
+
+    Free variants outrank everything else. On a gateway that mixes free
+    and paid models under the same family (xKiro lists both
+    `qwen3.8-max` and `qwen3.8-max:free`), auto-picking by quality alone
+    is how a run silently starts billing.
     """
     name = name.lower().rsplit("/", 1)[-1]
+    free = 1 if name.endswith(":free") else 0
     version = 0.0
     match = re.search(r"(\d+(?:\.\d+)?)", name)
     if match:
@@ -225,7 +259,7 @@ def _model_rank(name: str) -> tuple:
     # A stable name outranks a dated snapshot of the same thing, and
     # anything outranks a preview that can disappear mid-week.
     stable = 0 if any(tag in name for tag in ("preview", "exp", "beta")) else 1
-    return (stable, family, version)
+    return (free, stable, family, version)
 
 
 def usable_models(names: list) -> list:
@@ -243,6 +277,13 @@ def list_models(provider: str, key: str) -> list:
         # and turns over (llama-3.3-70b was retired in favour of gpt-oss).
         return _list_models_openai_style(
             "https://api.cerebras.ai/v1/models", key)
+    if provider == XKIRO:
+        # 100+ models, free and paid mixed under the same family names.
+        # Worth listing so an operator can see them, but see _model_rank:
+        # free variants sort first precisely because this list is not all
+        # free, and the default is pinned rather than chosen from here.
+        return _list_models_openai_style(
+            "https://api.xkiro.com/v1/models", key)
     if provider != GEMINI:
         # OpenAI's list is large and mostly irrelevant here, and its
         # small-model names have been stable for years.
@@ -273,7 +314,7 @@ def list_models(provider: str, key: str) -> list:
 def _list_models_openai_style(url: str, key: str) -> list:
     """Model ids from an OpenAI-shaped `GET /v1/models` reply."""
     request = urllib.request.Request(
-        url, headers={"Authorization": f"Bearer {key}", **_CEREBRAS_HEADERS})
+        url, headers={"Authorization": f"Bearer {key}", **_GATEWAY_HEADERS})
     try:
         with urllib.request.urlopen(request, timeout=_TIMEOUT) as response:
             data = json.loads(response.read().decode("utf-8", "replace"))
@@ -550,18 +591,21 @@ def check(provider: str = "", model: str = "") -> tuple:
                f"{model}:generateContent?key={key}")
         data, error = _post_detailed(
             url, {"contents": [{"parts": [{"text": "Reply with: ok"}]}]}, {})
-    elif provider == CEREBRAS:
-        # A reasoning model needs room to think before it writes anything,
-        # so this asks for far more than the 5 tokens the others need. At
-        # 5, gpt-oss-120b returns finish_reason "length" with a
-        # `reasoning` field and NO `content` - which reads exactly like a
-        # rejected key and would report a working key as broken.
+    elif provider in _CHAT_URLS:
+        # Every OpenAI-shaped provider, so a new one is a line in
+        # _CHAT_URLS rather than another branch here.
+        #
+        # 200 tokens, not the 5 this used to ask for: Cerebras' models are
+        # reasoning models and spend tokens thinking before writing
+        # anything. At 5, gpt-oss-120b returns finish_reason "length" with
+        # a `reasoning` field and NO `content` - which reads exactly like a
+        # rejected key, so a working key got reported as broken.
         data, error = _post_detailed(
-            "https://api.cerebras.ai/v1/chat/completions",
+            _CHAT_URLS[provider],
             {"model": model,
              "messages": [{"role": "user", "content": "Reply with: ok"}],
              "max_tokens": 200},
-            _cerebras_headers(key))
+            _bearer_headers(key))
     else:
         data, error = _post_detailed(
             "https://api.openai.com/v1/chat/completions",
@@ -574,7 +618,7 @@ def check(provider: str = "", model: str = "") -> tuple:
         return False, f"{provider} ({model}) rejected the key - {error}"
     if not isinstance(data, dict):
         return False, f"{provider} returned nothing usable"
-    if provider == CEREBRAS:
+    if provider in _REASONING_PROVIDERS:
         # The reply arrived, but check that the model actually produced
         # text rather than spending the whole budget on reasoning.
         try:
@@ -764,6 +808,7 @@ def _ask_anthropic(key: str, model: str, prompt: str) -> str:
 def asker_for(provider: str):
     """The function that talks to this provider."""
     return {GEMINI: _ask_gemini, CEREBRAS: _ask_cerebras,
+            XKIRO: _ask_xkiro,
             OPENAI: _ask_openai,
             ANTHROPIC: _ask_anthropic}.get(provider, _ask_gemini)
 
@@ -781,22 +826,24 @@ def asker_for(provider: str):
 # ceiling is generous and only a floor is pinned.
 _CEREBRAS_MAX_TOKENS = 8192
 
-# Cerebras sits behind a filter that answers HTTP 403 to the default
-# `Python-urllib/3.x` User-Agent and 200 to anything else. Measured:
+# Two of the providers sit behind a filter that rejects the default
+# `Python-urllib/3.x` User-Agent. Measured, both of them:
 #
-#   default urllib UA   -> 403 Forbidden
-#   no UA / curl / any  -> 200
+#   Cerebras, default urllib UA -> HTTP 403 Forbidden
+#   xKiro,    default urllib UA -> HTTP 403 (Cloudflare error code 1010)
+#   either,   any other UA      -> HTTP 200
 #
 # Without this, a working key is reported as "rejected the key - HTTP
 # 403", which is the one message that sends an operator to regenerate a
 # key that was never the problem.
 _USER_AGENT = "AutoBleepPro/2.0 (+https://github.com/STEVECODES1/AutoBleepPro)"
 
-_CEREBRAS_HEADERS = {"User-Agent": _USER_AGENT}
+_GATEWAY_HEADERS = {"User-Agent": _USER_AGENT}
 
 
-def _cerebras_headers(key: str) -> dict:
-    return {"Authorization": f"Bearer {key}", **_CEREBRAS_HEADERS}
+def _bearer_headers(key: str) -> dict:
+    """Bearer auth plus a User-Agent the gateways will accept."""
+    return {"Authorization": f"Bearer {key}", **_GATEWAY_HEADERS}
 
 
 def _ask_cerebras(key: str, model: str, prompt: str) -> str:
@@ -809,7 +856,7 @@ def _ask_cerebras(key: str, model: str, prompt: str) -> str:
         "max_tokens": _CEREBRAS_MAX_TOKENS,
     }
     data = _post("https://api.cerebras.ai/v1/chat/completions", payload,
-                 _cerebras_headers(key))
+                 _bearer_headers(key))
     if not isinstance(data, dict):
         return ""
     try:
@@ -831,6 +878,119 @@ def _ask_cerebras(key: str, model: str, prompt: str) -> str:
                   f"the candidate count.")
         return ""
     return content
+
+
+# ── xKiro ────────────────────────────────────────────────────────────
+#
+# An OpenAI-shaped gateway covering 100+ models from several vendors.
+# Two things about it are not interchangeable with the others:
+#
+#   1. Model ids carry a vendor prefix AND, for the free ones, a ':free'
+#      SUFFIX that is part of the id - "qwen/qwen3.8-omni-flash:free".
+#      Dropping the suffix is a 404, not a fallback to the paid model.
+#   2. It rejects the default urllib User-Agent the same way Cerebras
+#      does. See _USER_AGENT.
+#
+# It is the only provider besides Gemini whose models can be shown the
+# frames, which is why it sits second in PROVIDER_ORDER and in
+# VISION_PROVIDERS.
+_XKIRO_MAX_TOKENS = 4096
+
+
+def to_openai_content(parts: list) -> list:
+    """Gemini `parts` as OpenAI-shaped content blocks.
+
+    The same bytes in a different envelope: Gemini carries an image as
+    {"inline_data": {"mime_type", "data"}}, the OpenAI shape wants a
+    data: URI. Frames are ~0.6 MB of base64 for 48 images, so this is a
+    rewrite and not a re-encode.
+    """
+    blocks = []
+    for part in parts or []:
+        if not isinstance(part, dict):
+            continue
+        inline = part.get("inline_data")
+        if inline:
+            mime = inline.get("mime_type") or "image/jpeg"
+            data = inline.get("data") or ""
+            blocks.append({"type": "image_url",
+                           "image_url": {"url": f"data:{mime};base64,{data}"}})
+        elif part.get("text") is not None:
+            blocks.append({"type": "text", "text": part["text"]})
+    return blocks
+
+
+def _ask_xkiro(key: str, model: str, prompt: str) -> str:
+    payload = {
+        "model": model,
+        "messages": [{"role": "system", "content": SYSTEM_PROMPT},
+                     {"role": "user", "content": prompt}],
+        "response_format": {"type": "json_object"},
+        "temperature": 0.4,
+        "max_tokens": _XKIRO_MAX_TOKENS,
+    }
+    data = _post(_CHAT_URLS[XKIRO], payload, _bearer_headers(key))
+    if not isinstance(data, dict):
+        return ""
+    try:
+        return data["choices"][0]["message"]["content"]
+    except (KeyError, IndexError, TypeError):
+        return ""
+
+
+def _ask_xkiro_vision(key: str, model: str, parts: list) -> tuple:
+    """(reply_text, why_not). Same call as _ask_xkiro, with the frames.
+
+    Returns the reason rather than swallowing it - a vision request fails
+    for reasons the text one never does, and "came back empty" is not
+    something anyone can act on.
+    """
+    payload = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": SYSTEM_PROMPT + VISION_NOTE},
+            {"role": "user", "content": to_openai_content(parts)},
+        ],
+        "response_format": {"type": "json_object"},
+        "temperature": 0.4,
+        "max_tokens": _XKIRO_MAX_TOKENS,
+    }
+    images = sum(1 for part in parts if "inline_data" in part)
+    megabytes = len(json.dumps(payload)) / 1e6
+
+    data, problem = _post_detailed(_CHAT_URLS[XKIRO], payload,
+                                   _bearer_headers(key),
+                                   timeout=_VISION_TIMEOUT)
+    # The one measured failure here was a plain HTTP 500 with "A server
+    # error occurred", which cleared on the immediate retry and is a
+    # failure mode shared with the other providers - both Geminis have
+    # been seen to answer 503 and "high demand" the same way. A busy
+    # gateway is not a reason to throw away the pass.
+    if problem and _is_transient(problem):
+        print(f"[Clips] xKiro said {problem} - waiting 20s and trying "
+              f"once more...")
+        time.sleep(_BUSY_RETRY_SECONDS)
+        data, problem = _post_detailed(_CHAT_URLS[XKIRO], payload,
+                                       _bearer_headers(key),
+                                       timeout=_VISION_TIMEOUT)
+
+    if problem:
+        return "", f"{problem} ({images} images, {megabytes:.1f} MB)"
+    if not isinstance(data, dict):
+        return "", f"no response ({images} images, {megabytes:.1f} MB)"
+    try:
+        return data["choices"][0]["message"]["content"], ""
+    except (KeyError, IndexError, TypeError):
+        return "", f"reply had no text: {str(data)[:200]}"
+
+
+def vision_asker_for(provider: str):
+    """The function that shows this provider the frames, or None.
+
+    None means the provider is text-only, and the caller should use the
+    words - not that the pass has failed.
+    """
+    return {GEMINI: _ask_gemini_vision, XKIRO: _ask_xkiro_vision}.get(provider)
 
 
 def _ask_openai(key: str, model: str, prompt: str) -> str:
@@ -944,12 +1104,17 @@ def _ask_one_provider(provider, key, model, shortlist, count, source_path,
     """
     model = resolve_model(provider, key, model)
 
-    # Vision is Gemini-only here and only when there is a file to sample.
-    # It is tried FIRST and falls back to the words on any failure: a
+    # Vision is tried FIRST and falls back to the words on any failure: a
     # model that cannot see is the behaviour this had all along, and it
     # is much better than no clips.
+    #
+    # Which providers get the frames comes from VISION_PROVIDERS rather
+    # than a hard-coded GEMINI, because the vision pass used to be a
+    # single point of failure: one provider refusing meant every clip
+    # that day was picked on words alone.
     raw = ""
-    if source_path and provider == GEMINI and ask is None:
+    vision_ask = vision_asker_for(provider) if ask is None else None
+    if source_path and vision_ask is not None:
         looking = shortlist[:VISION_MAX_CANDIDATES]
         why = ""
         try:
@@ -958,7 +1123,7 @@ def _ask_one_provider(provider, key, model, shortlist, count, source_path,
             if not images:
                 why = "no frames could be read from the video"
             else:
-                raw, why = _ask_gemini_vision(key, model, parts)
+                raw, why = vision_ask(key, model, parts)
         except Exception as exc:
             why = f"{type(exc).__name__}: {exc}"
         if raw:
