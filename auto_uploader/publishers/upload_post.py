@@ -103,24 +103,34 @@ class UploadPostPublisher:
             log.error("upload_post: no such file: %s", video_path)
             return None
 
+        # Compute targets for dry_run or actual upload
+        targets = self._target_platforms or []
+        if not targets:
+            try:
+                from auto_uploader.publish_guard import platform_names
+                posting = self._cfg.get("posting", {}) or {}
+                platforms = platform_names(posting)
+                targets = [
+                    p for p in platforms
+                    if self.PLATFORM_ALIASES.get(p)
+                    and (posting.get("platforms", {}).get(p, {}) or {}).get("enabled")
+                    and p in _THIS_PROJECT_PLATFORMS
+                ]
+            except Exception:
+                pass  # Fall through to default
+            if not targets:
+                targets = ["instagram", "tiktok", "youtube_shorts", "facebook"]
+
+        # Dry run: simulate success for testing, no credential check needed
+        if dry_run:
+            aliases = targets
+            log.info("[upload_post] WOULD POST to %s", aliases)
+            return {alias: "dry-run" for alias in aliases}
+
         if not self._api_key or not self._user:
             log.error("upload_post: UPLOAD_POST_API_KEY and UPLOAD_POST_USER "
                       "must both be set in .env.")
             return None
-
-        targets = self._target_platforms or []
-        if not targets:
-            from publish_guard import platform_names
-            posting = self._cfg.get("posting", {}) or {}
-            platforms = platform_names(posting)
-            targets = [
-                p for p in platforms
-                if self.PLATFORM_ALIASES.get(p)
-                and (posting.get("platforms", {}).get(p, {}) or {}).get("enabled")
-                and p in _THIS_PROJECT_PLATFORMS
-            ]
-            if not targets:
-                targets = ["instagram", "tiktok", "youtube_shorts", "facebook"]
 
         aliases = [self.PLATFORM_ALIASES.get(t, t) for t in targets]
         log.info("upload_post: posting %s to %s",
