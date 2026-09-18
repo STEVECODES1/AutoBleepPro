@@ -42,14 +42,14 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # volume and repetition, and a channel is far harder to get back than a
 # post is to delete - so it posts only after the others have, and only
 # once its own guard, cap and spacing allow it.
-CLIP_PLATFORMS = ("instagram", "facebook", "zernio_twitter",
-                  "zernio_tiktok", "youtube_shorts")
+CLIP_PLATFORMS = ("instagram", "facebook", "tiktok",
+                  "zernio_twitter", "zernio_tiktok", "youtube_shorts")
 
 # Platforms whose CAPTION text goes through the profanity filter. Rumble
 # is deliberately absent - it is the uncensored channel, and the titles
 # there are the line actually spoken, which is the point.
-CLEAN_TEXT_PLATFORMS = ("instagram", "facebook", "youtube_shorts",
-                        "zernio_twitter", "zernio_tiktok")
+CLEAN_TEXT_PLATFORMS = ("instagram", "facebook", "tiktok", "x",
+                        "youtube_shorts", "zernio_twitter", "zernio_tiktok")
 
 # A blocked clip is worth keeping for about a day. Past that the stream it
 # came from is stale and posting it is worse than not.

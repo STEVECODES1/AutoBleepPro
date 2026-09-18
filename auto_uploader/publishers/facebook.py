@@ -142,26 +142,11 @@ class FacebookPublisher:
             log.error("Facebook: refusing to post an announcement with no link")
             return False
 
-        url = f"{GRAPH_API}/{self._page_id}/feed"
-        params = {
-            "message": message,
-            "link": link,
-            "access_token": self._token,
-        }
-        try:
-            r = requests.post(url, data=params, timeout=30)
-            r.raise_for_status()
-            post_id = r.json().get("id")
-        except Exception as exc:
-            _raise_if_setup(exc, "post a link")
-            log.error("Facebook: link post failed: %s", _graph_reason(exc) or exc)
-            return False
-
-        if not post_id:
-            log.error("Facebook: link post returned no id")
-            return False
-        log.info("Facebook: posted link, id=%s", post_id)
-        return True
+        # Delegate to the free Graph-API publisher (facebook_free.py),
+        # which has the same signature and the same credential checks.
+        if self._publisher is None:
+            self._publisher = FacebookFreePublisher(self._cfg)
+        return self._publisher.post_link(message, link)
 
     # ── Reels from a local file ──────────────────────────────────────────
 
@@ -169,39 +154,13 @@ class FacebookPublisher:
                             share_to_feed: bool = True) -> bool:
         """Publish a local clip as a Page Reel. No hosting anywhere.
 
-        post_reel() below takes a `file_url` that Meta fetches server-side,
-        which is why Facebook never received a single Reel: there is
-        nothing to hand it. A Rumble watch page is not a video file, and
-        putting clips on public hosting purely to satisfy a fetch is
-        infrastructure for its own sake.
-
-        /{page_id}/video_reels removes the requirement the same way
-        Instagram's resumable upload does - start the session, POST the
-        bytes to the upload host it names, then finish and publish.
-
-        `share_to_feed` is accepted so this matches the Instagram
-        publisher's signature; a Page Reel appears on the Page either way,
-        so there is nothing to pass on.
+        Delegate to the free Graph-API publisher (facebook_free.py), which
+        uploads the bytes directly without needing a public URL.
         """
-        if not self._ready():
-            return False
-        if not os.path.isfile(video_path):
-            log.error("Facebook: no such file: %s", video_path)
-            return False
-
-        size = os.path.getsize(video_path)
-        if size <= 0:
-            log.error("Facebook: %s is empty", os.path.basename(video_path))
-            return False
-
-        session = self._start_reel_session()
-        if not session:
-            return False
-        video_id, upload_url = session
-
-        if not self._upload_reel_bytes(upload_url, video_path, size):
-            return False
-        return self._finish_reel(video_id, caption)
+        if self._publisher is None:
+            self._publisher = FacebookFreePublisher(self._cfg)
+        return self._publisher.post_reel_from_file(video_path, caption,
+                                                    share_to_feed)
 
     def _start_reel_session(self) -> Optional[tuple]:
         """(video_id, upload_url) for a new Reel, or None."""

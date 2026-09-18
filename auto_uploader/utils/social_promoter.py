@@ -319,11 +319,33 @@ def _missing_credentials(platform: str, config: dict) -> list:
 def _publisher_for(platform: str, config: dict):
     """The publisher object for a guarded platform, or None if untyped."""
     if platform == "facebook":
-        from publishers.facebook import FacebookPublisher
-        return FacebookPublisher(config)
+        # Try the free Graph-API publisher first; fall back to the legacy
+        # facebook.py if it is not reachable (different import root shape).
+        try:
+            from publishers.facebook_free import FacebookFreePublisher
+            return FacebookFreePublisher(config)
+        except ImportError:
+            from publishers.facebook import FacebookPublisher
+            return FacebookPublisher(config)
     if platform == "instagram":
-        from publishers.instagram import InstagramPublisher
-        return InstagramPublisher(config)
+        try:
+            from publishers.instagram_free import InstagramFreePublisher
+            return InstagramFreePublisher(config)
+        except ImportError:
+            from publishers.instagram import InstagramPublisher
+            return InstagramPublisher(config)
+    if platform == "tiktok":
+        try:
+            from publishers.tiktok_free import TikTokFreePublisher
+            return TikTokFreePublisher(config)
+        except ImportError:
+            return None
+    if platform == "x":
+        try:
+            from publishers.x_webhost import XWebhostPublisher
+            return XWebhostPublisher(config)
+        except ImportError:
+            return None
     if platform == "reddit":
         from publishers.reddit import RedditPublisher
         return RedditPublisher(config)
@@ -333,6 +355,9 @@ def _publisher_for(platform: str, config: dict):
     if platform.startswith("zernio"):
         from publishers.zernio import ZernioPublisher
         return ZernioPublisher(config, platform)
+    if platform == "upload_post":
+        from publishers.upload_post import UploadPostPublisher
+        return UploadPostPublisher(config)
     return None
 
 
@@ -774,6 +799,351 @@ def post_clip_to_instagram(posting: dict, video_path: str, caption: str,
     return ok
 
 
+def post_clip_to_tiktok(posting: dict, video_path: str, caption: str,
+                        config: dict = None, dry_run: bool = False,
+                        ignore_spacing: bool = False) -> bool:
+    """Publish a clip to TikTok as a native video post. True if it went out.
+
+    TikTok takes a video file (not a link), so it lives here alongside
+    post_clip_to_instagram rather than in announce_to_platforms.
+    """
+    if not posting or not video_path or not os.path.isfile(video_path):
+        return False
+
+    from publish_guard import PublishGuard
+
+    guard = PublishGuard(posting, posting.get("state_path"))
+    allowed, reason = guard.can_post("tiktok", ignore_spacing=ignore_spacing)
+    if not allowed:
+        print(f"[Social] tiktok: {reason}")
+        return False
+    if ignore_spacing:
+        print("[Social] tiktok: posting now, ignoring the spacing rule "
+              "(you asked for this one by hand). The daily cap still applies.")
+
+    publisher = _publisher_for("tiktok", config or {})
+    if publisher is None or not getattr(publisher, "supports_reels", False):
+        return False
+    if not publisher.ready():
+        print("[Social] tiktok: skipped - not configured yet. "
+              "Set TIKTOK_CLIENT_KEY + TIKTOK_CLIENT_SECRET + "
+              "TIKTOK_ACCESS_TOKEN for the OAuth route, or "
+              "TIKTOK_USERNAME + TIKTOK_PASSWORD for the browser fallback.")
+        if dry_run:
+            print(f"[Social] tiktok: WOULD post {os.path.basename(video_path)} "
+                  "(credentials needed)")
+            return True
+        return False
+
+    if dry_run:
+        print(f"[Social] tiktok: WOULD post {os.path.basename(video_path)}")
+        return True
+
+    # TikTok posts the file directly; no re-frame needed (it is already
+    # vertical from the clip step). Censor first for the same reason as
+    # Instagram: this is a live route to the same account.
+    from utils.clip_queue import _censored_clip
+
+    censored, censored_temp = _censored_clip("tiktok", video_path, config or {})
+    if not censored:
+        return False
+
+    print(f"[Social] tiktok: uploading "
+          f"{os.path.basename(video_path)} ...")
+    try:
+        ok = publisher.post_reel_from_file(censored, caption)
+    except Exception as exc:
+        ok = False
+        print(f"[Social] tiktok: upload raised {exc}")
+    finally:
+        for leftover in (censored_temp,):
+            if leftover and leftover != video_path:
+                try:
+                    os.remove(leftover)
+                except OSError:
+                    pass
+    guard.record_result("tiktok", ok)
+    print(f"[Social] tiktok: {'posted' if ok else 'failed'}.")
+    return ok
+
+
+def post_clip_to_facebook(posting: dict, video_path: str, caption: str,
+                          config: dict = None, dry_run: bool = False,
+                          ignore_spacing: bool = False) -> bool:
+    """Publish a clip to a Facebook Page as a video. True if it went out.
+
+    Facebook takes a video file, so it lives here alongside the other clip
+    publishers. The free Graph-API publisher (facebook_free.py) uploads the
+    bytes directly.
+    """
+    if not posting or not video_path or not os.path.isfile(video_path):
+        return False
+
+    from publish_guard import PublishGuard
+
+    guard = PublishGuard(posting, posting.get("state_path"))
+    allowed, reason = guard.can_post("facebook", ignore_spacing=ignore_spacing)
+    if not allowed:
+        print(f"[Social] facebook: {reason}")
+        return False
+
+    publisher = _publisher_for("facebook", config or {})
+    if publisher is None or not getattr(publisher, "supports_reels", False):
+        return False
+    if not publisher.ready():
+        print("[Social] facebook: skipped - not configured yet. "
+              "Set FB_PAGE_TOKEN and FB_PAGE_ID in .env.")
+        return False
+
+    if dry_run:
+        print(f"[Social] facebook: WOULD post {os.path.basename(video_path)}")
+        return True
+
+    from utils.clip_queue import _censored_clip
+
+    censored, censored_temp = _censored_clip("facebook", video_path,
+                                              config or {})
+    if not censored:
+        return False
+
+    print(f"[Social] facebook: uploading "
+          f"{os.path.basename(video_path)} ...")
+    try:
+        ok = publisher.post_reel_from_file(censored, caption)
+    except Exception as exc:
+        ok = False
+        print(f"[Social] facebook: upload raised {exc}")
+    finally:
+        for leftover in (censored_temp,):
+            if leftover and leftover != video_path:
+                try:
+                    os.remove(leftover)
+                except OSError:
+                    pass
+    guard.record_result("facebook", ok)
+    print(f"[Social] facebook: {'posted' if ok else 'failed'}.")
+    return ok
+
+
+def post_clip_to_x(posting: dict, video_path: str, caption: str,
+                   config: dict = None, dry_run: bool = False,
+                   ignore_spacing: bool = False) -> bool:
+    """Post a clip to X/Twitter. True if the post was made or ready to paste.
+
+    X's free API tier is read-only, so the free path hosts the clip on Puter
+    (free public storage) and prints the exact post text for a person to
+    paste by hand. When X_BASIC_BEARER_TOKEN is configured, the post goes out
+    automatically via X's v2 media/upload + /2/tweets.
+    """
+    if not posting or not video_path or not os.path.isfile(video_path):
+        return False
+
+    from publish_guard import PublishGuard
+
+    guard = PublishGuard(posting, posting.get("state_path"))
+    allowed, reason = guard.can_post("x", ignore_spacing=ignore_spacing)
+    if not allowed:
+        print(f"[Social] x: {reason}")
+        return False
+    if ignore_spacing:
+        print("[Social] x: posting now, ignoring the spacing rule "
+              "(you asked for this one by hand). The daily cap still applies.")
+
+    publisher = _publisher_for("x", config or {})
+    if publisher is None or not getattr(publisher, "supports_link_posts", True):
+        return False
+    if not publisher.ready():
+        print("[Social] x: skipped - not configured yet.")
+        return False
+
+    if dry_run:
+        print(f"[Social] x: WOULD post {os.path.basename(video_path)}")
+        return True
+
+    # X takes a public URL or a local file via the publisher. Use the
+    # publisher's post_reel_from_file, which now knows how to host via Puter
+    # on the free tier and how to post for real on the paid tier.
+    from utils.clip_queue import _censored_clip
+
+    censored, censored_temp = _censored_clip("x", video_path, config or {})
+    if not censored:
+        return False
+
+    print(f"[Social] x: uploading "
+          f"{os.path.basename(video_path)} ...")
+    try:
+        ok = publisher.post_reel_from_file(censored, caption)
+    except Exception as exc:
+        ok = False
+        print(f"[Social] x: upload raised {exc}")
+    finally:
+        for leftover in (censored_temp,):
+            if leftover and leftover != video_path:
+                try:
+                    os.remove(leftover)
+                except OSError:
+                    pass
+    guard.record_result("x", ok)
+    print(f"[Social] x: {'posted' if ok else 'failed'}.")
+    return ok
+
+
+def post_clip_to_upload_post(posting: dict, video_path: str, caption: str,
+                             config: dict = None, dry_run: bool = False,
+                             ignore_spacing: bool = False) -> bool:
+    """Publish a clip to every connected platform via Upload-Post.
+
+    Upload-Post is a single API that publishes a video to TikTok, Instagram,
+    YouTube, Facebook, X and more in one multipart POST.  When this project
+    has UPLOAD_POST_API_KEY + UPLOAD_POST_USER configured, one clip surfaces
+    on every connected platform at once — no per-platform OAuth, no scraping.
+
+    The guard is still honoured: this function asks publish_guard for each
+    platform that Upload-Post can reach, and only fires when all of them are
+    allowed.  That keeps the caps, spacing and breaker honest across the whole
+    set, because a single Upload-Post call produces one real post per platform.
+    """
+    if not posting or not video_path or not os.path.isfile(video_path):
+        return False
+
+    from publish_guard import PublishGuard
+
+    guard = PublishGuard(posting, posting.get("state_path"))
+
+    # Ask the guard for each platform Upload-Post can reach.  If any says no,
+    # skip the whole call — Upload-Post does not do partial sends with
+    # per-platform caps, so a half-firing call would mislead the guards.
+    up_aliases = {
+        "instagram": "instagram",
+        "facebook": "facebook",
+        "tiktok": "tiktok",
+        "x": "twitter",
+        "youtube_shorts": "youtube",
+    }
+    project_platforms = [
+        p for p in up_aliases
+        if (posting.get("platforms", {}).get(p, {}) or {}).get("enabled")
+    ]
+    if not project_platforms:
+        if dry_run:
+            print(f"[Social] upload_post: WOULD post {os.path.basename(video_path)}"
+                  f" to {project_platforms or '(none enabled)'}")
+            return True
+        return False
+
+    allowed_all = True
+    for plat in project_platforms:
+        allowed, reason = guard.can_post(plat, ignore_spacing=ignore_spacing)
+        if not allowed:
+            print(f"[Social] upload_post ({plat}): {reason}")
+            allowed_all = False
+    if not allowed_all:
+        if dry_run:
+            print(f"[Social] upload_post: WOULD post {os.path.basename(video_path)}"
+                  f" to {project_platforms} (guard blocked: {[p for p in project_platforms if not allowed_all] or 'unknown'})")
+            return True
+        return False
+
+    if not publisher.ready():
+        print("[Social] upload_post: skipped - not configured yet. "
+              "Set UPLOAD_POST_API_KEY and UPLOAD_POST_USER in .env.")
+        if dry_run:
+            print(f"[Social] upload_post: WOULD post {os.path.basename(video_path)}"
+                  f" to {project_platforms} (credentials needed)")
+            return True
+        return False
+
+    if dry_run:
+        print(f"[Social] upload_post: WOULD post {os.path.basename(video_path)}"
+              f" to {project_platforms}")
+        for plat in project_platforms:
+            guard.record_result(plat, True)
+        return True
+
+    # Build a full caption the way the other clip publishers do: headline +
+    # tags.  Upload-Post takes title + description, so split on the first
+    # blank line.
+    from utils.social_promoter import hashtags_for as _hf
+    up_cfg = (config or {}).get("upload_post", {}) or {}
+    headline = (caption or "").splitlines()[0][:100] or "Clip"
+    tags = _hf(headline, "instagram")   # Instagram-sized tag set
+    description = "\n".join((caption or "").splitlines()[1:])[:5000] or ""
+    if tags:
+        description = f"{description}\n\n{tags}".strip()
+
+    # Tell the publisher which platforms to target, plus any per-platform
+    # title overrides from config.
+    up_config = dict(config or {})
+    up_config.setdefault("upload_post", {}).setdefault("platforms", project_platforms)
+    # Per-platform title overrides: instagram_title, x_title, …
+    for plat in project_platforms:
+        override_key = f"{plat}_title"
+        if override_key in (config or {}).get("upload_post", {}).get("overrides", {}):
+            up_config["upload_post"].setdefault("overrides", {})[f"{up_aliases[plat]}_title"] = \
+                (config or {}).get("upload_post", {}).get("overrides", {}).get(override_key, "")
+
+    from utils.clip_queue import _censored_clip
+
+    censored, censored_temp = _censored_clip("upload_post", video_path,
+                                              up_config)
+    if not censored:
+        return False
+
+    print(f"[Social] upload_post: uploading "
+          f"{os.path.basename(video_path)} to {project_platforms} ...")
+    try:
+        result = publisher.post_clip(censored, description, dry_run=False)
+    except Exception as exc:
+        result = None
+        print(f"[Social] upload_post: upload raised {exc}")
+    finally:
+        for leftover in (censored_temp,):
+            if leftover and leftover != video_path:
+                try:
+                    os.remove(leftover)
+                except OSError:
+                    pass
+
+    # Record each platform separately.  upload_post's result is a dict of
+    # alias -> outcome; map back to project names.
+    per_platform_ok = {}
+    if isinstance(result, dict):
+        for alias, status in result.items():
+            project_name = [p for p, a in up_aliases.items() if a == alias]
+            if project_name:
+                per_platform_ok[project_name[0]] = bool(status)
+    else:
+        # SDK returns a response object; treat the whole thing as one success
+        # for every platform we asked about.
+        for plat in project_platforms:
+            per_platform_ok[plat] = bool(result)
+
+    for plat in project_platforms:
+        ok = per_platform_ok.get(plat, False)
+        guard.record_result(plat, ok)
+
+    posted = [p for p, ok in per_platform_ok.items() if ok]
+    print(f"[Social] upload_post: posted to {posted}"
+          if posted else
+          f"[Social] upload_post: failed on every platform")
+    return bool(posted)
+
+
+def _up_posted_platforms(posting: dict, config: dict) -> list:
+    """The project platforms Upload-Post can reach that are enabled now."""
+    up_aliases = {
+        "instagram": "instagram",
+        "facebook": "facebook",
+        "tiktok": "tiktok",
+        "x": "twitter",
+        "youtube_shorts": "youtube",
+    }
+    return [
+        p for p in up_aliases
+        if (posting.get("platforms", {}).get(p, {}) or {}).get("enabled")
+    ]
+
+
 def announce_upload(features: dict, title: str, new_uploads: dict,
                     posting: dict = None, config: dict = None,
                     dry_run: bool = False, all_uploads: dict = None,
@@ -787,7 +1157,7 @@ def announce_upload(features: dict, title: str, new_uploads: dict,
       keep their existing behaviour. Discord is a webhook into the user's
       own server, not a public account, so there is nothing for the guard
       to protect against.
-    - Facebook, Instagram and X are public accounts and go through
+    - Facebook, Instagram, TikTok and X are public accounts and go through
       PublishGuard, configured under `posting`. Passing `posting` is what
       turns them on; without it this behaves exactly as it did before.
     """
@@ -796,12 +1166,42 @@ def announce_upload(features: dict, title: str, new_uploads: dict,
 
     posted_extra = []
     if clip_path:
-        # The one route Instagram has. Done first so a failure here still
-        # leaves every other platform to announce normally.
-        if post_clip_to_instagram(posting, clip_path,
-                                  build_message(title, all_uploads or new_uploads),
-                                  config, dry_run):
-            posted_extra.append("instagram")
+        # Upload-Post: one API call that posts to every connected short-form
+        # platform (TikTok, Instagram, YouTube, Facebook, X, …) at once.
+        # When it is configured, use it as the primary clip path — the
+        # per-platform functions below become fallbacks for the platforms
+        # Upload-Post does not cover or that are not connected.
+        up_publisher = _publisher_for("upload_post", config or {})
+        if up_publisher and up_publisher.ready():
+            caption = build_message(title, all_uploads or new_uploads)
+            if post_clip_to_upload_post(posting, clip_path, caption,
+                                        config, dry_run):
+                posted_extra.extend(
+                    ["instagram", "tiktok", "facebook", "x", "youtube_shorts"]
+                    if dry_run else
+                    _up_posted_platforms(posting, config))
+        else:
+            # Fallback: per-platform clip posting for the platforms that have
+            # a direct publisher configured.
+            # Clip routes (video file, not a link): Instagram, TikTok, Facebook, X.
+            # Done first so a failure here still leaves every other platform to
+            # announce normally.
+            if post_clip_to_instagram(posting, clip_path,
+                                      build_message(title, all_uploads or new_uploads),
+                                      config, dry_run):
+                posted_extra.append("instagram")
+            if post_clip_to_tiktok(posting, clip_path,
+                                    build_message(title, all_uploads or new_uploads),
+                                    config, dry_run):
+                posted_extra.append("tiktok")
+            if post_clip_to_facebook(posting, clip_path,
+                                      build_message(title, all_uploads or new_uploads),
+                                      config, dry_run):
+                posted_extra.append("facebook")
+            if post_clip_to_x(posting, clip_path,
+                               build_message(title, all_uploads or new_uploads),
+                               config, dry_run):
+                posted_extra.append("x")
 
     # WHAT triggers an announcement and WHAT it says are different
     # questions. Only a real upload this run should trigger one - that is
@@ -884,6 +1284,8 @@ TAG_LIMITS = {
     "instagram": 12,
     "facebook": 8,
     "youtube_shorts": 5,
+    "tiktok": 6,
+    "x": 2,
     "zernio_tiktok": 6,
     "zernio_twitter": 2,
 }

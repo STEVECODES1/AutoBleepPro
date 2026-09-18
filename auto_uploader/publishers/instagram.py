@@ -125,20 +125,21 @@ class InstagramPublisher:
                             share_to_feed: bool = True) -> bool:
         """Publish a local file as a Reel, with no hosting anywhere.
 
-        This is what makes Instagram reachable at all. The documented
-        Content Publishing flow takes a `video_url` that Meta fetches
-        server-side, which means every clip needs a public URL first -
-        and a Rumble page is not a fetchable video file, so there was
-        nothing to give it.
-
-        upload_type=resumable removes that requirement: the container is
-        created empty and the bytes are POSTed straight to
-        rupload.facebook.com. Same container, same publish step
-        afterwards.
-
-        Returns True on success. On any failure the caller still has the
-        hosted-URL path in post_reel().
+        Try the free instagrapi route (instagram_free.py) first — it logs in
+        with a regular account and uploads directly. Fall back to the Graph
+        API resumable-upload path below when instagrapi is not available.
         """
+        # instagrapi route (free, unofficial).
+        try:
+            from publishers.instagram_free import InstagramFreePublisher
+            free = InstagramFreePublisher(self._cfg)
+            if free.ready():
+                return free.post_reel_from_file(video_path, caption,
+                                                share_to_feed)
+        except ImportError:
+            pass
+
+        # Graph API route (official, needs Business Account + token).
         if not self._ready():
             return False
         if not os.path.isfile(video_path):
