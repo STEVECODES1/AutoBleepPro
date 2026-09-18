@@ -21,8 +21,8 @@ import pytest  # noqa: E402
 
 from autoreel import llm_highlights as llm  # noqa: E402
 from autoreel.highlights import Highlight  # noqa: E402
-from autoreel.llm_highlights import (ANTHROPIC, GEMINI, OPENAI,  # noqa: E402
-                                     all_available, asker_for, rank)
+from autoreel.llm_highlights import (ANTHROPIC, CEREBRAS, GEMINI,  # noqa: E402
+                                     OPENAI, all_available, asker_for, rank)
 
 GOOD = '{"clips":[{"index":1,"score":90,"title":"picked"}]}'
 
@@ -30,7 +30,7 @@ GOOD = '{"clips":[{"index":1,"score":90,"title":"picked"}]}'
 @pytest.fixture
 def no_keys(monkeypatch):
     for name in ("GEMINI_API_KEY", "GOOGLE_API_KEY", "OPENAI_API_KEY",
-                 "ANTHROPIC_API_KEY"):
+                 "ANTHROPIC_API_KEY", "CEREBRAS_API_KEY"):
         monkeypatch.delenv(name, raising=False)
     return monkeypatch
 
@@ -202,13 +202,17 @@ def test_every_configured_key_is_checked(no_keys, monkeypatch):
     assert asked == [GEMINI, OPENAI]
 
 
-def test_no_keys_at_all_names_all_three(no_keys):
+def test_no_keys_at_all_names_every_provider(no_keys):
+    """The list is derived from the key table, so adding a provider
+    cannot leave this message naming fewer than are supported."""
     from autoreel.llm_highlights import check_all
 
     (_name, ok, detail), = check_all()
 
     assert not ok
-    assert "ANTHROPIC_API_KEY" in detail
+    for name in ("GEMINI_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY",
+                 "CEREBRAS_API_KEY"):
+        assert name in detail
 
 
 def test_one_bad_key_does_not_hide_a_good_one(no_keys, monkeypatch):
@@ -242,3 +246,101 @@ def test_a_configured_model_is_not_forced_onto_a_second_provider(
     check_all(model="gemini-flash-latest")
 
     assert seen == ["", ""], "a provider-specific model name was reused"
+
+
+# ── talking to Cerebras ──────────────────────────────────────────────
+#
+# Cerebras is OpenAI-shaped, but its models are REASONING models: they
+# spend completion tokens on a `reasoning` field before writing any
+# `content`. Measured on the live API with max_tokens=10 the reply was
+#
+#   {"finish_reason":"length","message":{"reasoning":"The user asks: ..."}}
+#
+# with no `content` key at all. Every test here exists because of that.
+
+def test_cerebras_goes_after_gemini_and_before_the_paid_ones(no_keys):
+    """Gemini sees frames; Cerebras is fast and free. The paid backstops
+    come last."""
+    no_keys.setenv("GEMINI_API_KEY", "g")
+    no_keys.setenv("CEREBRAS_API_KEY", "c")
+    no_keys.setenv("OPENAI_API_KEY", "o")
+    no_keys.setenv("ANTHROPIC_API_KEY", "a")
+
+    assert [p for p, _ in all_available()] == [GEMINI, CEREBRAS, OPENAI,
+                                               ANTHROPIC]
+
+
+def test_cerebras_has_its_own_caller():
+    assert asker_for(CEREBRAS) is llm._ask_cerebras
+
+
+def test_cerebras_asks_for_a_budget_it_can_think_inside(monkeypatch):
+    """A reasoning model needs room to think before it writes anything.
+    At OpenAI's usual 5-token ceiling it returns no content at all."""
+    sent = {}
+
+    def note(url, payload, headers):
+        sent["url"] = url
+        sent["payload"] = payload
+        sent["headers"] = headers
+        return {"choices": [{"message": {"content": GOOD}}]}
+
+    monkeypatch.setattr(llm, "_post", note)
+
+    assert llm._ask_cerebras("k", "gpt-oss-120b", "prompt") == GOOD
+    assert sent["url"] == "https://api.cerebras.ai/v1/chat/completions"
+    assert sent["headers"]["Authorization"] == "Bearer k"
+    assert sent["payload"]["max_tokens"] >= 1024, \
+        "too small for a reasoning model to finish thinking and answer"
+    assert sent["payload"]["response_format"] == {"type": "json_object"}
+    assert sent["payload"]["messages"][0]["content"] == llm.SYSTEM_PROMPT
+
+
+def test_a_reasoning_only_reply_is_empty_and_says_why(monkeypatch, capsys):
+    """The dangerous case: a valid reply with no `content`. Read as "the
+    model had no opinion" it silently hands the run to the next provider."""
+    monkeypatch.setattr(llm, "_post", lambda *a, **k: {
+        "choices": [{"finish_reason": "length",
+                     "message": {"reasoning": "The user asks: Reply with..."}}]})
+
+    assert llm._ask_cerebras("k", "gpt-oss-120b", "p") == ""
+    assert "token ceiling" in capsys.readouterr().out
+
+
+def test_a_reasoning_only_reply_is_not_reported_as_a_bad_key(
+        no_keys, monkeypatch):
+    """--check-llm must not call a working key broken because the model
+    spent its budget thinking."""
+    from autoreel.llm_highlights import check
+
+    no_keys.setenv("CEREBRAS_API_KEY", "c")
+    monkeypatch.setattr(llm, "resolve_model", lambda *a, **k: "gpt-oss-120b")
+    monkeypatch.setattr(llm, "_post_detailed", lambda *a, **k: ({
+        "choices": [{"finish_reason": "length",
+                     "message": {"reasoning": "thinking..."}}]}, ""))
+
+    ok, detail = check()
+
+    assert not ok
+    assert "reasoning" in detail
+    assert "rejected the key" not in detail
+
+
+def test_a_cerebras_models_endpoint_is_asked_for_what_the_key_reaches(
+        monkeypatch):
+    """Its catalogue is small and turns over, so the module's rule -
+    ask the provider rather than pin a name - applies here too."""
+    monkeypatch.setattr(llm, "_list_models_openai_style",
+                        lambda url, key: ["gpt-oss-120b", "qwen-3.8-27b"])
+
+    assert llm.list_models(CEREBRAS, "c") == ["gpt-oss-120b", "qwen-3.8-27b"]
+
+
+def test_the_no_key_message_is_derived_from_the_key_table(no_keys):
+    """It named three providers and stayed at three after a fourth was
+    added, so the operator was told to look for the wrong list."""
+    names = llm._all_key_names()
+
+    for provider in llm.PROVIDER_ORDER:
+        for var in llm._KEY_NAMES[provider]:
+            assert var in names, f"{var} missing from the no-key message"

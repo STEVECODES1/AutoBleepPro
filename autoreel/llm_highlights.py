@@ -45,6 +45,7 @@ from typing import Optional
 GEMINI = "gemini"
 OPENAI = "openai"
 ANTHROPIC = "anthropic"
+CEREBRAS = "cerebras"
 
 # Last resort only. Model names are retired faster than a pinned default
 # can be maintained - the first key tried against this hit "gemini-2.5-flash
@@ -54,6 +55,7 @@ DEFAULT_MODELS = {
     GEMINI: "gemini-flash-latest",
     OPENAI: "gpt-4o-mini",
     ANTHROPIC: "claude-sonnet-5",
+    CEREBRAS: "gpt-oss-120b",
 }
 
 # Model families that cannot do this job, whatever they are called.
@@ -64,13 +66,19 @@ _KEY_NAMES = {
     GEMINI: ("GEMINI_API_KEY", "GOOGLE_API_KEY"),
     OPENAI: ("OPENAI_API_KEY",),
     ANTHROPIC: ("ANTHROPIC_API_KEY",),
+    CEREBRAS: ("CEREBRAS_API_KEY",),
 }
 
 # Tried in this order. Gemini first because it is the only one here that
 # can be shown the FRAMES, which is the whole reason the picks got good;
 # the others are text-only and are the backstop for the days it will not
 # answer.
-PROVIDER_ORDER = (GEMINI, OPENAI, ANTHROPIC)
+#
+# Cerebras next, ahead of the other two text-only providers: it is the
+# fastest of them by a wide margin and its free tier covers this workload,
+# so a Gemini refusal costs seconds rather than a failed run. Measured on
+# the live API: 0.017s total for a short completion.
+PROVIDER_ORDER = (GEMINI, CEREBRAS, OPENAI, ANTHROPIC)
 
 _TIMEOUT = 90
 
@@ -229,6 +237,12 @@ def usable_models(names: list) -> list:
 
 def list_models(provider: str, key: str) -> list:
     """What this key can actually reach. Empty on any failure."""
+    if provider == CEREBRAS:
+        # Cerebras answers this unauthenticated-free and lists only what
+        # the key can call, which is worth asking: its catalogue is small
+        # and turns over (llama-3.3-70b was retired in favour of gpt-oss).
+        return _list_models_openai_style(
+            "https://api.cerebras.ai/v1/models", key)
     if provider != GEMINI:
         # OpenAI's list is large and mostly irrelevant here, and its
         # small-model names have been stable for years.
@@ -253,6 +267,26 @@ def list_models(provider: str, key: str) -> list:
         name = str(entry.get("name") or "").rsplit("/", 1)[-1]
         if name:
             names.append(name)
+    return names
+
+
+def _list_models_openai_style(url: str, key: str) -> list:
+    """Model ids from an OpenAI-shaped `GET /v1/models` reply."""
+    request = urllib.request.Request(
+        url, headers={"Authorization": f"Bearer {key}", **_CEREBRAS_HEADERS})
+    try:
+        with urllib.request.urlopen(request, timeout=_TIMEOUT) as response:
+            data = json.loads(response.read().decode("utf-8", "replace"))
+    except Exception:
+        return []
+    if not isinstance(data, dict):
+        return []
+    names = []
+    for entry in data.get("data") or []:
+        if isinstance(entry, dict):
+            name = str(entry.get("id") or "").strip()
+            if name:
+                names.append(name)
     return names
 
 
@@ -461,6 +495,19 @@ def _post_detailed(url: str, payload: dict, headers: dict,
         return None, str(exc)
 
 
+def _all_key_names() -> str:
+    """Every api-key variable name, in the order they are tried.
+
+    Derived rather than written out: this line named only three providers
+    and stayed that way after a fourth was added, so a run with no keys
+    told the operator to look for three when there were four.
+    """
+    names = []
+    for provider in PROVIDER_ORDER:
+        names.extend(_KEY_NAMES.get(provider, ()))
+    return " / ".join(names)
+
+
 def check_all(provider: str = "", model: str = "") -> list:
     """[(provider, ok, detail)] for EVERY configured key.
 
@@ -472,8 +519,7 @@ def check_all(provider: str = "", model: str = "") -> list:
     """
     found = all_available(provider)
     if not found:
-        return [("", False, "no GEMINI_API_KEY, OPENAI_API_KEY or "
-                            "ANTHROPIC_API_KEY in .env")]
+        return [("", False, f"no {_all_key_names()} in .env")]
     checked = []
     for name, _key in found:
         ok, detail = check(name, model if len(found) == 1 else "")
@@ -490,8 +536,7 @@ def check(provider: str = "", model: str = "") -> tuple:
     """
     provider, key = available(provider)
     if not provider:
-        return False, ("no GEMINI_API_KEY, OPENAI_API_KEY or "
-                       "ANTHROPIC_API_KEY in .env")
+        return False, f"no {_all_key_names()} in .env"
     model = resolve_model(provider, key, model)
 
     if provider == ANTHROPIC:
@@ -505,6 +550,18 @@ def check(provider: str = "", model: str = "") -> tuple:
                f"{model}:generateContent?key={key}")
         data, error = _post_detailed(
             url, {"contents": [{"parts": [{"text": "Reply with: ok"}]}]}, {})
+    elif provider == CEREBRAS:
+        # A reasoning model needs room to think before it writes anything,
+        # so this asks for far more than the 5 tokens the others need. At
+        # 5, gpt-oss-120b returns finish_reason "length" with a
+        # `reasoning` field and NO `content` - which reads exactly like a
+        # rejected key and would report a working key as broken.
+        data, error = _post_detailed(
+            "https://api.cerebras.ai/v1/chat/completions",
+            {"model": model,
+             "messages": [{"role": "user", "content": "Reply with: ok"}],
+             "max_tokens": 200},
+            _cerebras_headers(key))
     else:
         data, error = _post_detailed(
             "https://api.openai.com/v1/chat/completions",
@@ -517,6 +574,17 @@ def check(provider: str = "", model: str = "") -> tuple:
         return False, f"{provider} ({model}) rejected the key - {error}"
     if not isinstance(data, dict):
         return False, f"{provider} returned nothing usable"
+    if provider == CEREBRAS:
+        # The reply arrived, but check that the model actually produced
+        # text rather than spending the whole budget on reasoning.
+        try:
+            if not data["choices"][0]["message"].get("content"):
+                return False, (f"{provider} ({model}) answered but wrote no "
+                               f"content - the token budget was spent on "
+                               f"reasoning. Use a non-reasoning model or "
+                               f"raise _CEREBRAS_MAX_TOKENS.")
+        except (KeyError, IndexError, TypeError):
+            return False, f"{provider} returned nothing usable"
     return True, f"{provider} ({model}) answered - the key works"
 
 
@@ -695,8 +763,74 @@ def _ask_anthropic(key: str, model: str, prompt: str) -> str:
 
 def asker_for(provider: str):
     """The function that talks to this provider."""
-    return {GEMINI: _ask_gemini, OPENAI: _ask_openai,
+    return {GEMINI: _ask_gemini, CEREBRAS: _ask_cerebras,
+            OPENAI: _ask_openai,
             ANTHROPIC: _ask_anthropic}.get(provider, _ask_gemini)
+
+
+# Cerebras is OpenAI-shaped, with one thing that has to be handled
+# differently: its current models (gpt-oss-120b) are REASONING models and
+# spend completion tokens on a `reasoning` field before writing any
+# `content`. Measured on the live API with max_tokens=10:
+#
+#   {"finish_reason":"length","message":{"reasoning":"The user asks: ..."}}
+#
+# - no `content` key at all, which _ask_openai would read as the model
+# having no opinion and hand the run to the next provider for no reason.
+# A real answer needs a budget large enough to cover the thinking, so the
+# ceiling is generous and only a floor is pinned.
+_CEREBRAS_MAX_TOKENS = 8192
+
+# Cerebras sits behind a filter that answers HTTP 403 to the default
+# `Python-urllib/3.x` User-Agent and 200 to anything else. Measured:
+#
+#   default urllib UA   -> 403 Forbidden
+#   no UA / curl / any  -> 200
+#
+# Without this, a working key is reported as "rejected the key - HTTP
+# 403", which is the one message that sends an operator to regenerate a
+# key that was never the problem.
+_USER_AGENT = "AutoBleepPro/2.0 (+https://github.com/STEVECODES1/AutoBleepPro)"
+
+_CEREBRAS_HEADERS = {"User-Agent": _USER_AGENT}
+
+
+def _cerebras_headers(key: str) -> dict:
+    return {"Authorization": f"Bearer {key}", **_CEREBRAS_HEADERS}
+
+
+def _ask_cerebras(key: str, model: str, prompt: str) -> str:
+    payload = {
+        "model": model,
+        "messages": [{"role": "system", "content": SYSTEM_PROMPT},
+                     {"role": "user", "content": prompt}],
+        "response_format": {"type": "json_object"},
+        "temperature": 0.4,
+        "max_tokens": _CEREBRAS_MAX_TOKENS,
+    }
+    data = _post("https://api.cerebras.ai/v1/chat/completions", payload,
+                 _cerebras_headers(key))
+    if not isinstance(data, dict):
+        return ""
+    try:
+        content = data["choices"][0]["message"].get("content")
+    except (KeyError, IndexError, TypeError):
+        return ""
+    if not content:
+        # Ran out of budget mid-thought, or answered only in `reasoning`.
+        # Said out loud: an empty string here is indistinguishable from a
+        # model that read the candidates and liked none of them.
+        reason = ""
+        try:
+            reason = str(data["choices"][0].get("finish_reason") or "")
+        except (KeyError, IndexError, TypeError):
+            reason = ""
+        if reason == "length":
+            print(f"[Clips] Cerebras ({model}) hit the token ceiling before "
+                  f"writing an answer - raise _CEREBRAS_MAX_TOKENS or lower "
+                  f"the candidate count.")
+        return ""
+    return content
 
 
 def _ask_openai(key: str, model: str, prompt: str) -> str:
