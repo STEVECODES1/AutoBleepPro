@@ -115,6 +115,38 @@ ENCODE_PRESETS = {
     "slow — best compression": "slow",
 }
 
+# Common Whisper language codes. "auto" = let the model detect.
+LANGUAGE_CHOICES = {
+    "Auto-detect": None,
+    "English": "en",
+    "Spanish": "es",
+    "French": "fr",
+    "German": "de",
+    "Portuguese": "pt",
+    "Italian": "it",
+    "Dutch": "nl",
+    "Russian": "ru",
+    "Japanese": "ja",
+    "Korean": "ko",
+    "Chinese (Simplified)": "zh",
+    "Hindi": "hi",
+    "Turkish": "tr",
+    "Arabic": "ar",
+    "Polish": "pl",
+    "Swedish": "sv",
+    "Danish": "da",
+    "Norwegian": "no",
+    "Finnish": "fi",
+    "Thai": "th",
+    "Vietnamese": "vi",
+    "Indonesian": "id",
+    "Greek": "el",
+    "Czech": "cs",
+    "Romanian": "ro",
+    "Hungarian": "hu",
+    "Ukrainian": "uk",
+}
+
 BEEP_PRESETS = {
     "Classic TV Bleep (1000 Hz)": 1000,
     "High Pitch (1500 Hz)": 1500,
@@ -153,6 +185,8 @@ class AutoBleepPro:
         self.profane_words: list[dict] = []
         self.word_vars: list[ctk.BooleanVar] = []
         self.device_info: str = "unknown"
+        self.language_var: ctk.StringVar = ctk.StringVar(
+            value=list(LANGUAGE_CHOICES.keys())[0])
 
         self._audio_path_for_export: str | None = None
         self._video_path_for_export: str | None = None
@@ -168,6 +202,7 @@ class AutoBleepPro:
 
         self._ui_queue: queue.Queue = queue.Queue()
         self._closing = False
+        self._cancel_event: threading.Event | None = None
         self._poll_id: str | None = None
 
         self._setup_ui()
@@ -373,6 +408,22 @@ class AutoBleepPro:
                         variable=self.export_srt_var,
                         font=("Arial", 11)).pack(anchor="w", pady=(12, 2))
 
+        self.export_report_var = ctk.BooleanVar(value=False)
+        ctk.CTkCheckBox(inner, text="Also export bleep report (CSV: timestamp, word, reason)",
+                        variable=self.export_report_var,
+                        font=("Arial", 11)).pack(anchor="w", pady=(2, 2))
+
+        ctk.CTkLabel(inner, text="Transcript Language (Whisper):",
+                     font=("Arial", 12)).pack(anchor="w", pady=(14, 2))
+        ctk.CTkOptionMenu(inner, values=list(LANGUAGE_CHOICES.keys()),
+                          variable=self.language_var, width=320).pack(anchor="w")
+        ctk.CTkLabel(inner,
+                     text="Auto-detect is usually best. Set explicitly for "
+                          "mixed-language or non-English audio.",
+                     font=("Arial", 10), text_color="gray",
+                     wraplength=520, justify="left").pack(anchor="w", padx=26,
+                                                          pady=(2, 0))
+
         # Off by default, and it stays off unless ticked. The export is
         # what gets published, so a pacing change is never a surprise.
         self.trim_silence_var = ctk.BooleanVar(value=False)
@@ -478,6 +529,10 @@ class AutoBleepPro:
         ctk.CTkCheckBox(bs, text="Export SRT in batch (full transcript beside each video)",
                         variable=self.batch_srt_var,
                         font=("Arial", 11)).pack(anchor="w", padx=28, pady=(0, 4))
+        self.batch_report_var = ctk.BooleanVar(value=False)
+        ctk.CTkCheckBox(bs, text="Export bleep report in batch (CSV per video)",
+                        variable=self.batch_report_var,
+                        font=("Arial", 11)).pack(anchor="w", padx=28, pady=(0, 4))
         self.batch_trim_silence_var = ctk.BooleanVar(value=False)
         ctk.CTkCheckBox(bs, text="Trim silences / dead air in every video",
                         variable=self.batch_trim_silence_var,
@@ -490,9 +545,12 @@ class AutoBleepPro:
             fg_color="#7a2bb0", hover_color="#591e80", state="disabled")
         self.batch_btn.pack(pady=14, padx=24, fill="x")
 
-        self.batch_log = ctk.CTkTextbox(parent, font=("Consolas", 11), height=240)
+        self.batch_log = ctk.CTkTextbox(parent, font=("Consolas", 11), height=180)
         self.batch_log.pack(pady=4, padx=14, fill="both", expand=True)
         self.batch_log.insert("1.0", "Batch log will appear here...\n")
+        self.batch_progress = ctk.CTkProgressBar(parent)
+        self.batch_progress.pack(pady=(0, 8), padx=14, fill="x")
+        self.batch_progress.set(0)
 
     # ── Small UI callbacks (main thread) ─────────────────────────────────────
 
@@ -606,6 +664,7 @@ class AutoBleepPro:
 
     def _snapshot_options(self, *, output_dir_override: str | None = None,
                           write_srt: bool = False,
+                          write_report: bool = False,
                           trim_silence: bool | None = None) -> ProcessOptions:
         """Read every Tk variable ONCE, on the main thread."""
         raw = self.custom_words_var.get()
@@ -620,6 +679,9 @@ class AutoBleepPro:
                     self._update_status(f"⚠️ {reason} Falling back to the preset tone.")
                 beep_path = None
 
+        lang_label = self.language_var.get()
+        lang_code = LANGUAGE_CHOICES.get(lang_label)
+
         return ProcessOptions(
             model_name=MODEL_MAP[self.model_var.get()],
             compute_pref=COMPUTE_MAP[self.compute_var.get()],
@@ -632,6 +694,8 @@ class AutoBleepPro:
             output_dir=output_dir_override if output_dir_override is not None
             else self.output_dir,
             write_srt=write_srt,
+            write_report=write_report,
+            language=lang_code,
             # Explicit argument wins so the Batch tab can use its own
             # checkbox; otherwise the Single Video one applies.
             trim_silence=bool(self.trim_silence_var.get())
@@ -671,7 +735,8 @@ class AutoBleepPro:
             extract_audio(video_path, audio_path)
 
             self._update_status("[3/3] AI transcription + smart word detection…", 0.42)
-            transcript = transcribe_words(bundle, audio_path)
+            transcript = transcribe_words(bundle, audio_path,
+                                           language=options.language)
             found = find_profanity_v2(transcript, options.custom_words,
                                       sensitivity=options.sensitivity)
 
@@ -790,6 +855,7 @@ class AutoBleepPro:
 
         options = self._snapshot_options(
             write_srt=bool(self.export_srt_var.get()),
+            write_report=bool(self.export_report_var.get()),
             trim_silence=bool(self.trim_silence_var.get()))
         self.confirm_btn.configure(state="disabled")
         threading.Thread(
@@ -829,6 +895,9 @@ class AutoBleepPro:
             if options.write_srt and transcript:
                 srt_path = words_to_srt(transcript, sidecar_path(out_path, ".srt"))
                 extra = f"\nCaptions: {os.path.basename(str(srt_path))}"
+            if options.write_report:
+                extra = (extra + "\n" if extra else "") + \
+                         f"Bleep report: {os.path.basename(out_path)}_report.csv"
 
             self._update_status("✅ Done! Video saved.", 1.0)
             self._on_main(messagebox.showinfo, "Success! ✅",
@@ -853,6 +922,7 @@ class AutoBleepPro:
         options = self._snapshot_options(          # main thread
             output_dir_override=self._batch_output_dir,
             write_srt=bool(self.batch_srt_var.get()),
+            write_report=bool(self.batch_report_var.get()),
             trim_silence=bool(self.batch_trim_silence_var.get()))
         in_dir = self._batch_input_dir
         self.batch_btn.configure(state="disabled")
@@ -862,6 +932,10 @@ class AutoBleepPro:
 
     def _finish_batch(self, message: str, progress: float | None = None):
         self._update_status(message, progress)
+        try:
+            self.batch_progress.set(1.0 if progress is None else progress)
+        except Exception:
+            pass
         self._set_buttons(batch=True)
         self._busy = False
 
@@ -890,7 +964,9 @@ class AutoBleepPro:
             f"Loaded: {bundle.label}\n"
             f"Method: {METHOD_LABELS.get(options.method, options.method)}  |  "
             f"Sensitivity: {options.sensitivity} "
-            f"({sensitivity_band(options.sensitivity)})\n{'─' * 50}")
+            f"({sensitivity_band(options.sensitivity)})"
+            f"{'  |  Language: ' + options.language if options.language else '  |  Language: auto-detect'}\n"
+            f"{'─' * 50}")
 
         ok = failed = 0
         for idx, video_path in enumerate(files, 1):
@@ -898,6 +974,10 @@ class AutoBleepPro:
             self._batch_log_write(f"\n[{idx}/{len(files)}] {name}")
             self._update_status(f"Batch: {name} ({idx}/{len(files)})…",
                                 (idx - 1) / len(files))
+            try:
+                self.batch_progress.set((idx - 1) / len(files))
+            except Exception:
+                pass
 
             result = process_video(
                 video_path, options, bundle,

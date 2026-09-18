@@ -131,6 +131,56 @@ NEIGHBOUR_BLEED_MS = 120
 COMPUTE_CHOICES = ("auto", "int8", "float16", "float32")
 ENCODE_CHOICES = ("ultrafast", "fast", "medium", "slow")
 
+# ── Policy categories (mirrors autoreel/compliance.py DEFAULT_CATEGORIES) ──
+# These are the non-profanity content rules that can get a post removed or
+# age-restricted. They are intentionally clinical/plain terms rather than
+# slurs, so the list itself is safe to ship and edit.
+POLICY_CATEGORIES: dict[str, list[str]] = {
+    "violence": [
+        "kill you", "stab you", "shoot you", "beat you up", "murder",
+    ],
+    "drugs": [
+        "cocaine", "heroin", "meth", "fentanyl", "smoke crack",
+    ],
+    "self_harm": [
+        "kill myself", "self harm", "self-harm", "suicide",
+    ],
+    "sexual_content": [
+        "nsfw", "explicit content", "onlyfans",
+    ],
+}
+# Categories serious enough that muting the single word isn't enough - the
+# sentence around it usually carries the same meaning. YouTube acts on
+# context, not just the audible word.
+POLICY_HIGH_SEVERITY: frozenset[str] = frozenset({"hate_speech"})
+# Placeholder - real hate speech terms come from autoreel/compliance.py at
+# runtime if it is importable. If not, this stays empty and the policy scan
+# still covers violence/drugs/self_harm/sexual_content.
+POLICY_HATE_SPEECH: list[str] = []
+
+# Inflection suffix pattern, shared with autoreel/compliance.py.
+_POLICY_INFLECTIONS = r"(?:s|es|ed|ing|er|ers|y|ies|in|a|az|z)?"
+
+
+def _policy_matcher(phrases: list[str]) -> re.Pattern | None:
+    """One regex for a keyword list, matched on WORD BOUNDARIES + inflections."""
+    words = sorted(
+        {str(p).strip().lower() for p in phrases if str(p).strip()},
+        key=len, reverse=True,
+    )
+    if not words:
+        return None
+    joined = "|".join(re.escape(word) for word in words)
+    return re.compile(rf"\b(?:{joined}){_POLICY_INFLECTIONS}\b")
+
+
+# Pre-built policy patterns. Populated at module level; hate_speech terms
+# are injected from autoreel/compliance if available.
+_POLICY_PATTERNS: dict[str, re.Pattern | None] = {
+    name: _policy_matcher(phrases)
+    for name, phrases in POLICY_CATEGORIES.items()
+}
+
 
 def clamp_sensitivity(value: int | float | None) -> int:
     """Coerce anything user-supplied into 0-100."""
@@ -548,6 +598,178 @@ def find_profanity_v2(
 _check_word = check_word
 
 
+# ── Policy category detection ─────────────────────────────────────────────────
+# Mirrors the category system in autoreel/compliance.py so the uploader's
+# smart pipeline can use one engine for both profanity and policy content.
+# Hate-speech terms are injected from autoreel.compliance at import time if
+# it is available, so the lists stay in one place and bleep_engine stays
+# importable without autoreel present.
+
+def _inject_hate_speech_from_compliance() -> None:
+    """Pull hate_speech terms from autoreel.compliance if it is importable."""
+    global POLICY_HATE_SPEECH, _POLICY_PATTERNS
+    try:
+        from autoreel.compliance import DEFAULT_CATEGORIES
+    except ImportError:
+        return
+    hate_terms = DEFAULT_CATEGORIES.get("hate_speech", [])
+    if hate_terms and not POLICY_HATE_SPEECH:
+        POLICY_HATE_SPEECH.extend(hate_terms)
+        _POLICY_PATTERNS["hate_speech"] = _policy_matcher(hate_terms)
+
+
+_inject_hate_speech_from_compliance()
+
+
+@dataclass
+class PolicyHit:
+    """A policy-category violation, compatible with the uploader's Violation shape."""
+    word: str
+    start: float
+    end: float
+    category: str
+    segment_start: float | None = None
+    segment_end: float | None = None
+    prev_end: float | None = None
+    next_start: float | None = None
+
+    @property
+    def is_high_severity(self) -> bool:
+        return self.category in POLICY_HIGH_SEVERITY
+
+
+def find_policy_violations(
+    result: Any,
+    custom_words: Sequence[str] = (),
+    only_categories: Sequence[str] = (),
+    padding_ms: int = DEFAULT_PADDING_MS,
+) -> list[PolicyHit]:
+    """Scan a transcription result for policy-category violations.
+
+    Returns PolicyHit list. Each hit is deduplicated by start timestamp (ms)
+    so a word that trips two categories is only flagged once, with the
+    highest-severity category winning.
+    """
+    all_words = _flatten_words(result)
+    if not all_words:
+        return []
+
+    # Build category patterns, filtered by only_categories.
+    categories: dict[str, list[str]] = dict(POLICY_CATEGORIES)
+    if only_categories:
+        wanted = set(only_categories)
+        categories = {k: v for k, v in categories.items() if k in wanted}
+    if custom_words:
+        categories.setdefault("custom_word", [])
+        categories["custom_word"].extend(
+            str(w).strip().lower() for w in custom_words if str(w).strip())
+    patterns: dict[str, re.Pattern | None] = {
+        name: _policy_matcher(phrases) for name, phrases in categories.items()
+    }
+    # hate_speech pattern may have been injected above.
+    if "hate_speech" in categories and "hate_speech" not in patterns:
+        patterns["hate_speech"] = _policy_matcher(POLICY_HATE_SPEECH)
+
+    found: list[PolicyHit] = []
+    seen_starts: set[int] = set()
+
+    for segment in (result or {}).get("segments", []) or []:
+        seg_start = float(segment.get("start", 0.0) or 0.0)
+        seg_end = float(segment.get("end", 0.0) or 0.0)
+        words = [w for w in (segment.get("words", []) or []) if isinstance(w, dict)]
+        for idx, word_info in enumerate(words):
+            raw = str(word_info.get("word", "") or "").strip()
+            if not raw:
+                continue
+            try:
+                start = float(word_info.get("start", 0.0) or 0.0)
+                end = float(word_info.get("end", 0.0) or 0.0)
+            except (TypeError, ValueError):
+                continue
+
+            norm = raw.lower().strip(".,!?;:\"'")
+            core = re.sub(r"'(s|ll|d|m|re|ve|t)$", "", norm) if norm else ""
+
+            category: str | None = None
+
+            # High-severity categories first (hate_speech etc.) — they win on dedup.
+            for cat in POLICY_HIGH_SEVERITY:
+                pattern = patterns.get(cat)
+                if pattern and (pattern.search(core) or pattern.search(norm)):
+                    category = cat
+                    break
+
+            if not category:
+                for cat, pattern in patterns.items():
+                    if cat in POLICY_HIGH_SEVERITY:
+                        continue
+                    if pattern and (pattern.search(core) or pattern.search(norm)):
+                        category = cat
+                        break
+
+            # Custom words: use bleep_engine's own check for smarter matching.
+            if not category and custom_words:
+                ctx = [
+                    re.sub(r"[^a-z]", "",
+                           str(words[i].get("word", "") or "").strip().lower())
+                    for i in range(max(0, idx - 5), idx)
+                ]
+                is_bad, _reason = check_word(raw, ctx,
+                                             tuple(custom_words),
+                                             sensitivity=70)
+                if is_bad:
+                    category = "custom_word"
+
+            if not category:
+                continue
+
+            key = int(round(start * 1000))
+            if key in seen_starts:
+                continue
+            seen_starts.add(key)
+
+            prev_end = words[idx - 1].get("end") if idx > 0 else None
+            next_start = words[idx + 1].get("start") if idx + 1 < len(words) else None
+
+            found.append(PolicyHit(
+                word=raw,
+                start=start,
+                end=end,
+                category=category,
+                segment_start=seg_start if seg_start else None,
+                segment_end=seg_end if seg_end else None,
+                prev_end=prev_end,
+                next_start=next_start,
+            ))
+
+    return found
+
+
+def scan_all(
+    result: Any,
+    custom_words: Sequence[str] = (),
+    sensitivity: int = DEFAULT_SENSITIVITY,
+    only_categories: Sequence[str] = (),
+    mute_whole_segment: bool = False,
+) -> dict[str, list]:
+    """Combined profanity + policy scan.
+
+    Returns {"profanity": [hit dicts], "policy": [PolicyHit list]}.
+    The uploader's smart pipeline uses this to get both detection types
+    from one engine, with the profanity side getting bleep_engine's
+    smarter leet/homophone/context/mishear detection.
+    """
+    profanity_hits = find_profanity_v2(
+        result, custom_words, sensitivity=sensitivity)
+    policy_hits = find_policy_violations(
+        result,
+        custom_words=custom_words,
+        only_categories=only_categories,
+        padding_ms=DEFAULT_PADDING_MS,
+    )
+    return {"profanity": profanity_hits, "policy": policy_hits}
+
+
 # ═════════════════════════════════════════════════════════════════════════════
 # DEVICE / MODELS
 # ═════════════════════════════════════════════════════════════════════════════
@@ -671,15 +893,72 @@ class ModelCache:
 # it, so a prompt written in the register of the audio biases the model
 # toward transcribing verbatim instead of tidying. It never appears in the
 # output - it only shapes how the audio is read.
-VERBATIM_PROMPT = (
-    "The following is an unedited, verbatim gaming stream transcript. "
-    "It contains explicit language, insults and swearing, transcribed "
-    "exactly as spoken with no censoring, no asterisks and no omissions. "
-    "Example: Oh shit, what the fuck was that, you damn idiot, holy crap."
-)
+VERBATIM_PROMPTS: dict[str, str] = {
+    "en": (
+        "The following is an unedited, verbatim gaming stream transcript. "
+        "It contains explicit language, insults and swearing, transcribed "
+        "exactly as spoken with no censoring, no asterisks and no omissions. "
+        "Example: Oh shit, what the fuck was that, you damn idiot, holy crap."
+    ),
+    "es": (
+        "Esta es una transcripcion de streaming de juegos, editada y sin censura. "
+        "Contiene lenguaje explicito, insultos y palabrotas, transcritos "
+        "exactamente como se hablan, sin censura, ni asteriscos ni omisiones. "
+        "Ejemplo: Joder, que coche de mierda era ese, estupido de la puta madre."
+    ),
+    "fr": (
+        "Voici une transcription brute et non editee d'un stream de jeu video. "
+        "Elle contient du langage explicite, des insultes et des jurons, transcrits "
+        "exactement comme prononces, sans censure, ni asteroides, ni omissions. "
+        "Exemple: Putain, quelle est cette merde, espece d'enculé, sacre bleu."
+    ),
+    "de": (
+        "Dies ist eine unbearbeitete, wortgetreue Transkription eines Gaming-Streams. "
+        "Sie enthalt explizite Sprache, Beleidigungen und Schimpfworter, "
+        "exakt so wiedergegeben wie gesprochen, ohne Zensur, ohne Sternchen "
+        "und ohne Weglassungen. Beispiel: Scheiße, was zum Geier war das, du verdammter Idiot."
+    ),
+    "pt": (
+        "Esta e uma transcricao brutais e verbatim de um stream de jogo. "
+        "Contem linguagem explicita, insultos e palavras novas, transcritas "
+        "exatamente como faladas, sem censura, sem asteriscos e sem omissao. "
+        "Exemplo: Caralho, que porra era aquilo, idiota do caralho, semen."
+    ),
+    "it": (
+        "Questa e una trascrizione non censurata e letterale di uno stream di gioco. "
+        "Contiene linguaggio esplicito, insulti e parolacce, trascritti "
+        "esattamente come detti, senza censura, senza asterischi e senza omissioni. "
+        "Esempio: Accidenti, che cazzo era quello, cretino di merda, damnato."
+    ),
+    "ja": (
+        "これはゲーム実況の編集なし・文字通りの文字起こしです。 "
+        "露骨な言語、侮辱、暴言を含んでおり、 censorship・伏字・省略なしで "
+        "話されたとおりに正確に書き起こしています。 "
+        "例：クソ、なんでそんな fuck なんだ、まったくぶち殺してやりたい、 holy shit."
+    ),
+    "ko": (
+        "다음은 편집 없이 그대로 옮긴 게임 방송 음성 텍스트입니다. "
+        "노골적인 표현, 모욕, 욕설을 포함하며 검열·별점·생략 없이 "
+        "말한 그대로 정확하게 받아썼습니다. "
+        "예: 젠장, 이게 무슨 개소리야, 빌어먹을 멍청이, holy crap."
+    ),
+    "zh": (
+        "以下是未經編輯、逐字逐句的遊戲直播語音紀錄。 "
+        "包含露骨用語、侮辱性話語與髒話，均依原始發音原樣記錄，"
+        "無審查、無星號替代、無省略。 "
+        "範例：糟糕，操什麼傻逼東西，該死的白痴，天哪."
+    ),
+}
+
+# Fallback for any language not listed: English prompt. Better an English
+# biasing than none at all when the user set an explicit language.
+def _verbatim_prompt(language: str | None) -> str:
+    if not language:
+        return VERBATIM_PROMPTS["en"]
+    return VERBATIM_PROMPTS.get(language, VERBATIM_PROMPTS["en"])
 
 
-def transcribe_options(backend: str) -> dict:
+def transcribe_options(backend: str, language: str | None = None) -> dict:
     """Decode settings that decide how much profanity is heard at all.
 
     Kept in one place because the two backends take the same names and
@@ -688,13 +967,15 @@ def transcribe_options(backend: str) -> dict:
     """
     options = {
         "word_timestamps": True,
-        "initial_prompt": VERBATIM_PROMPT,
+        "initial_prompt": _verbatim_prompt(language),
         # Whisper otherwise feeds each window its own previous output, and
         # over hours of gameplay one bad window makes the next worse - it
         # loops or drifts, and whole minutes come back as repeated filler
         # with the real words gone.
         "condition_on_previous_text": False,
     }
+    if language:
+        options["language"] = language
     if backend != "openai-whisper":
         # A wider search costs time and finds words a greedy decode drops.
         # Missing a slur is more expensive here than the extra minutes.
@@ -702,9 +983,10 @@ def transcribe_options(backend: str) -> dict:
     return options
 
 
-def transcribe_words(bundle: ModelBundle, audio_path: str) -> dict:
+def transcribe_words(bundle: ModelBundle, audio_path: str,
+                     language: str | None = None) -> dict:
     """Transcribe with word timestamps, normalised to whisper's dict shape."""
-    options = transcribe_options(bundle.backend)
+    options = transcribe_options(bundle.backend, language=language)
     if bundle.backend == "openai-whisper":
         return bundle.model.transcribe(audio_path, **options)
 
@@ -868,9 +1150,18 @@ def _clamp_to_neighbours(s: int, e: int, padded_s: int, padded_e: int,
     """
     for b_start, b_end in bounds:
         if b_end <= s:
-            padded_s = max(padded_s, min(b_end - NEIGHBOUR_BLEED_MS, s))
+            # Neighbour is entirely before this word: pull the pad start
+            # back toward the neighbour's end, but never past it by more
+            # than NEIGHBOUR_BLEED_MS (the neighbour's own boundary is
+            # fuzzy too), and never past the original s.
+            candidate = max(b_end - NEIGHBOUR_BLEED_MS, s)
+            padded_s = max(padded_s, candidate)
         elif b_start >= e:
-            padded_e = min(padded_e, max(b_start + NEIGHBOUR_BLEED_MS, e))
+            # Neighbour is entirely after this word: pull the pad end in
+            # toward the neighbour's start plus bleed, but never before
+            # the original e, and never past padded_e.
+            candidate = min(b_start + NEIGHBOUR_BLEED_MS, e)
+            padded_e = min(padded_e, candidate)
             break
     return padded_s, padded_e
 
@@ -1162,6 +1453,70 @@ def sidecar_path(video_path: str | Path, suffix: str) -> Path:
     return p.with_suffix(suffix if suffix.startswith(".") else f".{suffix}")
 
 
+def write_bleep_report(
+    hits: Sequence[dict],
+    video_path: str | Path,
+    transcript: Any | None = None,
+    out_dir: str | None = None,
+) -> Path:
+    """Write a CSV report of every censored word: timestamp, word, reason.
+
+    The report is named after the output video (``clip_CLEAN_report.csv``)
+    and sits beside it. Useful for auditing what the detector caught without
+    scrubbing the video.
+
+    Returns the path written.
+    """
+    out = Path(out_dir or os.path.dirname(str(video_path) or "."))
+    out.mkdir(parents=True, exist_ok=True)
+    stem = os.path.splitext(os.path.basename(str(video_path)))[0]
+    csv_path = out / f"{stem}_report.csv"
+
+    import csv
+
+    all_words = _flatten_words(transcript) if transcript else None
+    with csv_path.open("w", newline="", encoding="utf-8") as fh:
+        writer = csv.writer(fh)
+        writer.writerow(["start", "end", "word", "reason",
+                         "before_context", "after_context"])
+        for hit in hits:
+            start = float(hit.get("start", 0.0) or 0.0)
+            end = float(hit.get("end", 0.0) or 0.0)
+            word = str(hit.get("word", "")).strip()
+            reason = str(hit.get("reason", "")).strip()
+            if all_words:
+                before = _context_around(all_words, start, -5)
+                after = _context_around(all_words, end, 5)
+            else:
+                before = after = ""
+            writer.writerow([
+                f"{start:.2f}", f"{end:.2f}", word, reason,
+                before, after,
+            ])
+    return csv_path
+
+
+def _context_around(
+    all_words: list[dict],
+    anchor: float,
+    window: int,
+) -> str:
+    """Up to `window` words before (negative) or after (positive) `anchor`."""
+    if not all_words:
+        return ""
+    words = []
+    for w in all_words:
+        t = float(w.get("start", 0.0) or 0.0)
+        if (window < 0 and t < anchor) or (window > 0 and t > anchor):
+            words.append(str(w.get("word", "")).strip())
+    words = [w for w in words if w]
+    if window < 0:
+        words = words[-abs(window):]
+    else:
+        words = words[:window]
+    return " ".join(words)
+
+
 # ═════════════════════════════════════════════════════════════════════════════
 # PATHS
 # ═════════════════════════════════════════════════════════════════════════════
@@ -1197,14 +1552,16 @@ def build_output_path(
 
 
 def safe_remove(*paths: str | None) -> None:
-    """Best-effort delete. Tolerates missing files and Windows file locks."""
+    """Best-effort delete. Tolerates missing files; warns on locked/permission-denied."""
     for p in paths:
         if not p:
             continue
         try:
             os.remove(p)
-        except (FileNotFoundError, PermissionError, IsADirectoryError, OSError):
+        except FileNotFoundError:
             pass
+        except (PermissionError, IsADirectoryError, OSError) as exc:
+            print(f"[AutoBleep] warning: could not remove {p}: {exc}", file=sys.stderr)
 
 
 def new_temp_wav() -> str:
@@ -1354,6 +1711,7 @@ class ProcessOptions:
     write_video: bool = True
     write_srt: bool = False
     write_txt: bool = False
+    write_report: bool = False
     # Dead-air removal. OFF unless asked for: the export is what gets
     # published, and a pacing threshold that suits one streamer ruins
     # another's. See autoreel/silence_trim.py for why it needs BOTH a
@@ -1361,6 +1719,10 @@ class ProcessOptions:
     trim_silence: bool = False
     min_silence_s: float = 2.5
     silence_pad_s: float = 0.25
+    # Whisper language. None = auto-detect (the default). Setting it
+    # explicitly avoids the model drifting into the wrong language on
+    # mixed-language audio and skips the auto-detect overhead.
+    language: str | None = None
 
 
 @dataclass
@@ -1370,6 +1732,7 @@ class ProcessResult:
     output_path: str | None = None
     srt_path: str | None = None
     txt_path: str | None = None
+    report_path: str | None = None
     error: str | None = None
     # How much dead air came out, and how many stretches. Zero when the
     # trim was off or found nothing worth cutting.
@@ -1462,7 +1825,8 @@ def process_video(
         extract_audio(video_path, audio_path)
 
         say("Transcribing…")
-        transcript = transcribe_words(bundle, audio_path)
+        transcript = transcribe_words(bundle, audio_path,
+                                       language=options.language)
 
         # Sidecars are named after the *output* video when one is being
         # written, so `clip_CLEAN.mp4` sits next to `clip_CLEAN.srt`.
@@ -1470,6 +1834,11 @@ def process_video(
             if options.write_video else \
             os.path.join(options.output_dir or os.path.dirname(video_path),
                          os.path.basename(video_path))
+
+        hits = find_profanity_v2(transcript, options.custom_words,
+                                 sensitivity=options.sensitivity)
+        result.hits = hits
+        say(f"{len(hits)} word(s) to censor.")
 
         if options.write_txt:
             result.txt_path = str(words_to_txt(
@@ -1479,11 +1848,11 @@ def process_video(
             result.srt_path = str(words_to_srt(
                 transcript, sidecar_path(base_for_sidecars, ".srt")))
             say(f"Captions  -> {os.path.basename(result.srt_path)}")
-
-        hits = find_profanity_v2(transcript, options.custom_words,
-                                 sensitivity=options.sensitivity)
-        result.hits = hits
-        say(f"{len(hits)} word(s) to censor.")
+        if options.write_report:
+            result.report_path = str(write_bleep_report(
+                hits, base_for_sidecars, transcript,
+                options.output_dir))
+            say(f"Bleep report -> {os.path.basename(result.report_path)}")
 
         if not options.write_video:
             return result

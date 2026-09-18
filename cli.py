@@ -58,6 +58,15 @@ def build_parser() -> argparse.ArgumentParser:
             "   0-30   only real profanity, leet/masked words and --custom-words\n"
             "  31-70   adds minced oaths (fudge), mishears (duck) and matching context\n"
             "  71-100  also fires on weaker surrounding context\n"
+            "\n"
+            "output extras:\n"
+            "   --srt         full-transcript .srt beside each output\n"
+            "   --txt         timestamped .txt transcript beside each output\n"
+            "   --report      CSV of every bleept word (timestamp, word, reason)\n"
+            "\n"
+            "language:\n"
+            "   --lang en     force English (skips auto-detect)\n"
+            "   --lang es     Spanish, etc. Omit for auto-detect.\n"
         ),
     )
     parser.add_argument("input", help="Video file, or a folder of videos.")
@@ -107,6 +116,11 @@ def build_parser() -> argparse.ArgumentParser:
                         help="Write a timestamped .txt transcript beside each output.")
     parser.add_argument("--no-bleep-export", dest="bleep_export", action="store_false",
                         help="Skip video rendering; only analyse (use with --srt/--txt).")
+    parser.add_argument("--report", action="store_true",
+                        help="Write a CSV bleep report beside each output video.")
+    parser.add_argument("--lang", default=None, metavar="LANG",
+                        help="Whisper language code (e.g. 'en', 'es', 'fr'). "
+                             "Omit for auto-detect (default).")
 
     parser.add_argument("-q", "--quiet", action="store_true",
                         help="Suppress progress output on stderr.")
@@ -180,6 +194,8 @@ def main(argv: list[str] | None = None) -> int:
         write_video=args.bleep_export,
         write_srt=args.srt,
         write_txt=args.txt,
+        write_report=args.report,
+        language=args.lang,
         trim_silence=args.trim_silence,
         min_silence_s=args.min_silence,
     )

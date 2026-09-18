@@ -26,6 +26,15 @@ except ImportError:  # pragma: no cover - exercised in envs without the dep
 
 from .profanity_extra import contains_extra
 
+# Whether bleep_engine is importable at runtime. If it is, compliance.py prefers
+# its check_word() for profanity detection because it understands leet-speak,
+# homophones and context triggers that the base profanity list misses.
+try:
+    import bleep_engine  # type: ignore[import-untyped]
+    _BLEEP_ENGINE_AVAILABLE = True
+except ImportError:  # pragma: no cover - bare copy without bleep_engine
+    _BLEEP_ENGINE_AVAILABLE = False
+
 # Non-explicit keyword phrases for kid-unfriendly topics beyond raw
 # profanity. Intentionally clinical/plain terms (drug names, phrasing
 # around violence or self-harm) rather than slurs, so the list itself is
@@ -192,7 +201,7 @@ class ComplianceEngine:
         self._custom = _matcher(self.custom_words)
 
     def _flag_reason(self, word: str) -> Optional[str]:
-        normalized = word.strip().lower().strip(".,!?;:\"'")
+        normalized = word.strip().lower().strip(".,!?;:\\\"'")
         if not normalized:
             return None
 
@@ -220,6 +229,28 @@ class ComplianceEngine:
                     continue
                 if pattern and pattern.search(candidate):
                     return category
+
+            # ── Smart profanity detection from bleep_engine ─────────────────
+            # bleep_engine's check_word knows leet-speak (f@ck), homophones
+            # (beach → bitch), context triggers (son of a → bitch), and
+            # Whisper mishears (duck → fuck). Use it when it is available and
+            # the caller has not restricted us to policy-only categories.
+            # When only_categories is set we are in policy-only mode and must
+            # not consult the profanity filter at all (it would undo the
+            # restriction by flagging ordinary swearing).
+            if (self.use_profanity_filter
+                    and not self.only_categories
+                    and _BLEEP_ENGINE_AVAILABLE):
+                try:
+                    import bleep_engine as _be
+                    is_bad, _reason = _be.check_word(
+                        word, [], self.custom_words,
+                        sensitivity=_be.DEFAULT_SENSITIVITY,
+                    )
+                    if is_bad:
+                        return "profanity"
+                except Exception:
+                    pass
 
             if self.use_profanity_filter and (
                     (HAS_BETTER_PROFANITY and _profanity.contains_profanity(candidate))
