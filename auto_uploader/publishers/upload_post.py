@@ -21,9 +21,9 @@ try:
     _UP_CLIENT_OK = True
 except ImportError:
     _UP_CLIENT_OK = False
-    log.warning(
-        "upload_post: 'upload-post' SDK not installed — "
-        "pip install upload-post")
+    log.info(
+        "upload_post: optional 'upload-post' SDK not installed — using the "
+        "REST route. Install it with: pip install upload-post")
 
 try:
     import requests
@@ -76,11 +76,8 @@ class UploadPostPublisher:
             if p]
 
     def ready(self) -> bool:
-        if not _UP_CLIENT_OK:
-            log.error(
-                "upload_post: 'upload-post' SDK not installed — "
-                "pip install upload-post")
-            return False
+        # The SDK is optional: _upload_via_rest covers it. Only 'requests'
+        # and the two credentials are hard requirements.
         if not _REQUESTS_OK:
             log.error("upload_post: 'requests' not installed — "
                       "pip install requests")
@@ -95,6 +92,9 @@ class UploadPostPublisher:
                 "upload_post: UPLOAD_POST_USER must be set in .env — "
                 "your profile username from the dashboard.")
             return False
+        if not _UP_CLIENT_OK:
+            log.info("upload_post: SDK not installed — using the REST route "
+                     "(same API, no extra dependency).")
         return True
 
     def post_clip(self, video_path: str, caption: str = "",
@@ -145,10 +145,6 @@ class UploadPostPublisher:
                 key = f"{alias}_{suffix}"
                 if key in self._overrides:
                     extra[key] = self._overrides[key]
-
-        if dry_run:
-            log.info("[upload_post] WOULD POST to %s", aliases)
-            return {alias: "dry-run" for alias in aliases}
 
         # Try the SDK first; fall back to raw requests if it throws.
         try:
@@ -221,16 +217,19 @@ class UploadPostPublisher:
         files = {
             "video": (os.path.basename(video_path), video_bytes, "video/mp4"),
         }
-        data = {
-            "title": title,
-            "user": user,
-            "platforms": ",".join(platforms),
-        }
+        # The API takes repeated `platform[]` fields, not a comma-joined
+        # string (that shape belongs to /analyze-shorts). A dict cannot hold
+        # duplicate keys, so build a list of tuples.
+        data = [
+            ("title", title),
+            ("user", user),
+        ]
+        data += [("platform[]", p) for p in platforms]
         if description:
-            data["description"] = description
+            data.append(("description", description))
         if extra:
             for k, v in extra.items():
-                data[k] = str(v)
+                data.append((k, str(v)))
 
         headers = {"Authorization": f"Apikey {self._api_key}"}
 
