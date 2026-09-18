@@ -22,7 +22,7 @@ import pytest  # noqa: E402
 from autoreel import llm_highlights as llm  # noqa: E402
 from autoreel.highlights import Highlight  # noqa: E402
 from autoreel.llm_highlights import (ANTHROPIC, CEREBRAS, GEMINI,  # noqa: E402
-                                     OPENAI, XKIRO, all_available,
+                                     GROQ, OPENAI, XKIRO, all_available,
                                      asker_for, rank)
 
 GOOD = '{"clips":[{"index":1,"score":90,"title":"picked"}]}'
@@ -31,7 +31,8 @@ GOOD = '{"clips":[{"index":1,"score":90,"title":"picked"}]}'
 @pytest.fixture
 def no_keys(monkeypatch):
     for name in ("GEMINI_API_KEY", "GOOGLE_API_KEY", "OPENAI_API_KEY",
-                 "ANTHROPIC_API_KEY", "CEREBRAS_API_KEY", "XKIRO_API_KEY"):
+                 "ANTHROPIC_API_KEY", "CEREBRAS_API_KEY", "XKIRO_API_KEY",
+                 "GROQ_API_KEY"):
         monkeypatch.delenv(name, raising=False)
     return monkeypatch
 
@@ -212,7 +213,7 @@ def test_no_keys_at_all_names_every_provider(no_keys):
 
     assert not ok
     for name in ("GEMINI_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY",
-                 "CEREBRAS_API_KEY", "XKIRO_API_KEY"):
+                 "CEREBRAS_API_KEY", "XKIRO_API_KEY", "GROQ_API_KEY"):
         assert name in detail
 
 
@@ -507,3 +508,117 @@ def test_xkiro_vision_reports_why_it_failed(monkeypatch):
 
     assert reply == ""
     assert "no vision" in why
+
+
+# ── talking to Groq ──────────────────────────────────────────────────
+#
+# OpenAI-shaped, free, and fast. Its catalogue is the reason two of these
+# tests exist: 13 models, five of which are not chat models at all
+# (two whisper transcribers, two prompt-guard classifiers, one TTS voice)
+# and two more that are agentic routers rather than plain instruct models.
+
+def test_groq_comes_after_cerebras_and_before_the_paid_ones(no_keys):
+    no_keys.setenv("GEMINI_API_KEY", "g")
+    no_keys.setenv("XKIRO_API_KEY", "x")
+    no_keys.setenv("CEREBRAS_API_KEY", "c")
+    no_keys.setenv("GROQ_API_KEY", "q")
+    no_keys.setenv("OPENAI_API_KEY", "o")
+
+    assert [p for p, _ in all_available()] == [GEMINI, XKIRO, CEREBRAS, GROQ,
+                                              OPENAI]
+
+
+def test_groq_is_text_only(no_keys):
+    """None of its models are multimodal, so it must not be handed frames."""
+    assert GROQ not in llm.VISION_PROVIDERS
+    assert llm.vision_asker_for(GROQ) is None
+
+
+def test_groq_has_its_own_caller():
+    assert asker_for(GROQ) is llm._ask_groq
+
+
+def test_groqs_non_chat_models_are_filtered_out_of_the_auto_pick():
+    """Whisper, prompt-guard and orpheus sit in the same catalogue as the
+    chat models. An auto-pick that lands on one of them answers nothing."""
+    catalogue = [
+        "whisper-large-v3", "whisper-large-v3-turbo",
+        "meta-llama/llama-prompt-guard-2-22m",
+        "meta-llama/llama-prompt-guard-2-86m",
+        "canopylabs/orpheus-v1-english",
+        "canopylabs/orpheus-arabic-saudi",
+        "groq/compound", "groq/compound-mini",
+        "openai/gpt-oss-120b", "qwen/qwen3.8-27b",
+    ]
+
+    usable = llm.usable_models(catalogue)
+
+    for bad in ("whisper", "guard", "orpheus", "compound"):
+        assert not any(bad in name for name in usable),             f"an auto-pick could land on a {bad} model"
+    assert usable, "it filtered everything out"
+
+
+def test_groq_asks_for_a_budget_a_reasoning_model_can_think_inside(
+        monkeypatch):
+    """gpt-oss is what the auto-pick settles on here, and it thinks
+    before it answers."""
+    sent = {}
+
+    def note(url, payload, headers):
+        sent.update(url=url, payload=payload, headers=headers)
+        return {"choices": [{"message": {"content": GOOD}}]}
+
+    monkeypatch.setattr(llm, "_post", note)
+
+    assert llm._ask_groq("k", "openai/gpt-oss-120b", "p") == GOOD
+    assert sent["url"] == "https://api.groq.com/openai/v1/chat/completions"
+    assert sent["headers"]["Authorization"] == "Bearer k"
+    assert sent["headers"]["User-Agent"] == llm._USER_AGENT
+    assert sent["payload"]["max_tokens"] >= 1024
+    assert sent["payload"]["messages"][0]["content"] == llm.SYSTEM_PROMPT
+
+
+def test_the_reasoning_check_is_about_the_model_not_the_provider():
+    """Cerebras, xKiro and Groq all serve gpt-oss NEXT TO models that do
+    not reason, so a per-provider flag is wrong on at least one of them.
+    This is the bug the model-aware version exists to prevent."""
+    for model in ("openai/gpt-oss-120b", "gpt-oss-20b", "qwq-32b"):
+        assert llm.is_reasoning_model(model), model
+    for model in ("qwen/qwen3.8-27b", "qwen/qwen3.8-omni-flash:free",
+                  "llama-3.3-70b", "gemini-flash-latest"):
+        assert not llm.is_reasoning_model(model), model
+
+
+def test_a_reasoning_reply_on_groq_is_not_reported_as_a_bad_key(
+        no_keys, monkeypatch):
+    from autoreel.llm_highlights import check
+
+    no_keys.setenv("GROQ_API_KEY", "q")
+    monkeypatch.setattr(llm, "resolve_model",
+                        lambda *a, **k: "openai/gpt-oss-120b")
+    monkeypatch.setattr(llm, "_post_detailed", lambda *a, **k: ({
+        "choices": [{"finish_reason": "length",
+                     "message": {"reasoning": "thinking..."}}]}, ""))
+
+    ok, detail = check()
+
+    assert not ok
+    assert "reasoning" in detail
+    assert "rejected the key" not in detail
+
+
+def test_the_shared_reply_reader_handles_every_gateway(monkeypatch, capsys):
+    """One reader for all the OpenAI-shaped providers; the reasoning case
+    must not be read as the model having no opinion."""
+    reply = {"choices": [{"finish_reason": "length",
+                          "message": {"reasoning": "..."}}]}
+    assert llm._chat_reply(reply, "Groq", "openai/gpt-oss-120b") == ""
+    assert "token ceiling" in capsys.readouterr().out
+
+    # A content-bearing reply comes straight back.
+    assert llm._chat_reply(
+        {"choices": [{"message": {"content": GOOD}}]}, "Groq", "m") == GOOD
+
+    # Junk is empty, never an exception.
+    for junk in (None, {}, {"choices": []}, {"choices": [{}]}, "nope"):
+        assert llm._chat_reply(junk, "Groq", "m") == ""

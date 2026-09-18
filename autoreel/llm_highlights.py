@@ -47,6 +47,7 @@ OPENAI = "openai"
 ANTHROPIC = "anthropic"
 CEREBRAS = "cerebras"
 XKIRO = "xkiro"
+GROQ = "groq"
 
 # Last resort only. Model names are retired faster than a pinned default
 # can be maintained - the first key tried against this hit "gemini-2.5-flash
@@ -62,11 +63,28 @@ DEFAULT_MODELS = {
     # because the catalogue carries 100+ models including PAID ones and
     # choosing off it could quietly start billing.
     XKIRO: "qwen/qwen3.8-omni-flash:free",
+    # Matches what an auto-pick settles on, so the two cannot disagree:
+    # gpt-oss reasons before answering, which _chat_reply and the
+    # generous max-token budget both handle. Pin clips.llm_model to
+    # qwen/qwen3.8-27b if you would rather have the faster non-reasoning
+    # model.
+    GROQ: "openai/gpt-oss-120b",
 }
 
 # Model families that cannot do this job, whatever they are called.
+# 'guard'/'safeguard' are classifiers, 'orpheus' is text-to-speech - all
+# three sit in Groq's catalogue next to the chat models, and an auto-pick
+# that lands on one of them answers nothing.
+#
+# 'compound' is a different case: Groq's agentic routers CAN answer, and
+# did return valid JSON in testing, but they are built to call tools and
+# inject a hidden system prompt (477 prompt tokens measured for a
+# one-line reply). This module makes one strict-JSON completion call per
+# ranking pass, which is the wrong shape for an agent, so they are kept
+# out of the auto-pick rather than because they fail.
 _NOT_TEXT = ("embedding", "aqa", "imagen", "veo", "image", "tts", "audio",
-             "vision", "live", "realtime", "whisper", "dall-e", "moderation")
+             "vision", "live", "realtime", "whisper", "dall-e", "moderation",
+             "guard", "safeguard", "orpheus", "compound")
 
 _KEY_NAMES = {
     GEMINI: ("GEMINI_API_KEY", "GOOGLE_API_KEY"),
@@ -74,6 +92,7 @@ _KEY_NAMES = {
     ANTHROPIC: ("ANTHROPIC_API_KEY",),
     CEREBRAS: ("CEREBRAS_API_KEY",),
     XKIRO: ("XKIRO_API_KEY",),
+    GROQ: ("GROQ_API_KEY",),
 }
 
 # Tried in this order.
@@ -87,12 +106,14 @@ _KEY_NAMES = {
 # refusal costs a retry elsewhere rather than the whole pass. It is free,
 # fast, and returns clean content with no reasoning overhead.
 #
-# Cerebras third: fastest text-only backstop, free. Then the paid two.
+# Cerebras third and Groq fourth: both free and text-only, and both far
+# faster than the paid pair. Cerebras first of the two on measured speed
+# (0.017s vs 0.04s for a short completion). Then the paid two.
 #
 # VISION_PROVIDERS is what the vision pass is allowed to use. It is a
 # separate list because being able to answer about words says nothing
 # about being able to answer about pictures.
-PROVIDER_ORDER = (GEMINI, XKIRO, CEREBRAS, OPENAI, ANTHROPIC)
+PROVIDER_ORDER = (GEMINI, XKIRO, CEREBRAS, GROQ, OPENAI, ANTHROPIC)
 VISION_PROVIDERS = (GEMINI, XKIRO)
 
 # The OpenAI-shaped providers, and where each one lives. Adding another
@@ -101,12 +122,54 @@ _CHAT_URLS = {
     OPENAI: "https://api.openai.com/v1/chat/completions",
     CEREBRAS: "https://api.cerebras.ai/v1/chat/completions",
     XKIRO: "https://api.xkiro.com/v1/chat/completions",
+    GROQ: "https://api.groq.com/openai/v1/chat/completions",
 }
 
-# Providers whose models think before they answer. Their replies can carry
-# a `reasoning` field and no `content` at all if the budget runs out, so
-# callers must not read an empty `content` as "the model had no opinion".
-_REASONING_PROVIDERS = (CEREBRAS,)
+# Models that THINK before they answer. Their replies can carry a
+# `reasoning` field and no `content` at all when the budget runs out, so
+# an empty `content` must not be read as "the model had no opinion".
+#
+# This is a property of the MODEL, not of the provider: Cerebras, xKiro
+# and Groq all serve gpt-oss alongside models that do not reason, so a
+# per-provider list would be wrong on at least one of them. Matched on
+# the model id because that is what the caller actually asked for.
+_REASONING_MODEL_MARKERS = ("gpt-oss", "qwq", "deepseek-r", "reasoning")
+
+
+def is_reasoning_model(model: str) -> bool:
+    """Whether this model spends tokens thinking before it writes."""
+    name = str(model or "").lower()
+    return any(marker in name for marker in _REASONING_MODEL_MARKERS)
+
+
+def _chat_reply(data, provider: str, model: str) -> str:
+    """The text out of an OpenAI-shaped reply, or "".
+
+    Shared by every gateway-shaped provider because the reasoning-model
+    case is the same on all of them: a valid reply whose budget ran out
+    carries a `reasoning` field and NO `content`, and returning a bare
+    "" for that is indistinguishable from a model that read the
+    candidates and liked none of them.
+    """
+    if not isinstance(data, dict):
+        return ""
+    try:
+        message = data["choices"][0]["message"]
+    except (KeyError, IndexError, TypeError):
+        return ""
+    content = message.get("content")
+    if content:
+        return content
+    if is_reasoning_model(model):
+        try:
+            reason = str(data["choices"][0].get("finish_reason") or "")
+        except (KeyError, IndexError, TypeError):
+            reason = ""
+        if reason == "length":
+            print(f"[Clips] {provider} ({model}) hit the token ceiling before "
+                  f"writing an answer - the budget went on reasoning.")
+    return ""
+
 
 _TIMEOUT = 90
 
@@ -284,6 +347,12 @@ def list_models(provider: str, key: str) -> list:
         # free, and the default is pinned rather than chosen from here.
         return _list_models_openai_style(
             "https://api.xkiro.com/v1/models", key)
+    if provider == GROQ:
+        # Small (13) but mixed - whisper transcribers, prompt-guard
+        # classifiers and a TTS voice sit in it next to the chat models.
+        # _NOT_TEXT is what keeps an auto-pick off those.
+        return _list_models_openai_style(
+            "https://api.groq.com/openai/v1/models", key)
     if provider != GEMINI:
         # OpenAI's list is large and mostly irrelevant here, and its
         # small-model names have been stable for years.
@@ -618,7 +687,7 @@ def check(provider: str = "", model: str = "") -> tuple:
         return False, f"{provider} ({model}) rejected the key - {error}"
     if not isinstance(data, dict):
         return False, f"{provider} returned nothing usable"
-    if provider in _REASONING_PROVIDERS:
+    if is_reasoning_model(model):
         # The reply arrived, but check that the model actually produced
         # text rather than spending the whole budget on reasoning.
         try:
@@ -626,7 +695,7 @@ def check(provider: str = "", model: str = "") -> tuple:
                 return False, (f"{provider} ({model}) answered but wrote no "
                                f"content - the token budget was spent on "
                                f"reasoning. Use a non-reasoning model or "
-                               f"raise _CEREBRAS_MAX_TOKENS.")
+                               f"raise the max-token budget.")
         except (KeyError, IndexError, TypeError):
             return False, f"{provider} returned nothing usable"
     return True, f"{provider} ({model}) answered - the key works"
@@ -808,7 +877,7 @@ def _ask_anthropic(key: str, model: str, prompt: str) -> str:
 def asker_for(provider: str):
     """The function that talks to this provider."""
     return {GEMINI: _ask_gemini, CEREBRAS: _ask_cerebras,
-            XKIRO: _ask_xkiro,
+            XKIRO: _ask_xkiro, GROQ: _ask_groq,
             OPENAI: _ask_openai,
             ANTHROPIC: _ask_anthropic}.get(provider, _ask_gemini)
 
@@ -857,27 +926,7 @@ def _ask_cerebras(key: str, model: str, prompt: str) -> str:
     }
     data = _post("https://api.cerebras.ai/v1/chat/completions", payload,
                  _bearer_headers(key))
-    if not isinstance(data, dict):
-        return ""
-    try:
-        content = data["choices"][0]["message"].get("content")
-    except (KeyError, IndexError, TypeError):
-        return ""
-    if not content:
-        # Ran out of budget mid-thought, or answered only in `reasoning`.
-        # Said out loud: an empty string here is indistinguishable from a
-        # model that read the candidates and liked none of them.
-        reason = ""
-        try:
-            reason = str(data["choices"][0].get("finish_reason") or "")
-        except (KeyError, IndexError, TypeError):
-            reason = ""
-        if reason == "length":
-            print(f"[Clips] Cerebras ({model}) hit the token ceiling before "
-                  f"writing an answer - raise _CEREBRAS_MAX_TOKENS or lower "
-                  f"the candidate count.")
-        return ""
-    return content
+    return _chat_reply(data, "Cerebras", model)
 
 
 # ── xKiro ────────────────────────────────────────────────────────────
@@ -930,12 +979,41 @@ def _ask_xkiro(key: str, model: str, prompt: str) -> str:
         "max_tokens": _XKIRO_MAX_TOKENS,
     }
     data = _post(_CHAT_URLS[XKIRO], payload, _bearer_headers(key))
-    if not isinstance(data, dict):
-        return ""
-    try:
-        return data["choices"][0]["message"]["content"]
-    except (KeyError, IndexError, TypeError):
-        return ""
+    return _chat_reply(data, "xKiro", model)
+
+
+# ── Groq ─────────────────────────────────────────────────────────────
+#
+# OpenAI-shaped, free, and the fastest thing here after Cerebras - a
+# short completion measured at 0.04s. Two things to know:
+#
+#   1. It rejects the default urllib User-Agent (HTTP 403, Cloudflare
+#      code 1010), like Cerebras and xKiro. See _USER_AGENT.
+#   2. Its catalogue is 13 models and NOT all of them answer questions:
+#      two whisper transcribers, two llama-prompt-guard classifiers, and
+#      an orpheus text-to-speech voice. _NOT_TEXT filters all five so an
+#      auto-pick cannot land on one.
+#
+# The default is qwen3.8-27b rather than the stronger gpt-oss-120b
+# because gpt-oss reasons before every answer - measured at 35 reasoning
+# tokens for a one-line reply - and this job is reading a transcript and
+# returning a short list, which is latency and tokens for no gain. Pin
+# clips.llm_model if you want it anyway; _chat_reply still handles the
+# empty-content case properly.
+_GROQ_MAX_TOKENS = 4096
+
+
+def _ask_groq(key: str, model: str, prompt: str) -> str:
+    payload = {
+        "model": model,
+        "messages": [{"role": "system", "content": SYSTEM_PROMPT},
+                     {"role": "user", "content": prompt}],
+        "response_format": {"type": "json_object"},
+        "temperature": 0.4,
+        "max_tokens": _GROQ_MAX_TOKENS,
+    }
+    data = _post(_CHAT_URLS[GROQ], payload, _bearer_headers(key))
+    return _chat_reply(data, "Groq", model)
 
 
 def _ask_xkiro_vision(key: str, model: str, parts: list) -> tuple:
