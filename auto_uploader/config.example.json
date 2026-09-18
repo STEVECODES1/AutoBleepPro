@@ -173,16 +173,22 @@
         "min_minutes_between": 180
       },
       "zernio_twitter": {
-        "_comment": "One an hour, which reads as a person posting. X is the loosest of these about repetition.",
+        "_comment": "DISABLED: replaced by upload_post (free) and x_webhost (Puter bridge). X's free API tier is read-only; Basic is $200/mo. Connect X at upload-post.com instead.",
         "enabled": false,
         "daily_cap": 12,
         "min_minutes_between": 60
       },
       "zernio_tiktok": {
-        "_comment": "Wider spacing than X and a lower cap. TikTok's spam checks punish rapid near-identical posting harder than any other platform here, and the account is the thing at risk.",
+        "_comment": "DISABLED: replaced by tiktok_free (tiktok-api-client OAuth, or tiktokautouploader browser fallback). No scraping.",
         "enabled": false,
         "daily_cap": 6,
         "min_minutes_between": 150
+      },
+      "upload_post": {
+        "_note": "Upload-Post: one API call posts to ALL connected platforms (TikTok, Instagram, YouTube, Facebook, X, ...) at once. Set UPLOAD_POST_API_KEY + UPLOAD_POST_USER in .env. See https://upload-post.com. When enabled, the clip pipeline uses it as the PRIMARY path and the per-platform functions become fallbacks.",
+        "enabled": true,
+        "daily_cap": 10,
+        "min_minutes_between": 120
       }
     },
     "_spacing_comment": "min_minutes_between is what spreads posts through the day rather than firing them in a burst. 8 posts at 100 minutes apart covers about 13 hours, so a day of clips goes out steadily instead of all at once - which is the pattern every platform's spam detection actually keys on.",
