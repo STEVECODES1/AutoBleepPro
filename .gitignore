@@ -60,3 +60,40 @@ vocabulary.json
 # Your live settings. Tracked as config.example.json instead, so a
 # pull can never collide with a switch you flipped locally.
 /auto_uploader/config.json
+# Same reasoning, same file under another name - a hand-made copy of the
+# live settings is still the live settings.
+auto_uploader/config.mine.json
+
+# The YouTube Shorts OAuth token, and the reason this rule exists:
+# .gitignore already guarded 'youtube_token.json' (line 17), but the
+# uploader actually WRITES 'youtube_shorts_token.json'. The near-miss sat
+# untracked for weeks and would have gone in on the first `git add -A`.
+# It holds a client_secret and a refresh_token - i.e. lasting access to
+# the channel.
+auto_uploader/youtube_shorts_token.json
+auto_uploader/*_token.json
+
+# Playwright browser profiles. user_data_dir is a full logged-in session:
+# cookies for every site the uploaders touch, which is account access
+# without a password. Two of them exist because one script launches from
+# the repo root and another from auto_uploader/.
+browser_profile/
+auto_uploader/browser_profile/
+
+# Scratch verification runs - recorded media, extracted audio, frame
+# grabs and HF model cache. Not source, and ~1 GB of it.
+_verify/
+
+# A separate project checked out inside this one. It has its own .git, so
+# committing it would store a dangling gitlink instead of the files.
+/OpenChatCut/
+
+# Log artefacts that are not *.log, so the rules above miss them.
+# rumble_page_dump_*.html are full page saves of the Rumble dashboard,
+# which include the logged-in account's own listings.
+auto_uploader/logs/*
+!auto_uploader/logs/.gitkeep
+
+# Downloaded stream media - large, and re-downloadable from the VOD.
+auto_uploader/downloaded_clips/
+auto_uploader/downloaded_vods/
