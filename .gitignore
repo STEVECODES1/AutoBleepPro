@@ -84,10 +84,6 @@ auto_uploader/browser_profile/
 # grabs and HF model cache. Not source, and ~1 GB of it.
 _verify/
 
-# A separate project checked out inside this one. It has its own .git, so
-# committing it would store a dangling gitlink instead of the files.
-/OpenChatCut/
-
 # Log artefacts that are not *.log, so the rules above miss them.
 # rumble_page_dump_*.html are full page saves of the Rumble dashboard,
 # which include the logged-in account's own listings.

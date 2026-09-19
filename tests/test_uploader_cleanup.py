@@ -10,6 +10,7 @@ processed file, including files it has already cleaned.
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
 import sys
@@ -20,6 +21,35 @@ import pytest
 _UPLOADER = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "auto_uploader")
 sys.path.insert(0, _UPLOADER)
+
+
+def _uploader_main():
+    """auto_uploader/main.py, imported BY PATH.
+
+    Not `import main`. This repository has a main.py at the ROOT as well -
+    a launcher shim so `python main.py` works from the top level - and it
+    has none of the functions these tests exercise.
+
+    A bare `import main` used to pick the right one by luck of sys.path
+    order, and stopped when utils/censor.py was imported: censor.py does
+
+        sys.path.insert(0, <three dirnames up from utils/censor.py>)
+
+    which is the repository root, to reach autoreel/ one level above this
+    package. insert(0) puts that root AHEAD of auto_uploader/, so the next
+    `import main` anywhere in the process resolves to the launcher shim.
+
+    That is why these five tests passed in a full run and failed when this
+    file was run alone: something else had already imported the real main.
+    Naming the file removes the dependency on import order entirely.
+    """
+    if "uploader_main" not in sys.modules:
+        path = os.path.join(_UPLOADER, "main.py")
+        spec = importlib.util.spec_from_file_location("uploader_main", path)
+        module = importlib.util.module_from_spec(spec)
+        sys.modules["uploader_main"] = module
+        spec.loader.exec_module(module)
+    return sys.modules["uploader_main"]
 
 from utils.cleanup import (  # noqa: E402
     SOURCE_DELETE,
@@ -603,7 +633,7 @@ def test_tidy_only_ever_touches_the_tools_own_download_folder(tmp_path):
     promise about those is that they are only ever read. The refusal has
     to live next to the delete: a caller that forgets to check would
     break that promise silently and the files do not come back."""
-    import main
+    main = _uploader_main()
 
     library = tmp_path / "videos stizz"
     library.mkdir()
@@ -618,7 +648,7 @@ def test_tidy_only_ever_touches_the_tools_own_download_folder(tmp_path):
 
 def test_tidy_removes_the_vods_it_downloaded(tmp_path):
     """Three a day at 3-5 GB each fills a drive in a week."""
-    import main
+    main = _uploader_main()
 
     downloads = tmp_path / main.DOWNLOADED_VODS
     downloads.mkdir()
@@ -636,7 +666,7 @@ def test_tidy_removes_the_vods_it_downloaded(tmp_path):
 def test_tidy_will_not_walk_out_of_the_download_folder(tmp_path):
     """Checked per file, so a name that points elsewhere cannot reach a
     file outside the folder."""
-    import main
+    main = _uploader_main()
 
     downloads = tmp_path / main.DOWNLOADED_VODS
     downloads.mkdir()
@@ -655,7 +685,7 @@ def test_the_published_title_is_read_from_the_info_sidecar(tmp_path):
     "Gaming Stream"."""
     import json as _json
 
-    import main
+    main = _uploader_main()
 
     video = tmp_path / "monkey_n_gamble_howl [v70rbpc].mp4"
     video.write_bytes(b"x")
@@ -670,7 +700,7 @@ def test_the_published_title_is_read_from_the_info_sidecar(tmp_path):
 def test_no_sidecar_is_not_an_error(tmp_path):
     """Every video that arrived any other way has none, and the caller
     falls through to its other sources exactly as before."""
-    import main
+    main = _uploader_main()
 
     video = tmp_path / "recorded stream.mp4"
     video.write_bytes(b"x")
