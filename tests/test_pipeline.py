@@ -261,17 +261,39 @@ def test_streams_are_cut_into_clips_automatically():
     assert clips["count"] >= 1
 
 
-def test_instagram_clips_keep_their_original_audio():
-    """Instagram does not demonetise or age-restrict over spoken
-    language, so censoring a clip for it removes the moment and buys
-    nothing. Only YouTube gets the censored copy."""
+def test_every_platform_except_rumble_gets_the_censored_copy() -> None:
+    """The one invariant that matters for the Rumble re-upload:
+
+    Rumble is the ONLY destination that keeps the original audio. Every
+    other platform - YouTube, Instagram, Facebook, X, Reddit, TikTok,
+    and the Upload-Post fan-out that reaches all of them at once - must
+    post the censored copy. A clip that went to TikTok uncensored and to
+    YouTube censored from the same stream would be the bug the whole fix
+    exists to prevent: the two versions must never cross.
+    """
     import json
 
     with open(os.path.join(_UPLOADER, "config.json")) as f:
         config = json.load(f)
-    assert config["instagram"]["censor_uploads"] is False
-    assert config["rumble"]["censor_uploads"] is False
-    assert config["youtube"]["censor_uploads"] is True
+
+    # Rumble is the single exception.
+    assert config["rumble"]["censor_uploads"] is False, \
+        "Rumble must keep the original - this is the one platform where the uncensored file is the right one."
+
+    # Every other platform block that has the key must say True.
+    for name, block in config.items():
+        if not isinstance(block, dict) or "censor_uploads" not in block:
+            continue
+        assert block["censor_uploads"] is True, \
+            f"{name} has censor_uploads: {block['censor_uploads']} - only Rumble may be False."
+
+    # Check the clip-queue defaults too: these cover platforms reached
+    # through the upload_post bridge and any future standalone tiktok
+    # wiring, where the config block may not exist yet.
+    from auto_uploader.utils.clip_queue import CENSOR_AUDIO_DEFAULTS
+    for platform, mode in CENSOR_AUDIO_DEFAULTS.items():
+        assert mode == "slurs", \
+            f"CENSOR_AUDIO_DEFAULTS[{platform!r}] = {mode!r} - every clip default must be 'slurs' to keep the original off every short-form platform."
 
 
 def test_a_clip_gets_a_title_from_what_is_said_in_it():

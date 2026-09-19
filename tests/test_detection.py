@@ -95,17 +95,29 @@ def test_symbol_bypass_reason():
 
 # ── Homophones / minced oaths ────────────────────────────────────────────────
 
-@pytest.mark.parametrize("word", ["fudge", "shoot", "dang", "darn", "frick", "heck"])
+@pytest.mark.parametrize("word", ["fudge", "dang", "darn", "frick", "heck"])
 def test_non_context_homophones_flagged(word):
     assert flagged(word)
 
 
-@pytest.mark.parametrize("word", ["fudge", "shoot", "dang"])
+@pytest.mark.parametrize("word", ["fudge", "dang"])
 def test_homophones_suppressed_when_fuzzy_off(word):
     assert not flagged(word, fuzzy=False)
 
 
 # ── Context-only homophones ──────────────────────────────────────────────────
+
+def test_shoot_is_a_context_only_homophone():
+    """'shoot' is a normal gaming verb (I'm shooting enemies) and must
+    not bleep every instance - only when it stands in for 'shit', which
+    requires surrounding words to point at that intent."""
+    from bleep_engine import CONTEXT_TRIGGERS
+    # No context and an unrelated word: stays clean.
+    assert not flagged("shoot")
+    assert not flagged("shoot", ["the", "enemies"])
+    # A trigger phrase that points at 'shit' (e.g. "holy") does fire.
+    assert flagged("shoot", ["holy"])
+
 
 def test_beach_alone_not_flagged():
     assert not flagged("beach")
@@ -350,7 +362,7 @@ def test_low_band_still_honours_custom_words():
     assert flagged("pepsi", custom=["pepsi"], sensitivity=0)
 
 
-@pytest.mark.parametrize("word", ["fudge", "shoot", "dang", "heck", "frick"])
+@pytest.mark.parametrize("word", ["fudge", "dang", "heck", "frick"])
 def test_low_band_ignores_minced_oaths(word):
     assert not flagged(word, sensitivity=10)
     assert flagged(word, sensitivity=DEFAULT_SENSITIVITY)
@@ -475,20 +487,22 @@ def test_the_shipped_model_is_not_the_tiny_one():
 # ═════════════════════════════════════════════════════════════════════════════
 
 def test_the_decode_is_biased_toward_verbatim():
-    from bleep_engine import VERBATIM_PROMPT, transcribe_options
+    from bleep_engine import VERBATIM_PROMPTS, transcribe_options
 
-    assert transcribe_options("faster-whisper")["initial_prompt"] == VERBATIM_PROMPT
-    assert transcribe_options("openai-whisper")["initial_prompt"] == VERBATIM_PROMPT
+    default = VERBATIM_PROMPTS["en"]
+    assert transcribe_options("faster-whisper")["initial_prompt"] == default
+    assert transcribe_options("openai-whisper")["initial_prompt"] == default
 
 
 def test_the_prompt_actually_contains_the_words_it_is_biasing_toward():
     """A politely-worded prompt asking for uncensored output does not
     work - the bias comes from the register of the text itself."""
-    from bleep_engine import VERBATIM_PROMPT
+    from bleep_engine import VERBATIM_PROMPTS
 
-    lowered = VERBATIM_PROMPT.lower()
+    prompt = VERBATIM_PROMPTS["en"]
+    lowered = prompt.lower()
     assert "fuck" in lowered and "shit" in lowered
-    assert "*" not in VERBATIM_PROMPT, "the prompt censors itself"
+    assert "*" not in prompt, "the prompt censors itself"
 
 
 def test_windows_are_not_conditioned_on_previous_output():

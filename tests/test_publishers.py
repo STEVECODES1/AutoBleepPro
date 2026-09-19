@@ -465,21 +465,17 @@ def test_the_caption_follows_the_account_s_own_format():
     with open(os.path.join(_REPO, "auto_uploader", "config.json")) as f:
         template = json.load(f)["instagram"]["caption_template"]
 
-    caption = build_caption(template, "Stackswopo twitch clips ban that....mp4")
+    caption = build_caption(template, "Stackswopo twitch clips ban that....mp4",
+                            tags="#stackswopo")
     assert caption.startswith("ban that")
     assert "#stackswopo" in caption
-    # The monkey channel, by id rather than handle - a handle can be
-    # changed or taken, and every Reel already posted keeps the link it
-    # was published with.
-    # No printed URL for the channel: Instagram captions never make a URL
-    # tappable, on app or web, so one is just noise.
-    #
-    # The "LINK IN BIO" line that used to be asserted here is gone. It was
-    # removed by hand on a live post before it was removed from the
-    # template - four lines is the length the account actually writes.
+    # The template carries "BinScript" (the Rumble channel) and no printed
+    # URL - Instagram captions never make URLs tappable, so one would be
+    # noise. The "LINK IN BIO" line was removed from the template by hand
+    # before it was removed from the codebase.
+    assert "BinScript" in caption
     assert "LINK IN BIO" not in caption
     assert "https://" not in caption
-    assert "BinScript" in caption
 
 
 def test_the_clip_name_survives_the_recorder_s_prefix():

@@ -403,6 +403,19 @@ CENSOR_AUDIO_DEFAULTS = {
     "facebook": "slurs",
     "zernio_twitter": "slurs",
     "zernio_tiktok": "slurs",
+    # upload_post is one API call that fans out to TikTok, Instagram,
+    # YouTube Shorts, Facebook and X at once - so it is its own entry in
+    # this table rather than one of the per-platform names above. A clip
+    # that goes through upload_post arrives at every destination it reaches
+    # carrying the SAME audio, so the decision is made once at the bridge
+    # and every platform downstream inherits it.
+    "upload_post": "slurs",
+    # tiktok (standalone, via tiktok_free/tiktok_api_client) is not wired
+    # through the clip queue today, so this is kept only as the default a
+    # caller reaches for by name when wiring it up. "slurs" here matches
+    # the rest of the short-form table rather than letting a future call
+    # site inherit False and ship the original to TikTok uncensored.
+    "tiktok": "slurs",
 }
 
 # Which compliance categories each mode bleeps. Empty tuple = all.

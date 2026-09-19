@@ -58,7 +58,7 @@ DROP_ENTIRELY = (
 # ordinary word makes the channel look like it is hiding something it is
 # not.
 KEEP_PLAIN = ("hell", "damn", "crap", "god", "sucks", "kill", "dead",
-              "stupid", "idiot")
+              "stupid", "idiot", "shut", "dang", "darn", "shoot")
 
 _WORD = re.compile(r"[A-Za-z']+")
 

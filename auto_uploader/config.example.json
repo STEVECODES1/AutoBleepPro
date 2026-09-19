@@ -200,13 +200,43 @@
   "_clip_routing_comment": "route_clips_separately: a video at or under max_seconds is a CLIP, not a stream, so it goes to Rumble (which takes shorts) and the social announcement instead of the main YouTube channel - a channel of full VODs should not fill up with 30-second Twitch highlights. Twitch clips top out around 90s; 180 leaves margin for a hand-exported highlight. Set route_clips_separately false to upload everything the same way. --only overrides this.",
   "_instagram_comment": "How a clip is posted as a Reel. caption_template takes {title} (the clip's own name, cleaned up). vertical: re-frame 16:9 to full-bleed 9:16 before uploading - Instagram otherwise letterboxes a landscape clip into black bars with the picture a third of the height, which is what a raw Twitch clip looks like posted straight through. share_to_feed also puts it on the grid, not only the Reels tab.",
   "instagram": {
-    "_censor_comment": "false = post the ORIGINAL audio. Instagram does not demonetise or age-restrict over spoken language the way YouTube does, so bleeping a clip for it removes the moment and buys nothing. Rumble is already uncensored for the same reason. Only YouTube gets the censored copy.",
-    "censor_uploads": false,
+    "censor_uploads": true,
     "vertical": true,
     "share_to_feed": true,
+    "_censor_comment": "true = post the censored copy (same as YouTube). The rule now is that Rumble is the only uncensored platform - every other destination gets the censored file. Rumble is already uncensored for the same reason. This is the one place the two versions must never cross: the original is Rumble's, the censored copy is everybody else's.",
     "_link_comment": "Instagram captions NEVER make URLs clickable - not on the app, not on the web. Only the profile bio link is tappable. So the caption points at the bio instead of printing a URL nobody can tap, and the URLs are kept short and readable for anyone typing them. Put the monkey channel in your IG bio link for this to pay off.",
-    "caption_template": "{title} \ud83e\udd23\ud83e\udd23\ud83e\udd23\ud83d\udc80\ud83d\udc80\ud83d\udc80\n\n{tags}\n\nYouTube: @BinScript\nRumble: rumble.com/user/BinScripts",
+    "caption_template": "{title} 🤣🤣🤣💀💀💀\n\n{tags}\n\nYouTube: @BinScript\nRumble: rumble.com/user/BinScripts",
     "_tags_comment": "{tags} is filled per clip and per platform - specific tags matched to what is in the clip first, generic ones after, capped at what each platform rewards. Set max_hashtags on a platform block to override."
+  },
+  "facebook": {
+    "censor_uploads": true,
+    "caption_template": "{title}\n\n{tags}",
+    "_censor_comment": "true = post the censored copy. Facebook is included in upload-post's one-call fan-out and in the clip queue's per-platform path, and both routes read this flag - so the censored/uncensored split is identical no matter which path a Facebook clip takes.",
+    "_link_comment": "Facebook links are clickable from the app and the web. Unlike Instagram, printing the YouTube link here actually works."
+  },
+  "x": {
+    "censor_uploads": true,
+    "caption_template": "{title}\n\n{tags}",
+    "_censor_comment": "true = post the censored copy. X is included in upload-post's one-call fan-out. When the free X API tier is restored this block also drives the per-platform x publisher in the clip queue.",
+    "_link_comment": "X links are clickable. Character budget is tight: keep the caption short and put any URL in the description field, not the tweet text."
+  },
+  "reddit": {
+    "censor_uploads": true,
+    "caption_template": "{title}\n\n{tags}",
+    "_censor_comment": "true = post the censored copy. Reddit is reachable on the same Zernio key as the other platforms but is deliberately left out of the automated fan-out: self-promotion rules vary per subreddit and an automated feed of one channel's clips is what most subreddits ban on sight. When you post to Reddit by hand, use this censored copy - never the original.",
+    "_link_comment": "Reddit links are clickable. Post to the subreddit that wants this content, not to your own profile."
+  },
+  "tiktok": {
+    "censor_uploads": true,
+    "caption_template": "{title}\n\n{tags}",
+    "_censor_comment": "true = post the censored copy. TikTok is reached two ways: through upload-post's one-call fan-out (this block covers that route) and, if you wire it, through the standalone tiktok_free/tiktok_api_client publisher in the clip queue. CENSOR_AUDIO_DEFAULTS now also lists tiktok so the default is 'slurs' whichever path is used - the two must agree, because a clip that goes out to TikTok on one route uncensored and on the other route censored would be a real split.",
+    "_link_comment": "TikTok links are NOT clickable from the app. The caption must tell people where to find the full thing, because they cannot tap their way there from the clip."
+  },
+  "upload_post": {
+    "censor_uploads": true,
+    "caption_template": "{title}\n\n{tags}",
+    "_censor_comment": "true = post the censored copy. Upload-Post is a single API call that fans out to TikTok, Instagram, YouTube Shorts, Facebook and X at once, so this one flag decides the audio for every platform in that call. It is also listed in CENSOR_AUDIO_DEFAULTS as 'slurs' so the clip queue's upload_post path and this config block agree. If this is ever set to false, every platform downstream of upload-post would receive the original uncensored audio - which is the one combination that violates the rule.",
+    "_link_comment": "Upload-Post writes one caption across all platforms, so keep it generic enough to fit each one. Per-platform title overrides are supported via the overrides block."
   },
   "clips": {
     "_auto_clip_comment": "Any VOD dropped in auto_clip_folder is turned into clips by `--watch`, one per pass, without a command. The folder is a LIBRARY: nothing in it is moved, renamed or deleted. A .clipped.json beside it remembers what has been done, so nothing is cut twice. Set auto_clip_folder to \"\" to switch this off.",

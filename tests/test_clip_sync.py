@@ -441,12 +441,16 @@ def test_the_caption_shift_is_off_unless_asked_for():
     maker = ClipMaker(output_dir="/tmp", config={"clips": {}})
     assert maker._caption_shift("/x/a.mp4", [], ClipSpec(0.0, 10.0, 1)) == 0.0
 
-    for name in ("config.json", "config.example.json"):
-        path = os.path.join(_REPO, "auto_uploader", name)
-        with open(path, encoding="utf-8") as handle:
-            clips = json.load(handle).get("clips", {})
-        assert clips.get("align_captions") is False, \
-            f"{name} still ships the shift switched on"
+    # The SHIPPED default, not the operator's overrides: config.json is
+    # gitignored, so this reads config.example.json - the template every
+    # fresh checkout gets. A pull must never collide with a setting the
+    # previous owner flipped, and a test that checks the live config.json
+    # only passes on machines that happen to agree with the assertion.
+    path = os.path.join(_REPO, "auto_uploader", "config.example.json")
+    with open(path, encoding="utf-8") as handle:
+        clips = json.load(handle).get("clips", {})
+    assert clips.get("align_captions") is False, \
+        f"{os.path.basename(path)} still ships the shift switched on"
 
 
 def test_it_can_still_be_switched_on(monkeypatch):

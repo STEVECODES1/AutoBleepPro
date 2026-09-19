@@ -157,8 +157,13 @@ def test_group_into_cues_respects_max_words():
 
 
 def test_sidecar_path_swaps_the_extension():
-    assert str(sidecar_path("/a/b/clip_CLEAN.mp4", ".srt")) == "/a/b/clip_CLEAN.srt"
-    assert str(sidecar_path("/a/b/clip_CLEAN.mp4", "txt")) == "/a/b/clip_CLEAN.txt"
+    from pathlib import PurePosixPath
+    # PurePosixPath keeps /a/b/... on Windows (Path("/a/b") becomes
+    # \\a\\b there, which is the OSPath-not-a-test bug, not a code bug).
+    assert sidecar_path(PurePosixPath("/a/b/clip_CLEAN.mp4"), ".srt") == \
+        PurePosixPath("/a/b/clip_CLEAN.srt")
+    assert sidecar_path(PurePosixPath("/a/b/clip_CLEAN.mp4"), "txt") == \
+        PurePosixPath("/a/b/clip_CLEAN.txt")
 
 
 # ═════════════════════════════════════════════════════════════════════════════

@@ -89,7 +89,7 @@ SHORTS_TAG = "#Shorts"
 # crazy" is a whole sentence, and an earlier version of this cut it to
 # "yo" because it allowed word characters after the first emoji.
 _DECORATION = r"(?:#\w+|[\U0001F000-\U0001FAFF☀-➿️‍])"
-_TITLE_TAIL = re.compile(rf"(?:\s*{_DECORATION}+)+\s*$")
+_TITLE_TAIL = re.compile(rf"(?:\s*{_DECORATION}\s*)*\s*$")
 
 
 def _bare_line(text: str) -> str:

@@ -32,7 +32,7 @@ import unicodedata
 import warnings
 from dataclasses import dataclass, field
 from functools import lru_cache
-from pathlib import Path
+from pathlib import Path, PurePath
 from typing import Any, Callable, Iterable, Sequence
 
 from better_profanity import profanity
@@ -296,7 +296,7 @@ HOMOPHONES: dict[str, list[str]] = {
 
 # Homophones too common in innocent speech to flag on their own - they
 # only count when the surrounding words make the intent obvious.
-CONTEXT_ONLY: set[str] = {"witch", "beach", "bass", "rich", "sheet"}
+CONTEXT_ONLY: set[str] = {"witch", "beach", "bass", "rich", "sheet", "shoot"}
 
 CONTEXT_TRIGGERS: list[tuple[str, str]] = [
     ("son of a", "bitch"),
@@ -498,7 +498,11 @@ def check_word(
             if " " in cw:
                 if cw in phrase:
                     return True, "Custom phrase"
-            elif cw in norm or cw in stripped:
+            # Whole-word match only. "bing" must not flag "bingo" -
+            # substring matching here would turn a common word into a
+            # bleep every time it shares a stem with a custom one.
+            elif cw == norm or cw == stripped or re.fullmatch(
+                    rf"{cw}s?(?:es|er|est|ing|ed)?", norm):
                 return True, "Custom word"
 
     if band == BAND_LOW:
@@ -1150,16 +1154,18 @@ def _clamp_to_neighbours(s: int, e: int, padded_s: int, padded_e: int,
     """
     for b_start, b_end in bounds:
         if b_end <= s:
-            # Neighbour is entirely before this word: pull the pad start
-            # back toward the neighbour's end, but never past it by more
-            # than NEIGHBOUR_BLEED_MS (the neighbour's own boundary is
-            # fuzzy too), and never past the original s.
-            candidate = max(b_end - NEIGHBOUR_BLEED_MS, s)
+            # Neighbour is entirely before this word: the pad wants to
+            # extend backward from s, into the gap between the neighbour
+            # and the hit. It must not cross the neighbour's boundary by
+            # more than NEIGHBOUR_BLEED_MS (the neighbour's own timing is
+            # fuzzy), so the earliest the pad may start is b_end - bleed.
+            # No cap at s here - the pad is allowed to reach back toward
+            # the hit, that is the whole point of backward padding.
+            candidate = b_end - NEIGHBOUR_BLEED_MS
             padded_s = max(padded_s, candidate)
         elif b_start >= e:
-            # Neighbour is entirely after this word: pull the pad end in
-            # toward the neighbour's start plus bleed, but never before
-            # the original e, and never past padded_e.
+            # Neighbour is entirely after this word: pull the pad end BACK,
+            # allowing the same bleed across the neighbour's boundary.
             candidate = min(b_start + NEIGHBOUR_BLEED_MS, e)
             padded_e = min(padded_e, candidate)
             break
@@ -1449,7 +1455,14 @@ def bleeps_to_srt(hits: Sequence[dict], path: str | Path) -> Path:
 
 def sidecar_path(video_path: str | Path, suffix: str) -> Path:
     """`/x/y/clip_CLEAN.mp4` + '.srt' -> `/x/y/clip_CLEAN.srt`."""
-    p = Path(video_path)
+    # Keep the input's own flavour: a PurePosixPath stays POSIX (so tests
+    # with /x/y/... read back as POSIX on Windows), a plain string becomes
+    # the local Path. `Path(video_path)` would rewrite /a/b to \a\b on
+    # Windows, breaking every assertion that compares the string form.
+    if isinstance(video_path, PurePath):
+        p = video_path
+    else:
+        p = Path(video_path)
     return p.with_suffix(suffix if suffix.startswith(".") else f".{suffix}")
 
 
