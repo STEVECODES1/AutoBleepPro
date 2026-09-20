@@ -1063,10 +1063,10 @@ def post_clip_to_upload_post(posting: dict, video_path: str, caption: str,
 
     if dry_run:
     print(f"[Social] upload_post: WOULD post {os.path.basename(video_path)}"
-          f" to {project_platforms}")
-    for plat in project_platforms:
-        guard.record_result(plat, True)
-    return True
+              f" to {project_platforms}")
+        for plat in project_platforms:
+            guard.record_result(plat, True)
+        return True
 
     # Build a full caption the way the other clip publishers do: headline +
     # tags.  Upload-Post takes title + description, so split on the first
