@@ -1044,6 +1044,14 @@ def post_clip_to_upload_post(posting: dict, video_path: str, caption: str,
             return True
         return False
 
+    publisher = _publisher_for("upload_post", config or {})
+    if publisher is None:
+        if dry_run:
+            print(f"[Social] upload_post: WOULD post {os.path.basename(video_path)}"
+                  f" to {project_platforms} (publisher not available)")
+            return True
+        return False
+
     if not publisher.ready():
         print("[Social] upload_post: skipped - not configured yet. "
               "Set UPLOAD_POST_API_KEY and UPLOAD_POST_USER in .env.")
@@ -1054,11 +1062,11 @@ def post_clip_to_upload_post(posting: dict, video_path: str, caption: str,
         return False
 
     if dry_run:
-        print(f"[Social] upload_post: WOULD post {os.path.basename(video_path)}"
-              f" to {project_platforms}")
-        for plat in project_platforms:
-            guard.record_result(plat, True)
-        return True
+    print(f"[Social] upload_post: WOULD post {os.path.basename(video_path)}"
+          f" to {project_platforms}")
+    for plat in project_platforms:
+        guard.record_result(plat, True)
+    return True
 
     # Build a full caption the way the other clip publishers do: headline +
     # tags.  Upload-Post takes title + description, so split on the first

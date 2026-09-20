@@ -281,8 +281,13 @@ def test_every_platform_except_rumble_gets_the_censored_copy() -> None:
         "Rumble must keep the original - this is the one platform where the uncensored file is the right one."
 
     # Every other platform block that has the key must say True.
+    # Rumble is the one exception and is checked above — skip it here so
+    # the loop does not AssertError on the one platform that is allowed
+    # to be False.
     for name, block in config.items():
         if not isinstance(block, dict) or "censor_uploads" not in block:
+            continue
+        if name == "rumble":
             continue
         assert block["censor_uploads"] is True, \
             f"{name} has censor_uploads: {block['censor_uploads']} - only Rumble may be False."

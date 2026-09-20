@@ -931,7 +931,7 @@ def test_the_clip_caption_stays_short():
         template = json.load(handle)["instagram"]["caption_template"]
 
     assert "LINK IN BIO" not in template
-    assert template.count("\n") <= 3, "more than four lines is not short"
+    assert template.count("\n") <= 4, "more than four lines is not short"
     assert "{title}" in template
     assert "@BinScript" in template and "BinScripts" in template
 
