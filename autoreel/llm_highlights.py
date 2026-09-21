@@ -48,13 +48,18 @@ ANTHROPIC = "anthropic"
 CEREBRAS = "cerebras"
 XKIRO = "xkiro"
 GROQ = "groq"
+NVIDIA = "nvidia"
+DEEPSEEK = "deepseek"
+OPENROUTER = "openrouter"
 
 # Last resort only. Model names are retired faster than a pinned default
 # can be maintained - the first key tried against this hit "gemini-2.5-flash
 # is no longer available to new users" - so the real answer is to ASK the
 # provider what it has and take the best of it. See resolve_model().
 DEFAULT_MODELS = {
-    GEMINI: "gemini-flash-latest",
+    # Measured fastest AND most reliable at 48 frames - see
+    # PROVIDER_ORDER. Only a fallback; resolve_model still asks.
+    GEMINI: "gemini-3.5-flash",
     OPENAI: "gpt-4o-mini",
     ANTHROPIC: "claude-sonnet-5",
     CEREBRAS: "gpt-oss-120b",
@@ -69,6 +74,22 @@ DEFAULT_MODELS = {
     # qwen/qwen3.8-27b if you would rather have the faster non-reasoning
     # model.
     GROQ: "openai/gpt-oss-120b",
+    # NVIDIA's build.nvidia.com catalogue is ~100 models and the ids are
+    # long, so this is pinned rather than auto-picked. "omni" is the
+    # multimodal line - it reads the frames, which is the whole reason
+    # this provider is worth having rather than a fifth text model.
+    NVIDIA: "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning",
+    # deepseek-chat, not deepseek-reasoner: this job is reading a
+    # transcript and returning a short list. Reasoning buys nothing
+    # here and costs latency on every clip. is_reasoning_model already
+    # matches "deepseek-r" if you pin the reasoner anyway.
+    DEEPSEEK: "deepseek-chat",
+    # OpenRouter is a gateway to 443 models, free and paid mixed, so
+    # this is pinned like xKiro's - an auto-pick off that catalogue
+    # could quietly start billing. Text only: nex-n2.5-pro reads 8
+    # frames in 5.8s and returns EMPTY content at 48, which is the
+    # number this actually sends.
+    OPENROUTER: "nex-agi/nex-n2.5-pro:free",
 }
 
 # Model families that cannot do this job, whatever they are called.
@@ -93,6 +114,9 @@ _KEY_NAMES = {
     CEREBRAS: ("CEREBRAS_API_KEY",),
     XKIRO: ("XKIRO_API_KEY",),
     GROQ: ("GROQ_API_KEY",),
+    NVIDIA: ("NVIDIA_API_KEY", "NVIDIA_NIM_API_KEY"),
+    DEEPSEEK: ("DEEPSEEK_API_KEY",),
+    OPENROUTER: ("OPENROUTER_API_KEY",),
 }
 
 # Tried in this order.
@@ -113,8 +137,23 @@ _KEY_NAMES = {
 # VISION_PROVIDERS is what the vision pass is allowed to use. It is a
 # separate list because being able to answer about words says nothing
 # about being able to answer about pictures.
-PROVIDER_ORDER = (GEMINI, XKIRO, CEREBRAS, GROQ, OPENAI, ANTHROPIC)
-VISION_PROVIDERS = (GEMINI, XKIRO)
+# Measured on 2026-09-21 at the REAL workload - 48 frames, which is what
+# the vision pass actually sends - because a model that reads 8 images
+# beautifully can be useless at 48, and one of them is:
+#
+#   gemini-3.5-flash                 4.5s   clean JSON, finishReason STOP
+#   gemini-flash-latest             13.7s   clean JSON
+#   gemini-3-flash-preview          19.3s   hit MAX_TOKENS
+#   nvidia omni (8 images)          22.1s   clean JSON, ~50% of attempts
+#   openrouter nex-n2.5-pro:free    32-53s  EMPTY content at 48 frames
+#                                           (5.8s and clean at 8)
+#
+# So Gemini first on merit, not habit: four times faster than anything
+# else here and the only one that answered 48 frames every time.
+# OpenRouter is text-only below for exactly the reason above.
+PROVIDER_ORDER = (GEMINI, NVIDIA, XKIRO, DEEPSEEK, OPENROUTER, CEREBRAS,
+                  GROQ, OPENAI, ANTHROPIC)
+VISION_PROVIDERS = (GEMINI, NVIDIA, XKIRO)
 
 # The OpenAI-shaped providers, and where each one lives. Adding another
 # is a line here rather than a new branch in check().
@@ -123,6 +162,9 @@ _CHAT_URLS = {
     CEREBRAS: "https://api.cerebras.ai/v1/chat/completions",
     XKIRO: "https://api.xkiro.com/v1/chat/completions",
     GROQ: "https://api.groq.com/openai/v1/chat/completions",
+    NVIDIA: "https://integrate.api.nvidia.com/v1/chat/completions",
+    DEEPSEEK: "https://api.deepseek.com/v1/chat/completions",
+    OPENROUTER: "https://openrouter.ai/api/v1/chat/completions",
 }
 
 # Models that THINK before they answer. Their replies can carry a
@@ -353,6 +395,15 @@ def list_models(provider: str, key: str) -> list:
         # _NOT_TEXT is what keeps an auto-pick off those.
         return _list_models_openai_style(
             "https://api.groq.com/openai/v1/models", key)
+    if provider in (NVIDIA, OPENROUTER, DEEPSEEK):
+        # Listed so --check-llm can show what a key reaches. NVIDIA and
+        # OpenRouter are in _PINNED_MODEL_PROVIDERS, so this is for
+        # READING, not for auto-picking: NVIDIA's list offers ~80 models
+        # and two of them (nvidia/vila,
+        # microsoft/phi-3-vision-128k-instruct) answered 404 "Not found
+        # for account" on a key that had just been shown them.
+        return _list_models_openai_style(
+            _CHAT_URLS[provider].replace("/chat/completions", "/models"), key)
     if provider != GEMINI:
         # OpenAI's list is large and mostly irrelevant here, and its
         # small-model names have been stable for years.
@@ -400,6 +451,21 @@ def _list_models_openai_style(url: str, key: str) -> list:
     return names
 
 
+# Providers whose model must NOT be auto-picked from their catalogue.
+#
+# xKiro: 100+ models with free and PAID under the same family names, so
+# an auto-pick could quietly start billing.
+#
+# NVIDIA: its /v1/models lists ~80 models for everyone, and listing is
+# not the same as reachable. Measured on this account, nvidia/vila and
+# microsoft/phi-3-vision-128k-instruct both answered
+# 404 "Not found for account" - so an auto-pick that took the
+# best-sounding name off that list would 404 on a name the catalogue
+# had just offered. Which models a key can call is a fact about the
+# key, and the list does not carry it.
+_PINNED_MODEL_PROVIDERS = (XKIRO, NVIDIA, OPENROUTER)
+
+
 def resolve_model(provider: str, key: str, configured: str = "") -> str:
     """The model to call: whatever was configured, else the best on offer.
 
@@ -407,9 +473,14 @@ def resolve_model(provider: str, key: str, configured: str = "") -> str:
     own schedule and a pinned default fails with a 404 that reads like a
     broken key - which is exactly how this was found. Asking costs one
     request and survives the next retirement without an edit.
+
+    The exception is _PINNED_MODEL_PROVIDERS, where the catalogue is
+    actively misleading - see the comment above it.
     """
     if configured:
         return configured
+    if provider in _PINNED_MODEL_PROVIDERS:
+        return DEFAULT_MODELS[provider]
     available_names = usable_models(list_models(provider, key))
     return available_names[0] if available_names else DEFAULT_MODELS[provider]
 
@@ -878,6 +949,8 @@ def asker_for(provider: str):
     """The function that talks to this provider."""
     return {GEMINI: _ask_gemini, CEREBRAS: _ask_cerebras,
             XKIRO: _ask_xkiro, GROQ: _ask_groq,
+            NVIDIA: _ask_nvidia, DEEPSEEK: _ask_deepseek,
+            OPENROUTER: _ask_openrouter,
             OPENAI: _ask_openai,
             ANTHROPIC: _ask_anthropic}.get(provider, _ask_gemini)
 
@@ -1016,12 +1089,160 @@ def _ask_groq(key: str, model: str, prompt: str) -> str:
     return _chat_reply(data, "Groq", model)
 
 
-def _ask_xkiro_vision(key: str, model: str, parts: list) -> tuple:
-    """(reply_text, why_not). Same call as _ask_xkiro, with the frames.
+# ── NVIDIA (build.nvidia.com / NIM) ──────────────────────────────────
+#
+# OpenAI-shaped, one key, and the catalogue is ~80 models from a dozen
+# vendors - Meta, Mistral, Moonshot, Z.ai and DeepSeek all answer
+# through the same endpoint and the same key.
+#
+# MEASURED against the live API on 2026-09-21, because the catalogue
+# listing a model says nothing about whether this account can call it:
+#
+#   nvidia/nemotron-3-ultra-550b-a55b      clean JSON
+#   moonshotai/kimi-k3                     clean JSON
+#   z-ai/glm-5.3                           clean JSON
+#   deepseek-ai/deepseek-v4.1-flash        clean JSON
+#   nvidia/nemotron-3-super-120b-a12b      503, service overloaded
+#   nvidia/nemotron-3.5-lightning-30b-a3b  leaked "Here's a thinking
+#                                          process:" into content
+#   nvidia/vila                            404, not enabled for account
+#   microsoft/phi-3-vision-128k-instruct   404, not enabled for account
+#   meta/llama-3.2-90b-vision-instruct     timed out at 120s on 8 images
+#
+# The 404s are the important lesson: they are not "no such model", they
+# are "not found for account". Which models a key can reach is a fact
+# about the key, so the default here is one that answered on this one
+# and resolve_model() still asks the catalogue for the rest.
+_NVIDIA_MAX_TOKENS = 8192
 
-    Returns the reason rather than swallowing it - a vision request fails
-    for reasons the text one never does, and "came back empty" is not
-    something anyone can act on.
+# Providers that must NOT be sent response_format={"type":"json_object"}.
+#
+# It is an OpenAI parameter and NVIDIA's gateway accepts it without
+# complaint, then answers worse. Measured on 2026-09-21, same prompt,
+# only this parameter changed:
+#
+#   nemotron-3-ultra-550b  with:    {"ok":{ "ok": 1 }      <- malformed
+#                          without: {"clips":[{"index":1,"score":90}]}
+#   deepseek-v4.1-flash    with:    ""                     <- empty
+#                          without: {"clips":[{"index":1,"score":90}]}
+#   kimi-k3                with:    connection closed after 85s
+#
+# Two silent failures and a hang, all of them looking from here like
+# "the model had no opinion about the clips". Asking for JSON in the
+# prompt - which SYSTEM_PROMPT already does - works on every one of
+# them, and the reply parser is tolerant of fenced and bare JSON
+# anyway, which is what it was written for.
+_NO_JSON_MODE = (NVIDIA,)
+
+
+def _json_mode(provider: str) -> dict:
+    """{"response_format": ...} for providers that are better with it."""
+    if provider in _NO_JSON_MODE:
+        return {}
+    return {"response_format": {"type": "json_object"}}
+
+
+# NVIDIA's preview models run on a shared pool, and a full pool is an
+# instant refusal rather than a queue:
+#
+#   HTTP 503 ResourceExhausted: Worker local total request limit
+#   reached (16/16)                              returned in 0.3s
+#
+# Measured at roughly half of attempts, and a success takes 10-12s. So
+# the useful strategy is the opposite of the usual backoff: retry
+# several times with a SHORT wait, because a refusal costs a third of a
+# second and the next slot may be free immediately. One 20s retry - the
+# shared default - turns a 50% failure into a 25% failure and spends 20
+# seconds doing it.
+_NVIDIA_BUSY_TRIES = 5
+_NVIDIA_BUSY_WAIT = 4
+
+
+def _ask_nvidia(key: str, model: str, prompt: str) -> str:
+    payload = {
+        "model": model,
+        "messages": [{"role": "system", "content": SYSTEM_PROMPT},
+                     {"role": "user", "content": prompt}],
+        "temperature": 0.4,
+        "max_tokens": _NVIDIA_MAX_TOKENS,
+        **_json_mode(NVIDIA),
+    }
+    data = _post(_CHAT_URLS[NVIDIA], payload, _bearer_headers(key))
+    return _chat_reply(data, "NVIDIA", model)
+
+
+# ── DeepSeek ─────────────────────────────────────────────────────────
+#
+# OpenAI-shaped and text-only. Worth having as its own provider rather
+# than only through NVIDIA's gateway: a direct key is not subject to
+# NVIDIA's shared preview capacity, which is what took the vision model
+# down ("Worker local total request limit reached (427/16)").
+_DEEPSEEK_MAX_TOKENS = 4096
+
+
+def _ask_deepseek(key: str, model: str, prompt: str) -> str:
+    payload = {
+        "model": model,
+        "messages": [{"role": "system", "content": SYSTEM_PROMPT},
+                     {"role": "user", "content": prompt}],
+        "response_format": {"type": "json_object"},
+        "temperature": 0.4,
+        "max_tokens": _DEEPSEEK_MAX_TOKENS,
+    }
+    data = _post(_CHAT_URLS[DEEPSEEK], payload, _bearer_headers(key))
+    return _chat_reply(data, "DeepSeek", model)
+
+
+# ── OpenRouter ───────────────────────────────────────────────────────
+#
+# OpenAI-shaped, one key, 443 models from every vendor - and a genuinely
+# free tier, which is the reason it is here.
+#
+# TEXT ONLY, deliberately, and this is the one measurement worth
+# repeating: nex-n2.5-pro:free read 8 frames in 5.8s and returned clean
+# JSON. At 48 frames - the number the vision pass actually sends - the
+# same model took 32s and 53s and returned EMPTY content both times.
+# Testing a vision model on a handful of images and concluding it works
+# is how a provider gets promoted into VISION_PROVIDERS and then
+# silently returns nothing on every real run.
+#
+# Every other free vision model on the gateway was unusable for a
+# different reason, all measured the same day: gemma-4-31b and
+# qwen3.8-27b answered 429 rate-limited immediately, ling-3.0-flash-vl
+# and nex-n2.5-mini answered 400, inkling is "only available on agentic
+# harnesses", and dots-3-note returned prose instead of JSON.
+_OPENROUTER_MAX_TOKENS = 4096
+
+
+def _ask_openrouter(key: str, model: str, prompt: str) -> str:
+    payload = {
+        "model": model,
+        "messages": [{"role": "system", "content": SYSTEM_PROMPT},
+                     {"role": "user", "content": prompt}],
+        "response_format": {"type": "json_object"},
+        "temperature": 0.4,
+        "max_tokens": _OPENROUTER_MAX_TOKENS,
+    }
+    data = _post(_CHAT_URLS[OPENROUTER], payload, _bearer_headers(key))
+    return _chat_reply(data, "OpenRouter", model)
+
+
+def _ask_openai_shaped_vision(provider: str, label: str, key: str,
+                              model: str, parts: list,
+                              max_tokens: int = _XKIRO_MAX_TOKENS,
+                              tries: int = 2,
+                              wait: int = _BUSY_RETRY_SECONDS) -> tuple:
+    """(reply_text, why_not) from any OpenAI-shaped provider, with frames.
+
+    One function rather than one per gateway: xKiro, NVIDIA and anything
+    else OpenAI-shaped take byte-identical requests, and the only things
+    that differ are the URL, the name in the log line and how many
+    tokens to allow. A second copy of this would be a second place for
+    the retry-on-busy rule to drift.
+
+    Returns the reason rather than swallowing it - a vision request
+    fails for reasons the text one never does, and "came back empty" is
+    not something anyone can act on.
     """
     payload = {
         "model": model,
@@ -1029,37 +1250,54 @@ def _ask_xkiro_vision(key: str, model: str, parts: list) -> tuple:
             {"role": "system", "content": SYSTEM_PROMPT + VISION_NOTE},
             {"role": "user", "content": to_openai_content(parts)},
         ],
-        "response_format": {"type": "json_object"},
         "temperature": 0.4,
-        "max_tokens": _XKIRO_MAX_TOKENS,
+        "max_tokens": max_tokens,
+        **_json_mode(provider),
     }
     images = sum(1 for part in parts if "inline_data" in part)
     megabytes = len(json.dumps(payload)) / 1e6
 
-    data, problem = _post_detailed(_CHAT_URLS[XKIRO], payload,
-                                   _bearer_headers(key),
-                                   timeout=_VISION_TIMEOUT)
-    # The one measured failure here was a plain HTTP 500 with "A server
-    # error occurred", which cleared on the immediate retry and is a
-    # failure mode shared with the other providers - both Geminis have
-    # been seen to answer 503 and "high demand" the same way. A busy
-    # gateway is not a reason to throw away the pass.
-    if problem and _is_transient(problem):
-        print(f"[Clips] xKiro said {problem} - waiting 20s and trying "
-              f"once more...")
-        time.sleep(_BUSY_RETRY_SECONDS)
-        data, problem = _post_detailed(_CHAT_URLS[XKIRO], payload,
+    # A busy gateway is not a reason to throw away the pass. The
+    # measured failures here are a plain HTTP 500 "A server error
+    # occurred" on xKiro and a 503 "ResourceExhausted" on NVIDIA's
+    # shared preview pool; both Geminis answer 503 and "high demand" the
+    # same way. All of them clear on a retry.
+    #
+    # How many retries and how long to wait are per provider, because
+    # the shape differs: xKiro's 500 is rare and worth one patient
+    # retry, NVIDIA's 503 comes back in 0.3s about half the time and is
+    # worth several impatient ones.
+    data = problem = None
+    for attempt in range(max(1, tries)):
+        if attempt:
+            print(f"[Clips] {label} said {problem} - waiting {wait}s and "
+                  f"trying again ({attempt + 1}/{tries})...")
+            time.sleep(wait)
+        data, problem = _post_detailed(_CHAT_URLS[provider], payload,
                                        _bearer_headers(key),
                                        timeout=_VISION_TIMEOUT)
+        if not problem or not _is_transient(problem):
+            break
 
     if problem:
         return "", f"{problem} ({images} images, {megabytes:.1f} MB)"
     if not isinstance(data, dict):
         return "", f"no response ({images} images, {megabytes:.1f} MB)"
-    try:
-        return data["choices"][0]["message"]["content"], ""
-    except (KeyError, IndexError, TypeError):
-        return "", f"reply had no text: {str(data)[:200]}"
+    text = _chat_reply(data, label, model)
+    if text:
+        return text, ""
+    return "", f"reply had no text: {str(data)[:200]}"
+
+
+def _ask_xkiro_vision(key: str, model: str, parts: list) -> tuple:
+    return _ask_openai_shaped_vision(XKIRO, "xKiro", key, model, parts)
+
+
+def _ask_nvidia_vision(key: str, model: str, parts: list) -> tuple:
+    return _ask_openai_shaped_vision(NVIDIA, "NVIDIA", key, model, parts,
+                                     max_tokens=_NVIDIA_MAX_TOKENS,
+                                     tries=_NVIDIA_BUSY_TRIES,
+                                     wait=_NVIDIA_BUSY_WAIT)
 
 
 def vision_asker_for(provider: str):
@@ -1068,7 +1306,8 @@ def vision_asker_for(provider: str):
     None means the provider is text-only, and the caller should use the
     words - not that the pass has failed.
     """
-    return {GEMINI: _ask_gemini_vision, XKIRO: _ask_xkiro_vision}.get(provider)
+    return {GEMINI: _ask_gemini_vision, XKIRO: _ask_xkiro_vision,
+            NVIDIA: _ask_nvidia_vision}.get(provider)
 
 
 def _ask_openai(key: str, model: str, prompt: str) -> str:

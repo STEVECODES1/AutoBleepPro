@@ -622,3 +622,115 @@ def test_the_shared_reply_reader_handles_every_gateway(monkeypatch, capsys):
     # Junk is empty, never an exception.
     for junk in (None, {}, {"choices": []}, {"choices": [{}]}, "nope"):
         assert llm._chat_reply(junk, "Groq", "m") == ""
+
+
+# ── the providers added 2026-09-21, and why they sit where they do ────
+#
+# Everything asserted here was MEASURED against the live APIs at the
+# real workload, not read off a model card. The numbers are in the
+# comment above PROVIDER_ORDER.
+
+def test_gemini_is_first_on_measured_speed_not_habit(no_keys):
+    """48 frames is what the vision pass actually sends. gemini-3.5-flash
+    answered it in 4.5s; the next best was 22s and answered about half
+    the time."""
+    from autoreel.llm_highlights import DEEPSEEK, NVIDIA, OPENROUTER
+
+    for name in ("GEMINI_API_KEY", "NVIDIA_API_KEY", "DEEPSEEK_API_KEY",
+                 "OPENROUTER_API_KEY"):
+        no_keys.setenv(name, "k")
+
+    assert [p for p, _ in all_available()] == [GEMINI, NVIDIA, DEEPSEEK,
+                                               OPENROUTER]
+
+
+def test_openrouter_is_not_allowed_to_see_the_frames():
+    """The measurement that matters most here.
+
+    nex-n2.5-pro:free reads 8 images in 5.8s and returns clean JSON. At
+    48 - the real number - it took 32s and 53s and returned EMPTY
+    content both times. A model tested on a handful of images and
+    promoted on that evidence returns nothing on every real run, and
+    the run falls back to the local scorer without saying why.
+    """
+    from autoreel.llm_highlights import (OPENROUTER, VISION_PROVIDERS,
+                                         vision_asker_for)
+
+    assert OPENROUTER not in VISION_PROVIDERS
+    assert vision_asker_for(OPENROUTER) is None
+
+
+def test_deepseek_is_text_only_too():
+    from autoreel.llm_highlights import (DEEPSEEK, VISION_PROVIDERS,
+                                         vision_asker_for)
+
+    assert DEEPSEEK not in VISION_PROVIDERS
+    assert vision_asker_for(DEEPSEEK) is None
+
+
+def test_nvidia_can_see_the_frames():
+    """The only vision backstop left if Gemini's key lapses."""
+    from autoreel.llm_highlights import (NVIDIA, VISION_PROVIDERS,
+                                         vision_asker_for)
+
+    assert NVIDIA in VISION_PROVIDERS
+    assert vision_asker_for(NVIDIA) is not None
+
+
+def test_nvidia_is_never_sent_json_mode():
+    """response_format is accepted by NVIDIA's gateway and makes it
+    answer WORSE. Same prompt, only this parameter changed:
+
+        nemotron-3-ultra-550b  with:    {"ok":{ "ok": 1 }   <- malformed
+                               without: {"clips":[...]}
+        deepseek-v4.1-flash    with:    ""                  <- empty
+                               without: {"clips":[...]}
+        kimi-k3                with:    connection closed after 85s
+
+    Two silent failures and a hang, all of which look from here like
+    "the model had no opinion about the clips".
+    """
+    from autoreel.llm_highlights import (DEEPSEEK, NVIDIA, OPENROUTER,
+                                         XKIRO, _json_mode)
+
+    assert _json_mode(NVIDIA) == {}
+    # Every other OpenAI-shaped provider is better WITH it.
+    for provider in (XKIRO, DEEPSEEK, OPENROUTER):
+        assert _json_mode(provider) == {"response_format":
+                                        {"type": "json_object"}}
+
+
+def test_the_misleading_catalogues_are_not_auto_picked():
+    """NVIDIA's /v1/models lists ~80 models for every account, and
+    listing is not reaching: nvidia/vila and phi-3-vision both answered
+    404 "Not found for account" on a key that had just been offered
+    them. OpenRouter mixes 443 free and PAID models under one catalogue,
+    where an auto-pick could quietly start billing."""
+    from autoreel.llm_highlights import (DEFAULT_MODELS, NVIDIA, OPENROUTER,
+                                         XKIRO, _PINNED_MODEL_PROVIDERS,
+                                         resolve_model)
+
+    for provider in (NVIDIA, OPENROUTER, XKIRO):
+        assert provider in _PINNED_MODEL_PROVIDERS
+        # No network call, and no catalogue name - the pinned one.
+        assert resolve_model(provider, "any-key") == DEFAULT_MODELS[provider]
+
+    # An explicit config setting still wins over the pin.
+    assert resolve_model(NVIDIA, "k", "some/other-model") == "some/other-model"
+
+
+def test_nvidia_retries_are_short_and_many_not_long_and_few():
+    """Its preview pool refuses instantly when full -
+
+        503 ResourceExhausted: Worker local total request limit
+        reached (16/16)              returned in 0.3s
+
+    - at about half of attempts, while a success takes 10-22s. A single
+    patient 20s retry turns a 50% failure into a 25% failure and spends
+    20 seconds doing it; several impatient ones cost almost nothing."""
+    from autoreel.llm_highlights import (_BUSY_RETRY_SECONDS,
+                                         _NVIDIA_BUSY_TRIES,
+                                         _NVIDIA_BUSY_WAIT)
+
+    assert _NVIDIA_BUSY_TRIES > 2
+    assert _NVIDIA_BUSY_WAIT < _BUSY_RETRY_SECONDS
