@@ -118,3 +118,65 @@ def test_the_recorder_writes_it_on_delivery():
     assert "resolved_watch_url(self.url, self.video_id)" in body
     assert "remember_source(destination, self.url)" not in body, \
         "this writes an address that expires when the stream does"
+
+
+# ── which file to count ───────────────────────────────────────────────
+#
+# Found by actually running it against a live stream rather than by
+# reading the code: yt-dlp does not leave one file.
+
+def test_a_single_fragment_is_never_counted_as_the_whole_chat(tmp_path):
+    """A real fetch of a live stream leaves all three of these:
+
+        chat.live_chat.json             191057   the log
+        chat.live_chat.json.part        191057   the same bytes, in progress
+        chat.live_chat.json.part-Frag10  17219   ONE fragment
+
+    All three contain "live_chat". Taking whichever os.listdir returned
+    first was a one-in-three chance of counting a tenth of the chat -
+    which still parses, still produces a curve, and reads as "the
+    audience was quiet all stream except one stretch". Nothing
+    downstream could tell.
+    """
+    from autoreel.chat_energy import pick_chat_log
+
+    (tmp_path / "chat.live_chat.json").write_text("x" * 191057)
+    (tmp_path / "chat.live_chat.json.part").write_text("x" * 191057)
+    (tmp_path / "chat.live_chat.json.part-Frag10").write_text("x" * 17219)
+
+    assert pick_chat_log(str(tmp_path)).endswith("chat.live_chat.json")
+
+
+def test_a_part_file_is_used_when_it_is_all_there_is(tmp_path):
+    """An interrupted fetch has no finished .json, and most of the chat
+    beats none of it."""
+    from autoreel.chat_energy import pick_chat_log
+
+    (tmp_path / "chat.live_chat.json.part").write_text("x" * 5000)
+    (tmp_path / "chat.live_chat.json.part-Frag3").write_text("x" * 100)
+
+    assert pick_chat_log(str(tmp_path)).endswith(".part")
+
+
+def test_empty_and_missing_are_answered_with_nothing(tmp_path):
+    """No chat is a normal answer, not a failure."""
+    from autoreel.chat_energy import pick_chat_log
+
+    assert pick_chat_log(str(tmp_path)) == ""
+    assert pick_chat_log(str(tmp_path / "does-not-exist")) == ""
+
+    (tmp_path / "chat.live_chat.json").write_text("")
+    assert pick_chat_log(str(tmp_path)) == "", "an empty file is not a log"
+
+
+def test_pre_stream_chat_does_not_shift_every_timestamp():
+    """A live fetch carries chat from BEFORE the stream, at negative
+    offsets - measured at -2605s on a real one. Letting those set the
+    origin would move every clip timestamp by 43 minutes."""
+    from autoreel.chat_energy import _rates
+
+    rates = _rates([-2605.0, -10.0, 0.0, 5.0, 5.4, 9.0])
+
+    assert len(rates) == 10, "the curve starts at the stream, not at -2605s"
+    assert rates[0] == 1
+    assert rates[5] == 2

@@ -111,6 +111,51 @@ def _rates(offsets: Sequence[float]) -> list:
     return counts
 
 
+def pick_chat_log(workspace: str) -> str:
+    """The chat log to count, out of whatever yt-dlp left behind.
+
+    It does not leave one file. A fetch of a stream that is still live,
+    or one that was interrupted, leaves all three of these side by side:
+
+        chat.live_chat.json            191057   the log
+        chat.live_chat.json.part       191057   the same bytes, in progress
+        chat.live_chat.json.part-Frag10 17219   ONE fragment
+
+    Every one of them contains "live_chat", and this used to take
+    whichever os.listdir happened to return first - arbitrary, and on a
+    real fetch that is a one-in-three chance of counting a single
+    fragment. A tenth of the chat still parses, still produces a curve,
+    and reads as "the audience was quiet for this whole stream except
+    one stretch". There is nothing downstream that could notice.
+
+    So: never a -Frag file, prefer a finished .json over a .part, and
+    among equals take the biggest.
+    """
+    candidates = []
+    try:
+        names = os.listdir(workspace)
+    except OSError:
+        return ""
+    for name in names:
+        if "live_chat" not in name:
+            continue
+        # A fragment is a slice of the log, not a smaller copy of it.
+        if "-Frag" in name:
+            continue
+        path = os.path.join(workspace, name)
+        try:
+            size = os.path.getsize(path)
+        except OSError:
+            continue
+        if not size:
+            continue
+        # Finished files first, then by size.
+        candidates.append((0 if not name.endswith(".part") else 1,
+                           -size, path))
+    candidates.sort()
+    return candidates[0][2] if candidates else ""
+
+
 def rates_for_url(url: str) -> list:
     """[messages per second] for this video, or [] if there is no chat.
 
@@ -128,11 +173,7 @@ def rates_for_url(url: str) -> list:
         except (OSError, subprocess.TimeoutExpired):
             return []
 
-        found = ""
-        for name in os.listdir(workspace):
-            if "live_chat" in name:
-                found = os.path.join(workspace, name)
-                break
+        found = pick_chat_log(workspace)
         if not found:
             return []
         return _rates(_timestamps(found))
