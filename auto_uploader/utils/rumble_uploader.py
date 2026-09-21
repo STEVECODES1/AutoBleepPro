@@ -188,7 +188,19 @@ def _set_file_via_cdp(page, selector: str, file_path: str) -> bool:
         })
         count = (result.get("result") or {}).get("value", 0)
         return int(count or 0) > 0
-    except Exception:
+    except Exception as exc:
+        # This used to be a silent `return False`. The caller has no
+        # way to tell "CDP attach failed" apart from "not using CDP at
+        # all", so it fell straight through to Playwright's own
+        # set_input_files - which then failed with a DIFFERENT, more
+        # confusing error ("Cannot transfer files larger than 50Mb to a
+        # browser not co-located with the server") that has nothing to
+        # do with the real cause. A real run hit exactly this: Chrome
+        # attached fine, and the upload still died on the 50MB message,
+        # with no way to see why the CDP path was skipped.
+        print(f"[Rumble] CDP file attach failed, falling back to "
+              f"Playwright's own upload (which has a 50MB ceiling on a "
+              f"non-co-located browser): {exc}")
         return False
 
 
