@@ -1013,6 +1013,10 @@ class Recorder:
     # sixty seconds. Ten hours of that buries everything else.
     _said: dict = field(default_factory=dict, repr=False)
     _swept_orphans: bool = field(default=False, repr=False)
+    # When bytes actually started arriving for the current attempt, as
+    # opposed to when this process started waiting for them. None until
+    # the download begins. See record_one_stream.
+    recording_started_at: Optional[float] = field(default=None, repr=False)
 
     def say(self, message: str) -> None:
         print(f"[{time.strftime('%H:%M:%S')}] {message}", flush=True)
@@ -1209,6 +1213,11 @@ class Recorder:
                     # stream beginning.
                     if is_recording_line(line):
                         waiting = False
+                        # The moment bytes start arriving, as opposed to
+                        # the moment this process started waiting for
+                        # them. With --wait-for-video those can be
+                        # eleven hours apart. See recording_started_at.
+                        self.recording_started_at = time.time()
                         self.say("Live - recording started.")
                         # Asked NOW, while the stream is still live - a
                         # live URL resolves to nothing once it ends.
@@ -1638,6 +1647,16 @@ class Recorder:
         while True:
             target = segment_path(self.staging, base, resumes + 1)
             started = time.time()
+            # Cleared per attempt. On the first attempt yt-dlp WAITS for
+            # the channel to go live, so `started` above is when the
+            # waiting began, not when the recording did - a real run sat
+            # watching for 11 hours, recorded for one minute, hit a 403
+            # and reported "Recording dropped after 667 min", which
+            # reads as eleven hours of lost footage. It is also what
+            # should_resume was measuring, so the reconnect decision was
+            # made on the length of the wait rather than the length of
+            # the recording.
+            self.recording_started_at = None
             # Held only while actually downloading, so the machine can
             # still sleep normally during the wait between streams.
             with KeepAwake() as awake:
@@ -1648,13 +1667,17 @@ class Recorder:
                 code = self._run(self.download_args(target, wait=(resumes == 0)),
                                  log_path)
             ended = time.time()
+            # Fall back to `started` when the download never began -
+            # there is no recording to measure, and the wait is then the
+            # only span there is.
+            recorded_from = self.recording_started_at or started
 
             if code in (127, 130):
                 return None
             if code == 0:
                 self.say("Stream ended.")
                 break
-            if not should_resume(started, ended, resumes):
+            if not should_resume(recorded_from, ended, resumes):
                 # A stream that was FOUND and produced nothing is not a
                 # channel that is offline, and this treated them the
                 # same: should_resume only reconnects an attempt that
@@ -1682,8 +1705,8 @@ class Recorder:
 
             resumes += 1
             self.say(f"Recording dropped after "
-                     f"{(ended - started) / 60:.0f} min - reconnecting "
-                     f"(resume {resumes}/{MAX_RESUMES})...")
+                     f"{(ended - recorded_from) / 60:.0f} min of recording "
+                     f"- reconnecting (resume {resumes}/{MAX_RESUMES})...")
             self.say(f"Full yt-dlp output: {log_path}")
             time.sleep(3)
 
@@ -1810,6 +1833,18 @@ def main(argv: Optional[list] = None) -> int:
 
     here = os.path.dirname(os.path.abspath(__file__))
     root = os.path.dirname(here)
+
+    # The recorder's window is the other one left open all night, and it
+    # has the same problem: "Live - recording started" and a wall of 403s
+    # look identical at a glance. Imported from the uploader's utils so
+    # there is one set of rules, and skipped silently if this is being
+    # run from a checkout without them rather than failing to record.
+    try:
+        sys.path.insert(0, os.path.join(root, "auto_uploader"))
+        from utils import term      # noqa: F401
+        term.colourise_stdout()
+    except Exception:
+        pass
 
     parser = argparse.ArgumentParser(
         description="Record live streams into the uploader\'s watch folder. "

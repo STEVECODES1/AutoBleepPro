@@ -226,6 +226,7 @@ from utils.duplicate_checker import DuplicateChecker, hash_file
 from utils.file_watcher import FolderWatcher, is_intermediate_download, is_sidecar_file
 from utils.logging_setup import setup_logger, setup_publisher_logging
 from utils.notifier import notify
+from utils import term
 from utils.retry import retry_with_backoff
 from utils.rumble_checker import fetch_rumble_videos
 from utils.self_healing import run_health_check
@@ -2673,6 +2674,14 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
 
 
 def main(argv=None) -> int:
+    # Before anything prints. A run is thousands of lines and the ones
+    # that matter - a failed upload, an open circuit breaker, an expired
+    # sign-in - used to sit in the middle of them in identical white
+    # text. A dead Rumble upload went unnoticed from 05:47 to 09:29 that
+    # way. Turns itself off when output is redirected to a .log, when
+    # NO_COLOR is set, or on a terminal that says it is dumb.
+    term.colourise_stdout()
+
     parser = argparse.ArgumentParser(description="Auto-upload streams to YouTube + Rumble.")
     # Optional value, same as --batch. Passing the folder on the command
     # line means re-extracting the ZIP (which overwrites config.json, and
@@ -2958,7 +2967,7 @@ def main(argv=None) -> int:
     # Printed on EVERY run, not just --test-config: a stale extract running
     # old code has silently caused several confusing "the fix did nothing"
     # sessions, and the build stamp settles it in one line.
-    print(f"AutoBleep auto-uploader | Build: {BUILD}")
+    print(term.heading(f"AutoBleep auto-uploader | Build: {BUILD}"))
 
     config_dir = os.path.dirname(os.path.abspath(__file__))
     # config.json is NOT tracked in git - config.example.json is. Your

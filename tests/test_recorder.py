@@ -1169,3 +1169,48 @@ def test_an_empty_title_writes_nothing(tmp_path):
 
     assert remember_title(str(log), "") == ""
     assert not (tmp_path / "s.txt").exists()
+
+
+# ── how long the recording actually ran ────────────────────────────────
+
+def test_the_wait_for_a_stream_is_not_counted_as_recording_time():
+    """On the first attempt yt-dlp WAITS for the channel to go live, so
+    the clock started before the stream did.
+
+    A real run on 2026-09-21 watched for 11 hours, recorded for one
+    minute, hit a wall of 403s and said:
+
+        Recording dropped after 667 min - reconnecting (resume 1/20)
+
+    667 minutes is the length of the WAIT. It reads as eleven hours of
+    lost footage, and the same span was what should_resume weighed when
+    deciding whether the drop was worth reconnecting - so the reconnect
+    decision was being made on how long nobody had streamed for.
+    """
+    recorder = Recorder(url="https://example.invalid/live", name="S",
+                        staging="/tmp", watch_folder="/tmp")
+
+    # Nothing has started downloading yet.
+    assert recorder.recording_started_at is None
+
+    waiting_began = 0.0
+    recording_began = 40_000.0          # ~11 hours of waiting
+    dropped = recording_began + 60.0    # one minute of actual recording
+
+    recorder.recording_started_at = recording_began
+    recorded_from = recorder.recording_started_at or waiting_began
+
+    assert (dropped - recorded_from) / 60 == pytest.approx(1.0), \
+        "the message would claim 667 minutes of recording"
+    assert not should_resume(recorded_from, dropped, resumes=0), \
+        "a one-minute recording is a blip, however long the wait was"
+
+
+def test_a_stream_that_never_started_still_measures_something():
+    """No download began, so there is no recording to measure and the
+    wait is the only span there is. It must not divide by None."""
+    recorder = Recorder(url="https://example.invalid/live", name="S",
+                        staging="/tmp", watch_folder="/tmp")
+
+    recorded_from = recorder.recording_started_at or 100.0
+    assert recorded_from == 100.0
