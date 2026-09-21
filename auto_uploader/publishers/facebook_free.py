@@ -203,8 +203,25 @@ class FacebookFreePublisher:
 
     # ── Reel/short path (same as video, named for the queue) ──────────
 
-    def post_reel_from_file(self, video_path: str, caption: str = "") -> bool:
-        """A Facebook "Reel" on a Page is just a Page video. Delegate."""
+    def post_reel_from_file(self, video_path: str, caption: str = "",
+                            share_to_feed: bool = True) -> bool:
+        """A Facebook "Reel" on a Page is just a Page video. Delegate.
+
+        `share_to_feed` is accepted and ignored on purpose. It is an
+        Instagram concept - there, a Reel goes to the Reels tab and only
+        also lands on the grid if you ask. A Page video is already on the
+        Page's feed, so there is nothing to opt into.
+
+        Accepted rather than dropped because the clip queue calls every
+        Reel publisher with the same keyword (clip_queue.py, one call
+        site for all of them). Without this parameter that call raised
+        "got an unexpected keyword argument 'share_to_feed'" on EVERY
+        Facebook clip - caught by the queue's catch-all, counted as a
+        failed post, and after four of them the circuit breaker opened
+        and stopped trying for an hour. Facebook was the only social
+        channel still working at the time, and it went dark for a
+        signature mismatch.
+        """
         return self.post_video_from_file(video_path, caption)
 
 

@@ -173,8 +173,17 @@ class TikTokFreePublisher:
 
     # ── public surface ──────────────────────────────────────────────────
 
-    def post_reel_from_file(self, video_path: str, caption: str = "") -> bool:
-        """Post a local video to TikTok. Tries OAuth first, then browser."""
+    def post_reel_from_file(self, video_path: str, caption: str = "",
+                            share_to_feed: bool = True) -> bool:
+        """Post a local video to TikTok. Tries OAuth first, then browser.
+
+        `share_to_feed` is accepted and ignored: it is an Instagram-only
+        concept, but the clip queue calls every Reel publisher through a
+        single call site that always passes it. A publisher that does not
+        accept it raises "got an unexpected keyword argument" on every
+        single post - which is how Facebook's went dark for four straight
+        clips and tripped its circuit breaker.
+        """
         if not self.ready():
             return False
         if not os.path.isfile(video_path):

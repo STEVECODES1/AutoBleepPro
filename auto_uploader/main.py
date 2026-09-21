@@ -229,7 +229,11 @@ from utils.notifier import notify
 from utils.retry import retry_with_backoff
 from utils.rumble_checker import fetch_rumble_videos
 from utils.self_healing import run_health_check
-from utils.rumble_uploader import RumbleUploader
+from utils.rumble_uploader import (
+    RumbleUploader,
+    RumbleSetupError,
+    should_retry as rumble_should_retry,
+)
 from utils.templating import (
     build_description,
     build_title,
@@ -1138,8 +1142,17 @@ def _apply_mode(cfg, name: str, settings: dict):
     """
     print(f"[Mode] {name}")
     if "rumble_censor_uploads" in settings:
-        cfg.rumble.censor_uploads = bool(settings["rumble_censor_uploads"])
-        print(f"       Rumble  <- {'censored' if cfg.rumble.censor_uploads else 'UNCENSORED'} full VOD")
+        # The second door to the same setting. config.py enforces
+        # Rumble=uncensored at load time, and a mode profile flipping it
+        # back here would quietly undo that - which is exactly the shape
+        # of bug this project keeps hitting: the fix lands on one path
+        # while a second hardcoded path keeps the old behaviour.
+        if settings["rumble_censor_uploads"]:
+            print("       Rumble  <- ignoring this mode's censored setting; "
+                  "Rumble is the uncensored destination "
+                  "(RUMBLE_CENSOR_UPLOADS=1 in .env overrides).")
+        cfg.rumble.censor_uploads = False
+        print("       Rumble  <- UNCENSORED full VOD")
     if settings.get("rumble_title_format"):
         cfg.rumble.title_format = str(settings["rumble_title_format"])
     if "youtube_censor_uploads" in settings:
@@ -2330,6 +2343,13 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
                     progress_callback=rb_progress,
                 ),
                 max_retries=cfg.general.max_retries, delays=cfg.general.retry_delays, on_retry=rb_on_retry,
+                # A browser that is not running, or is signed out, fails
+                # exactly the same way on attempt two and attempt three.
+                # Skipping the 60s/300s/900s backoff on those turns a
+                # 23-minute dead end into an immediate, accurate message -
+                # and frees YouTube's head-start wait at the same moment
+                # instead of ten minutes later.
+                should_retry=rumble_should_retry,
             )
             if not parallel:
                 print()
@@ -2357,7 +2377,13 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
             # desktop toast only, so a failed Rumble upload looked exactly
             # like a successful one from the terminal: no output at all.
             print(f"[Rumble] UPLOAD FAILED: {exc}")
-            if cfg.rumble.cdp_url:
+            if isinstance(exc, RumbleSetupError):
+                # The message already names the exact setup problem and
+                # its fix; repeating a generic version of it underneath
+                # just buries the specific one.
+                print("         Nothing was retried: this fails identically "
+                      "every time until the setup above is fixed.")
+            elif cfg.rumble.cdp_url:
                 print(f"         Rumble uploads through Chrome at {cfg.rumble.cdp_url}. "
                       "If that is not running, start it with "
                       "--remote-debugging-port=9222 and log into rumble.com there.")

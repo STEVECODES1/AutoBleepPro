@@ -449,17 +449,18 @@ def test_the_monkey_profile_frames_the_call_not_the_browser():
     screen and howl.gg sits on the right. The old rectangle - x 0.50,
     width 0.37 - was the right-hand half, so it framed the slots browser
     perfectly on every clip where no face was found."""
-    from autoreel.crop_strategy import (CROP_FACE_PAN, resolve_content_region,
+    from autoreel.crop_strategy import (CROP_REGION, resolve_content_region,
                                         resolve_crop_strategy, resolve_region)
 
     config = {"clips": {"profile": "monkey"}}
 
-    # FACE_PAN, not REGION: same measured call-pane box, but its centre is
-    # allowed to walk so a person who moves mid-clip does not end up at the
-    # edge of a frame that is mostly wall. Everything below - which HALF of
-    # the screen is kept - is what this test is really guarding, and it is
-    # identical either way.
-    assert resolve_crop_strategy(config) == CROP_FACE_PAN
+    # REGION: one measured call-pane box, held still for the clip. The
+    # walking version (face_pan) was retired 2026-09-21 - it followed
+    # whatever mediapipe called a face, which on this channel's footage
+    # is a passing NPC. Everything below - which HALF of the screen is
+    # kept - is what this test is really guarding, and it is identical
+    # either way.
+    assert resolve_crop_strategy(config) == CROP_REGION
 
     box = resolve_region(config)
     assert box["x"] + box["width"] <= 0.5, \
@@ -493,7 +494,8 @@ def test_the_gta_profile_is_a_centre_crop_and_never_faces():
     in the blur instead of on the picture. Nothing was cut and nobody
     could see any of it. Short-form is watched on an upright phone;
     filling that screen is the format, not a preference."""
-    from autoreel.crop_strategy import (CROP_CENTER, CROP_FACE, CROP_FACE_PAN,
+    from autoreel.crop_strategy import (CROP_CENTER, CROP_FACE,
+                                        CROP_FACE_PAN,
                                         resolve_crop_strategy)
 
     resolved = resolve_crop_strategy({"clips": {"profile": "gta"}})
@@ -600,7 +602,7 @@ def test_auto_picks_the_framing_from_the_stream_title():
     completely different things - so every GTA stream went through the
     Monkey rectangle, cropped to the left 46% of a gameplay frame for a
     call window that was not there."""
-    from autoreel.crop_strategy import (CROP_CENTER, CROP_FACE_PAN,
+    from autoreel.crop_strategy import (CROP_CENTER, CROP_REGION,
                                         resolve_crop_strategy)
 
     def framing(title):
@@ -609,7 +611,7 @@ def test_auto_picks_the_framing_from_the_stream_title():
 
     assert framing('"stackswopo + gta D10 johnny cox + Lifestyle RP" 8/12/26') \
         == CROP_CENTER
-    assert framing("Stackswopo monkey app trolling pt 1") == CROP_FACE_PAN
+    assert framing("Stackswopo monkey app trolling pt 1") == CROP_REGION
 
 
 def test_an_unrecognisable_title_keeps_the_whole_frame():

@@ -40,7 +40,7 @@ from . import face_region, motion_region
 from .crop_strategy import (
     CROP_CENTER,
     CROP_FACE,
-    CROP_FACE_PAN,
+    normalise_strategy,
     CROP_FIT,
     CROP_MOTION,
     CROP_REGION,
@@ -445,13 +445,20 @@ def build_filter(strategy: str = CROP_CENTER,
 
     Order: crop/fit  ->  captions (optional)  ->  watermark.
     """
-    if motion_commands and strategy == CROP_FACE_PAN and region:
-        # The region is NOT discarded here. motion_crop_filter ignores it
-        # by design - gameplay pans across the whole frame - and reusing
-        # that branch for a face path would throw away the call pane and
-        # pan across the desktop.
-        chain = face_pan_filter(motion_commands, region)
-    elif motion_commands:
+    # face_pan is retired (see crop_strategy.RETIRED_STRATEGIES): the
+    # moving crop chased NPC faces across GTA footage. A config that
+    # still names it renders as the static region crop instead of
+    # panning, so an old profile keeps working without the behaviour
+    # that was asked to be removed.
+    #
+    # The sendcmd path is dropped with it. Normalising the name alone
+    # would leave `motion_commands` in play, and the chain would still
+    # come out with a crop that walks across the frame - a different
+    # moving crop, which is not what "remove the face pan" means.
+    if normalise_strategy(strategy) != strategy:
+        motion_commands = ""
+    strategy = normalise_strategy(strategy)
+    if motion_commands:
         chain = motion_crop_filter(motion_commands)
     else:
         chain = crop_filter(strategy, region)
@@ -1037,8 +1044,9 @@ class ClipMaker:
             if self.per_clip_framing:
                 strategy, region = self._framing_at(
                     source_path, spec, strategy, self.region)
-                clip_strategy = strategy
-            if strategy in (CROP_REGION, CROP_FACE_PAN) and self.find_faces:
+            strategy = normalise_strategy(strategy)
+            clip_strategy = strategy
+            if strategy == CROP_REGION and self.find_faces:
                 # Said ONCE per run, not per clip. Without mediapipe every
                 # clip falls back to the fixed call-pane rectangle and the
                 # person drifts out of it, and the only sign was the crop
@@ -1048,33 +1056,14 @@ class ClipMaker:
                         "[Clips] Face framing is OFF - mediapipe is not "
                         "installed, so the crop cannot follow anyone. "
                         "Install it with:  pip install mediapipe")
-                measured = None
-                if strategy == CROP_FACE_PAN:
-                    # Ask for a path first. It answers (None, []) for a
-                    # clip where nobody moves far enough to be worth
-                    # following, and that answer is the common one - a
-                    # call where both people sit still is exactly the
-                    # case a moving crop makes worse, not better.
-                    size, path = face_region.path_for(
-                        source_path, spec.start, spec.end - spec.start,
-                        within=self.content_region)
-                    if size and path:
-                        measured = size
-                        motion_commands = os.path.join(
-                            self.output_dir,
-                            f".{safe_stem(basename)}_clip{spec.index:02d}.cmds")
-                        with open(motion_commands, "w", encoding="utf-8") as f:
-                            f.write(motion_region.commands_file(
-                                path,
-                                f"iw*{size['width']:.4f}",
-                                f"ih*{size['height']:.4f}"))
-                if measured is None:
-                    # No path, or not this strategy: the static rectangle,
-                    # measured the same way it always was.
-                    clip_strategy = CROP_REGION
-                    measured = face_region.region_for(
-                        source_path, spec.start, spec.end - spec.start,
-                        within=self.content_region)
+                # One static rectangle, measured from the clip. The
+                # moving version of this (face_pan) is retired - it
+                # followed NPC faces across GTA footage and slid the
+                # crop mid-clip for no visible reason.
+                clip_strategy = CROP_REGION
+                measured = face_region.region_for(
+                    source_path, spec.start, spec.end - spec.start,
+                    within=self.content_region)
                 if measured:
                     region = measured
                 else:

@@ -187,6 +187,77 @@ def _resolve_path(project_root: str, path: str) -> str:
     return os.path.normpath(resolved)
 
 
+
+# The upload route Rumble actually works over. Rumble has no creator API,
+# so an upload drives a real browser - and the only route that survives
+# unattended is attaching to a Chrome you are already signed into.
+#
+# This used to default to None, meaning "no CDP", which silently selected
+# the username/password path instead: launch a fresh logged-out browser
+# and type credentials into Rumble's login form. That path does not work
+# and cannot be made to. A real run on 2026-09-21 produced, for the full
+# VOD and all six clips in turn:
+#
+#   Locator.fill: Timeout 30000ms exceeded.
+#     waiting for locator("input[type='email']")...
+#
+# seven times, three attempts each, ~1415 seconds apiece - a little under
+# three hours of wall time - and put nothing on Rumble while YouTube
+# uploaded normally. The login form it was waiting for is not there for
+# an automated browser to fill in.
+#
+# config.json is not in the repo, so a config written before cdp_url
+# existed has no key for it and cannot be fixed by pulling. The default
+# has to carry it. Anyone who genuinely wants the password path can still
+# select it with "cdp_url": false, which is explicit rather than absent.
+DEFAULT_RUMBLE_CDP_URL = "http://localhost:9222"
+
+
+
+# Rumble gets the ORIGINAL audio. Every other destination gets the
+# censored copy. That split is the whole reason two copies are rendered.
+#
+# It was a config value with a default of False, which meant a config.json
+# written before the split existed - or one where the key got flipped
+# once and forgotten - sent the bleeped copy to Rumble and there was no
+# sign of it anywhere except a line in --show-config nobody reads. The
+# channel owner reported it as "rumble was censoring the vod".
+#
+# config.json is gitignored, so a stale value there cannot be corrected
+# by pulling; the invariant has to live here. Set RUMBLE_CENSOR_UPLOADS=1
+# in .env to override it deliberately - that is a decision someone typed,
+# not a default nobody chose.
+def _rumble_censor_uploads(rb: dict) -> bool:
+    """False - Rumble takes the uncensored copy - unless env says otherwise."""
+    override = (os.environ.get("RUMBLE_CENSOR_UPLOADS") or "").strip().lower()
+    if override in ("1", "true", "yes", "on"):
+        return True
+    if rb.get("censor_uploads"):
+        print("[Config] rumble.censor_uploads is set in config.json, but "
+              "Rumble is the uncensored destination - ignoring it and "
+              "uploading the original audio. Set RUMBLE_CENSOR_UPLOADS=1 "
+              "in .env if you really want Rumble bleeped.")
+    return False
+
+
+def _rumble_cdp_url(rb: dict):
+    """The CDP endpoint for Rumble, defaulting to the local debug port."""
+    from_env = os.environ.get("RUMBLE_CDP_URL")
+    if from_env:
+        return from_env
+    if "cdp_url" in rb:
+        configured = rb["cdp_url"]
+        # An explicit false/null/"" is a deliberate "do not use CDP".
+        if configured is False:
+            return None
+        if configured:
+            return str(configured)
+        # null or "" left over from an older template is not a decision -
+        # it is the absence of one, and the absence is what broke this.
+        return DEFAULT_RUMBLE_CDP_URL
+    return DEFAULT_RUMBLE_CDP_URL
+
+
 def load_config(config_path: str = "config.json", env_path: str = ".env") -> AppConfig:
     project_root = os.path.dirname(os.path.abspath(config_path)) or "."
     load_dotenv(env_path)
@@ -232,10 +303,10 @@ def load_config(config_path: str = "config.json", env_path: str = ".env") -> App
         password=os.environ.get("RUMBLE_PASSWORD", ""),
         login_url=rb.get("login_url", "https://rumble.com/login.php"),
         upload_url=rb.get("upload_url", "https://rumble.com/upload.php"),
-        cdp_url=os.environ.get("RUMBLE_CDP_URL") or rb.get("cdp_url") or None,
+        cdp_url=_rumble_cdp_url(rb),
         primary_category=rb.get("primary_category", "Gaming"),
         secondary_category=rb.get("secondary_category", ""),
-        censor_uploads=bool(rb.get("censor_uploads", False)),
+        censor_uploads=_rumble_censor_uploads(rb),
         rss_url=rb.get("rss_url") or f"https://rumble.com/user/{rb['channel']}/index.xml",
         skip_if_exists=bool(rb.get("skip_if_exists", True)),
     )

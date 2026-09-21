@@ -130,10 +130,10 @@ def test_the_tracking_is_still_there_for_anyone_who_wants_it():
 
 def test_a_call_stream_is_untouched_by_this():
     """Faces are the right signal there and always were."""
-    from autoreel.crop_strategy import CROP_FACE_PAN, resolve_crop_strategy
+    from autoreel.crop_strategy import CROP_REGION, resolve_crop_strategy
 
     assert resolve_crop_strategy(
-        {"clips": {"profile": "monkey"}}) == CROP_FACE_PAN
+        {"clips": {"profile": "monkey"}}) == CROP_REGION
 
 
 # ── fewer clips when nothing read them ───────────────────────────────

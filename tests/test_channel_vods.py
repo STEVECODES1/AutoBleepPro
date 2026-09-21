@@ -616,7 +616,7 @@ def test_the_framing_flag_beats_a_leftover_crop_strategy():
         "gameplay") == "center"
     assert resolve_crop_strategy(
         {"clips": {"profile": "monkey", "crop_strategy": ""}},
-        "gameplay") == "face_pan"
+        "gameplay") == "region"   # was face_pan, retired 2026-09-21
     assert resolve_crop_strategy(
         {"clips": {"profile": "whole", "crop_strategy": ""}},
         "gameplay") == "fit"

@@ -312,9 +312,13 @@ def apply_trim(source: str, out_path: str, cuts: Sequence, duration: float,
     """
     if not cuts:
         return source
-    if not have_ffmpeg():
-        raise TrimError("ffmpeg is not on PATH - silence trimming needs it")
 
+    # The sanity checks come BEFORE the ffmpeg check, because they are
+    # facts about the cut list and hold whether or not ffmpeg exists.
+    # With the order reversed, a machine without ffmpeg reported "ffmpeg
+    # is not on PATH" for a trim that would have removed 90% of the
+    # video - the wrong diagnosis, and the one that sends you installing
+    # a tool instead of looking at why the transcript came back empty.
     removed = removed_seconds(cuts)
     if duration > 0 and removed / duration > MAX_REMOVED_FRACTION:
         raise TrimError(
@@ -325,6 +329,9 @@ def apply_trim(source: str, out_path: str, cuts: Sequence, duration: float,
     keeps = keep_ranges(cuts, duration)
     if not keeps:
         raise TrimError("trimming would leave nothing behind")
+
+    if not have_ffmpeg():
+        raise TrimError("ffmpeg is not on PATH - silence trimming needs it")
 
     partial = f"{out_path}.partial.mp4"
     try:

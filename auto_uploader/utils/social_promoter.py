@@ -1062,7 +1062,7 @@ def post_clip_to_upload_post(posting: dict, video_path: str, caption: str,
         return False
 
     if dry_run:
-    print(f"[Social] upload_post: WOULD post {os.path.basename(video_path)}"
+        print(f"[Social] upload_post: WOULD post {os.path.basename(video_path)}"
               f" to {project_platforms}")
         for plat in project_platforms:
             guard.record_result(plat, True)

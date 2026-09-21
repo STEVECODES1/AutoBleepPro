@@ -122,11 +122,14 @@ def test_a_gameplay_path_still_writes_no_y():
     assert script.count("crop x") == 2
 
 
-def test_the_pan_crops_the_measured_box_not_a_full_height_slice():
-    """The sharp edge. build_filter's motion branch ignores `region` by
-    design - gameplay pans across the whole frame - and reusing it here
-    would pan a full-height 9:16 strip across the entire desktop, slots
-    browser included."""
+def test_a_retired_face_pan_config_renders_as_a_still_crop():
+    """Retired 2026-09-21 at the channel owner's instruction.
+
+    A config that still says face_pan must render - and must render
+    WITHOUT the pan. Rejecting it outright would break a machine whose
+    gitignored config.json still names it; honouring it would put back
+    the moving crop that was asked to be removed.
+    """
     from autoreel.clip_maker import build_filter
 
     region = {"x": 0.03, "y": 0.05, "width": 0.46, "height": 0.90}
@@ -134,9 +137,7 @@ def test_the_pan_crops_the_measured_box_not_a_full_height_slice():
                          motion_commands="/tmp/pan.cmds")
 
     assert chain.count("crop=") == 1, "two crop filters crop the crop"
-    assert "iw*0.4600" in chain and "ih*0.9000" in chain, \
-        "the measured box's size was thrown away"
-    assert "sendcmd" in chain
+    assert "sendcmd" not in chain, "the pan is back"
 
 
 def test_gameplay_motion_is_untouched_by_any_of_this():
@@ -154,13 +155,25 @@ def test_gameplay_motion_is_untouched_by_any_of_this():
 
 # ── the rules that must survive ──────────────────────────────────────
 
-def test_face_pan_is_not_face_tracking():
-    """CROP_FACE means the per-frame moviepy renderer and is banned from
-    every profile. This is a different thing - a fixed-size box walked by
-    sendcmd - and conflating the two names would quietly re-enable the
-    banned one."""
+def test_face_pan_is_retired_and_cannot_be_configured():
+    """The pan followed whatever mediapipe called a face. On GTA RP that
+    is a passing NPC, and the crop slid across the frame mid-clip for no
+    reason a viewer could see.
+
+    Not in VALID_STRATEGIES, so naming it in a profile or config is
+    rejected at validation rather than quietly switching the moving crop
+    back on - and no profile may name it either.
+    """
+    from autoreel.crop_strategy import RETIRED_STRATEGIES, normalise_strategy
+
     assert CROP_FACE_PAN != CROP_FACE
-    assert CROP_FACE_PAN in VALID_STRATEGIES
+    assert CROP_FACE_PAN not in VALID_STRATEGIES
+    assert CROP_FACE_PAN in RETIRED_STRATEGIES
+    assert normalise_strategy(CROP_FACE_PAN) in VALID_STRATEGIES
+
+    for name, profile in PROFILES.items():
+        assert profile.get("crop_strategy") != CROP_FACE_PAN, \
+            f"profile {name!r} still asks for the retired pan"
 
 
 def test_gameplay_never_reaches_the_face_pan():

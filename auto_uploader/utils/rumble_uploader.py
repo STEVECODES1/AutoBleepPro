@@ -37,6 +37,40 @@ from typing import Callable, Optional
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
 
 
+class RumbleSetupError(RuntimeError):
+    """A Rumble failure that no amount of retrying can fix.
+
+    Chrome is not running with remote debugging, or the window it is
+    attached to is signed out of Rumble. Both are one-time setup facts
+    about this machine, not weather. Retrying them costs 60s + 300s +
+    900s per video - a real run spent 1413 seconds arriving at the same
+    "Locator.fill: Timeout" three times - and the exception that finally
+    surfaced named a login-form selector, which had nothing to do with
+    why the upload never happened.
+
+    Raised so the caller can skip its backoff and say the true reason at
+    the first failure, while the stream is still fresh.
+    """
+
+
+def is_permanent(exc: BaseException) -> bool:
+    """Is this a failure that will fail identically on the next attempt?"""
+    return isinstance(exc, RumbleSetupError)
+
+
+def should_retry(exc: BaseException) -> bool:
+    """Pass to retry_with_backoff: retry everything except setup errors."""
+    return not is_permanent(exc)
+
+
+# Signs that a Rumble page is asking whoever is driving to sign in. Used
+# on the UPLOAD page - Rumble bounces a signed-out visitor to its login
+# form rather than showing an upload form - so an attached-but-logged-out
+# Chrome is reported as exactly that instead of as a mystery timeout
+# waiting for a file input that was never going to exist.
+_LOGIN_WALL = re.compile(r"/login|/sign-?in|/register", re.I)
+
+
 # Recorded instead of a URL when the upload succeeded but Rumble never
 # showed a link. Deliberately not "FAILED:" - the video IS up, so dedup
 # must still treat it as done and not re-upload it on the next run.
@@ -258,25 +292,49 @@ class RumbleUploader:
                     attached = True
                     print(f"[Rumble] Attached to Chrome at {self.cdp_url}.")
                 except Exception as exc:
-                    # Chrome isn't running with --remote-debugging-port. Falling
-                    # back beats failing the upload: cdp_url is configured for
-                    # the good path, not as a hard requirement.
+                    # Configuring cdp_url IS the decision about how this
+                    # account reaches Rumble. It does not mean "try the
+                    # browser, and if that is down, go type the password
+                    # in instead": that fallback opens a fresh,
+                    # logged-out profile, guesses at a login form, and
+                    # walks into whatever captcha or 2FA Rumble shows an
+                    # unfamiliar browser - with nobody at the window to
+                    # answer either, because the whole point is that this
+                    # runs unattended when a stream ends.
+                    #
+                    # It has never completed an upload. What it did do was
+                    # replace an accurate message about Chrome with a
+                    # misleading one about a login-form selector, three
+                    # times, across 23 minutes of backoff, while the
+                    # stream that was supposed to go up first went
+                    # nowhere. The terminal said
+                    # "Locator.fill: Timeout 30000ms exceeded"; the
+                    # actual problem was that Chrome was not reachable
+                    # on the debugging port.
+                    #
+                    # So: when the CDP route is configured and
+                    # unreachable, say exactly that, at once, and stop.
                     print(f"[Rumble] Could not attach to Chrome at {self.cdp_url} ({exc}).")
-                    if self.username and self.password:
-                        print("[Rumble] Falling back to username/password login. "
-                              "For the reliable path, launch Chrome with "
-                              "--remote-debugging-port=9222 and log into Rumble there.")
                     browser = page = None
+                    raise RumbleSetupError(
+                        f"Chrome is not reachable at {self.cdp_url} ({exc}). "
+                        f"Startup check said: {detail}. Rumble uploads go "
+                        "through your own signed-in Chrome, so start it with "
+                        "--remote-debugging-port=9222, log into rumble.com in "
+                        "that window, and leave it open."
+                    ) from exc
 
+            # Only reachable with no cdp_url configured at all - an
+            # attach failure now raises above rather than landing here.
             if page is None:
                 if not self.username or not self.password:
-                    raise RuntimeError(
-                        "Could not attach to Chrome at "
-                        f"{self.cdp_url or '(unset)'}, and RUMBLE_USERNAME/"
-                        "RUMBLE_PASSWORD are not set in .env either - so there "
-                        "is no way to reach Rumble. Either launch Chrome with "
-                        "--remote-debugging-port=9222 and log in, or fill in "
-                        "the .env credentials."
+                    raise RumbleSetupError(
+                        "no way to reach Rumble: rumble.cdp_url is not set in "
+                        "config.json and RUMBLE_USERNAME/RUMBLE_PASSWORD are "
+                        "not set in .env either. The recommended fix is the "
+                        "first one - set \"cdp_url\": \"http://localhost:9222\", "
+                        "start Chrome with --remote-debugging-port=9222, and "
+                        "log into rumble.com in that window once."
                     )
                 browser = p.chromium.launch(headless=self.headless)
                 page = browser.new_page()
@@ -947,10 +1005,43 @@ class RumbleUploader:
               "unpublished.")
         return False
 
+    @staticmethod
+    def _signed_out(page) -> bool:
+        """Did Rumble bounce us off the upload page to a login form?
+
+        Attached is not the same as signed in, and the two failures look
+        nothing alike from the log even though both end in a timeout. A
+        Chrome session that has expired since the last stream lands on
+        Rumble's login page, which has no file input - so the upload
+        sat waiting 120 seconds for a Title field that was never coming
+        and reported that, rather than the one fact that would have
+        fixed it in ten seconds: sign in again in that window.
+        """
+        try:
+            if _LOGIN_WALL.search(page.url or ""):
+                return True
+            # Still on /upload.php but showing the login form: Rumble
+            # renders it inline for a signed-out visitor rather than
+            # redirecting, depending on how the page was reached.
+            return page.locator("input[type='file'], #Filedata").count() == 0 and (
+                page.locator("input[type='password']").count() > 0
+            )
+        except Exception:
+            # Never let the diagnosis itself break the upload.
+            return False
+
     def _upload_video(
         self, page, video_path, title, description, tags, privacy, thumbnail_path, progress_callback
     ) -> str:
         page.goto(self.upload_url, timeout=60_000)
+
+        if self._signed_out(page):
+            raise RumbleSetupError(
+                "the Chrome this attached to is not signed into Rumble - "
+                f"{self.upload_url} came back as a login page ({page.url}). "
+                "Sign into rumble.com in that Chrome window once; the "
+                "profile remembers it for every run after."
+            )
 
         # See _rumble_friendly_alias just above the class - a .ts file
         # attaches CLEANLY over CDP and is then refused by Rumble's own

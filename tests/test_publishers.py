@@ -925,13 +925,20 @@ def test_the_clip_caption_stays_short():
     import json
     import os
 
+    # config.example.json, not config.json. The live config is gitignored,
+    # so reading it made this test assert something different on every
+    # machine and fail outright on a clean checkout, where the file does
+    # not exist at all. The template is what ships, so the template is
+    # what this guards.
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    with open(os.path.join(root, "auto_uploader", "config.json"),
+    with open(os.path.join(root, "auto_uploader", "config.example.json"),
               encoding="utf-8") as handle:
         template = json.load(handle)["instagram"]["caption_template"]
 
     assert "LINK IN BIO" not in template
-    assert template.count("\n") <= 4, "more than four lines is not short"
+    # Six lines: hook, blank, tags, blank, YouTube, Rumble. Both channel
+    # lines are the point of the caption, so the ceiling counts them.
+    assert template.count("\n") <= 5, "more than six lines is not short"
     assert "{title}" in template
     assert "@BinScript" in template and "BinScripts" in template
 

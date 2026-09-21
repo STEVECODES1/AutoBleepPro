@@ -267,8 +267,27 @@ def test_noncensoring_platform_pending_still_deletes_the_reencode(env):
     assert env["video"].exists(), "the retry input for Rumble is the source"
 
 
-def test_reencode_kept_when_rumble_also_censors(env):
-    """Flip rumble.censor_uploads on and the same case reverses."""
+def test_config_json_cannot_make_rumble_censored(env, capsys):
+    """Rumble is the uncensored destination, and config.json cannot
+    change that.
+
+    A stale `censor_uploads: true` left in a gitignored config.json is
+    how the full VOD went up to Rumble bleeped - the one place that is
+    supposed to carry the original audio. It is ignored, and said out
+    loud rather than silently.
+    """
+    env["raw"]["rumble"]["censor_uploads"] = True
+    with open(env["cfg_path"], "w") as f:
+        json.dump(env["raw"], f)
+    cfg = load(env)
+    assert cfg.rumble.censor_uploads is False
+    assert "uncensored destination" in capsys.readouterr().out
+    assert censoring_platforms(cfg) == {"youtube"}
+
+
+def test_reencode_kept_when_rumble_also_censors(env, monkeypatch):
+    """The deliberate override - typed into .env, not left in a config."""
+    monkeypatch.setenv("RUMBLE_CENSOR_UPLOADS", "1")
     env["raw"]["rumble"]["censor_uploads"] = True
     with open(env["cfg_path"], "w") as f:
         json.dump(env["raw"], f)

@@ -85,7 +85,34 @@ CROP_STACK = "stack"
 CROP_FACE_PAN = "face_pan"
 
 VALID_STRATEGIES = (CROP_CENTER, CROP_MOTION, CROP_FACE, CROP_FIT,
-                    CROP_REGION, CROP_STACK, CROP_FACE_PAN)
+                    CROP_REGION, CROP_STACK)
+
+# Retired 2026-09-21 at the channel owner's instruction: "keep the clips
+# cropped default at this point, remove the face pan thing."
+#
+# The pan was meant to follow a person who moves during a clip. On this
+# channel's footage it followed whatever mediapipe decided was a face -
+# which on GTA RP is a passing NPC - and the crop slid across the frame
+# mid-clip for no reason a viewer could see. A crop that moves when it
+# should not is worse than one that never moves, because the still one
+# is at least predictable.
+#
+# Deliberately NOT in VALID_STRATEGIES, so a profile or config that still
+# names "face_pan" is rejected at validation instead of quietly enabling
+# a moving crop again. The constant itself stays defined so that check
+# and the code that normalises old values have something to compare to.
+RETIRED_STRATEGIES = (CROP_FACE_PAN,)
+
+
+def normalise_strategy(strategy: str) -> str:
+    """Map a retired strategy onto what replaces it.
+
+    A config written before face_pan was retired should render, not
+    crash - it just must not get the pan.
+    """
+    if (strategy or "").strip().lower() in RETIRED_STRATEGIES:
+        return CROP_REGION
+    return strategy
 
 # The rectangle REGION keeps, as fractions of the source width and
 # height. The default points at the right-hand third, full height, which
@@ -135,7 +162,7 @@ PROFILES: Dict[str, Dict[str, Any]] = {
     # rectangle for a whole minute can only be right about the average.
     # When nobody moves far enough to matter the path is refused and this
     # renders as the static rectangle it always was.
-    "monkey": {"crop_strategy": CROP_FACE_PAN, "crop_region": DEFAULT_REGION,
+    "monkey": {"crop_strategy": CROP_REGION, "crop_region": DEFAULT_REGION,
                "content_region": DEFAULT_CONTENT_REGION},
     # Both people stacked, for a stream where the camera is a separate
     # pane from the call - the layout the hand-made CapCut edits use.

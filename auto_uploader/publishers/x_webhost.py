@@ -186,7 +186,8 @@ class XWebhostPublisher:
             log.error("X: tweet post failed: %s", exc)
             return False
 
-    def post_reel_from_file(self, video_path: str, caption: str = "") -> bool:
+    def post_reel_from_file(self, video_path: str, caption: str = "",
+                            share_to_feed: bool = True) -> bool:
         """Post a local clip to X.
 
         Free tier: upload the clip to Puter (free public host), then build the

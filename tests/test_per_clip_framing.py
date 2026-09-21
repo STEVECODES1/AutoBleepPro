@@ -22,7 +22,7 @@ if _REPO not in sys.path:
 from autoreel import clip_maker  # noqa: E402
 from autoreel.clip_maker import ClipMaker, ClipSpec  # noqa: E402
 from autoreel.crop_strategy import (CROP_CENTER, CROP_FACE_PAN,  # noqa: E402
-                                    CROP_FIT, CROP_MOTION)
+                                    CROP_FIT, CROP_MOTION, CROP_REGION)
 
 
 def _maker(**kw):
@@ -40,7 +40,9 @@ def test_a_call_inside_a_gameplay_stream_is_framed_as_a_call(monkeypatch):
     strategy, region = _maker()._framing_at(
         "/v.mp4", ClipSpec(start=120.0, end=140.0, index=1), CROP_FIT, None)
 
-    assert strategy == CROP_FACE_PAN
+    # CROP_REGION since face_pan was retired 2026-09-21: the same
+    # measured call-pane rectangle, held still instead of walking.
+    assert strategy == CROP_REGION
     assert region, "the call pane rectangle came with it"
 
 
