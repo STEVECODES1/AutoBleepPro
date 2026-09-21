@@ -197,7 +197,10 @@ def test_the_preflight_only_runs_when_main_is_the_program():
     call = body.index("_deps.ensure()")
 
     assert guard < call
-    assert call < body.index("from utils.config import")
+    # Anchored at the start of a line. Plain substring matching finds
+    # any COMMENT that happens to quote this import, which is how this
+    # started failing when a comment above the imports mentioned it.
+    assert call < body.index("\nfrom utils.config import")
 
 
 # ── dotenv can never take the uploader down again ────────────────────────

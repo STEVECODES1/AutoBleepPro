@@ -11,6 +11,32 @@ Usage:
     python main.py --test-config                   # validate config.json/.env without uploading anything
 """
 
+# ── Before anything else is imported ─────────────────────────────────
+#
+# A conflicted `git stash pop` writes its markers INTO the source, and
+# the first sign of it was
+#
+#     File "auto_uploader/utils/config.py", line 324
+#         <<<<<<< Updated upstream
+#     SyntaxError: invalid syntax
+#
+# printed twice, then again fifteen seconds later, then again, because
+# the keepalive restarted a program that could not possibly start. That
+# traceback names a line number and nothing else - not that the
+# checkout is half-merged, not what to type to fix it.
+#
+# This has to sit ABOVE the ordinary imports: the failure happens while
+# importing utils.config, so a check placed below that never runs.
+import os as _os
+import sys as _sys
+
+_sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+from utils.checkout_sanity import check as _check_checkout  # noqa: E402
+
+_broken = _check_checkout()
+if _broken:
+    _sys.exit(_broken)
+
 import os
 
 # BEFORE anything imports mediapipe. These are read by the C++ logging

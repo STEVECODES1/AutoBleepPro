@@ -20,6 +20,12 @@ REM  sets ERRORLEVEL too, so a banner that reads it after the counter
 REM  increments reports the counter, and every crash printed "exit 0".
 set "CODE=%ERRORLEVEL%"
 
+REM  Exit 3 is checkout_sanity's "this tree is half-merged". Restarting
+REM  cannot fix a file with conflict markers in it - it failed five
+REM  times in seventy-five seconds proving that - and the message it
+REM  printed above says exactly what to type. Stop and let it be read.
+if "%CODE%"=="3" goto broken
+
 set /a RESTARTS+=1
 call :backoff
 
@@ -33,6 +39,14 @@ echo ============================================================
 echo.
 timeout /t %WAIT% /nobreak >nul
 goto loop
+
+:broken
+echo.
+echo  [Keepalive] NOT restarting - see the message above. A restart
+echo              cannot repair a half-merged checkout.
+echo.
+pause
+goto :eof
 
 REM  Grows with the restart count, stops at two minutes, never gives up -
 REM  see _RUN_RECORDER.bat for why.
