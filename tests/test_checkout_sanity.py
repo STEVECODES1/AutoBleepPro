@@ -127,3 +127,37 @@ def test_the_keepalive_stops_instead_of_looping():
     # The check has to come before the restart counter, or it restarts
     # once anyway before noticing.
     assert body.index('goto broken') < body.index("set /a RESTARTS+=1")
+
+
+# ── the launcher must never stop and wait for a keystroke ─────────────
+
+def test_the_pull_cannot_open_an_editor():
+    """A plain `git pull` that has to MERGE opens an editor for the
+    merge message. On Windows that is vim, in a batch window, with no
+    sign of what happened or that Esc :wq is the way out - the pull
+    simply appears to hang, which is exactly what it did on
+    2026-09-21.
+    """
+    body = open(os.path.join(_REPO, "START.bat"),
+                encoding="utf-8", errors="replace").read()
+
+    assert "git pull --no-edit" in body
+    assert "\ngit pull\n" not in body, \
+        "a bare pull opens vim the moment it has to merge"
+    # ...and anything else git might open an editor for.
+    assert 'set "GIT_EDITOR=true"' in body
+    assert body.index("GIT_EDITOR") < body.index("git pull --no-edit")
+
+
+def test_local_edits_are_parked_rather_than_blocking_the_pull():
+    """Edits in the working tree abort a pull outright, and the old
+    launcher then said "continuing with the version already on disk"
+    and started anyway - which is how a whole night ran on a two-day-old
+    checkout."""
+    body = open(os.path.join(_REPO, "START.bat"),
+                encoding="utf-8", errors="replace").read()
+
+    assert "git stash push -u" in body
+    assert body.index("git stash push -u") < body.index("git pull --no-edit")
+    # Parked, not discarded.
+    assert "git stash pop" in body, "say how to get them back"

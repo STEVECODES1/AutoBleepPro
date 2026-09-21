@@ -65,7 +65,19 @@ if %ERRORLEVEL% equ 0 (
     set STASHED=0
 )
 
-git pull
+REM  --no-edit, because a plain `git pull` that has to MERGE opens an
+REM  editor for the merge message - and on Windows that editor is vim,
+REM  in a batch window, with no indication of what happened or that
+REM  Esc :wq is the way out. The pull just appears to hang. --no-edit
+REM  takes git's own default message ("Merge branch 'main' of ...")
+REM  and carries on, which is the message anyone would have accepted.
+REM
+REM  GIT_EDITOR=true covers everything else git might open an editor
+REM  for from in here: `true` exits 0 immediately, so git reads the
+REM  default and moves on instead of waiting for a keystroke nobody
+REM  knows to press.
+set "GIT_EDITOR=true"
+git pull --no-edit
 set GIT_EXIT=%ERRORLEVEL%
 if %GIT_EXIT% neq 0 goto pull_warn
 echo  Up to date with GitHub.
