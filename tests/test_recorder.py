@@ -1214,3 +1214,92 @@ def test_a_stream_that_never_started_still_measures_something():
 
     recorded_from = recorder.recording_started_at or 100.0
     assert recorded_from == 100.0
+
+
+# ── the address that makes chat reachable ─────────────────────────────
+
+def test_the_channel_live_url_is_replaced_with_the_real_video():
+    """THE reason chat has never worked.
+
+    The recorder watches a CHANNEL - youtube.com/@stackswopo_/live -
+    which is a redirect to whatever is live right now, and to nothing
+    once the stream ends. That address was written beside every
+    recording, so by the time the clip picker read it back (always
+    after the stream finished) it resolved to no video, chat replay
+    could not be fetched, and every clip was chosen from transcript
+    shape and loudness while the audience's own verdict went unread.
+    """
+    from record_stream import resolved_watch_url, youtube_id_in
+
+    # yt-dlp names the id in its own output, over and over.
+    assert youtube_id_in("[youtube] UKAaigyaM2E: Downloading webpage") == \
+        "UKAaigyaM2E"
+    assert youtube_id_in("[youtube] UKAaigyaM2E: Downloading player JSON") == \
+        "UKAaigyaM2E"
+
+    assert resolved_watch_url("https://www.youtube.com/@stackswopo_/live",
+                              "UKAaigyaM2E") == \
+        "https://www.youtube.com/watch?v=UKAaigyaM2E"
+
+
+def test_lines_that_do_not_name_a_video_are_not_mistaken_for_one():
+    """Most of yt-dlp's output is not this line, and a false id would
+    write a sidecar pointing at a video that does not exist."""
+    from record_stream import youtube_id_in
+
+    for line in ("[download] Destination: stream.ts.f299.mp4",
+                 "[dashsegments] Total fragments: unknown (live)",
+                 "[download] Got error: HTTP Error 403: Forbidden.",
+                 "[youtube] Extracting URL: https://youtube.com/x",
+                 ""):
+        assert youtube_id_in(line) == "", line
+
+
+def test_a_url_that_already_names_a_video_is_left_alone():
+    from record_stream import resolved_watch_url
+
+    for url in ("https://www.youtube.com/watch?v=ABCdef12345",
+                "https://youtu.be/ABCdef12345"):
+        assert resolved_watch_url(url, "UKAaigyaM2E") == url
+
+
+def test_other_platforms_are_not_rewritten():
+    """Twitch and Kick do not serve chat replay this way, and pasting a
+    YouTube id onto a Twitch URL would point at nothing at all."""
+    from record_stream import resolved_watch_url
+
+    for url in ("https://www.twitch.tv/stackswopo",
+                "https://kick.com/stackswopo"):
+        assert resolved_watch_url(url, "UKAaigyaM2E") == url
+
+
+def test_no_id_means_the_url_is_unchanged():
+    """A recording that never printed one - a resume that reconnected
+    without re-extracting, or another extractor entirely - keeps what it
+    had rather than losing the sidecar."""
+    from record_stream import resolved_watch_url
+
+    assert resolved_watch_url("https://www.youtube.com/@x/live", "") == \
+        "https://www.youtube.com/@x/live"
+
+
+def test_the_sidecar_is_what_the_clip_picker_reads(tmp_path):
+    """End to end across the two files: what the recorder writes is what
+    clip_runner.source_beside finds."""
+    import sys as _sys
+    _AU = os.path.join(_REPO, "auto_uploader")
+    if _AU not in _sys.path:
+        _sys.path.insert(0, _AU)
+    from utils.clip_runner import source_beside
+
+    from record_stream import remember_source, resolved_watch_url
+
+    video = tmp_path / "Stackswopo - IDK (FULL STREAM).ts"
+    video.write_bytes(b"x")
+
+    remember_source(str(video),
+                    resolved_watch_url("https://www.youtube.com/@s_/live",
+                                       "UKAaigyaM2E"))
+
+    assert source_beside(str(video)) == \
+        "https://www.youtube.com/watch?v=UKAaigyaM2E"

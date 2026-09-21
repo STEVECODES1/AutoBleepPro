@@ -460,6 +460,52 @@ def source_sidecar(video_path: str) -> str:
     return os.path.splitext(video_path or "")[0] + ".source.txt"
 
 
+# yt-dlp names the video it is working on, over and over, in lines like
+#
+#   [youtube] UKAaigyaM2E: Downloading webpage
+#   [youtube] UKAaigyaM2E: Downloading visionos player API JSON
+#
+# That id is the only thing that stays useful after the stream ends, and
+# it was being thrown away. See resolved_watch_url.
+_YT_ID_LINE = re.compile(r"^\[youtube\]\s+([A-Za-z0-9_-]{11}):")
+
+
+def youtube_id_in(line: str) -> str:
+    """The video id yt-dlp just named, or ""."""
+    match = _YT_ID_LINE.match((line or "").strip())
+    return match.group(1) if match else ""
+
+
+def resolved_watch_url(url: str, video_id: str) -> str:
+    """The address that will still resolve tomorrow.
+
+    THIS IS WHY CHAT NEVER WORKED. The recorder watches a CHANNEL:
+
+        https://www.youtube.com/@stackswopo_/live
+
+    which is a redirect that points at whatever is live right now, and
+    at nothing once the stream ends. remember_source wrote that address
+    beside every recording, so by the time the clip picker read it back
+    - after the stream had finished, which is always - it resolved to
+    no video, chat replay could not be fetched, and every clip this
+    project has ever cut was chosen from transcript shape and loudness
+    while the audience's own verdict sat one HTTP request away.
+
+    The id yt-dlp printed while recording turns it into a permanent
+    address. A URL that already names a specific video is returned
+    unchanged; anything that is not YouTube is left alone, because no
+    other platform here serves chat replay this way.
+    """
+    url = str(url or "").strip()
+    if not video_id:
+        return url
+    if "youtube.com" not in url and "youtu.be" not in url:
+        return url
+    if "watch?v=" in url or "youtu.be/" in url:
+        return url
+    return f"https://www.youtube.com/watch?v={video_id}"
+
+
 def remember_source(video_path: str, url: str) -> str:
     """Write down which stream this recording is, beside it.
 
@@ -1017,6 +1063,10 @@ class Recorder:
     # opposed to when this process started waiting for them. None until
     # the download begins. See record_one_stream.
     recording_started_at: Optional[float] = field(default=None, repr=False)
+    # The YouTube id yt-dlp named while recording. Turns the channel
+    # /live address into one that still resolves after the stream ends,
+    # which is what makes chat replay reachable - see resolved_watch_url.
+    video_id: str = field(default="", repr=False)
 
     def say(self, message: str) -> None:
         print(f"[{time.strftime('%H:%M:%S')}] {message}", flush=True)
@@ -1197,6 +1247,14 @@ class Recorder:
                     # must not end it.
                     refusals = 0
                     downloaded_anything = True
+                found_id = youtube_id_in(line)
+                if found_id:
+                    # Captured from every matching line, not only the
+                    # first: the id is the same throughout a recording,
+                    # and a resume starts a fresh yt-dlp whose early
+                    # lines are the only place it appears.
+                    self.video_id = found_id
+
                 if log:
                     # The log keeps EVERYTHING. Quietening the console is
                     # about being able to read it; throwing away the
@@ -1388,7 +1446,8 @@ class Recorder:
             self.say(f"Could not move the finished file: {exc}")
             return None
 
-        remember_source(destination, self.url)
+        remember_source(destination,
+                        resolved_watch_url(self.url, self.video_id))
 
         if join_lost_material(probe_duration(destination), part_lengths):
             # Nothing is deleted on this path. The joined file is still

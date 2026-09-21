@@ -109,4 +109,12 @@ def test_the_recorder_writes_it_on_delivery():
     body = open(os.path.join(_REPO, "tools", "record_stream.py"),
                 encoding="utf-8").read()
 
-    assert "remember_source(destination, self.url)" in body
+    assert "remember_source(destination," in body
+    # ...and writes the RESOLVED address, not the channel /live one.
+    # self.url is youtube.com/@stackswopo_/live, which points at
+    # whatever is live right now and at nothing once the stream ends -
+    # so the sidecar written from it was always dead by the time the
+    # clip picker read it back. See resolved_watch_url.
+    assert "resolved_watch_url(self.url, self.video_id)" in body
+    assert "remember_source(destination, self.url)" not in body, \
+        "this writes an address that expires when the stream does"
