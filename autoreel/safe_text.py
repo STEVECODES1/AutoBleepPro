@@ -181,6 +181,17 @@ def clean_title(text: str, fallback: str = "", checker=None) -> str:
     the sentence around it, which means that line simply is not usable
     as a title on a platform that would object to it. Masking is a fix;
     dropping is a demolition.
+
+    An EMPTY fallback means "give me the best you can manage". That is
+    right for a hook burned into the frame: "Get down like James Brown,
+    nigga" still makes a fine hook as "GET DOWN LIKE JAMES BROWN", and
+    pinning nothing there would be worse than pinning that.
+
+    It is the wrong thing for an upload TITLE, where the caller has a
+    real alternative - the filename - and a stump like "be with bro oh
+    my god" is worse than using it. Such a caller passes a fallback it
+    can recognise rather than an empty one; see the clip-title path in
+    auto_uploader/main.py.
     """
     counts: dict = {}
     cleaned = clean(text, checker, counts=counts)

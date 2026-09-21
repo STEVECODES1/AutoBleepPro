@@ -1836,6 +1836,44 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
                     spoken = handle.read().strip().splitlines()[0].strip()
             except (OSError, IndexError):
                 spoken = ""
+        # CLEANED before it is used, not after. This line is transcribed
+        # speech and it becomes the video's public title on every
+        # platform. Uncleaned, it published these to Rumble, monetized
+        # and public, on 2026-09-19:
+        #
+        #   "Oh this nigga must be stupid what must be stupid nigga
+        #    pussy nigga"
+        #   "Oh what am i desh you niggas your dick sucked"
+        #
+        # The hook caption burned into the video was fixed at its own
+        # choke point in captions.py and this path was left on the old
+        # behaviour - the same shape of bug as the rest of this file's
+        # history: one path fixed, a second one still hardcoded.
+        #
+        # clean_title MASKS what it can and refuses what it cannot. A
+        # slur cannot be masked convincingly or dropped without wrecking
+        # the sentence, so a line carrying one is simply not usable as a
+        # title and the filename is used instead - which is what the
+        # fallback argument is for.
+        if spoken:
+            from autoreel.safe_text import clean_title
+
+            # A fallback this can RECOGNISE, not an empty one. An empty
+            # fallback means "give me the best you can manage", which is
+            # right for a hook burned into a frame and wrong here: it
+            # hands back the stump ("Oh this must be stupid what must be
+            # stupid p****") and the caller uses it because it is
+            # truthy. The filename is a real title and is right there.
+            unusable = "\x00-no-safe-title-\x00"
+            safe = clean_title(spoken, fallback=unusable)
+            if safe != unusable:
+                spoken = safe
+            else:
+                print(f"[Clip] The spoken line cannot be made into a safe "
+                      f"title - using the filename instead.")
+                print(f"       not used: {spoken[:80]}")
+                spoken = ""
+
         if spoken:
             stream_title = spoken
             print(f"[Clip] Title from the clip itself: {stream_title}")
@@ -4168,8 +4206,11 @@ def main(argv=None) -> int:
     existing_rumble_videos = []
     if not dry_run and cfg.rumble.skip_if_exists:
         try:
-            existing_rumble_videos = fetch_rumble_videos(cfg.rumble.rss_url, cfg.rumble.cdp_url)
-            print(f"[Rumble] Found {len(existing_rumble_videos)} existing video(s) via RSS for dedup checks.")
+            existing_rumble_videos = fetch_rumble_videos(
+                cfg.rumble.rss_url, cfg.rumble.cdp_url,
+                channel_url=_rumble_channel_url(cfg))
+            print(f"[Rumble] Found {len(existing_rumble_videos)} existing "
+                  f"video(s) for dedup checks.")
         except Exception as exc:
             # Not a warning: the local hash/title history is the primary
             # defence and it is working. The feed only ever added cover

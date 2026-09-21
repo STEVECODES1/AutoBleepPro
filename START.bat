@@ -4,7 +4,7 @@ REM  START.bat - the whole system, in one double-click.
 REM
 REM  Opens two windows and leaves them running:
 REM
-REM    1. RECORDER  - waits for YouTube, Twitch or Kick to go live, records the
+REM    1. RECORDER  - waits for YouTube or Twitch to go live, records the
 REM                   full stream, and fetches any new Twitch clips. Everything
 REM                   it produces lands in auto_uploader\watch_folder.
 REM
@@ -42,18 +42,49 @@ reg add "HKCU\Console" /v QuickEdit /t REG_DWORD /d 0 /f >nul 2>&1
 echo ============================================================
 echo  Pulling latest code from GitHub...
 echo ============================================================
+
+REM  Edits sitting in the working tree block a pull outright:
+REM
+REM    error: Your local changes to the following files would be
+REM    overwritten by merge ... Aborting
+REM
+REM  and the old version of this file then said "continuing with the
+REM  version already on disk" and started anyway. That is how a whole
+REM  night ran on code from two days earlier while the fix for what was
+REM  failing sat in the repo, pulled and unused.
+REM
+REM  So: park any local edits first. `git stash` KEEPS them - nothing is
+REM  thrown away, and `git stash pop` brings them back - but they stop
+REM  being a reason to run stale code. A clean tree stashes nothing and
+REM  this costs one command.
+git stash push -u -m "START.bat auto-stash" >nul 2>&1
+if %ERRORLEVEL% equ 0 (
+    set STASHED=1
+    echo  Local edits parked in git stash - restore with: git stash pop
+) else (
+    set STASHED=0
+)
+
 git pull
 set GIT_EXIT=%ERRORLEVEL%
 if %GIT_EXIT% neq 0 goto pull_warn
+echo  Up to date with GitHub.
 goto pull_done
 
 :pull_warn
 echo.
-echo  WARNING: git pull failed ^(exit code %GIT_EXIT%^).
-echo  Check your internet connection or run: git status
-echo  Continuing with the version already on disk...
+echo  ############################################################
+echo  #  WARNING: git pull FAILED ^(exit code %GIT_EXIT%^).
+echo  #
+echo  #  You are about to run the version already on disk, which
+echo  #  may NOT have the fix you are waiting for. Check the lines
+echo  #  above, then run:  git status
+echo  #
+echo  #  The build stamp printed by the uploader tells you which
+echo  #  commit is actually running - check it matches GitHub.
+echo  ############################################################
 echo.
-timeout /t 4 /nobreak >nul
+timeout /t 10 /nobreak >nul
 
 :pull_done
 echo.
@@ -61,7 +92,7 @@ echo ============================================================
 echo  Starting AutoBleepPro
 echo ============================================================
 echo.
-echo  Recorder : YouTube + Twitch + Kick + OnlyThaGuys live, plus new Twitch clips
+echo  Recorder : Stackswopo on YouTube + Twitch
 echo  Uploader : censor, upload, clip, announce
 echo  Folder   : %~dp0auto_uploader\watch_folder
 echo.
