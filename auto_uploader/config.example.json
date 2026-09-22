@@ -263,7 +263,7 @@
         }
       }
     },
-    "_crop_comment": "How a 16:9 clip becomes 9:16. 'fit' keeps the WHOLE frame and fills the rest with a blurred copy of it - nothing is cut, so both people in a Monkey call stay in shot. 'center' keeps the middle third of the width, which on webcam footage is a tight shot of whoever happens to be in the middle. 'face' chases faces and is wrong for gameplay - it locks onto NPCs. 'center' remains the code default; this file chooses fit because the content is two people on camera.",
+    "_crop_comment": "How a 16:9 clip becomes 9:16. 'fit' keeps the WHOLE frame and fills the rest with a blurred copy of it - nothing is cut, so both people in a Monkey call stay in shot. 'center' keeps the middle third of the width, which on webcam footage is a tight shot of whoever happens to be in the middle. 'face' chases faces and is wrong for gameplay - it locks onto NPCs, and it is off for gameplay permanently. LEAVE THIS BLANK unless you want to override: blank means the code default, which is 'fit'. The default was 'center' for a while and the clips came out framed on grass, a road and a trash bin - a centre crop of 16:9 keeps 31% of the width, and on gameplay that 31% is whatever the camera happened to be pointing at. Putting 'center' here brings that back.",
     "crop_strategy": "",
     "content_kind": "gameplay",
     "route_clips_separately": true,
