@@ -47,6 +47,35 @@ def test_the_rumble_alias_is_not_picked_up_as_a_second_video():
             f"{name} would be uploaded a second time"
 
 
+def test_the_vertical_reframe_is_not_uploaded_as_its_own_clip():
+    """The worst of the three. _vertical_copy writes its 9:16 re-frame
+    into the same directory as its input - which for a clip is the watch
+    folder - so the ALREADY-CROPPED copy appeared as a new video and was
+    uploaded as one. main.py's _RENDERED_CLIP knew these were outputs;
+    the watcher, which is what decides if something uploads, did not."""
+    for name in ("_vertical_Stackswopo - Idk - Clip 01.mp4",
+                 "_vertical__vertical_Clip 01_CENSORED_silence.mp4"):
+        assert is_intermediate_download(name), f"{name} would upload again"
+
+
+def test_the_censored_copy_is_not_uploaded_as_its_own_clip():
+    assert is_intermediate_download(
+        "Clip 01_CENSORED_silence-large-v3-turbo-f9c0fa9813.mp4")
+
+
+def test_a_users_own_file_is_never_mistaken_for_a_render():
+    """The two mistakes do not cost the same. A missed artefact is one
+    duplicate upload; a false positive is a real video that never
+    uploads and never says why. So the match is anchored on the leading
+    underscore every render has."""
+    for name in ("vertical video of my stream.mp4",
+                 "vertical.mp4",
+                 "my rumble upload.mp4",
+                 "the censored cut.mp4"):
+        assert not is_intermediate_download(name), \
+            f"{name} is a real video and would never be uploaded"
+
+
 def test_the_real_recording_is_still_picked_up():
     """The guard must not be so wide it swallows the actual video."""
     for name in ("Stackswopo - IDK - 09-20-26 (FULL STREAM).ts",

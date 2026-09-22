@@ -25,33 +25,59 @@ from watchdog.observers import Observer
 # these are not: yt-dlp downloads each stream fully, *then* merges, so
 # there's a window where an audio-only .mp4 sits there complete and
 # unchanging. Without this it would look "stable" and get uploaded.
-# ...and one this project leaves there itself.
+_INTERMEDIATE_STEM = re.compile(
+    r"\.(f\d{1,4}|temp|tmp|part|download|ytdl)$", re.IGNORECASE)
+
+
+# The files THIS TOOL renders next to the sources, which are outputs and
+# not things to upload. main.py's _RENDERED_CLIP already knew about them
+# for the posting preview; the watcher did not, and the watcher is what
+# decides whether something gets uploaded.
 #
-# Rumble's upload form reads the FILENAME, not the container, and
-# refuses .ts - which is what --hls-use-mpegts produces and what every
-# recording here is. So rumble_uploader hard-links the recording to
-# "<name>._rumble_upload.mp4" and hands Rumble that.
-#
-# The link is made beside the original, which is IN THE WATCH FOLDER.
-# So the watcher saw a brand-new .mp4 appear, waited for it to stop
-# growing - it never grows, it is a hard link to a finished file - and
-# queued it as a second video:
+# Every one of these lands in the watch folder beside the clip it came
+# from, appears as a brand-new .mp4, stops growing immediately (it is
+# finished the moment it is written, and the Rumble one is a hard link
+# to a file that was already finished) and so reads as a fresh video:
 #
 #   [Queue] Stackswopo - IDK - 09-20-26 (FULL STREAM)._rumble_upload.mp4
 #           is next - 2 already waiting.
 #
-# Every .ts stream was therefore uploaded twice: once as itself, once
-# as its own alias, under a filename with "._rumble_upload" in the
-# title.
-_INTERMEDIATE_STEM = re.compile(
-    r"\.(f\d{1,4}|temp|tmp|part|download|ytdl|_rumble_upload)$",
-    re.IGNORECASE)
+#   "_rumble_upload"  Rumble's form reads the FILENAME, not the
+#                     container, and refuses .ts - which is what every
+#                     recording here is. The uploader hard-links the
+#                     recording to a .mp4 name to get past that check.
+#
+#   "_vertical_"      the 9:16 re-frame made for Reels and Shorts. This
+#                     is the worst one to re-upload, because it is the
+#                     copy that has already been cropped - uploading it
+#                     as a source meant it could be cropped AGAIN.
+#
+#   "_CENSORED_"      the bleeped copy. Re-uploading it censors the
+#                     already-censored audio and posts the clip twice.
+#
+# So one stream could produce the real clip plus three more uploads of
+# the same moment, each a generation further from the original.
+# Anchored on the LEADING UNDERSCORE, which every one of these renders
+# has, because the cost of the two mistakes is not symmetric. A missed
+# artefact is one duplicate upload; a false positive is a real video
+# that never uploads at all and says nothing about why. main.py's
+# _RENDERED_CLIP matches a bare "vertical " too - fine for labelling a
+# preview, wrong here, where "vertical video of my stream.mp4" is a
+# file somebody might genuinely drop in the folder.
+_OUR_OWN_RENDER = re.compile(
+    r"(^_vertical_|\._rumble_upload$|_CENSORED_)", re.IGNORECASE)
 
 
 def is_intermediate_download(path: str) -> bool:
-    """True for a downloader's in-progress / pre-merge artefact."""
+    """True for a file that is an artefact rather than a video to upload.
+
+    Two kinds: a downloader's in-progress output, and this tool's own
+    renders. Both look like finished videos sitting in the folder, and
+    neither is one.
+    """
     stem = os.path.splitext(os.path.basename(path))[0]
-    return bool(_INTERMEDIATE_STEM.search(stem))
+    return bool(_INTERMEDIATE_STEM.search(stem)
+                or _OUR_OWN_RENDER.search(stem))
 
 
 # Extensions that are plausibly a video someone MEANT to upload, but that
