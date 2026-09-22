@@ -204,11 +204,20 @@ class _Locator:
 
 
 class _FakePage:
-    def __init__(self, captured):
+    def __init__(self, captured, waits=None):
         self._captured = captured
+        # Every selector the upload waited for, in order. The real page
+        # renders its form with JavaScript after load, so what gets
+        # waited for - and whether anything is waited for at all - is
+        # the difference between the CDP attach working and not.
+        self.waits = waits if waits is not None else []
 
     def goto(self, *_a, **_k):
         pass
+
+    def wait_for_selector(self, selector, **kwargs):
+        self.waits.append((selector, kwargs.get("state")))
+        return None
 
     def locator(self, _selector):
         return _Locator(self._captured)
@@ -264,6 +273,98 @@ def test_an_mp4_recording_needs_no_alias_and_none_is_created(tmp_path, monkeypat
     captured = []
     monkeypatch.setattr(ru, "_set_file_via_cdp", lambda page, sel, path: False)
 
+    with pytest.raises(_StopHere):
+        _uploader()._upload_video(_FakePage(captured), str(video), "t", "d",
+                                  [], "public", "", None)
+
+    assert captured == [str(video)]
+
+
+# ── why every real upload failed ──────────────────────────────────────
+
+def test_the_file_input_is_waited_for_before_cdp_is_asked_for_it(
+        tmp_path, monkeypatch):
+    """page.goto() returns on the load event; Rumble renders the upload
+    form with JavaScript afterwards.
+
+    A Playwright locator hides that by auto-waiting. The raw CDP
+    DOM.querySelector inside _set_file_via_cdp does not - it asks once,
+    and at that moment the honest answer is "no such element". So the
+    bypass returned False for a reason that had nothing to do with CDP,
+    the code fell through to Playwright, and THAT auto-waited, found the
+    input, and died on the single limit the bypass exists to avoid:
+
+        Locator.set_input_files: Cannot transfer files larger than 50Mb
+        to a browser not co-located with the server
+    """
+    video = tmp_path / "s.mp4"
+    video.write_bytes(b"x" * 100)
+    waits = []
+    seen = []
+
+    def fake_cdp(page, selector, path):
+        seen.append((list(page.waits), selector))
+        return True
+
+    monkeypatch.setattr(ru, "_set_file_via_cdp", fake_cdp)
+
+    with pytest.raises(_StopHere):
+        _uploader()._upload_video(_FakePage([], waits), str(video), "t", "d",
+                                  [], "public", "", None)
+
+    assert seen, "the CDP attach was never attempted"
+    waited_before, selector = seen[0]
+    assert waited_before, "CDP was asked for an element nobody waited for"
+    assert "input[type='file']" in waited_before[0][0]
+    # The same selector, so the wait cannot pass while the query misses.
+    assert waited_before[0][0] == selector
+
+
+def test_it_waits_for_attached_not_visible(tmp_path, monkeypatch):
+    """The input is hidden behind Rumble's own styled button, as nearly
+    every upload form's is. Waiting for it to be VISIBLE would time out
+    on a page that is working perfectly."""
+    video = tmp_path / "s.mp4"
+    video.write_bytes(b"x" * 100)
+    waits = []
+    monkeypatch.setattr(ru, "_set_file_via_cdp", lambda p, sel, path: True)
+
+    with pytest.raises(_StopHere):
+        _uploader()._upload_video(_FakePage([], waits), str(video), "t", "d",
+                                  [], "public", "", None)
+
+    assert waits[0][1] == "attached"
+
+
+def test_a_big_file_refuses_rather_than_taking_the_doomed_path(
+        tmp_path, monkeypatch):
+    """Playwright's 50MB ceiling is arithmetic, not weather. A stream
+    recording must not go down that path and spend 60s + 300s + 900s of
+    backoff confirming its own size three times."""
+    video = tmp_path / "stream.mp4"
+    video.write_bytes(b"x" * 100)
+    monkeypatch.setattr(ru, "_set_file_via_cdp", lambda p, sel, path: False)
+    monkeypatch.setattr(ru.os.path, "getsize", lambda _p: 4200 * 1_000_000)
+
+    captured = []
+    with pytest.raises(ru.RumbleSetupError) as raised:
+        _uploader()._upload_video(_FakePage(captured), str(video), "t", "d",
+                                  [], "public", "", None)
+
+    message = str(raised.value)
+    assert "4200 MB" in message
+    assert "50 MB" in message
+    assert captured == [], "it tried the path that cannot work anyway"
+
+
+def test_a_small_file_still_falls_back_to_playwright(tmp_path, monkeypatch):
+    """The fallback is not dead code - under the ceiling it is a real
+    second route, and a clip is well under it."""
+    video = tmp_path / "clip.mp4"
+    video.write_bytes(b"x" * 100)
+    monkeypatch.setattr(ru, "_set_file_via_cdp", lambda p, sel, path: False)
+
+    captured = []
     with pytest.raises(_StopHere):
         _uploader()._upload_video(_FakePage(captured), str(video), "t", "d",
                                   [], "public", "", None)

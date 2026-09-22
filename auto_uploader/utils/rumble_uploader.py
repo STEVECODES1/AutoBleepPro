@@ -127,6 +127,12 @@ def upload_timeout_for(video_path: str) -> int:
 
 
 
+# Playwright's own ceiling for handing a file to a browser it did not
+# launch. Not configurable and not a network timeout - it refuses
+# outright, because it cannot know the browser is on this machine.
+_PLAYWRIGHT_CDP_LIMIT_MB = 50
+
+
 def _set_file_via_cdp(page, selector: str, file_path: str) -> bool:
     """Hand Chrome a local path instead of streaming the bytes to it.
 
@@ -1066,9 +1072,56 @@ class RumbleUploader:
             # "Filedata" is Rumble's actual field id (confirmed via a
             # community open-source Rumble uploader); type-based fallback
             # first in case it's changed since, then this specific id.
-            # CDP first: a stream recording is far past Playwright's 50 MB
-            # ceiling for an attached browser, and that path fails outright.
-            if not _set_file_via_cdp(page, "input[type='file'], #Filedata", upload_path):
+            #
+            # WAIT FOR IT TO EXIST FIRST. This is what made every real
+            # upload fail. page.goto() returns on the load event, but
+            # Rumble renders the upload form with JavaScript afterwards,
+            # so at this point the input frequently is not in the DOM
+            # yet. A Playwright locator hides that by auto-waiting; the
+            # raw CDP DOM.querySelector inside _set_file_via_cdp does
+            # NOT - it is a single question asked once, and the honest
+            # answer at that moment is "no such element".
+            #
+            # So the CDP bypass returned False for a reason that had
+            # nothing to do with CDP, the code fell through to the
+            # Playwright path, and THAT auto-waited, found the input,
+            # and died on the one limit the bypass exists to avoid:
+            #
+            #   Locator.set_input_files: Cannot transfer files larger
+            #   than 50Mb to a browser not co-located with the server
+            #
+            # which is a true sentence about a path that should never
+            # have been taken, and reads like the bypass is impossible
+            # rather than simply early.
+            #
+            # "attached", not "visible": the input is hidden behind
+            # Rumble's own styled button, as nearly every upload form's
+            # is, so waiting for it to be visible would time out on a
+            # page that is working perfectly.
+            file_selector = "input[type='file'], #Filedata"
+            try:
+                page.wait_for_selector(file_selector, state="attached",
+                                       timeout=60_000)
+            except Exception as exc:
+                print(f"[Rumble] The upload form's file input never "
+                      f"appeared: {exc}")
+
+            if not _set_file_via_cdp(page, file_selector, upload_path):
+                # Falling through here is only survivable for a small
+                # file. Playwright's ceiling is not a retryable failure -
+                # it is arithmetic - so a stream recording must not go
+                # down this path and burn 60s + 300s + 900s of backoff
+                # confirming the size of itself three times.
+                size_mb = os.path.getsize(upload_path) / 1e6
+                if size_mb > _PLAYWRIGHT_CDP_LIMIT_MB:
+                    raise RumbleSetupError(
+                        f"could not attach {os.path.basename(video_path)} "
+                        f"({size_mb:.0f} MB) through Chrome's own file API, "
+                        "and Playwright's fallback refuses anything over "
+                        f"{_PLAYWRIGHT_CDP_LIMIT_MB} MB to an attached "
+                        "browser. The reason the first route failed is "
+                        "printed above."
+                    )
                 file_input = page.locator("input[type='file']").or_(
                     page.locator("#Filedata")).first
                 file_input.set_input_files(upload_path)
