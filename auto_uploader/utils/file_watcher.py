@@ -25,8 +25,27 @@ from watchdog.observers import Observer
 # these are not: yt-dlp downloads each stream fully, *then* merges, so
 # there's a window where an audio-only .mp4 sits there complete and
 # unchanging. Without this it would look "stable" and get uploaded.
+# ...and one this project leaves there itself.
+#
+# Rumble's upload form reads the FILENAME, not the container, and
+# refuses .ts - which is what --hls-use-mpegts produces and what every
+# recording here is. So rumble_uploader hard-links the recording to
+# "<name>._rumble_upload.mp4" and hands Rumble that.
+#
+# The link is made beside the original, which is IN THE WATCH FOLDER.
+# So the watcher saw a brand-new .mp4 appear, waited for it to stop
+# growing - it never grows, it is a hard link to a finished file - and
+# queued it as a second video:
+#
+#   [Queue] Stackswopo - IDK - 09-20-26 (FULL STREAM)._rumble_upload.mp4
+#           is next - 2 already waiting.
+#
+# Every .ts stream was therefore uploaded twice: once as itself, once
+# as its own alias, under a filename with "._rumble_upload" in the
+# title.
 _INTERMEDIATE_STEM = re.compile(
-    r"\.(f\d{1,4}|temp|tmp|part|download|ytdl)$", re.IGNORECASE)
+    r"\.(f\d{1,4}|temp|tmp|part|download|ytdl|_rumble_upload)$",
+    re.IGNORECASE)
 
 
 def is_intermediate_download(path: str) -> bool:

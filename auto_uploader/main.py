@@ -2134,6 +2134,30 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
         except Exception:
             return source
 
+        # ALREADY 9:16? Then leave it alone.
+        #
+        # social_promoter._vertical_copy has had this check for a while
+        # and its comment says exactly why: "it re-runs the crop, so a
+        # region profile would crop the crop". This copy of the same
+        # logic never got it.
+        #
+        # Every clip out of ClipMaker is already 1080x1920. Centre-
+        # cropping one to 9:16 a second time keeps the middle of a frame
+        # that is already the middle of a frame - the picture zooms in
+        # hard and the sides of the shot are gone. The files said so out
+        # loud and nobody read them:
+        #
+        #   _vertical__vertical_Stackswopo - Idk ... Clip 01_CENSORED_...
+        #
+        # two prefixes, two crops. It is also a second full encode, so
+        # the cost was a generation of quality plus the time, spent to
+        # make the clip worse.
+        from utils.ffmpeg_tools import is_already_vertical
+
+        if is_already_vertical(source):
+            _vertical[source] = source
+            return source
+
         strategy = resolve_crop_strategy({"clips": cfg.clips},
                                          (cfg.clips or {}).get("content_kind", "gameplay"))
         os.makedirs(cfg.general.censored_folder, exist_ok=True)
@@ -2667,7 +2691,35 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
                     if moved:
                         source = moved[0]
                 run = make_clips(cfg, source, stream_title,
-                                 count=(cfg.clips or {}).get("count"))
+                                 count=(cfg.clips or {}).get("count"),
+                                 # TRANSCRIBE IF THERE IS NO CACHE.
+                                 #
+                                 # The transcript normally arrives free,
+                                 # as a by-product of the censor pass -
+                                 # but the censor pass only runs inside
+                                 # do_youtube(), via upload_path_for(),
+                                 # and do_youtube is never dispatched at
+                                 # all when the video is already on the
+                                 # channel. Rumble takes the uncensored
+                                 # file, so it does not trigger it
+                                 # either.
+                                 #
+                                 # So a stream already on YouTube that
+                                 # only needed Rumble produced no
+                                 # transcript, and every clip run on one
+                                 # ended with:
+                                 #
+                                 #   [Clips] Nothing rendered - no
+                                 #   transcript - the censor pass has
+                                 #   not run on this video
+                                 #
+                                 # which is the single most common shape
+                                 # of a backfill. transcribe_for_clips
+                                 # writes to exactly the path the censor
+                                 # pass would have used, so this costs
+                                 # one transcription and makes a later
+                                 # censor run free.
+                                 transcribe_if_needed=True)
                 print_run(run)
                 delivered = _deliver_clips(run, cfg)
                 # Hoisted onto the run's own record so the receipt at the
