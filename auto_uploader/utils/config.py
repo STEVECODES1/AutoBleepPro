@@ -6,6 +6,7 @@ secrets out of config.json means config.json is safe to commit/share.
 
 import json
 import os
+from urllib.parse import urlparse
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -227,6 +228,48 @@ DEFAULT_RUMBLE_CDP_URL = "http://localhost:9222"
 # by pulling; the invariant has to live here. Set RUMBLE_CENSOR_UPLOADS=1
 # in .env to override it deliberately - that is a decision someone typed,
 # not a default nobody chose.
+
+# The page that actually has an upload form on it.
+#
+# config.json is gitignored, so a wrong value here cannot be corrected
+# by pulling, and a wrong value is silent: the uploader navigates to
+# whatever it says, finds no file input, and reports that the form
+# never appeared - which is true, and says nothing about why.
+#
+# A real run had it pointing at
+#
+#     https://rumble.com/API?a=video/upload&id=&k=&ext=&v2=
+#
+# Rumble has no route for that, so it parsed "/API" as a USERNAME and
+# served a channel page belonging to a user called API, with 83
+# followers and no videos. A channel page has no file input, so the
+# attach waited the full 60s and gave up, and the browser sat on a
+# stranger's profile looking like a failed upload.
+DEFAULT_RUMBLE_UPLOAD_URL = "https://rumble.com/upload.php"
+
+# What an upload page can plausibly be. Deliberately narrow: the point
+# is to catch a value that cannot possibly carry an upload form, not to
+# second-guess a future rename by Rumble.
+_UPLOAD_PATHS = ("/upload", "/studio/upload")
+
+
+def _rumble_upload_url(rb: dict) -> str:
+    """The configured upload page, or the default when it cannot be one."""
+    configured = str(rb.get("upload_url") or "").strip()
+    if not configured:
+        return DEFAULT_RUMBLE_UPLOAD_URL
+
+    path = urlparse(configured).path.rstrip("/").lower()
+    if any(path.startswith(known) for known in _UPLOAD_PATHS):
+        return configured
+
+    print(f"[Config] rumble.upload_url is {configured!r}, which is not a "
+          f"Rumble upload page - there is no upload form on it, so nothing "
+          f"could ever attach. Using {DEFAULT_RUMBLE_UPLOAD_URL} instead. "
+          f"Fix the value in config.json to silence this.")
+    return DEFAULT_RUMBLE_UPLOAD_URL
+
+
 def _rumble_censor_uploads(rb: dict) -> bool:
     """False - Rumble takes the uncensored copy - unless env says otherwise."""
     override = (os.environ.get("RUMBLE_CENSOR_UPLOADS") or "").strip().lower()
@@ -302,7 +345,7 @@ def load_config(config_path: str = "config.json", env_path: str = ".env") -> App
         username=os.environ.get("RUMBLE_USERNAME", ""),
         password=os.environ.get("RUMBLE_PASSWORD", ""),
         login_url=rb.get("login_url", "https://rumble.com/login.php"),
-        upload_url=rb.get("upload_url", "https://rumble.com/upload.php"),
+        upload_url=_rumble_upload_url(rb),
         cdp_url=_rumble_cdp_url(rb),
         primary_category=rb.get("primary_category", "Gaming"),
         secondary_category=rb.get("secondary_category", ""),

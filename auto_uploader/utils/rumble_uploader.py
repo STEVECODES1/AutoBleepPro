@@ -1103,8 +1103,20 @@ class RumbleUploader:
                 page.wait_for_selector(file_selector, state="attached",
                                        timeout=60_000)
             except Exception as exc:
+                # Say WHERE we are, not only what is missing. "The file
+                # input never appeared" is true of the upload page on a
+                # slow night and equally true of a page that was never
+                # the upload page at all - and the second is what
+                # actually happened: a wrong rumble.upload_url in a
+                # gitignored config.json sent this to a stranger's
+                # channel, which has no upload form and never will.
                 print(f"[Rumble] The upload form's file input never "
                       f"appeared: {exc}")
+                print(f"         The page it waited on was: {page.url}")
+                if "/upload" not in (page.url or ""):
+                    print("         That is not an upload page. Check "
+                          "rumble.upload_url in config.json - it should "
+                          "be https://rumble.com/upload.php")
 
             if not _set_file_via_cdp(page, file_selector, upload_path):
                 # Falling through here is only survivable for a small
