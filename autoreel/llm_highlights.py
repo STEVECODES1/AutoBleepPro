@@ -240,6 +240,14 @@ _MAX_TEXT_CHARS = 700
 CANDIDATE_MULTIPLIER = 4
 MAX_CANDIDATES = 60
 
+# The prompt tells the model to "score anything you are unsure about
+# below 50 and leave it out" - which is a request, not a guarantee. A
+# model that pads its answer, or drifts on the instruction, can still
+# return a candidate at 15 and have it posted if fewer than `count` came
+# back. This is the code-side floor that makes the instruction actually
+# binding: it is enforced here whether or not the model honoured it.
+MIN_CLIP_SCORE = 50.0
+
 # How many candidates get FRAMES attached. Every image is tokens and
 # upload time, and the text pass has already sorted the list - so the
 # ones near the bottom are not worth looking at. Twenty-four covers a
@@ -314,6 +322,35 @@ reaction, someone getting caught out, a story landing. Reject the ones
 that are only loud, only filler, or only make sense to somebody who
 watched the whole stream. If a candidate needs context it does not
 contain, it is not a clip.
+
+JUDGE IT ON WHAT IS SAID AND WHAT HAPPENS, not on how it looks. A frame
+of someone's face mid-sentence is not evidence of a reaction, and loud
+audio is not evidence of a joke landing - both of those are hints, not
+verdicts. The transcript is what tells you whether the moment actually
+resolves: a setup with no punchline, an argument that trails off, a
+"reaction" to something you cannot identify from the words - none of
+that is a clip no matter what the frame shows. If you cannot say in one
+sentence what is funny or what happens, using only what was said, reject
+it.
+
+TWO SEPARATE QUESTIONS, both required: is it FUNNY (or a genuine
+moment - an argument, someone caught out, a story landing), AND does it
+MAKE SENSE on its own with no other context. A clip can fail either one.
+A rant that is well-delivered but requires knowing who's being talked
+about is a sense failure. A clean, self-contained line that just is not
+funny is a funny failure. Score both, out loud to yourself, before
+scoring the clip - do not let a strong score on one stand in for the
+other.
+
+DO NOT PICK A CANDIDATE FOR WHAT IT MIGHT LOOK LIKE OUT OF CONTEXT ON
+ITS OWN, cut loose from the stream it came from and read by someone who
+was not there. A line about someone else's kid, health, family, or
+appearance can play as a joke live, mid-conversation, tone audible - and
+read as cruel or as making light of something serious once it is a
+fifteen-second clip with a title on it. If the moment's humor depends
+entirely on delivery, tone, or "you had to be there," and the words
+alone are ugly, leave it out. This is not the same test as "does it make
+sense" - a line can be perfectly clear and still wrong to post.
 
 For each one you pick, write a TITLE:
 - what actually happens in it, in the streamer's own words where possible
@@ -541,10 +578,16 @@ def _timestamp(seconds: float) -> str:
 VISION_NOTE = """\
 
 You can SEE two frames from each candidate - one early, one near the end.
-Use them. On this channel the funniest moments are visual: a face
-reaction, someone walking up behind, a fight starting. The transcript
-misses all of it, and a candidate whose words are dull but whose frames
-show something happening is exactly the one worth picking.
+Use them AS A TIE-BREAKER, not as the reason to pick something. Two
+frames a second apart cannot show whether a joke landed, whether a
+reaction was to what you think it was to, or whether the thirteen
+seconds between them make sense - only the transcript can. What the
+frames are good for: catching a purely visual gag the words miss
+entirely - someone walking up behind, a fight starting, a face doing
+something the transcript renders as silence - and confirming that a
+candidate the transcript already made a case for is not, say, an empty
+loading screen. A candidate with a weak transcript and a striking frame
+is still a weak candidate; do not let the picture outvote the words.
 
 Say what you can see in the title where it helps. Do not describe the
 frames back to me.\
@@ -1593,10 +1636,28 @@ def _ask_one_provider(provider, key, model, shortlist, count, source_path,
 
 
 def _chosen_from(picked: list, shortlist: list, count: int) -> list:
-    """The model's picks, as Highlights, in timeline order."""
+    """The model's picks, as Highlights, in timeline order.
+
+    The prompt tells the model to score anything it is unsure of below
+    50 and leave it out - MIN_CLIP_SCORE enforces that here rather than
+    trusting it happened. A model that pads its answer to reach `count`,
+    or just drifts on the instruction, can return a real number below the
+    floor for a candidate it does not actually believe in; without this,
+    that candidate still gets rendered and posted the moment fewer than
+    `count` strong ones came back.
+
+    Dropping weak picks here, rather than asking the model to simply not
+    send them, also survives a provider that never fully implements
+    "leave it out" - the filter does not care why the number was low.
+    """
     picked.sort(key=lambda item: item[1], reverse=True)
+    strong = [item for item in picked if item[1] >= MIN_CLIP_SCORE]
+    if len(strong) < len(picked):
+        dropped = len(picked) - len(strong)
+        print(f"[Clips] Dropped {dropped} pick(s) that scored below "
+              f"{MIN_CLIP_SCORE:.0f} - not confident enough to post.")
     chosen = []
-    for index, score, title in picked[:count]:
+    for index, score, title in strong[:count]:
         highlight = shortlist[index - 1]
         if title:
             # The model read the clip; its title beats the best sentence

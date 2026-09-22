@@ -727,6 +727,33 @@ def specs_from_segments(segments: Iterable[dict], count: int = DEFAULT_CLIP_COUN
         # it: "watched 24 candidates" then "read 72".
         print(f"[Clips] The model chose {len(highlights)} clips.")
 
+    # THE FINAL DEDUPE. Two clips of the same moment reached uploads
+    # before this: the shortlist handed to the model (or, with no model
+    # opinion, ranked directly) is built by select_clips() above, whose
+    # own gap ladder relaxes down to 0s of spacing when there are not
+    # enough clear windows to fill the pool - see HighlightScorer's
+    # _gap_ladder. That is the right call for BUILDING the pool: a
+    # shortlist that came up short because the gap was too strict is
+    # worse than one with some overlap in it. But nothing after that
+    # point ever re-checked the picks against each other. A model
+    # reading a shortlist with two 30s windows over the same laugh, five
+    # seconds apart, has no way to know they are the same moment - it
+    # just sees two candidates and can score, title and pick both. The
+    # scorer's own fallback ranking has the identical exposure: top-N by
+    # score, with no idea two of the N overlap in time.
+    #
+    # Genuinely overlapping windows ARE the same clip - one covers
+    # 40-70s, the other 45-75s, both are "the argument at the counter".
+    # Kept the higher-scored (or model-preferred) one of each pair;
+    # dropped is dropped, not squeezed thinner.
+    ranked = sorted(highlights, key=lambda h: h.score, reverse=True)
+    deduped = scorer._take(ranked, count=len(ranked), min_gap=0.0)
+    if len(deduped) < len(highlights):
+        print(f"[Clips] Dropped {len(highlights) - len(deduped)} clip(s) "
+              f"that overlapped another pick in time - same moment, cut "
+              f"twice.")
+    highlights = sorted(deduped, key=lambda h: h.start)
+
     titled_by = "model" if named_by_model else "scorer"
     return [
         ClipSpec(start=h.start, end=h.end, index=i,

@@ -620,3 +620,94 @@ def test_a_long_reply_is_cut_down(no_keys, capsys):
 
     line = next(l for l in capsys.readouterr().out.splitlines() if "xxx" in l)
     assert len(line) < 400
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Selection quality: funny, makes sense, and not just a striking frame
+#
+# Two real failures drove this: clips that were not funny (a shrug of a
+# moment, chosen because loud or because the frame looked like something),
+# and a title built on a line about someone else's disability that read as
+# cruel the moment it was cut loose from the stream and given a caption.
+# Neither is a framing problem (crop_strategy.py) or a transcription
+# problem - both are the model picking on the wrong basis.
+# ═════════════════════════════════════════════════════════════════════════════
+
+def test_funny_and_makes_sense_are_both_required():
+    from autoreel.llm_highlights import SYSTEM_PROMPT
+
+    assert "TWO SEPARATE QUESTIONS" in SYSTEM_PROMPT
+    assert "FUNNY" in SYSTEM_PROMPT
+    assert "MAKE SENSE" in SYSTEM_PROMPT
+
+
+def test_the_transcript_outranks_the_frame():
+    """The two vision frames are a tie-breaker, never the reason to pick
+    a candidate the words do not support."""
+    from autoreel.llm_highlights import VISION_NOTE
+
+    assert "TIE-BREAKER" in VISION_NOTE
+    assert "do not let the picture outvote the words" in VISION_NOTE.lower()
+
+
+def test_a_clip_cannot_be_judged_only_on_how_it_looks():
+    from autoreel.llm_highlights import SYSTEM_PROMPT
+
+    assert "JUDGE IT ON WHAT IS SAID AND WHAT HAPPENS" in SYSTEM_PROMPT
+    assert "not on how it looks" in SYSTEM_PROMPT
+
+
+def test_a_line_that_is_ugly_out_of_context_is_rejected_even_if_clear():
+    """A clip can make perfect sense and still be wrong to post - a line
+    about someone else's kid, health or appearance that only worked as a
+    joke live, in tone, mid-conversation."""
+    from autoreel.llm_highlights import SYSTEM_PROMPT
+
+    assert "out of context" in SYSTEM_PROMPT.lower()
+    assert "health, family, or appearance" in SYSTEM_PROMPT.replace("\n", " ")
+    assert "wrong to post" in SYSTEM_PROMPT
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# The score floor is enforced in code, not just asked for in the prompt
+#
+# "Score anything you are unsure about below 50 and leave it out" is a
+# request. A model that pads toward `count` anyway, or just does not follow
+# it precisely, used to still get that pick rendered and posted - nothing
+# on this side ever looked at the number. MIN_CLIP_SCORE makes the floor
+# real regardless of what any provider actually does with the instruction.
+# ═════════════════════════════════════════════════════════════════════════════
+
+def test_a_weak_pick_is_dropped_even_when_fewer_than_count_came_back(no_keys):
+    """The exact gap: count=3, the model sends 3, only one clears the
+    bar. Without a code-side floor all three would have rendered because
+    there were not more than `count` to trim."""
+    no_keys.setenv("GEMINI_API_KEY", "g")
+    body = json.dumps({"clips": [
+        {"index": 1, "score": 15, "title": "barely anything happens"},
+        {"index": 2, "score": 30, "title": "still not much here"},
+        {"index": 3, "score": 90, "title": "this one actually lands"},
+    ]})
+
+    chosen = rank(candidates(), 3, ask=replying(body))
+
+    assert len(chosen) == 1
+    assert chosen[0].hook == "this one actually lands"
+
+
+def test_nothing_clearing_the_bar_means_no_clips_not_a_crash(no_keys):
+    no_keys.setenv("GEMINI_API_KEY", "g")
+    body = json.dumps({"clips": [
+        {"index": 1, "score": 10, "title": "not it"},
+        {"index": 2, "score": 20, "title": "also not it"},
+    ]})
+
+    chosen = rank(candidates(), 2, ask=replying(body))
+
+    assert chosen == []
+
+
+def test_the_floor_matches_what_the_prompt_tells_the_model():
+    from autoreel.llm_highlights import MIN_CLIP_SCORE, SYSTEM_PROMPT
+
+    assert f"below {int(MIN_CLIP_SCORE)}" in SYSTEM_PROMPT

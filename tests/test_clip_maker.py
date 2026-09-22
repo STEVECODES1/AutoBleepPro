@@ -899,3 +899,70 @@ def test_the_scorer_naming_the_clips_is_recorded(monkeypatch):
 
     assert specs
     assert all(spec.titled_by == "scorer" for spec in specs)
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# The final overlap dedupe
+#
+# select_clips() builds the shortlist handed to the model with a gap ladder
+# that relaxes down to 0s of spacing when there are not enough clear windows
+# to fill the pool - the right call for BUILDING a pool, wrong left
+# unchecked at the end. A model (or the scorer's own fallback ranking)
+# reading that shortlist has no way to know two candidates describe the
+# same moment a few seconds apart, and nothing after it ever re-checked the
+# final picks against each other - so the same clip came out twice, cut at
+# very slightly different in/out points, and both got uploaded.
+# ═════════════════════════════════════════════════════════════════════════════
+
+def test_two_overlapping_picks_from_the_model_become_one_clip(monkeypatch):
+    """The exact shape of the bug: the model is handed two windows over
+    the same moment (shortlist gap relaxed to fill the pool) and picks
+    both. The stronger-scored one survives; the other does not become a
+    second clip."""
+    from autoreel import clip_maker, llm_highlights
+    from autoreel.highlights import Highlight
+
+    segments = [{"start": float(i * 30), "end": float(i * 30 + 25),
+                 "text": "OH MY GOD what the hell holy crap bro",
+                 "words": []} for i in range(6)]
+
+    def model_picks_two_overlapping(shortlist, count, *_a, **_k):
+        return [
+            Highlight(start=40.0, end=70.0, score=60.0,
+                     text="a", hook="the argument at the counter (early cut)"),
+            Highlight(start=45.0, end=75.0, score=95.0,
+                     text="a", hook="the argument at the counter"),
+            Highlight(start=400.0, end=430.0, score=80.0,
+                     text="b", hook="a completely different moment"),
+        ]
+
+    monkeypatch.setattr(llm_highlights, "rank", model_picks_two_overlapping)
+    specs = clip_maker.specs_from_segments(segments, count=3, llm_rank=True)
+
+    assert len(specs) == 2, "two overlapping windows should collapse to one clip"
+    titles = [s.title for s in specs]
+    assert "the argument at the counter" in titles
+    assert "the argument at the counter (early cut)" not in titles
+    assert "a completely different moment" in titles
+
+
+def test_non_overlapping_picks_are_left_alone(monkeypatch):
+    """The dedupe must not eat clips that are merely close together -
+    only ones that actually overlap in time."""
+    from autoreel import clip_maker, llm_highlights
+    from autoreel.highlights import Highlight
+
+    segments = [{"start": float(i * 30), "end": float(i * 30 + 25),
+                 "text": "OH MY GOD what the hell holy crap bro",
+                 "words": []} for i in range(6)]
+
+    def model_picks_two_distinct(shortlist, count, *_a, **_k):
+        return [
+            Highlight(start=40.0, end=60.0, score=90.0, text="a", hook="one"),
+            Highlight(start=61.0, end=80.0, score=85.0, text="b", hook="two"),
+        ]
+
+    monkeypatch.setattr(llm_highlights, "rank", model_picks_two_distinct)
+    specs = clip_maker.specs_from_segments(segments, count=2, llm_rank=True)
+
+    assert len(specs) == 2
