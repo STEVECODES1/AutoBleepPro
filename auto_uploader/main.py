@@ -1022,6 +1022,44 @@ def _is_link(value: str) -> bool:
     return str(value or "").strip().lower().startswith(("http://", "https://"))
 
 
+
+def videos_one_level_down(folder: str, supported_formats) -> list:
+    """[(subfolder, [video names])] for videos sitting one level down.
+
+    A recording dragged into a subfolder of the watch folder - or
+    dropped there by a file manager that made a "Video" folder on the
+    way - is invisible to the batch, and "No videos found" while three
+    .ts files sit twelve inches away reads as the tool being broken
+    rather than as a path problem.
+
+    One level only, and REPORTED rather than processed: which folder to
+    work on is the operator's call, not a guess made on their behalf.
+    Walking the whole tree would also mean walking uploaded/, censored/
+    and clips/ if any of them are ever nested here, and offering to
+    re-upload what is already done.
+    """
+    found = []
+    try:
+        entries = sorted(os.listdir(folder))
+    except OSError:
+        return found
+    for entry in entries:
+        sub = os.path.join(folder, entry)
+        if not os.path.isdir(sub):
+            continue
+        try:
+            inside = [
+                name for name in sorted(os.listdir(sub))
+                if os.path.splitext(name)[1].lower() in supported_formats
+                and not is_intermediate_download(name)
+            ]
+        except OSError:
+            continue
+        if inside:
+            found.append((sub, inside))
+    return found
+
+
 def _rumble_channel_url(cfg) -> str:
     """The channel's listing page, however it was configured.
 
@@ -4312,6 +4350,25 @@ def main(argv=None) -> int:
             print(f"        Looked for: {', '.join(cfg.general.supported_formats)}")
             print(f"        Watch folder is {cfg.general.watch_folder} - try "
                   "`--batch` with no folder to use that instead.")
+
+            # Look ONE level down and say what is there. A recording
+            # dragged into a subfolder of the watch folder - or dropped
+            # there by a file manager that made a "Video" folder on the
+            # way - is invisible to this, and "No videos found" while
+            # three .ts files sit twelve inches away reads as the tool
+            # being broken. Reported, not processed: which folder to
+            # work on is the operator's call, not a guess made on their
+            # behalf.
+            for sub, inside in videos_one_level_down(
+                    batch_folder, cfg.general.supported_formats):
+                print(f"\n        {len(inside)} video(s) ARE sitting in "
+                      f"{sub}:")
+                for name in inside[:8]:
+                    print(f"          - {name}")
+                if len(inside) > 8:
+                    print(f"          ...and {len(inside) - 8} more")
+                print(f"        Move them up into {batch_folder}, or run:")
+                print(f'            python main.py --batch "{sub}"')
             return 0
 
         print(f"\n[Batch] {len(candidates)} video(s) to process:")
