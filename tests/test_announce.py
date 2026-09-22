@@ -382,9 +382,18 @@ def test_x_text_keeps_a_short_title_intact(tmp_path):
     assert UPLOADS["youtube"] in text
 
 
-def test_facebook_group_is_not_parked(tmp_path, publishers, no_x):
-    """There is no approved route AND nothing useful to hand a person -
-    group posting was withdrawn, so a queued text would just be noise."""
+def test_facebook_group_is_parked_rather_than_dropped(tmp_path, publishers,
+                                                      no_x):
+    """Meta removed publish_to_groups, so there is no endpoint and this
+    cannot be automated - but it was being dropped on the floor, on the
+    reasoning that a queued text "would just be noise".
+
+    That was wrong. The finished text is exactly what a person needs,
+    and writing it out is the difference between posting to the group
+    being a paste and being a rewrite from memory. The channel owner
+    asked for these posts to happen; not automatable is not the same as
+    not wanted.
+    """
     queue = tmp_path / "manual_posts.txt"
     posting = make_posting(tmp_path)
     posting["platforms"]["facebook_group"] = {
@@ -392,7 +401,13 @@ def test_facebook_group_is_not_parked(tmp_path, publishers, no_x):
     posting["manual_queue_path"] = str(queue)
 
     announce_to_platforms(posting, "DAMN", UPLOADS)
-    assert not queue.exists() or "facebook_group" not in queue.read_text()
+
+    assert queue.exists(), "the group post was dropped instead of queued"
+    parked = queue.read_text()
+    assert "facebook_group" in parked
+    # The actual post, ready to paste - not just a note that one was due.
+    assert "DAMN" in parked
+    assert UPLOADS["youtube"] in parked
 
 
 def test_the_shipped_config_keeps_x_inside_the_free_tier():

@@ -399,7 +399,22 @@ def announce_to_platforms(posting: dict, title: str, new_uploads: dict,
 
     for platform in platforms:
         if platform == "facebook_group":
-            continue   # no route at all, and nothing useful to hand a human
+            # QUEUED, not skipped. Meta removed publish_to_groups, so
+            # there is no endpoint to call and this genuinely cannot be
+            # automated - but "cannot be automated" and "is lost" are
+            # different things, and this used to be the second one.
+            #
+            # The old comment said there was "nothing useful to hand a
+            # human", which was wrong: the finished text is exactly what
+            # a person needs, and writing it out turns posting to the
+            # group into a paste instead of a rewrite from memory. It
+            # also pings Discord, so it arrives somewhere that gets
+            # looked at rather than sitting in a file nobody opens.
+            queue_manual_post(platform, title, new_uploads, queue_path)
+            print("[Social] facebook_group: no API exists for Groups - the "
+                  "post is written to the manual queue and sent to Discord "
+                  "to paste in.")
+            continue
         if platform in skip:
             # Already handled elsewhere this run - a clip posted as a Reel
             # must not also be announced here as a link to itself.

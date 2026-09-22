@@ -309,10 +309,29 @@ class PublishGuard:
         # Before the enabled check, so a manual-only platform says why it
         # is parked rather than the less useful "disabled".
         if self.is_manual_only(platform):
+            # Two different reasons, and the difference is what somebody
+            # does next. A platform held back BY CHOICE (Reddit's
+            # manual_approval_only) really is written to the manual
+            # queue for a person to post. A platform in ALWAYS_MANUAL is
+            # there because no API route exists at all - and the
+            # announcer skips queueing it, because a queue entry for
+            # something nobody can act on differently is just a line to
+            # scroll past.
+            #
+            # Saying "queued for a human" for both sent someone to
+            # logs/manual_posts.txt to look for a Facebook Group post
+            # that was never written there.
+            if platform in ALWAYS_MANUAL:
+                return Decision(
+                    False,
+                    f"{platform} is manual-approval only - no approved API "
+                    "route exists (Meta removed publish_to_groups), so it "
+                    "can never be automated. The post is queued for a human "
+                    "in the manual posts file and sent to Discord to paste.")
             return Decision(
                 False,
-                f"{platform} is manual-approval only - queued for a human, "
-                "never auto-posted")
+                f"{platform} is manual-approval only - queued for a human "
+                "in the manual posts file, never auto-posted")
 
         settings = self._platform_config(platform)
         if not settings:
