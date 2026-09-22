@@ -301,12 +301,56 @@ def _rumble_cdp_url(rb: dict):
     return DEFAULT_RUMBLE_CDP_URL
 
 
+
+def _warn_on_duplicate_keys(pairs):
+    """dict() from JSON pairs, saying so when a key appeared twice.
+
+    JSON allows a key to appear more than once and every parser silently
+    keeps the LAST one. Nothing warns. The file still opens in an
+    editor, still validates, still looks exactly like what was intended
+    - and behaves like something else entirely.
+
+    That cost a full night here. The rumble block had been edited twice
+    and ended up with two copies of five keys:
+
+        "cdp_url": "http://localhost:9222",   <- what the file appeared to say
+        ...
+        "cdp_url": null,                      <- what was actually used
+
+    So Chrome was never attached, and the upload went to
+    rumble.com/api/v1/video/upload, which has no upload form on it, and
+    the login went to a tools page with no login form. Three separate
+    failures, each debugged on its own, all of them this.
+
+    Warned rather than rejected: the file is valid JSON and the
+    last-wins value may well be the wanted one. Refusing to start would
+    turn a warning into an outage.
+    """
+    seen = {}
+    duplicates = []
+    for key, value in pairs:
+        if key in seen and not key.startswith("_"):
+            duplicates.append(key)
+        seen[key] = value
+    if duplicates:
+        print(f"[Config] WARNING: {', '.join(sorted(set(duplicates)))} "
+              f"{'appears' if len(set(duplicates)) == 1 else 'appear'} more "
+              f"than once in the same block of config.json. JSON keeps the "
+              f"LAST copy, so the value being used is the one further down "
+              f"the file - which is how cdp_url became null while the file "
+              f"still showed the right address higher up. Delete the "
+              f"duplicates.")
+        for key in sorted(set(duplicates)):
+            print(f"         {key} = {seen[key]!r}   <- the one in effect")
+    return seen
+
+
 def load_config(config_path: str = "config.json", env_path: str = ".env") -> AppConfig:
     project_root = os.path.dirname(os.path.abspath(config_path)) or "."
     load_dotenv(env_path)
 
     with open(config_path, "r", encoding="utf-8") as f:
-        raw = json.load(f)
+        raw = json.load(f, object_pairs_hook=_warn_on_duplicate_keys)
 
     yt = raw["youtube"]
     rb = raw["rumble"]
