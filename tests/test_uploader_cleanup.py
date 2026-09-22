@@ -611,16 +611,18 @@ def test_the_transcript_survives_when_clips_are_still_to_be_cut(tmp_path):
 
 def test_clips_are_cut_before_the_source_is_retired():
     """Read the order out of main.py itself: this is a sequencing bug and
-    the sequence is the thing to pin."""
-    import re
+    the sequence is the thing to pin.
 
+    The clip cut itself moved into cut_clips_from_stream() (both "already
+    uploaded" routes call it now, not just one), so the call site is a
+    different string than it used to be - the invariant is the same."""
     main_py = os.path.join(_UPLOADER, "main.py")
     with open(main_py, encoding="utf-8") as f:
         body = f.read()
 
-    make_clips_at = body.index("run = make_clips(cfg, source, stream_title")
+    cut_at = body.rindex("cut_clips_from_stream(\n            cfg, video_path, is_clip, title=stream_title)")
     retire_at = body.rindex("\n    retire_source()")
-    assert make_clips_at < retire_at, \
+    assert cut_at < retire_at, \
         "the source is retired before the clips are cut from it"
 
 

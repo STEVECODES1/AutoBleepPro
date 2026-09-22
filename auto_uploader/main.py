@@ -741,14 +741,33 @@ def _retire_duplicate(cfg, video_path: str) -> None:
         print(f"[WARN] Could not move {name}: {exc}")
 
 
-def _clip_already_uploaded(cfg, video_path: str, is_clip: bool) -> int:
-    """Cut clips from a VOD that was uploaded on an earlier run.
+def cut_clips_from_stream(cfg, video_path: str, is_clip: bool,
+                          title: str = "", notice: str = "",
+                          notify: bool = False) -> int:
+    """Cut clips from a finished stream, once. Returns how many landed.
 
-    The dedup check answers "has this been UPLOADED", and the answer was
-    being used to skip everything - including clipping, which had never
-    happened for that file. Clips are the reason to keep a stream around
-    after it is published, so being already-uploaded is precisely the
-    state where clipping is still owed.
+    THE ONE PLACE CLIPS ARE CUT FROM A STREAM. There were two, and the
+    difference between them was the whole bug: whether clips got made
+    depended on WHICH of the two "this is already uploaded" checks
+    happened to notice first.
+
+      - The content-hash ledger knows the file -> early return, and this
+        function was called there, so clips were cut.
+      - The hash is unknown but YouTube's channel listing and Rumble's
+        local history both recognise the title -> the run continues,
+        both platforms print "already exists", nothing is newly
+        uploaded, and clipping sat behind `if newly_uploaded:`. No
+        clips, no message, no sign anything was skipped.
+
+    A 3.2 GB stream went through the second path and was quietly never
+    clipped. Being already uploaded is not a reason to skip clipping -
+    it is the normal state of a stream that is ready to be clipped.
+
+    Cut once, and only once: the .clipped.json ledger is keyed on the
+    video's own name and size, so it survives the move to uploaded/, and
+    it is consulted here rather than by each caller. Both paths used to
+    be able to fire for the same file on different runs, which cut and
+    posted the same clips twice.
 
     Clips are never clipped. A clip of a clip is not a thing.
     """
@@ -772,16 +791,44 @@ def _clip_already_uploaded(cfg, video_path: str, is_clip: bool) -> int:
     if was_clipped(archive, source):
         return 0
 
-    print(f"[Clips] Already uploaded, but never clipped. Cutting clips from "
-          f"{os.path.basename(source)} now.")
+    print(notice or (f"[Clips] Cutting clips from "
+                     f"{os.path.basename(source)}..."))
     from utils.clip_runner import make_clips, print_run
 
-    title = get_stream_title(source, "", cfg, allow_prompt=False)
+    # The title the upload already worked out, when there is one. Reading
+    # it again off a file that has since moved costs a probe and can come
+    # back with the generic fallback instead.
+    title = title or get_stream_title(source, "", cfg, allow_prompt=False)
     try:
         run = make_clips(cfg, source, title,
                          count=clips_cfg.get("count") or None,
-                         notify=False, transcribe_if_needed=True)
+                         notify=notify,
+                         # TRANSCRIBE IF THERE IS NO CACHE.
+                         #
+                         # The transcript normally arrives free, as a
+                         # by-product of the censor pass - but the censor
+                         # pass only runs inside do_youtube(), via
+                         # upload_path_for(), and do_youtube is never
+                         # dispatched at all when the video is already on
+                         # the channel. Rumble takes the uncensored file,
+                         # so it does not trigger it either.
+                         #
+                         # So a stream already on YouTube that only
+                         # needed Rumble produced no transcript, and
+                         # every clip run on one ended with "no
+                         # transcript - the censor pass has not run on
+                         # this video", which is the single most common
+                         # shape of a backfill. transcribe_for_clips
+                         # writes to exactly the path the censor pass
+                         # would have used, so this costs one
+                         # transcription and makes a later censor run
+                         # free.
+                         transcribe_if_needed=True)
     except Exception as exc:
+        # Clips are a bonus on top of an upload; failing to make them
+        # must not make the upload look failed. NOT recorded in the
+        # ledger - a crash is not a verdict about the video, and the
+        # next run should try again.
         print(f"[Clips] could not clip {os.path.basename(source)}: {exc}")
         return 0
     if run.skipped_reason:
@@ -790,7 +837,23 @@ def _clip_already_uploaded(cfg, video_path: str, is_clip: bool) -> int:
     print_run(run)
     delivered = _deliver_clips(run, cfg)
     remember(archive, source, delivered)
+    if delivered:
+        print(f"[Clips] {delivered} clip(s) moved into "
+              f"{cfg.general.watch_folder} - they will be posted one at a "
+              "time, on the spacing set for each platform.")
     return delivered
+
+
+def _clip_already_uploaded(cfg, video_path: str, is_clip: bool) -> int:
+    """The hash-ledger path: this exact file has been uploaded before.
+
+    Same work as every other path, said differently, because "already
+    uploaded but never clipped" is worth seeing in the log.
+    """
+    return cut_clips_from_stream(
+        cfg, video_path, is_clip,
+        notice=(f"[Clips] Already uploaded, but never clipped. Cutting "
+                f"clips from {os.path.basename(video_path)} now."))
 
 
 def _autoclip_one(cfg) -> int:
@@ -2678,70 +2741,6 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
                             skip_platforms=tuple(clip_reels))
         except Exception as exc:
             print(f"[Social] WARNING: announce failed: {exc}")
-        # A finished STREAM is the source of the next day of clips. The
-        # transcript the censor pass already produced is what scores the
-        # highlights, so this is nearly free at this point - and doing it
-        # here rather than by hand is the difference between having clips
-        # and meaning to make some.
-        if not is_clip and (cfg.clips or {}).get("auto_from_streams", False):
-            try:
-                from utils.clip_runner import make_clips, print_run
-
-
-                # The source is still where it was: retire_source() now
-                # runs after this. The fallback stays for a re-run over a
-                # video that was already moved to uploaded/ on an earlier
-                # pass.
-                source = video_path
-                if not os.path.isfile(source):
-                    moved = _suggest_paths(cfg, os.path.basename(video_path))
-                    if moved:
-                        source = moved[0]
-                run = make_clips(cfg, source, stream_title,
-                                 count=(cfg.clips or {}).get("count"),
-                                 # TRANSCRIBE IF THERE IS NO CACHE.
-                                 #
-                                 # The transcript normally arrives free,
-                                 # as a by-product of the censor pass -
-                                 # but the censor pass only runs inside
-                                 # do_youtube(), via upload_path_for(),
-                                 # and do_youtube is never dispatched at
-                                 # all when the video is already on the
-                                 # channel. Rumble takes the uncensored
-                                 # file, so it does not trigger it
-                                 # either.
-                                 #
-                                 # So a stream already on YouTube that
-                                 # only needed Rumble produced no
-                                 # transcript, and every clip run on one
-                                 # ended with:
-                                 #
-                                 #   [Clips] Nothing rendered - no
-                                 #   transcript - the censor pass has
-                                 #   not run on this video
-                                 #
-                                 # which is the single most common shape
-                                 # of a backfill. transcribe_for_clips
-                                 # writes to exactly the path the censor
-                                 # pass would have used, so this costs
-                                 # one transcription and makes a later
-                                 # censor run free.
-                                 transcribe_if_needed=True)
-                print_run(run)
-                delivered = _deliver_clips(run, cfg)
-                # Hoisted onto the run's own record so the receipt at the
-                # end can say how many were cut - `delivered` itself dies
-                # with this try block.
-                clips_delivered = delivered or 0
-                if delivered:
-                    print(f"[Clips] {delivered} clip(s) moved into "
-                          f"{cfg.general.watch_folder} - they will be posted "
-                          "one at a time, on the spacing set for each "
-                          "platform.")
-            except Exception as exc:
-                # Clips are a bonus on top of a successful upload; failing
-                # to make them must not make the upload look failed.
-                print(f"[Clips] WARNING: could not make clips: {exc}")
 
         try:
             optimizer_cfg = cfg.features.get("content_optimizer", {})
@@ -2760,6 +2759,29 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
 
     if newly_uploaded:
         stage_timer.mark("metadata/optimizer")
+
+    # A finished STREAM is the source of the next day of clips. The
+    # transcript the censor pass already produced is what scores the
+    # highlights, so this is nearly free at this point - and doing it
+    # here rather than by hand is the difference between having clips
+    # and meaning to make some.
+    #
+    # OUTSIDE the `newly_uploaded` gate, for the same reason the clip
+    # queue above is. It sat inside, so "both platforms already have
+    # this stream" was read as "do not clip it" - two facts with
+    # nothing to do with each other. A stream that is already published
+    # is not a stream that is done; it is a stream nobody has clipped
+    # yet. That is the usual state of a VOD the second time the watcher
+    # sees it, and the watcher sees every VOD more than once.
+    #
+    # Running every time is safe because cut_clips_from_stream consults
+    # the .clipped.json ledger itself and cuts a given stream once.
+    #
+    # Before retire_source(), which with cleanup.source_video set to
+    # 'delete' is the moment the VOD stops existing.
+    if not dry_run:
+        clips_delivered = cut_clips_from_stream(
+            cfg, video_path, is_clip, title=stream_title) or 0
 
     # Only now is the VOD finished with. It had two jobs - the upload and
     # the clips - and this used to run between them.
