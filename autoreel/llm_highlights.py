@@ -252,6 +252,54 @@ VISION_MAX_CANDIDATES = 24
 # and looks exactly like the model having no opinion.
 VISION_MAX_IMAGES = 48
 
+# ...and what each provider will actually accept in one request, where
+# that is lower. NVIDIA answered a 48-image request with
+#
+#   HTTP 500: VLLMValidationError: At most 12 image(s) may be provided
+#   in one prompt. (parameter=image)
+#
+# every single time, then burned four retries on it, because the retry
+# rule only knows "500 is transient" and a request that is too big is
+# not going to get smaller by waiting. Gemini and xKiro take all 48.
+PROVIDER_MAX_IMAGES = {}
+
+
+def images_allowed(provider: str) -> int:
+    return PROVIDER_MAX_IMAGES.get(provider, VISION_MAX_IMAGES)
+
+
+def thin_images(parts: list, limit: int) -> list:
+    """The same candidates, with at most `limit` frames between them.
+
+    Truncating the list would be simpler and much worse: the images are
+    grouped behind the candidate they belong to, so cutting at 12 would
+    describe the first six candidates in pictures and leave the other
+    eighteen as text the model has already been given. Keeping ONE frame
+    per candidate instead means twelve of them are seen rather than six,
+    which is the point of showing it pictures at all.
+    """
+    if limit <= 0:
+        return [part for part in parts if "inline_data" not in part]
+
+    images = sum(1 for part in parts if "inline_data" in part)
+    if images <= limit:
+        return list(parts)
+
+    kept: list = []
+    used = 0
+    first_of_candidate = False
+    for part in parts:
+        if "inline_data" not in part:
+            kept.append(part)
+            first_of_candidate = True
+            continue
+        # One per candidate, in order, until the budget runs out.
+        if first_of_candidate and used < limit:
+            kept.append(part)
+            used += 1
+        first_of_candidate = False
+    return kept
+
 
 SYSTEM_PROMPT = """\
 You pick the moments worth cutting out of a live stream.
@@ -833,8 +881,40 @@ def _refusal(data: dict) -> str:
 _RETRY_CODES = ("429", "500", "502", "503", "504")
 
 
+# A 429 that means "you have used your allowance for the DAY", as
+# opposed to "you are going too fast". Waiting twenty seconds fixes the
+# second and cannot fix the first:
+#
+#   HTTP 429: You exceeded your current quota ... Quota exceeded for
+#   metric: generativelanguage.googleapis.com/
+#   generate_content_free_tier_requests, limit: 20,
+#   model: gemini-3.8-flash
+#
+# Twenty requests a day is three streams' worth. Once it is gone, every
+# remaining clip paid 20 seconds to be told so again, three times per
+# clip, when the next provider in the cascade was sitting there ready.
+_EXHAUSTED_MARKERS = (
+    "exceeded your current quota",
+    "quota exceeded for metric",
+    "free_tier_requests",
+    "insufficient_quota",
+    "billing details",
+)
+
+
+def is_quota_exhausted(problem: str) -> bool:
+    """True when retrying this provider today cannot possibly work."""
+    lowered = str(problem or "").lower()
+    return any(marker in lowered for marker in _EXHAUSTED_MARKERS)
+
+
 def _is_transient(problem: str) -> bool:
     text = str(problem or "")
+    # Checked FIRST. An exhausted daily quota arrives as a 429, which
+    # is in _RETRY_CODES, so without this it reads as "busy, try again
+    # shortly" forever.
+    if is_quota_exhausted(text):
+        return False
     if any(f"HTTP {code}" in text for code in _RETRY_CODES):
         return True
     lowered = text.lower()
@@ -1115,6 +1195,10 @@ def _ask_groq(key: str, model: str, prompt: str) -> str:
 # and resolve_model() still asks the catalogue for the rest.
 _NVIDIA_MAX_TOKENS = 8192
 
+# Measured, not guessed: a 48-image request is refused outright with
+# "At most 12 image(s) may be provided in one prompt."
+PROVIDER_MAX_IMAGES[NVIDIA] = 12
+
 # Providers that must NOT be sent response_format={"type":"json_object"}.
 #
 # It is an OpenAI parameter and NVIDIA's gateway accepts it without
@@ -1244,6 +1328,7 @@ def _ask_openai_shaped_vision(provider: str, label: str, key: str,
     fails for reasons the text one never does, and "came back empty" is
     not something anyone can act on.
     """
+    parts = thin_images(parts, images_allowed(provider))
     payload = {
         "model": model,
         "messages": [

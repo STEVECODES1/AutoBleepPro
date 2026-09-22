@@ -38,6 +38,22 @@ _POLL_INTERVAL = 10
 _POLL_TIMEOUT = 600
 
 # Platforms Upload-Post can reach, and the alias it wants for each.
+#
+# MODULE level, and read as a plain name inside the class below - not as
+# self.PLATFORM_ALIASES, which is what three call sites did. Python
+# resolves an attribute on the instance and then the class, never the
+# module, so every one of them raised
+#
+#   'UploadPostPublisher' object has no attribute 'PLATFORM_ALIASES'
+#
+# on the first clip it was asked to post. The queue counted that as a
+# failed post, and after three the circuit breaker opened:
+#
+#   [Clips] upload_post: skipped - circuit breaker open for upload_post:
+#           3 consecutive failures.
+#
+# So the route that had just been wired into the clip pipeline never
+# posted anything and then switched itself off for an hour.
 PLATFORM_ALIASES = {
     "instagram": "instagram",
     "facebook": "facebook",
@@ -112,7 +128,7 @@ class UploadPostPublisher:
                 platforms = platform_names(posting)
                 targets = [
                     p for p in platforms
-                    if self.PLATFORM_ALIASES.get(p)
+                    if PLATFORM_ALIASES.get(p)
                     and (posting.get("platforms", {}).get(p, {}) or {}).get("enabled")
                     and p in _THIS_PROJECT_PLATFORMS
                 ]
@@ -132,7 +148,7 @@ class UploadPostPublisher:
                       "must both be set in .env.")
             return None
 
-        aliases = [self.PLATFORM_ALIASES.get(t, t) for t in targets]
+        aliases = [PLATFORM_ALIASES.get(t, t) for t in targets]
         log.info("upload_post: posting %s to %s",
                  os.path.basename(video_path), aliases)
 
@@ -140,7 +156,7 @@ class UploadPostPublisher:
         description = "\n".join((caption or "").splitlines()[1:])[:5000] or ""
 
         extra = {}
-        for project_name, alias in self.PLATFORM_ALIASES.items():
+        for project_name, alias in PLATFORM_ALIASES.items():
             for suffix in ("title", "description"):
                 key = f"{alias}_{suffix}"
                 if key in self._overrides:
