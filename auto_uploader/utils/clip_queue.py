@@ -42,8 +42,27 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # volume and repetition, and a channel is far harder to get back than a
 # post is to delete - so it posts only after the others have, and only
 # once its own guard, cap and spacing allow it.
-CLIP_PLATFORMS = ("instagram", "facebook", "tiktok",
+# upload_post FIRST, then the per-platform publishers.
+#
+# It was missing entirely. The config said "when enabled, the clip
+# pipeline uses it as the primary path and the per-platform functions
+# become fallbacks" - and that was true of the STREAM announcement path
+# in social_promoter, which is a different function. The clips cut out
+# of a VOD come through here, and here upload_post did not exist. A key
+# was set, the guard said ALLOW, --posting-status said OK, and not one
+# clip ever went through it.
+#
+# Order matters: it runs first so that what it covers can be skipped
+# below rather than posted twice.
+CLIP_PLATFORMS = ("upload_post", "instagram", "facebook", "tiktok",
                   "zernio_twitter", "zernio_tiktok", "youtube_shorts")
+
+# What one upload_post call already reaches, under this project's names.
+# A clip posted through it and then posted AGAIN by the direct publisher
+# is the same Reel twice on the same account minutes apart, which is
+# precisely the pattern every platform's spam detection keys on.
+UPLOAD_POST_COVERS = ("instagram", "facebook", "tiktok", "x",
+                      "youtube_shorts")
 
 # Platforms whose CAPTION text goes through the profanity filter. Rumble
 # is deliberately absent - it is the uncensored channel, and the titles
@@ -657,7 +676,17 @@ def offer(posting: dict, config: dict, video_path: str,
     guard = PublishGuard(posting, posting.get("state_path"))
     queue = _queue(posting)
 
+    # Filled in when upload_post posts this clip, so the per-platform
+    # publishers below do not post it a second time.
+    covered: set = set()
+
     for platform in platforms:
+        if platform in covered:
+            outcome[platform] = "skipped: sent by upload_post"
+            print(f"[Clips] {platform}: already sent in the upload_post "
+                  f"call - not posting it twice.")
+            continue
+
         already = _already_posted(queue, platform, video_path)
         if already is not None and already.state == "done":
             # This clip has been through here before - a re-run of the
@@ -734,7 +763,21 @@ def offer(posting: dict, config: dict, video_path: str,
         if ok:
             queue.complete(job_id)
             outcome[platform] = "posted"
-            print(f"[Clips] {platform}: posted a Reel.")
+            if platform == "upload_post":
+                # Only what is switched ON here. Suppressing a platform
+                # this project has disabled would be suppressing nothing,
+                # and suppressing one upload_post does not actually reach
+                # would silently drop it - --posting-status --verify is
+                # what reports which are connected.
+                covered = {
+                    name for name in UPLOAD_POST_COVERS
+                    if (posting.get("platforms", {}).get(name, {}) or {})
+                    .get("enabled")
+                }
+                reached = ", ".join(sorted(covered)) or "nothing else enabled"
+                print(f"[Clips] upload_post: posted - covers {reached}.")
+            else:
+                print(f"[Clips] {platform}: posted a Reel.")
             _journal(config, "ok", platform, video_path, "posted")
         else:
             # Worth one more go later; the queue's attempt ceiling stops
