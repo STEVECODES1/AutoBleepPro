@@ -1541,6 +1541,13 @@ def _check_sync(cfg, source: str) -> int:
             reference = clip_sync.envelope(source, point, span)
             probe_path = os.path.join(workspace, f"probe_{int(point)}.mp4")
             try:
+                # "center" on purpose, and it is not the posted framing.
+                # This clip is thrown away after best_offset() reads its
+                # AUDIO envelope - nobody ever sees the picture. Centre
+                # is the cheapest chain that still produces a valid
+                # file; `fit` would add a blur pass to a frame that is
+                # measured and deleted. Do not "fix" this to match the
+                # clip default.
                 render_clip(source, ClipSpec(point, point + span, 1),
                             probe_path, "center", None, "libx264",
                             "ultrafast", 30, watermark=False)

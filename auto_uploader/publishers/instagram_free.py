@@ -41,15 +41,57 @@ from .errors import NotConfigured, PermanentlyRejected
 
 log = logging.getLogger("publisher.instagram_free")
 
+# Why the import failed, not just that it did.
+#
+# This used to catch ImportError and report, always, "instagrapi not
+# installed - pip install instagrapi". On a machine where instagrapi
+# WAS installed - pip said "Requirement already satisfied: instagrapi
+# 3.0.5", same interpreter - that message sent someone to run the
+# install again and get the same answer, while Instagram, the account
+# with 28k followers, posted nothing.
+#
+# An ImportError does not only mean "no such package". It is also what
+# a package raises when one of ITS dependencies is missing or the wrong
+# version, and instagrapi and moviepy disagree about Pillow here:
+# instagrapi wants Pillow>=12.2, moviepy wants Pillow<12. Whichever
+# loses, the failure arrives as an ImportError naming something that is
+# not instagrapi at all.
+#
+# Exception rather than ImportError, too: a version clash deep in a
+# dependency can raise TypeError or AttributeError at import time, and
+# that would have taken the whole uploader down instead of skipping one
+# platform.
+_INSTA_IMPORT_ERROR = ""
 try:
     from instagrapi import Client as InstagrapiClient
     from instagrapi.exceptions import (
         ChallengeRequired, FeedbackRequired, LoginRequired,
         NotFound, RetryAfterContent, UploadError)
     _INSTA_OK = True
-except ImportError:
+except Exception as exc:                      # noqa: BLE001 - see above
     _INSTA_OK = False
-    log.warning("instagram_free: instagrapi not installed — pip install instagrapi")
+    _INSTA_IMPORT_ERROR = f"{type(exc).__name__}: {exc}"
+    log.warning("instagram_free: instagrapi could not be imported - %s",
+                _INSTA_IMPORT_ERROR)
+
+
+def instagrapi_problem() -> str:
+    """Why instagrapi is unusable, or "" when it is fine.
+
+    Written for the caller's message, so "not configured yet" can say
+    which of the two it is - never installed, or installed and broken.
+    """
+    if _INSTA_OK:
+        return ""
+    if not _INSTA_IMPORT_ERROR:
+        return "instagrapi is not installed - pip install instagrapi"
+    if "No module named 'instagrapi'" in _INSTA_IMPORT_ERROR:
+        return "instagrapi is not installed - pip install instagrapi"
+    return (f"instagrapi IS installed but will not import - "
+            f"{_INSTA_IMPORT_ERROR}. Installing it again will not help; "
+            f"this is a dependency version clash. instagrapi needs "
+            f"Pillow>=12.2 and moviepy needs Pillow<12, which is the "
+            f"usual cause on this project.")
 
 
 # Reels cap. instagrapi will reject longer uploads at the server side; this
@@ -87,9 +129,12 @@ class InstagramFreePublisher:
     def ready(self) -> bool:
         """True when a post could actually go out right now."""
         if not _INSTA_OK:
-            log.error(
-                "Instagram (instagrapi): 'instagrapi' is not installed — "
-                "pip install instagrapi")
+            # The real reason, which is not always "not installed" - see
+            # instagrapi_problem(). Telling someone to install a package
+            # that pip says is already there is a dead end, and this one
+            # cost the account its clips.
+            log.error("Instagram (instagrapi): %s", instagrapi_problem())
+            print(f"[Publisher] Instagram (instagrapi): {instagrapi_problem()}")
             return False
         if not self._user or not self._password:
             log.error(

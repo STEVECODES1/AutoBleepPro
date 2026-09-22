@@ -44,7 +44,8 @@ from autoreel.clip_maker import (  # noqa: E402
     render_clip,
     specs_from_segments,
 )
-from autoreel.crop_strategy import CROP_CENTER, CROP_FACE  # noqa: E402
+from autoreel.crop_strategy import (CROP_CENTER, CROP_FACE,  # noqa: E402
+                                    CROP_FIT)
 
 HAS_FFMPEG = shutil.which("ffmpeg") is not None
 # ffprobe ships with ffmpeg but is packaged separately often enough that
@@ -283,8 +284,9 @@ def test_a_zero_length_clip_is_refused(tmp_path):
         render_clip("in.mp4", ClipSpec(10.0, 10.0), str(tmp_path / "o.mp4"))
 
 
-def test_clip_maker_defaults_to_center_for_gameplay(tmp_path):
-    assert ClipMaker(output_dir=str(tmp_path)).strategy == CROP_CENTER
+def test_clip_maker_defaults_to_fit_for_gameplay(tmp_path):
+    """Built with no config at all, the maker keeps the whole frame."""
+    assert ClipMaker(output_dir=str(tmp_path)).strategy == CROP_FIT
 
 
 def test_clip_maker_refuses_face_strategy_with_a_useful_message(tmp_path):
@@ -380,7 +382,7 @@ def test_clip_maker_end_to_end(tmp_path, source_video):
     results = maker.make(source_video, segments, basename="stream")
     assert results, "a clearly clip-worthy segment produced nothing"
     assert all(os.path.exists(r.path) for r in results)
-    assert all(r.strategy == CROP_CENTER for r in results)
+    assert all(r.strategy == CROP_FIT for r in results)
     # The .ass files are working files, not deliverables.
     assert not [p for p in os.listdir(tmp_path / "clips") if p.endswith(".ass")]
 
@@ -399,11 +401,15 @@ def test_fit_is_a_valid_strategy():
     assert resolve_crop_strategy({"clips": {"crop_strategy": "fit"}}) == CROP_FIT
 
 
-def test_center_is_still_the_default_for_gameplay():
-    """Changing the shipped config must not change the code default."""
-    from autoreel.crop_strategy import CROP_CENTER, resolve_crop_strategy
+def test_fit_is_the_default_for_gameplay():
+    """Changing the shipped config must not change the code default.
 
-    assert resolve_crop_strategy({}, "gameplay") == CROP_CENTER
+    config.json is gitignored, so a default that only exists there is a
+    default this machine has and nobody else does. The value asserted
+    here is the one that ships."""
+    from autoreel.crop_strategy import CROP_FIT, resolve_crop_strategy
+
+    assert resolve_crop_strategy({}, "gameplay") == CROP_FIT
 
 
 def test_fit_crops_nothing_away():
@@ -479,39 +485,44 @@ def test_the_stacked_layout_is_still_available():
         {"clips": {"profile": "monkey_stack"}}) == CROP_STACK
 
 
-def test_the_gta_profile_is_a_centre_crop_and_never_faces():
+def test_the_gta_profile_fits_the_whole_frame_and_never_faces():
     """The standing rule has two halves and only one of them ever moved.
 
     Gameplay must NEVER get face tracking - GTA is full of NPC faces and
     a detector locks onto whichever is nearest the lens. That half is
     permanent and is asserted below and again in the next test.
 
-    The other half went centre -> motion -> fit -> centre. `fit` was
-    chosen because a crop that aims can aim wrong and a fit crop has
-    nothing to aim. True, and beside the point: measured on a real
-    posted clip, the uncut 16:9 frame filled about 31% of the 9:16
-    canvas, the rest blurred filler, with the burned-in captions landing
-    in the blur instead of on the picture. Nothing was cut and nobody
-    could see any of it. Short-form is watched on an upright phone;
-    filling that screen is the format, not a preference."""
-    from autoreel.crop_strategy import (CROP_CENTER, CROP_FACE,
-                                        CROP_FACE_PAN,
+    The other half went centre -> motion -> fit -> centre -> fit, and
+    this is the end of it: the two versions were looked at side by side
+    on the channel itself. A 16:9 frame centre-cropped to 9:16 keeps 31%
+    of the width, and on gameplay that 31% is whatever the camera
+    happened to be pointing at - grass, a road, a trash bin, someone's
+    leg. The argument for centre was that fit wastes screen on blur. It
+    does. It also keeps the car, the shooting and the person talking
+    inside the frame, and a viewer cannot laugh at a joke whose subject
+    was cropped off the side. Blur is cheaper than a clip about
+    nothing."""
+    from autoreel.crop_strategy import (CROP_FACE, CROP_FACE_PAN, CROP_FIT,
                                         resolve_crop_strategy)
 
     resolved = resolve_crop_strategy({"clips": {"profile": "gta"}})
 
-    assert resolved == CROP_CENTER
+    assert resolved == CROP_FIT
     # The half that has never changed and must not: no face detector
     # anywhere near gameplay. GTA is full of NPC faces.
     assert resolved not in (CROP_FACE, CROP_FACE_PAN)
 
 
-def test_gameplay_still_defaults_to_centre_without_a_profile():
-    """Only the explicitly chosen gta profile moves. A config that names
-    no profile gets the same locked crop it always did."""
-    from autoreel.crop_strategy import CROP_CENTER, default_for_content
+def test_gameplay_fits_the_whole_frame_without_a_profile():
+    """The gta profile and the bare gameplay default have to agree.
 
-    assert default_for_content("gameplay") == CROP_CENTER
+    They are two separate lookups and they have disagreed before: a
+    change would land on the profile table and the content table kept
+    the old value, so whether a stream was framed correctly depended on
+    whether its title happened to say "gta"."""
+    from autoreel.crop_strategy import CROP_FIT, default_for_content
+
+    assert default_for_content("gameplay") == CROP_FIT
 
 
 def test_no_profile_can_turn_face_tracking_on():
@@ -602,7 +613,7 @@ def test_auto_picks_the_framing_from_the_stream_title():
     completely different things - so every GTA stream went through the
     Monkey rectangle, cropped to the left 46% of a gameplay frame for a
     call window that was not there."""
-    from autoreel.crop_strategy import (CROP_CENTER, CROP_REGION,
+    from autoreel.crop_strategy import (CROP_FIT, CROP_REGION,
                                         resolve_crop_strategy)
 
     def framing(title):
@@ -610,7 +621,7 @@ def test_auto_picks_the_framing_from_the_stream_title():
             {"clips": {"profile": "auto", "content_title": title}})
 
     assert framing('"stackswopo + gta D10 johnny cox + Lifestyle RP" 8/12/26') \
-        == CROP_CENTER
+        == CROP_FIT
     assert framing("Stackswopo monkey app trolling pt 1") == CROP_REGION
 
 

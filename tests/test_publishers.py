@@ -207,11 +207,13 @@ def test_gameplay_default_crop_is_center():
     """Face tracking on GTA locks onto NPC faces and the crop jitters
     around the scene, so centre is the default and face is opt-in."""
     from autoreel.crop_strategy import (
-        CROP_CENTER, DEFAULT_CROP_STRATEGY, resolve_crop_strategy)
-    assert DEFAULT_CROP_STRATEGY == CROP_CENTER
-    assert resolve_crop_strategy({}) == CROP_CENTER
-    assert resolve_crop_strategy(None) == CROP_CENTER
-    assert resolve_crop_strategy({"clips": {}}, "gameplay") == CROP_CENTER
+        CROP_FACE, CROP_FIT, DEFAULT_CROP_STRATEGY, resolve_crop_strategy)
+    # FIT, not centre. Changed on 2026-09-22 after the channel owner saw both on the real channel: a page of centre-cropped clips came out as grass, a road, a trash bin and somebody's leg, because a 16:9 frame cropped to 9:16 keeps 31% of the width and discards the rest. Fit keeps the WHOLE screen with a blurred copy filling top and bottom. The permanent rule - gameplay NEVER gets face tracking - is unchanged and asserted below.
+    assert DEFAULT_CROP_STRATEGY == CROP_FIT
+    assert resolve_crop_strategy({}) == CROP_FIT
+    assert resolve_crop_strategy(None) == CROP_FIT
+    assert resolve_crop_strategy({"clips": {}}, "gameplay") == CROP_FIT
+    assert resolve_crop_strategy({"clips": {}}, "gameplay") != CROP_FACE
 
 
 def test_face_tracking_is_off_by_default():
@@ -235,8 +237,10 @@ def test_facecam_content_may_default_to_face():
 
 def test_unknown_content_kind_falls_back_to_center():
     """Centre is the option that cannot track the wrong thing."""
-    from autoreel.crop_strategy import CROP_CENTER, resolve_crop_strategy
-    assert resolve_crop_strategy({}, "some-new-format") == CROP_CENTER
+    from autoreel.crop_strategy import CROP_FIT, resolve_crop_strategy
+    # Keeping the whole frame is the safe answer for content nobody has
+    # described: a crop cannot be undone once the clip is posted.
+    assert resolve_crop_strategy({}, "some-new-format") == CROP_FIT
 
 
 def test_a_misspelled_strategy_is_an_error_not_a_silent_fallback(tmp_path):

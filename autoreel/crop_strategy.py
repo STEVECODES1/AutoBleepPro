@@ -186,7 +186,26 @@ PROFILES: Dict[str, Dict[str, Any]] = {
     #
     # Set clips.crop_strategy to "fit" to get the uncut frame back, or
     # "motion" for the tracking crop.
-    "gta": {"crop_strategy": CROP_CENTER},
+    # FIT, not centre crop. Changed to centre on 2026-09-21 and changed
+    # back on 2026-09-22, after seeing both on the real channel side by
+    # side.
+    #
+    # A 16:9 frame centre-cropped to 9:16 keeps 31% of the width and
+    # throws away the rest. On GTA that is not "the action, tightly
+    # framed" - it is a vertical slice of whatever happened to be in
+    # the middle. A page of real clips came out as grass, a stretch of
+    # road, a trash bin and somebody's leg, with the person talking and
+    # the thing being reacted to both outside the frame.
+    #
+    # Fit keeps the WHOLE screen, centred, with a blurred copy of the
+    # same frame filling the top and bottom. Nothing is cut, and on this
+    # channel's own older clips it is plainly the better of the two.
+    #
+    # The earlier objection to fit was that the picture sat at ~31% of
+    # the canvas with captions floating in the blur - but captions are
+    # off now (clips.burn_captions false), so that cost is not being
+    # paid, and it was never worth the whole frame anyway.
+    "gta": {"crop_strategy": CROP_FIT},
     # Layout unknown: keep everything, lose nothing.
     "whole": {"crop_strategy": CROP_FIT},
 }
@@ -268,14 +287,18 @@ def profile_for_title(title: str, fallback: str = "whole") -> str:
 # The default for this project. Changing this constant changes the default
 # for every clip, which is why it is a named constant with a test on it
 # rather than a literal buried in a call site.
-DEFAULT_CROP_STRATEGY = CROP_CENTER
+# Fit: keep the whole frame rather than guess which third of it
+# matters. A crop cannot be undone once the clip is posted, and the
+# channel owner's verdict on seeing both was "can see the whole screen
+# in the clip is better".
+DEFAULT_CROP_STRATEGY = CROP_FIT
 
 # Content kinds that must never silently get face tracking.
 GAMEPLAY_CONTENT = "gameplay"
 FACECAM_CONTENT = "facecam"
 
 _CONTENT_DEFAULTS = {
-    GAMEPLAY_CONTENT: CROP_CENTER,
+    GAMEPLAY_CONTENT: CROP_FIT,
     FACECAM_CONTENT: CROP_FACE,
 }
 

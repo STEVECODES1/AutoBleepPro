@@ -40,6 +40,7 @@ from . import face_region, motion_region
 from .crop_strategy import (
     CROP_CENTER,
     CROP_FACE,
+    DEFAULT_CROP_STRATEGY,
     normalise_strategy,
     CROP_FIT,
     CROP_MOTION,
@@ -276,7 +277,8 @@ def fit_filter() -> str:
     )
 
 
-def crop_filter(strategy: str = CROP_CENTER, region: Optional[dict] = None) -> str:
+def crop_filter(strategy: str = DEFAULT_CROP_STRATEGY,
+                region: Optional[dict] = None) -> str:
     """The 16:9 -> 9:16 re-frame, expressed for ffmpeg.
 
     Written against iw/ih rather than fixed numbers so it is correct for
@@ -436,7 +438,7 @@ def face_pan_filter(commands_path: str, region: dict) -> str:
             "setsar=1")
 
 
-def build_filter(strategy: str = CROP_CENTER,
+def build_filter(strategy: str = DEFAULT_CROP_STRATEGY,
                  caption_path: Optional[str] = None,
                  region: Optional[dict] = None,
                  watermark: bool = True,
@@ -486,7 +488,7 @@ def _encoder_args(encoder: str, preset: str = "fast", crf: int = 20) -> list:
 # ── Rendering ────────────────────────────────────────────────────────────
 
 def render_clip(source_path: str, spec: ClipSpec, output_path: str,
-                strategy: str = CROP_CENTER,
+                strategy: str = DEFAULT_CROP_STRATEGY,
                 caption_path: Optional[str] = None,
                 encoder: str = "libx264",
                 preset: str = "fast",
@@ -1028,9 +1030,18 @@ class ClipMaker:
                     with open(motion_commands, "w", encoding="utf-8") as f:
                         f.write(motion_region.commands_file(
                             path, CROP_WIDTH_EXPR))
-                # Anything else - a static scene, no numpy, a read that
-                # failed - renders as a plain centre crop, which is what
-                # it would have been anyway.
+                # Anything else - a static scene, no numpy, a read
+                # that failed - renders as a plain centre crop (see the
+                # render_clip call below).
+                #
+                # That used to be free: centre was the default, so the
+                # fallback landed where the clip would have landed
+                # anyway. It is not free now - the default is fit - so
+                # it is a real choice, and it is deliberate. `motion` is
+                # opt-in: someone who sets it asked for a crop that
+                # follows the action, and the still version of that is a
+                # crop, not the whole frame. Anyone who wants the whole
+                # frame asks for `fit` and never reaches this branch.
 
             # A region typed into config.json is a guess, and it goes
             # stale the moment the call window moves - which is how
@@ -1135,7 +1146,7 @@ class ClipMaker:
 
 
 def make_vertical(source_path: str, output_path: str,
-                  strategy: str = CROP_CENTER,
+                  strategy: str = DEFAULT_CROP_STRATEGY,
                   encoder: str = "libx264", preset: str = "fast") -> Optional[str]:
     """Re-frame a 16:9 clip as a full-bleed 9:16 video. Path, or None.
 
@@ -1144,10 +1155,19 @@ def make_vertical(source_path: str, output_path: str,
     empty. That is not a Reel, it is a video someone forgot to crop, and
     it is what a raw Twitch clip looks like posted straight through.
 
-    Centre crop rather than fit-with-bars: for gameplay the crosshair,
-    the HUD and the action are all centre-screen, so the crop keeps
-    everything that matters and fills the frame. Same filter the clip
-    renderer uses.
+    The framing is whatever the caller resolved - both callers pass
+    resolve_crop_strategy(), so it is the project default (fit) unless
+    config names something else. It is not decided here.
+
+    The default is fit, not a centre crop. The argument for centre was
+    that gameplay keeps the crosshair, the HUD and the action centre-
+    screen; on this channel's footage it does not. A 16:9 frame centre-
+    cropped to 9:16 keeps 31% of the width, and 31% of a GTA frame is
+    often grass, a road or a wall while the thing worth clipping is off
+    to one side. Fit wastes screen on blur and keeps the whole shot.
+
+    Same filter the clip renderer uses, so a clip and a standalone
+    conversion of the same source come out framed identically.
 
     Audio is stream-copied - only the framing changes.
     """
