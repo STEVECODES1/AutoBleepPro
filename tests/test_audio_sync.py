@@ -213,3 +213,85 @@ def test_a_fixed_start_offset_is_not_the_mechanism(tmp_path):
         f"WAV reported a start_time of {wav_start!r} - if that is the "
         f"-itsoffset surviving into the file, the reasoning above about "
         f"WAV needs revisiting")
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# The guard: verify every censored file on its way out, not just once
+# ═════════════════════════════════════════════════════════════════════════════
+
+def test_stream_durations_reads_video_and_audio_separately(monkeypatch):
+    """Two numbers, not media_duration()'s one - see the docstring on
+    why format=duration cannot be trusted to catch this."""
+    calls = []
+
+    def fake_run(args, **kwargs):
+        calls.append(args)
+        selector = args[args.index("-select_streams") + 1]
+        out = "12.500000\n" if selector == "v:0" else "12.000000\n"
+
+        class _Completed:
+            stdout = out.encode()
+        return _Completed()
+
+    monkeypatch.setattr(ffmpeg_tools.subprocess, "run", fake_run)
+
+    video_s, audio_s = ffmpeg_tools.stream_durations("out.mp4")
+    assert video_s == 12.5
+    assert audio_s == 12.0
+    assert len(calls) == 2
+
+
+def test_an_unmeasurable_stream_reads_as_none(monkeypatch):
+    def explode(args, **kwargs):
+        raise FileNotFoundError("no ffprobe")
+
+    monkeypatch.setattr(ffmpeg_tools.subprocess, "run", explode)
+    assert ffmpeg_tools.stream_durations("out.mp4") == (None, None)
+
+
+def test_a_censored_file_that_drifted_is_flagged(monkeypatch, capsys):
+    from utils import censor
+
+    monkeypatch.setattr(censor, "stream_durations",
+                        lambda path: (60.0, 58.5), raising=False)
+    monkeypatch.setattr("utils.ffmpeg_tools.stream_durations",
+                        lambda path: (60.0, 58.5))
+    censor._verify_sync("halfa_mill_CENSORED.mp4")
+
+    out = capsys.readouterr().out
+    assert "WARNING" in out
+    assert "disagree" in out
+    assert "halfa_mill_CENSORED.mp4" in out
+
+
+def test_a_censored_file_in_sync_says_nothing(monkeypatch, capsys):
+    from utils import censor
+
+    monkeypatch.setattr("utils.ffmpeg_tools.stream_durations",
+                        lambda path: (60.0, 60.05))
+    censor._verify_sync("fine.mp4")
+
+    assert capsys.readouterr().out == ""
+
+
+def test_an_unmeasurable_file_says_nothing_and_does_not_raise(monkeypatch, capsys):
+    """Never the reason a censor pass fails - see the docstring."""
+    from utils import censor
+
+    monkeypatch.setattr("utils.ffmpeg_tools.stream_durations",
+                        lambda path: (None, None))
+    censor._verify_sync("mystery.mp4")
+
+    assert capsys.readouterr().out == ""
+
+
+def test_the_verify_step_is_actually_wired_into_censor_video():
+    """Read out of the source: the check has to run on every censored
+    file, not exist unused."""
+    path = os.path.join(_UPLOADER, "utils", "censor.py")
+    body = open(path, encoding="utf-8").read()
+    render_at = body.index("strategy = _render(")
+    verify_at = body.index("_verify_sync(output_video_path)")
+    next_mark = body.index('timer.mark(f"render')
+    assert render_at < next_mark < verify_at, \
+        "_verify_sync must run right after the render, on the real output"

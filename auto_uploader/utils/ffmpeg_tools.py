@@ -235,6 +235,33 @@ class StageTimer:
         return f"{self.label}: {parts} (total {self.total():.1f}s)"
 
 
+def stream_durations(path: str) -> tuple:
+    """(video_seconds, audio_seconds) for the file's first video and
+    first audio stream, or None for either that cannot be read.
+
+    Deliberately two numbers, not media_duration()'s one. mux_audio()
+    always passes -shortest, which clamps the CONTAINER's overall
+    duration to whichever stream is shorter - so a real picture/sound
+    mismatch does not reliably show up in format=duration, the container
+    could report a clean, unremarkable length while the two streams
+    inside it disagree. This reads each stream's own declared duration
+    directly, which is what actually catches it.
+    """
+    def _one(selector: str) -> Optional[float]:
+        try:
+            completed = subprocess.run(
+                ["ffprobe", "-v", "error", "-select_streams", selector,
+                 "-show_entries", "stream=duration", "-of", "csv=p=0", path],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
+        except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
+            return None
+        try:
+            return float(completed.stdout.decode().strip().splitlines()[0])
+        except (ValueError, IndexError):
+            return None
+    return _one("v:0"), _one("a:0")
+
+
 def media_duration(path: str) -> Optional[float]:
     """Seconds of media in a file, or None if it cannot be determined.
 

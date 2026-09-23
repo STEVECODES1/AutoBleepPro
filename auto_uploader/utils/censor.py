@@ -181,6 +181,41 @@ def _render(source_path: str, clean_audio_path: str, output_video_path: str,
     return "moviepy"
 
 
+# Real drift is seconds, building up over an hours-long stream - this is
+# a couple of frames' worth of slack for measurement noise, not a
+# threshold tuned to let anything real through.
+_SYNC_TOLERANCE_S = 0.5
+
+
+def _verify_sync(output_video_path: str) -> None:
+    """Warn, loudly, if the censored file's picture and sound disagree
+    on how long the file is.
+
+    The check a viewer's "audio is delayed" comment asked for: rather
+    than trust that -af aresample=async=1 fixed it and wait for the next
+    complaint, every censored file is measured on its way out from now
+    on. Best-effort and never fails the pass - an unmeasurable file
+    (ffprobe missing, an exotic codec) says nothing about whether the
+    file is actually fine, and blocking a real upload over a check that
+    could not run would trade a maybe-problem for a certain one.
+    """
+    try:
+        from utils.ffmpeg_tools import stream_durations
+
+        video_s, audio_s = stream_durations(output_video_path)
+    except Exception:
+        return
+    if video_s is None or audio_s is None:
+        return
+    drift = abs(video_s - audio_s)
+    if drift > _SYNC_TOLERANCE_S:
+        print(f"[Censor] WARNING: picture and sound disagree by "
+              f"{drift:.1f}s in {os.path.basename(output_video_path)} "
+              f"({video_s:.1f}s video, {audio_s:.1f}s audio). This is "
+              f"exactly the shape of a delayed-audio report - worth a "
+              f"look before it goes out.")
+
+
 def _report_risk(violations, mute_whole_segment: bool = False) -> None:
     """Print what was flagged, worst category first.
 
@@ -379,6 +414,7 @@ def censor_video(
 
         strategy = _render(source_path, clean_audio_path, output_video_path, speed)
         timer.mark(f"render [{strategy}]")
+        _verify_sync(output_video_path)
         if timer.enabled:
             print(f"[Timing] {timer.summary()}")
 
