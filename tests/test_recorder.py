@@ -112,6 +112,129 @@ def test_resuming_stops_eventually():
 
 
 # ═════════════════════════════════════════════════════════════════════════════
+# yt-dlp's own "done" is not proof the broadcast actually ended
+# ═════════════════════════════════════════════════════════════════════════════
+#
+# "why are you uploading the live stream that's going on right now it's
+# not even over yet you already uploaded on youtube and about to finish
+# rumble" - a --live-from-start download exited 0 (yt-dlp's own signal
+# that the stream is over) while the channel was still genuinely live, at
+# the exact moment the "finished" recording was already being uploaded.
+# yt-dlp's exit code was trusted as ground truth with nothing to catch it
+# disagreeing with the platform itself.
+
+def test_channel_is_live_reads_the_platforms_own_status(monkeypatch):
+    import record_stream
+
+    class _Completed:
+        def __init__(self, out: str) -> None:
+            self.stdout = out.encode()
+            self.stderr = b""
+
+    monkeypatch.setattr(record_stream.subprocess, "run",
+                        lambda *a, **k: _Completed("is_live\n"))
+    assert record_stream.channel_is_live("https://example.invalid") is True
+
+    monkeypatch.setattr(record_stream.subprocess, "run",
+                        lambda *a, **k: _Completed("not_live\n"))
+    assert record_stream.channel_is_live("https://example.invalid") is False
+
+
+def test_channel_is_live_is_none_not_false_when_it_cannot_tell(monkeypatch):
+    """None must never be read as "confirmed not live" - that is exactly
+    what would let a broadcast that is still running get finalised because
+    the check itself failed to reach the platform, not because it found
+    anything."""
+    import record_stream
+
+    monkeypatch.setattr(
+        record_stream.subprocess, "run",
+        lambda *a, **k: (_ for _ in ()).throw(FileNotFoundError()))
+    assert record_stream.channel_is_live("https://example.invalid") is None
+
+    class _Empty:
+        stdout = b""
+        stderr = b""
+
+    monkeypatch.setattr(record_stream.subprocess, "run",
+                        lambda *a, **k: _Empty())
+    assert record_stream.channel_is_live("https://example.invalid") is None
+
+
+def test_a_clean_exit_while_still_live_is_not_trusted(tmp_path, monkeypatch):
+    """The exact bug report: yt-dlp says the stream ended, the platform
+    says it is still live - the recorder must side with the platform and
+    keep recording, not deliver a partial file as the finished stream."""
+    import record_stream
+
+    monkeypatch.setattr(record_stream.time, "sleep", lambda *_: None)
+
+    calls = {"run": 0, "live_check": 0}
+
+    def fake_run(self, args, log_path="", quiet_wait=True):
+        calls["run"] += 1
+        self.recording_started_at = 0.0
+        return 0
+
+    def fake_channel_is_live(url):
+        calls["live_check"] += 1
+        # First "clean" exit: still actually live. Second: really over.
+        return calls["live_check"] == 1
+
+    finalised_with = []
+
+    def fake_finalise(self, base):
+        finalised_with.append(base)
+        return "/tmp/delivered.mp4"
+
+    monkeypatch.setattr(record_stream.Recorder, "_run", fake_run)
+    monkeypatch.setattr(record_stream, "channel_is_live", fake_channel_is_live)
+    monkeypatch.setattr(record_stream.Recorder, "finalise", fake_finalise)
+
+    recorder = Recorder(url="https://www.youtube.com/@stackswopo_/live",
+                        staging=str(tmp_path / "recording"),
+                        watch_folder=str(tmp_path / "watch_folder"),
+                        name="Stackswopo")
+
+    delivered = recorder.record_one_stream()
+
+    assert calls["live_check"] == 2, \
+        "the second clean exit must be checked too, not just the first"
+    assert calls["run"] == 2, \
+        "a clean exit while the channel is still live must reconnect, " \
+        "not finalise immediately"
+    assert delivered == "/tmp/delivered.mp4"
+    assert finalised_with, "the real end must still deliver the recording"
+
+
+def test_the_still_live_reconnect_respects_max_resumes(tmp_path, monkeypatch):
+    """A live_status check stuck always answering "still live" - a bad
+    response, a platform quirk - must not loop forever any more than a
+    real dropped connection does."""
+    import record_stream
+
+    monkeypatch.setattr(record_stream.time, "sleep", lambda *_: None)
+    monkeypatch.setattr(record_stream, "MAX_RESUMES", 2)
+
+    def fake_run(self, args, log_path="", quiet_wait=True):
+        self.recording_started_at = 0.0
+        return 0
+
+    monkeypatch.setattr(record_stream.Recorder, "_run", fake_run)
+    monkeypatch.setattr(record_stream, "channel_is_live", lambda url: True)
+    monkeypatch.setattr(record_stream.Recorder, "finalise",
+                        lambda self, base: "/tmp/delivered.mp4")
+
+    recorder = Recorder(url="https://www.youtube.com/@stackswopo_/live",
+                        staging=str(tmp_path / "recording"),
+                        watch_folder=str(tmp_path / "watch_folder"),
+                        name="Stackswopo")
+
+    delivered = recorder.record_one_stream()
+    assert delivered == "/tmp/delivered.mp4"
+
+
+# ═════════════════════════════════════════════════════════════════════════════
 # Segments: order matters, silently
 # ═════════════════════════════════════════════════════════════════════════════
 

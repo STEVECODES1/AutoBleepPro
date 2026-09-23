@@ -274,6 +274,36 @@ def expected_duration(url: str) -> Optional[float]:
         return None
 
 
+def channel_is_live(url: str) -> Optional[bool]:
+    """Whether THIS broadcast is still live, right now, according to the
+    platform - not according to yt-dlp's own exit code.
+
+    yt-dlp exiting 0 from a --live-from-start download almost always means
+    the stream ended. It is also what a live download that locked onto an
+    early, wrong length looks like: it downloads up to that many minutes,
+    decides it has everything, and exits 0 while the broadcast is still
+    running past that point. The evidence for this happening: a stream
+    watched live in a browser at the same moment - viewers still in chat,
+    the LIVE badge still showing - while the recorder had already finished
+    "recording" it and handed the file to the uploader.
+
+    None when this could not be determined - never treated as "not live",
+    which would finalise a broadcast that is still actually going just
+    because the check itself failed to reach the platform.
+    """
+    try:
+        completed = subprocess.run(
+            YTDLP + ["--no-warnings", "--skip-download",
+                     "--print", "live_status", url],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60)
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return None
+    lines = completed.stdout.decode("utf-8", "replace").strip().splitlines()
+    if not lines:
+        return None
+    return lines[0].strip().lower() == "is_live"
+
+
 def ytdlp_command() -> list:
     """How to invoke yt-dlp, preferring the one in THIS interpreter.
 
@@ -1766,6 +1796,24 @@ class Recorder:
             if code in (127, 130):
                 return None
             if code == 0:
+                # yt-dlp says it is done. Believed on its own once - the
+                # recorder was delivering a stream while it was still
+                # genuinely live, evidence being the platform's own player
+                # showing LIVE and an active chat at the exact moment the
+                # "finished" upload had already gone out. Checked against
+                # the platform itself before it is trusted, same as every
+                # other guard this project already has for "did it actually
+                # happen" rather than "did the tool say it happened."
+                still_live = channel_is_live(
+                    resolved_watch_url(self.url, self.video_id))
+                if still_live and resumes < MAX_RESUMES:
+                    resumes += 1
+                    self.say("yt-dlp finished cleanly, but the channel is "
+                             "still live right now - not trusting that as "
+                             f"the stream ending (resume "
+                             f"{resumes}/{MAX_RESUMES})...")
+                    time.sleep(3)
+                    continue
                 self.say("Stream ended.")
                 break
             if not should_resume(recorded_from, ended, resumes):
