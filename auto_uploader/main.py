@@ -2619,6 +2619,37 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
             # already over. Idempotent if it was already set on success.
             rumble_upload_started.set()
 
+    # A clip's social-platform offer starts HERE, on its own thread,
+    # rather than after Rumble's upload has already finished. The two do
+    # not share a resource: Rumble's upload is browser/network I/O,
+    # offer()'s own per-platform censor pass (when a platform asks for
+    # one - see clip_queue._censored_clip) is GPU work that Rumble never
+    # touches. Making Instagram/Facebook/Shorts wait for Rumble to
+    # finish uploading before even STARTING was dead time, not a real
+    # dependency - the two were always independent, they just ran one
+    # after the other because the code happened to be written in that
+    # order.
+    #
+    # Started before Rumble's own dispatch below so the two overlap for
+    # their full length rather than only the tail of one lining up with
+    # the front of the other.
+    _clip_offer_result: dict = {}
+    _clip_offer_thread = None
+    if is_clip and cfg.posting:
+        def _run_clip_offer() -> None:
+            try:
+                from utils.clip_queue import offer
+
+                _clip_offer_result["value"] = offer(
+                    cfg.posting, _clip_config(cfg), instagram_clip_path(),
+                    fallback_caption=yt_title, dry_run=dry_run)
+            except Exception as exc:
+                print(f"[Clips] WARNING: could not offer the clip: {exc}")
+
+        _clip_offer_thread = threading.Thread(
+            target=_run_clip_offer, name="clip-offer", daemon=True)
+        _clip_offer_thread.start()
+
     # --- Dispatch ---
     # Rumble appended first and submitted first - it wants to be the one
     # already under way, not just the one asked for first.
@@ -2724,16 +2755,16 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
     # Safe to run every time because `offer` asks the queue per platform
     # and skips the ones already marked done. Rumble having seen this
     # clip says nothing about whether YouTube has.
+    #
+    # Already RUNNING by this point, on its own thread started before
+    # Rumble's own dispatch above - joined here rather than called, so
+    # its GPU work (when a platform asks for its own censor pass) spent
+    # the last several minutes overlapping Rumble's upload instead of
+    # waiting behind it.
     clip_reels = {}
-    if is_clip and cfg.posting:
-        try:
-            from utils.clip_queue import CLIP_PLATFORMS, offer
-
-            clip_reels = offer(
-                cfg.posting, _clip_config(cfg), instagram_clip_path(),
-                fallback_caption=yt_title, dry_run=dry_run)
-        except Exception as exc:
-            print(f"[Clips] WARNING: could not offer the clip: {exc}")
+    if _clip_offer_thread is not None:
+        _clip_offer_thread.join()
+        clip_reels = _clip_offer_result.get("value", {})
 
     if newly_uploaded:
         try:
