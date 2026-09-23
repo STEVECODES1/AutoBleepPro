@@ -33,9 +33,15 @@ except ImportError:
     log.warning("upload_post: 'requests' not installed — pip install requests")
 
 UPLOAD_POST_API = "https://api.upload-post.com/api/upload"
+UPLOAD_POST_STATUS_API = "https://api.upload-post.com/api/uploadposts/status"
 _STATUS_PATH = "/api/uploadposts/status"
 _POLL_INTERVAL = 10
 _POLL_TIMEOUT = 600
+
+# Per docs.upload-post.com/api/upload-status. Reaching one of these means
+# the job is done deciding, one way or another, for every platform in it
+# - nothing left to poll for.
+_TERMINAL_JOB_STATUSES = frozenset({"completed", "failed", "not_found"})
 
 # Platforms Upload-Post can reach, and the alias it wants for each.
 #
@@ -73,6 +79,43 @@ PLATFORM_ALIASES = {
 _THIS_PROJECT_PLATFORMS = {
     "instagram", "facebook", "tiktok", "x", "youtube_shorts",
 }
+
+# The reverse of PLATFORM_ALIASES, restricted to names this project
+# actually uses - "youtube" alone is ambiguous (both "youtube" and
+# "youtube_shorts" alias to it) and every other extra name in
+# PLATFORM_ALIASES (threads, pinterest, ...) is not a platform this
+# project posts to at all, so neither belongs in a mapping this project
+# reads its own results back through.
+_ALIAS_TO_PROJECT_NAME = {
+    alias: name for name, alias in PLATFORM_ALIASES.items()
+    if name in _THIS_PROJECT_PLATFORMS
+}
+
+
+def platforms_reached(result: Optional[Dict[str, Any]]) -> set:
+    """Which of THIS PROJECT's platform names a resolved status result
+    says actually succeeded - "success": true in that platform's own
+    result entry, not just "the job was accepted."
+
+    Reads the real, polled `results` array from check_status()/
+    _resolve_final_result() when present. Falls back to an EMPTY set,
+    never a guess, when the shape is not what was expected (an old SDK
+    response with no `results` field, a dry run, a malformed payload) -
+    the caller deciding a platform was reached because this function
+    could not tell would be the exact bug this exists to fix, the other
+    way round.
+    """
+    if not isinstance(result, dict):
+        return set()
+    reached = set()
+    for entry in result.get("results") or ():
+        if not isinstance(entry, dict) or not entry.get("success"):
+            continue
+        alias = str(entry.get("platform", "")).strip().lower()
+        name = _ALIAS_TO_PROJECT_NAME.get(alias)
+        if name:
+            reached.add(name)
+    return reached
 
 
 class UploadPostPublisher:
@@ -171,13 +214,100 @@ class UploadPostPublisher:
             if result is not None:
                 log.info("upload_post: upload accepted via SDK, result: %s",
                          result)
-                return result
+                return self._resolve_final_result(result)
             log.warning("upload_post: SDK returned None — trying raw REST.")
         except Exception as exc:
             log.warning("upload_post: SDK failed (%s) — trying raw REST.", exc)
 
-        return self._upload_via_rest(video_path, title, self._user,
-                                     aliases, description or None, extra)
+        result = self._upload_via_rest(video_path, title, self._user,
+                                       aliases, description or None, extra)
+        return self._resolve_final_result(result)
+
+    # ── status: what actually happened, not just what was accepted ──────
+    #
+    # "Upload initiated successfully in background... Check its status
+    # with GET /api/uploadposts/status?request_id=..." is upload-post's
+    # own ack for an async job - and this project used to stop reading
+    # right there, treat the ack as the outcome, and mark every platform
+    # in the job "posted". A clip whose Instagram leg genuinely failed on
+    # upload-post's side (an expired token, a disconnected account) came
+    # back with exactly the same ack as one that actually landed
+    # everywhere, and nothing here was ever able to tell the two apart -
+    # which is indistinguishable, from the terminal, from "it's not
+    # uploading" with no error anywhere to point at.
+    #
+    # _STATUS_PATH/_POLL_INTERVAL/_POLL_TIMEOUT existed already, unused,
+    # since before this was written - the polling was clearly intended
+    # and never wired up.
+
+    def check_status(self, request_id: str) -> Optional[Dict[str, Any]]:
+        """One status poll. None on any failure to reach or parse it -
+        the caller falls back to the original ack rather than block on a
+        status endpoint that may itself be having a bad day."""
+        if not _REQUESTS_OK or not request_id:
+            return None
+        try:
+            resp = requests.get(
+                UPLOAD_POST_STATUS_API, params={"request_id": request_id},
+                headers={"Authorization": f"Apikey {self._api_key}"},
+                timeout=30)
+        except Exception as exc:
+            log.warning("upload_post: status check failed: %s", exc)
+            return None
+        if not resp.ok:
+            log.warning("upload_post: status check rejected (HTTP %d): %s",
+                       resp.status_code, resp.text[:300])
+            return None
+        try:
+            return resp.json()
+        except Exception:
+            return None
+
+    def _resolve_final_result(
+            self, result: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+        """Poll until the job has actually finished, or give up and
+        return what was known.
+
+        `result` unchanged when there is nothing to poll: no request_id
+        at all (a synchronous response, or a dry run), or 'requests' is
+        unavailable to poll with. Otherwise polls check_status() every
+        _POLL_INTERVAL seconds until the job reaches a terminal status
+        (see _TERMINAL_JOB_STATUSES) or _POLL_TIMEOUT is spent, and
+        returns upload-post's own final status payload - which is what
+        carries the real, per-platform `results` this was all for.
+
+        A poll that fails, or a timeout with the job still not terminal,
+        returns the LAST status successfully read (or the original ack
+        if none ever came back) rather than None - a clip that is still
+        genuinely processing must not be reported as a failure.
+        """
+        if not isinstance(result, dict) or not _REQUESTS_OK:
+            return result
+        request_id = result.get("request_id")
+        if not request_id:
+            return result
+
+        log.info("upload_post: polling status for request_id=%s ...",
+                 request_id)
+        deadline = time.time() + _POLL_TIMEOUT
+        last_seen = result
+        while time.time() < deadline:
+            status = self.check_status(request_id)
+            if status is not None:
+                last_seen = status
+                if str(status.get("status", "")).lower() in _TERMINAL_JOB_STATUSES:
+                    log.info("upload_post: request_id=%s reached '%s' "
+                            "(%s/%s platforms)", request_id,
+                            status.get("status"), status.get("completed"),
+                            status.get("total"))
+                    return status
+            time.sleep(_POLL_INTERVAL)
+        log.warning(
+            "upload_post: request_id=%s did not reach a final status "
+            "within %ds - reporting what was last seen rather than "
+            "waiting indefinitely. Check --posting-status later.",
+            request_id, _POLL_TIMEOUT)
+        return last_seen
 
     # ── SDK upload ───────────────────────────────────────────────────────
 

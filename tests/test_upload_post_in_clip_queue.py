@@ -79,11 +79,22 @@ def test_a_covered_platform_is_skipped_after_upload_post_posts():
 
 
 def test_only_enabled_platforms_are_suppressed():
-    """Suppressing a platform this project has switched off would be
+    """The real, polled per-platform result (see publish()'s `detail`
+    and publishers.upload_post.platforms_reached) is what decides
+    `covered` now - not a guess from this project's own config. But
+    when there is truly nothing real to read (a dry run, an old-shaped
+    response with no polled results), it still falls back to the old
+    rule: suppressing a platform this project has switched off would be
     suppressing nothing, and would read as though upload_post had
     covered it."""
     body = open(os.path.join(_REPO, "auto_uploader", "utils",
                              "clip_queue.py"), encoding="utf-8").read()
 
-    block = body[body.index('if platform == "upload_post":'):]
-    assert '.get("enabled")' in block[:900]
+    # offer()'s own upload_post branch, not publish()'s (the file has
+    # two `if platform == "upload_post":` blocks now - one decides
+    # what publish() reports back, the other decides what offer() does
+    # with it).
+    marker = 'covered = detail.get("covers")'
+    assert marker in body
+    block = body[body.index(marker):]
+    assert '.get("enabled")' in block[:400]

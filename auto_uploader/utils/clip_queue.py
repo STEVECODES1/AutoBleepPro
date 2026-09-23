@@ -523,11 +523,19 @@ def _censored_clip(platform: str, video_path: str, config: dict) -> tuple:
 
 
 def publish(platform: str, video_path: str, caption: str,
-            config: dict, dry_run: bool = False) -> bool:
+            config: dict, dry_run: bool = False,
+            detail: Optional[dict] = None) -> bool:
     """Actually post one clip. No guard, no queue - callers do that.
 
     Raises NotConfigured when the platform refuses for a reason no retry
     can fix - a missing token scope, most often.
+
+    `detail`, when a caller passes a dict, is filled in for upload_post
+    with `detail["covers"]` - the platforms upload-post's OWN, polled
+    status says actually succeeded (see publishers.upload_post.
+    platforms_reached), not a guess. offer() reads it to decide which
+    per-platform publishers upload_post already covers; every other
+    caller can safely ignore `detail` and nothing changes for them.
     """
     from publishers.errors import NotConfigured, PermanentlyRejected
     if not os.path.isfile(video_path):
@@ -566,6 +574,33 @@ def publish(platform: str, video_path: str, caption: str,
                     os.remove(temporary)
                 except OSError:
                     pass
+
+        # upload_post's ack ("Upload initiated...") used to be treated as
+        # the outcome - every platform in the job marked "posted" the
+        # moment upload-post accepted the file, whether or not any of
+        # them actually went through on upload-post's own side. Real,
+        # polled per-platform results (post_clip() now polls for them -
+        # see _resolve_final_result) change what "posted" means here: at
+        # least one platform genuinely succeeded, not merely accepted.
+        reached: set = set()
+        if platform == "upload_post":
+            try:
+                from publishers.upload_post import platforms_reached
+
+                reached = platforms_reached(posted)
+            except Exception:
+                reached = set()
+            if detail is not None:
+                detail["covers"] = reached
+            # Only tighten the verdict when there IS something to read a
+            # verdict from - an old-shaped response (no `results` at
+            # all: a dry run, an SDK reply that predates polling) falls
+            # back to the previous "the ack means it worked" behaviour
+            # rather than being newly, wrongly marked a failure for a
+            # question this cannot yet answer.
+            if isinstance(posted, dict) and posted.get("results"):
+                posted = posted if reached else None
+
         if posted:
             print(f"[Clips] {platform}: {posted}")
             # Where it went, joined to why it was cut. This is the half
@@ -730,8 +765,10 @@ def offer(posting: dict, config: dict, video_path: str,
                      f"{decision.retry_after_s / 60:.0f} min")
             continue
 
+        detail: dict = {}
         try:
-            ok = publish(platform, video_path, caption, config, dry_run)
+            ok = publish(platform, video_path, caption, config, dry_run,
+                        detail=detail)
         except NotConfigured as exc:
             queue.block(job_id, str(exc), MAX_DEFERRED_AGE_S)
             outcome[platform] = "skipped: not configured"
@@ -764,18 +801,32 @@ def offer(posting: dict, config: dict, video_path: str,
             queue.complete(job_id)
             outcome[platform] = "posted"
             if platform == "upload_post":
-                # Only what is switched ON here. Suppressing a platform
-                # this project has disabled would be suppressing nothing,
-                # and suppressing one upload_post does not actually reach
-                # would silently drop it - --posting-status --verify is
-                # what reports which are connected.
-                covered = {
-                    name for name in UPLOAD_POST_COVERS
-                    if (posting.get("platforms", {}).get(name, {}) or {})
-                    .get("enabled")
-                }
-                reached = ", ".join(sorted(covered)) or "nothing else enabled"
-                print(f"[Clips] upload_post: posted - covers {reached}.")
+                # What upload-post's OWN polled status says actually
+                # succeeded (see publish()'s `detail` / publishers.
+                # upload_post.platforms_reached) - not a guess from
+                # which platform blocks this project happens to have
+                # `enabled: true`. Those two used to be treated as the
+                # same question and are not: an account can read
+                # "enabled" here and still not be genuinely connected on
+                # upload-post.com, or a real token there can have
+                # expired - either way this project's own config says
+                # nothing about it, and marking that platform "covered"
+                # anyway was silently skipping the per-platform fallback
+                # for a clip that had not actually gone out.
+                #
+                # Falls back to the old config-guess only when there is
+                # truly nothing to read a real answer from (a dry run, or
+                # an old-shaped response with no polled results) - see
+                # publish()'s own fallback for the matching case.
+                covered = detail.get("covers") or set()
+                if not covered:
+                    covered = {
+                        name for name in UPLOAD_POST_COVERS
+                        if (posting.get("platforms", {}).get(name, {}) or {})
+                        .get("enabled")
+                    }
+                shown = ", ".join(sorted(covered)) or "nothing else enabled"
+                print(f"[Clips] upload_post: posted - covers {shown}.")
             else:
                 print(f"[Clips] {platform}: posted a Reel.")
             _journal(config, "ok", platform, video_path, "posted")
