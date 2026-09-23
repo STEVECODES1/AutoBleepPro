@@ -50,29 +50,63 @@ log = logging.getLogger("publisher.instagram_free")
 # install again and get the same answer, while Instagram, the account
 # with 28k followers, posted nothing.
 #
-# An ImportError does not only mean "no such package". It is also what
-# a package raises when one of ITS dependencies is missing or the wrong
-# version, and instagrapi and moviepy disagree about Pillow here:
-# instagrapi wants Pillow>=12.2, moviepy wants Pillow<12. Whichever
-# loses, the failure arrives as an ImportError naming something that is
-# not instagrapi at all.
+# The real cause, found by downloading 3.0.5 and reading
+# instagrapi/exceptions.py directly rather than guessing again: THREE
+# of the six names this file imported were never real in that module.
+# `NotFound` is `NotFoundError`. `RetryAfterContent` and `UploadError`
+# do not exist under any name - the closest real classes are
+# RateLimitError and ClipNotUpload. Every one of the three raised
+# ImportError at import time, and Python's `from X import (a, b, c)`
+# fails the whole statement on the first bad name - so this module
+# never loaded, on every run, regardless of Pillow. The previous
+# version of this comment blamed a Pillow/moviepy version clash. That
+# was a guess, made without the package in hand, and it was wrong: the
+# actual failure was `cannot import name 'NotFound'`, an API mismatch
+# with nothing to do with Pillow.
 #
-# Exception rather than ImportError, too: a version clash deep in a
-# dependency can raise TypeError or AttributeError at import time, and
-# that would have taken the whole uploader down instead of skipping one
-# platform.
+# Fixed at both ends: the names below are the real ones, AND each is
+# read with getattr + a private placeholder that instagrapi will never
+# raise, rather than a bare `from ... import`. A name still wrong, or
+# renamed again in a future release, now disables just the one except
+# branch that used it - not the entire publisher, the way one bad name
+# did here.
 _INSTA_IMPORT_ERROR = ""
 try:
     from instagrapi import Client as InstagrapiClient
-    from instagrapi.exceptions import (
-        ChallengeRequired, FeedbackRequired, LoginRequired,
-        NotFound, RetryAfterContent, UploadError)
+    import instagrapi.exceptions as _insta_exceptions
     _INSTA_OK = True
 except Exception as exc:                      # noqa: BLE001 - see above
     _INSTA_OK = False
+    _insta_exceptions = None
     _INSTA_IMPORT_ERROR = f"{type(exc).__name__}: {exc}"
     log.warning("instagram_free: instagrapi could not be imported - %s",
                 _INSTA_IMPORT_ERROR)
+
+
+class _NoSuchInstagrapiError(Exception):
+    """Stands in for an instagrapi exception class this installed
+    version does not define. Never raised by real code, so an except
+    clause built on it is simply unreachable dead code rather than a
+    crash - which is the point: one missing/renamed class must disable
+    only the branch that names it."""
+
+
+def _insta_exc(name: str):
+    if _insta_exceptions is None:
+        return _NoSuchInstagrapiError
+    return getattr(_insta_exceptions, name, _NoSuchInstagrapiError)
+
+
+# Real names in instagrapi 3.0.5's exceptions.py (confirmed by reading
+# the module, not assumed): ChallengeRequired, FeedbackRequired and
+# LoginRequired were always correct. NotFoundError, RateLimitError and
+# ClipNotUpload are the three that were wrong before.
+ChallengeRequired = _insta_exc("ChallengeRequired")
+FeedbackRequired = _insta_exc("FeedbackRequired")
+LoginRequired = _insta_exc("LoginRequired")
+NotFound = _insta_exc("NotFoundError")
+RetryAfterContent = _insta_exc("RateLimitError")
+UploadError = _insta_exc("ClipNotUpload")
 
 
 def instagrapi_problem() -> str:
@@ -87,11 +121,15 @@ def instagrapi_problem() -> str:
         return "instagrapi is not installed - pip install instagrapi"
     if "No module named 'instagrapi'" in _INSTA_IMPORT_ERROR:
         return "instagrapi is not installed - pip install instagrapi"
+    if "Pillow" in _INSTA_IMPORT_ERROR:
+        return (f"instagrapi IS installed but will not import - "
+                f"{_INSTA_IMPORT_ERROR}. This looks like the Pillow "
+                f"version clash: instagrapi needs Pillow>=12.2 and "
+                f"moviepy needs Pillow<12.")
     return (f"instagrapi IS installed but will not import - "
-            f"{_INSTA_IMPORT_ERROR}. Installing it again will not help; "
-            f"this is a dependency version clash. instagrapi needs "
-            f"Pillow>=12.2 and moviepy needs Pillow<12, which is the "
-            f"usual cause on this project.")
+            f"{_INSTA_IMPORT_ERROR}. Installing it again will not help "
+            f"if this names a symbol, not a missing package - check "
+            f"what changed in the instagrapi version installed.")
 
 
 # Reels cap. instagrapi will reject longer uploads at the server side; this

@@ -608,16 +608,37 @@ _MISSED_MARKERS = (
 )
 
 
+# Real, saved output - not a retry message, an actual merged file on
+# disk. Confirmed against a real log: "ERROR: Did not get any data
+# blocks" printed twice during a mid-download 503, yt-dlp recovered on
+# its own, and "[Merger] Merging formats into ...part01.ts.mp4" printed
+# a dozen lines later. _missed_stream still matched the earlier phrase
+# anywhere in its 40-line tail and reported "MISSED a stream ... Nothing
+# was saved" for a segment that had, in fact, just been saved.
+_SAVED_MARKER = "[merger] merging formats into"
+
+
 def _missed_stream(tail) -> str:
     """Why a found stream produced nothing, or "" if none was found.
 
     Only fires when yt-dlp got far enough to be TALKING about a live
     video. A channel that is simply offline never reaches these lines.
+
+    A MISSED marker only counts if nothing AFTER it in the same tail
+    shows a merge actually completing. "Did not get any data blocks" is
+    what a mid-download hiccup looks like along the way - yt-dlp retries
+    fragments and often finishes the segment anyway - not a verdict on
+    the whole attempt by itself. Only the last word on THIS attempt
+    (nothing later in the tail undoes it) is worth reporting as missed.
     """
     text = " ".join(tail or ()).lower()
     for marker, why in _MISSED_MARKERS:
-        if marker in text:
-            return why
+        index = text.rfind(marker)
+        if index == -1:
+            continue
+        if _SAVED_MARKER in text[index:]:
+            continue
+        return why
     return ""
 
 

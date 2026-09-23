@@ -192,3 +192,72 @@ def test_once_mode_still_tries_exactly_once_even_on_a_crash():
     _source_loop(FakeRecorder(), True, stop)
 
     assert calls == [1]
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# A RECOVERED SEGMENT WAS ALSO REPORTED AS MISSED
+#
+# From a real run: a mid-download 503 printed "ERROR: Did not get any data
+# blocks" TWICE, yt-dlp recovered on its own and kept going, and
+# "[Merger] Merging formats into ...part01.ts.mp4" printed a dozen lines
+# later - a real, saved segment. _missed_stream still matched the earlier
+# phrase anywhere in its 40-line tail and reported "MISSED a stream ...
+# Nothing was saved" for a segment that had just been saved.
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _real_recovered_segment_tail():
+    """The exact shape of the log this was found in, trimmed to what
+    _missed_stream actually reads."""
+    return [
+        "[download] Got error: HTTP Error 503: Service Unavailable. "
+        "Retrying (1/inf)...",
+        "Sleeping 1.00 seconds ...",
+        "ERROR: Did not get any data blocks",
+        "ERROR: Did not get any data blocks",
+        "[youtube] czIBT-bBw4Y: Downloading webpage",
+        "[youtube] czIBT-bBw4Y: Downloading visionos player API JSON",
+        "ERROR: Did not get any data blocks",
+        "ERROR: Did not get any data blocks",
+        "[download] fragment not found; Skipping fragment 1970 ...",
+        "[download] fragment not found; Skipping fragment 1971 ...",
+        "[download] Download completed",
+        "[download] fragment not found; Skipping fragment 1970 ...",
+        "[download] fragment not found; Skipping fragment 1971 ...",
+        "[download] Download completed",
+        '[Merger] Merging formats into '
+        '"D:\\AutoBleepPro-git\\...\\part01.ts.mp4"',
+        "Deleting original file ...f140.mp4 (pass -k to keep)",
+        "Deleting original file ...f299.mp4 (pass -k to keep)",
+    ]
+
+
+def test_a_segment_that_actually_merged_is_not_reported_missed():
+    from record_stream import _missed_stream
+
+    assert _missed_stream(_real_recovered_segment_tail()) == "", \
+        "a segment that merged successfully must not be MISSED"
+
+
+def test_a_merge_failure_with_no_later_success_is_still_missed():
+    """The override must not swallow a genuine miss - only one a later
+    success in the SAME tail actually contradicts."""
+    from record_stream import _missed_stream
+
+    tail = ["[download] Got error: HTTP Error 503: Service Unavailable.",
+            "ERROR: Did not get any data blocks"]
+
+    assert _missed_stream(tail), \
+        "a miss with no later success must still be reported"
+
+
+def test_a_real_miss_after_an_earlier_merge_is_still_reported():
+    """Order matters: a merge earlier in the tail must not paper over a
+    genuine miss that happens afterward."""
+    from record_stream import _missed_stream
+
+    tail = ['[Merger] Merging formats into "part01.ts.mp4"',
+            "[download] Got error: HTTP Error 503: Service Unavailable.",
+            "ERROR: Did not get any data blocks"]
+
+    assert _missed_stream(tail), \
+        "a miss that happens AFTER an earlier merge is a real miss"
