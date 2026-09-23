@@ -119,8 +119,44 @@ def mux_audio(
     if not have_ffmpeg():
         return None
 
+    # A viewer reported "audio is delayed" on a stream censored for 277
+    # flagged words. Checked and ruled out: the mute rebuild itself does
+    # not drift - a simulated 650-span rebuild (matching another real
+    # stream's violation count) came back within a millisecond of the
+    # source length, so hundreds of pydub splices are not the cause.
+    #
+    # A fixed start offset was also checked and is not the mechanism
+    # either: the censored audio is a WAV, which cannot encode a
+    # timestamp at all - ffmpeg always reads its first sample as t=0 -
+    # and -map ... without -copyts rebases the video input's own PTS to
+    # roughly zero the same way. Two inputs that both start at ~0 do not
+    # explain a delay from the first frame.
+    #
+    # What remains, and could not be verified further without the
+    # source file itself: the audio here is rebuilt on a perfectly
+    # regular clock - pydub, working in exact milliseconds from Whisper
+    # timestamps - with no knowledge of whatever real-world irregularity
+    # the ORIGINAL video's own timestamps carry from being a live HLS
+    # capture running for hours (dropped frames, encoder stalls, a
+    # declared frame rate that is not quite the achieved one). None of
+    # that shows up over a short clip. Over a long stream it can
+    # accumulate into exactly a growing, increasingly audible offset -
+    # which is what a report on a long stream, rather than a short one,
+    # would look like.
+    #
+    # -af aresample=async=1 is ffmpeg's own documented answer to that
+    # shape of problem: it continuously compares the audio's timestamps
+    # against what elapsed video time implies and pads or trims samples
+    # to close any gap ("filling and trimming" per ffmpeg's own
+    # -h filter=aresample output) - correcting accumulated drift, not
+    # just a fixed start offset. Only audio is filtered; -c:v copy is
+    # untouched, so this costs nothing in picture quality, and nothing
+    # measurable in speed - audio was already being re-encoded to aac
+    # here, never stream-copied. Where there is no drift to correct it
+    # is a no-op.
     common = ["-map", "0:v:0", "-map", "1:a:0",
               "-c:a", "aac", "-b:a", audio_bitrate,
+              "-af", "aresample=async=1",
               "-movflags", "+faststart", "-shortest"]
 
     # 1. Stream copy: the fast path, and the only one that doesn't touch
