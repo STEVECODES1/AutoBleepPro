@@ -764,7 +764,8 @@ def _retire_duplicate(cfg, video_path: str) -> None:
 
 def cut_clips_from_stream(cfg, video_path: str, is_clip: bool,
                           title: str = "", notice: str = "",
-                          notify: bool = False) -> int:
+                          notify: bool = False,
+                          content_hash: str = "") -> int:
     """Cut clips from a finished stream, once. Returns how many landed.
 
     THE ONE PLACE CLIPS ARE CUT FROM A STREAM. There were two, and the
@@ -784,11 +785,17 @@ def cut_clips_from_stream(cfg, video_path: str, is_clip: bool,
     clipped. Being already uploaded is not a reason to skip clipping -
     it is the normal state of a stream that is ready to be clipped.
 
-    Cut once, and only once: the .clipped.json ledger is keyed on the
-    video's own name and size, so it survives the move to uploaded/, and
-    it is consulted here rather than by each caller. Both paths used to
-    be able to fire for the same file on different runs, which cut and
-    posted the same clips twice.
+    Cut once, and only once: the .clipped.json ledger is keyed on
+    CONTENT when `content_hash` is passed - both call sites in this file
+    have one, from the same hash_file() call the upload dedup already
+    made - and falls back to name+size otherwise. Content, not just
+    name+size, because a resumed recording that landed as
+    "...Stream_2.ts" next to the already-fully-clipped "...Stream.ts" -
+    byte for byte the same broadcast, confirmed by the upload dedup's own
+    hash match - has a different name and so a different name+size key,
+    and sailed straight past a name+size-only ledger: a second full
+    transcription, a second independent set of picks, and a real
+    duplicate batch of clips posted again under new titles.
 
     Clips are never clipped. A clip of a clip is not a thing.
     """
@@ -800,8 +807,9 @@ def cut_clips_from_stream(cfg, video_path: str, is_clip: bool,
 
     from utils.clip_watch import remember, was_clipped
 
-    # The record lives with the logs; the key is the video's own name and
-    # size, so a VOD that has moved to uploaded/ since is still known.
+    # The record lives with the logs; the key is content when a hash was
+    # passed in, name+size otherwise - either way it survives the move
+    # to uploaded/.
     archive = cfg.general.logs_folder
     source = video_path
     if not os.path.isfile(source):
@@ -809,7 +817,7 @@ def cut_clips_from_stream(cfg, video_path: str, is_clip: bool,
         if not moved:
             return 0
         source = moved[0]
-    if was_clipped(archive, source):
+    if was_clipped(archive, source, content_hash):
         return 0
 
     print(notice or (f"[Clips] Cutting clips from "
@@ -857,7 +865,7 @@ def cut_clips_from_stream(cfg, video_path: str, is_clip: bool,
         return 0
     print_run(run)
     delivered = _deliver_clips(run, cfg)
-    remember(archive, source, delivered)
+    remember(archive, source, delivered, content_hash=content_hash)
     if delivered:
         print(f"[Clips] {delivered} clip(s) moved into "
               f"{cfg.general.watch_folder} - they will be posted one at a "
@@ -865,16 +873,23 @@ def cut_clips_from_stream(cfg, video_path: str, is_clip: bool,
     return delivered
 
 
-def _clip_already_uploaded(cfg, video_path: str, is_clip: bool) -> int:
+def _clip_already_uploaded(cfg, video_path: str, is_clip: bool,
+                           content_hash: str = "") -> int:
     """The hash-ledger path: this exact file has been uploaded before.
 
     Same work as every other path, said differently, because "already
     uploaded but never clipped" is worth seeing in the log.
+
+    `content_hash` is the file_hash the caller already computed to reach
+    this branch at all (is_fully_uploaded() needed one) - passed through
+    so the clip ledger recognises this content even if the file on disk
+    has a different name than whatever it was clipped under before.
     """
     return cut_clips_from_stream(
         cfg, video_path, is_clip,
         notice=(f"[Clips] Already uploaded, but never clipped. Cutting "
-                f"clips from {os.path.basename(video_path)} now."))
+                f"clips from {os.path.basename(video_path)} now."),
+        content_hash=content_hash)
 
 
 def _autoclip_one(cfg) -> int:
@@ -1962,7 +1977,7 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
         # stream that had been through once was never looked at again -
         # and a 2.7 GB VOD sat in the watch folder being skipped every
         # single run while no clip was ever cut from it.
-        _clip_already_uploaded(cfg, video_path, is_clip)
+        _clip_already_uploaded(cfg, video_path, is_clip, content_hash=file_hash)
         # Then get it out of the watch folder. Leaving it meant every
         # run re-hashed 2.7 GB to reach the same answer, and the folder
         # never emptied. Retired the SAME way a freshly-uploaded video
@@ -2833,7 +2848,8 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
     # 'delete' is the moment the VOD stops existing.
     if not dry_run:
         clips_delivered = cut_clips_from_stream(
-            cfg, video_path, is_clip, title=stream_title) or 0
+            cfg, video_path, is_clip, title=stream_title,
+            content_hash=file_hash) or 0
 
     # Only now is the VOD finished with. It had two jobs - the upload and
     # the clips - and this used to run between them.

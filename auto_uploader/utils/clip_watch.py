@@ -68,7 +68,26 @@ ARCHIVE_NAME = ".clipped.json"
 MAX_ATTEMPTS = 3
 
 
-def _key(path: str) -> str:
+def _key(path: str, content_hash: str = "") -> str:
+    """The ledger key for this video - by CONTENT when a hash is known,
+    by filename+size otherwise.
+
+    A duplicate recording under a different name - a resumed download
+    that landed as "...Stream_2.ts" next to the original "...Stream.ts",
+    byte for byte the same broadcast - passed the upload dedup fine (that
+    already keys on content hash) and sailed straight past this one: two
+    different names, so two different name+size keys, so a file already
+    fully clipped and posted got the entire pipeline run on it again -
+    a costly transcription, a fresh set of picks, and a real duplicate
+    batch of clips posted a second time under new titles.
+
+    Callers that already have the file's hash (main.py computes one for
+    the upload dedup anyway) should pass it. Callers that do not - a
+    fresh drop into the auto-clip folder that nothing has hashed yet -
+    fall back to name+size, same as before.
+    """
+    if content_hash:
+        return f"hash:{content_hash}"
     try:
         return f"{os.path.basename(path).lower()}:{os.path.getsize(path)}"
     except OSError:
@@ -91,7 +110,7 @@ def load_archive(folder: str) -> dict:
 
 
 def remember(folder: str, path: str, clips: int, failed: bool = False,
-             attempts: int = 0) -> None:
+             attempts: int = 0, content_hash: str = "") -> None:
     """Record what happened to this VOD.
 
     A run that produced NO clips is still done: that VOD had nothing
@@ -101,9 +120,14 @@ def remember(folder: str, path: str, clips: int, failed: bool = False,
     A run that FAILED is a different thing, and `failed=True` keeps it
     eligible until MAX_ATTEMPTS. An HTTP 503 from the model is not a
     verdict about the video.
+
+    `content_hash`, when the caller has one, is what this is actually
+    keyed on - see _key(). Always the SAME hash a caller's later
+    was_clipped()/attempts_for() call will pass for the same content,
+    or the record is written under one key and read back under another.
     """
     data = load_archive(folder)
-    data[_key(path)] = {"name": os.path.basename(path),
+    data[_key(path, content_hash)] = {"name": os.path.basename(path),
                         "clips": int(clips), "when": time.time(),
                         "failed": bool(failed),
                         "attempts": int(attempts)}
@@ -117,18 +141,20 @@ def remember(folder: str, path: str, clips: int, failed: bool = False,
         pass
 
 
-def was_clipped(archive_folder: str, path: str) -> bool:
+def was_clipped(archive_folder: str, path: str, content_hash: str = "") -> bool:
     """Has this video already been through the clipper?
 
-    `archive_folder` is only where the record LIVES - the key is the
-    video's own name and size, so a VOD that has since moved from
-    watch_folder to uploaded/ is still recognised.
+    `archive_folder` is only where the record LIVES. The key is content
+    when `content_hash` is given - so a duplicate recording under a
+    different name is recognised as the same video - and falls back to
+    name+size otherwise, which still survives a move from watch_folder
+    to uploaded/.
     """
-    return is_done(load_archive(archive_folder).get(_key(path)))
+    return is_done(load_archive(archive_folder).get(_key(path, content_hash)))
 
 
-def attempts_for(folder: str, path: str) -> int:
-    entry = load_archive(folder).get(_key(path)) or {}
+def attempts_for(folder: str, path: str, content_hash: str = "") -> int:
+    entry = load_archive(folder).get(_key(path, content_hash)) or {}
     return int(entry.get("attempts", 0) or 0)
 
 

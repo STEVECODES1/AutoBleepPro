@@ -283,3 +283,75 @@ def test_a_differently_sized_video_of_the_same_name_is_not_clipped(library, tmp_
     logs.mkdir()
     remember(str(logs), _vod(library, "stream.ts", size=1024), 3)
     assert not was_clipped(str(logs), _vod(library, "stream.ts", size=9999))
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Content, not just name+size - a duplicate recording under a new name
+#
+# "'halfa mill' 9-21-26 Stackswopo Stream_2.ts" hash-matched a file the
+# upload dedup already knew as fully uploaded - the exact same broadcast,
+# saved under a second name after some kind of resume. The upload side
+# caught that fine (it keys on content hash). The clip ledger, keyed on
+# name+size alone, did not: a different name is a different key, so a
+# stream already fully clipped under its original name got the WHOLE
+# pipeline run again under the new one - a costly transcription, a
+# second independent set of picks, and a real duplicate batch of clips
+# posted a second time under new titles.
+# ═════════════════════════════════════════════════════════════════════════════
+
+def test_a_duplicate_recording_under_a_new_name_is_recognised_by_hash(
+        library, tmp_path):
+    """The exact bug: same content hash, two different filenames."""
+    from utils.clip_watch import was_clipped
+
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    original = _vod(library, "'halfa mill' Stream.ts", size=7_000_000)
+    remember(str(logs), original, 5, content_hash="abc123")
+
+    duplicate = _vod(library, "'halfa mill' Stream_2.ts", size=7_000_000)
+    assert was_clipped(str(logs), duplicate, content_hash="abc123"), \
+        "a hash match must be recognised even under a different filename"
+
+
+def test_without_a_hash_a_renamed_duplicate_is_still_missed(library, tmp_path):
+    """Documents the gap this closes, not a demand: a caller with no
+    hash to offer falls back to name+size, same as it always has, and a
+    renamed duplicate looks new to it."""
+    from utils.clip_watch import was_clipped
+
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    original = _vod(library, "Stream.ts", size=7_000_000)
+    remember(str(logs), original, 5)
+
+    duplicate = _vod(library, "Stream_2.ts", size=7_000_000)
+    assert not was_clipped(str(logs), duplicate)
+
+
+def test_a_hash_key_and_a_name_size_key_do_not_collide(library, tmp_path):
+    """The two schemes must not be able to mistake one video for
+    another just because a hash happens to be missing on one call."""
+    from utils.clip_watch import was_clipped
+
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    video = _vod(library, "stream.ts", size=1024)
+    remember(str(logs), video, 5, content_hash="realhash")
+
+    # Same file, but this caller has no hash to offer - must not read
+    # the hash-keyed record as if it were a name+size match.
+    assert not was_clipped(str(logs), video)
+
+
+def test_attempts_for_also_reads_by_hash(library, tmp_path):
+    from utils.clip_watch import attempts_for
+
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    video = _vod(library, "stream.ts", size=1024)
+    remember(str(logs), video, 0, failed=True, attempts=2,
+            content_hash="deadbeef")
+
+    renamed = _vod(library, "stream_renamed.ts", size=1024)
+    assert attempts_for(str(logs), renamed, content_hash="deadbeef") == 2

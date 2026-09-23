@@ -268,3 +268,82 @@ def test_the_transcript_is_made_when_the_censor_pass_never_ran(cfg, vod,
 
     main.cut_clips_from_stream(cfg, vod, is_clip=False, title="t")
     assert seen.get("transcribe_if_needed") is True
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# A renamed duplicate recording must not be re-clipped
+#
+# "'halfa mill' 9-21-26 Stackswopo Stream_2.ts" hash-matched a file the
+# upload dedup already knew as fully uploaded - the same broadcast, saved
+# under a second name. cut_clips_from_stream() now accepts the hash the
+# upload dedup already computed and threads it into the ledger, so a
+# renamed duplicate is recognised as the same video instead of getting
+# the whole pipeline - transcription, picks, posting - run on it again.
+# ═════════════════════════════════════════════════════════════════════════════
+
+def test_both_call_sites_pass_the_already_computed_hash():
+    """Read out of the source: file_hash is computed once, early, for
+    the upload dedup - both places that can reach cut_clips_from_stream
+    must reuse it rather than leave the ledger keyed on name+size."""
+    body = _source()
+
+    already_uploaded_call = body[body.index(
+        "_clip_already_uploaded(cfg, video_path, is_clip, "
+        "content_hash=file_hash)"):]
+    assert already_uploaded_call.startswith(
+        "_clip_already_uploaded(cfg, video_path, is_clip, "
+        "content_hash=file_hash)")
+
+    assert "content_hash=file_hash) or 0" in body, (
+        "the main cut_clips_from_stream() call must also pass the "
+        "already-computed file_hash")
+
+
+def test_a_stream_already_clipped_under_another_name_is_recognised(
+        cfg, vod, monkeypatch):
+    """The exact bug, end to end: a hash match must stop the pipeline
+    before it re-transcribes and re-picks a duplicate recording."""
+    import main
+    from utils.clip_watch import remember
+
+    remember(cfg.general.logs_folder, vod, 7, content_hash="samehash")
+
+    renamed = os.path.join(os.path.dirname(vod),
+                           "'halfa mill' Stream_2.ts")
+    with open(renamed, "wb") as handle:
+        handle.write(b"x" * 4096)
+
+    def explode(*args, **kwargs):
+        raise AssertionError(
+            "re-transcribed and re-picked a stream already clipped "
+            "under a different filename")
+
+    monkeypatch.setattr("utils.clip_runner.make_clips", explode)
+
+    assert main.cut_clips_from_stream(
+        cfg, renamed, is_clip=False, content_hash="samehash") == 0
+
+
+def test_a_different_hash_under_the_same_kind_of_name_is_still_cut(
+        cfg, vod, monkeypatch):
+    """Genuinely different content must not be blocked just because a
+    hash was offered - only a matching one skips the pipeline."""
+    import main
+
+    seen = {}
+
+    class _Run:
+        skipped_reason = ""
+        clips = []
+
+    def record(cfg_, source, title, **kwargs):
+        seen["called"] = True
+        return _Run()
+
+    monkeypatch.setattr("utils.clip_runner.make_clips", record)
+    monkeypatch.setattr("utils.clip_runner.print_run", lambda run: None)
+    monkeypatch.setattr(main, "_deliver_clips", lambda run, cfg: 0)
+
+    main.cut_clips_from_stream(cfg, vod, is_clip=False, title="t",
+                               content_hash="a-fresh-hash-nobody-has-seen")
+    assert seen.get("called") is True

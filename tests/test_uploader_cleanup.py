@@ -620,7 +620,7 @@ def test_clips_are_cut_before_the_source_is_retired():
     with open(main_py, encoding="utf-8") as f:
         body = f.read()
 
-    cut_at = body.rindex("cut_clips_from_stream(\n            cfg, video_path, is_clip, title=stream_title)")
+    cut_at = body.rindex("cut_clips_from_stream(\n            cfg, video_path, is_clip, title=stream_title,")
     retire_at = body.rindex("\n    retire_source()")
     assert cut_at < retire_at, \
         "the source is retired before the clips are cut from it"
