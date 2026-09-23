@@ -224,9 +224,20 @@ class FolderWatcher:
         self._observer.schedule(self._handler, folder, recursive=False)
         self._paused = threading.Event()
         self._worker = None
+        # Queued or actively inside on_ready right now - see is_active().
+        # A retry sweep calls consider() on the same path over and over;
+        # without this, a file whose upload is eight hours into a real
+        # attempt would be handed to _maybe_watch() again by the next
+        # sweep, pass the stability check instantly (it is not growing),
+        # and queue a second, redundant pass behind the one already
+        # running - piling up one more every sweep for as long as the
+        # real attempt takes.
+        self._active: set = set()
+        self._active_lock = threading.Lock()
 
     def consider(self, path: str) -> None:
-        """Offer a file that was ALREADY here when the watch started.
+        """Offer a file that was ALREADY here when the watch started, or
+        one a retry sweep wants looked at again.
 
         Through the same stability wait as a file that arrives, which is
         the whole point. The startup sweep used to call the processor
@@ -236,8 +247,21 @@ class FolderWatcher:
         nothing in the log said the file had been truncated, because from
         the uploader's side it had not been: that was genuinely all there
         was at the moment it looked.
+
+        Safe to call on the same path repeatedly, including while that
+        path is mid-upload: a path already queued or already inside
+        on_ready is skipped rather than queued a second time.
         """
+        if self.is_active(path):
+            return
         self._handler._maybe_watch(path)
+
+    def is_active(self, path: str) -> bool:
+        """True from the moment a path is queued until on_ready(path)
+        returns. False while it is still in the stability wait (that
+        phase has its own, separate guard in _NewVideoHandler)."""
+        with self._active_lock:
+            return path in self._active
 
     def _enqueue(self, path: str) -> None:
         depth = self._queue.qsize()
@@ -245,6 +269,8 @@ class FolderWatcher:
             print(f"[Queue] {os.path.basename(path)} is next - {depth} "
                   "already waiting. Videos are processed one at a time so "
                   "the GPU is not split between them.")
+        with self._active_lock:
+            self._active.add(path)
         self._queue.put(path)
 
     def _drain(self) -> None:
@@ -261,6 +287,8 @@ class FolderWatcher:
                 # keeps the queue moving.
                 print(f"[Queue] {os.path.basename(path)} failed: {exc}")
             finally:
+                with self._active_lock:
+                    self._active.discard(path)
                 self._queue.task_done()
 
     def start(self) -> None:

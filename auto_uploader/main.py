@@ -209,6 +209,27 @@ CLIP_DRAIN_SECONDS = 60
 # is measured in minutes.
 AUTOCLIP_SECONDS = 300
 
+# How often --watch re-offers everything still sitting in the watch
+# folder to the uploader.
+#
+# A file left there after process_file() returns means "not every
+# platform succeeded yet" - and until this existed, nothing ever asked
+# again. --watch only reacts to a file ARRIVING (the startup sweep is a
+# one-time exception for what was already there) and process_file()'s
+# own retries (60s/300s/900s backoff) are bounded and give up. A stream
+# that lost its YouTube upload to a dropped connection at 3 AM sat
+# there, correctly reported as unfinished, until someone came back,
+# read the log and ran --batch by hand - which is exactly the kind of
+# babysitting this project exists to not need.
+#
+# Slower than AUTOCLIP_SECONDS on purpose: re-offering a file re-hashes
+# it to check what is already done (a minute or more on a multi-GB
+# stream), and the answer is almost always "nothing new to do" - the
+# file has already succeeded and is gone, or is still mid-upload and
+# FolderWatcher.is_active() skips it for free. 30 minutes keeps that
+# cost rare while still being well inside a single overnight session.
+RETRY_SWEEP_SECONDS = 1800
+
 # Size observations for files still being copied in, kept between passes.
 _AUTOCLIP_SEEN: dict = {}
 
@@ -4540,6 +4561,7 @@ def main(argv=None) -> int:
             # expires long after the last file did.
             next_drain = 0.0
             next_autoclip = time.time() + 15
+            next_retry_sweep = time.time() + RETRY_SWEEP_SECONDS
             while True:
                 time.sleep(1)
                 if cfg.posting and time.time() >= next_drain:
@@ -4558,6 +4580,30 @@ def main(argv=None) -> int:
                         _autoclip_one(cfg)
                     except Exception as exc:
                         print(f"[Clips] WARNING: auto-clip failed: {exc}")
+
+                if not dry_run and time.time() >= next_retry_sweep:
+                    next_retry_sweep = time.time() + RETRY_SWEEP_SECONDS
+                    # Re-offer everything still sitting in the watch
+                    # folder - a network blip that outlived
+                    # process_file()'s own retries left it there with
+                    # nothing else ever going to ask again. Safe to call
+                    # on every pass: watcher.consider() is a no-op for
+                    # anything already queued or mid-upload (see
+                    # FolderWatcher.is_active), and for anything already
+                    # finished process_file()'s own dedup check answers
+                    # "already uploaded" in the time it takes to hash the
+                    # file, not a re-upload.
+                    try:
+                        for name in sorted(os.listdir(watch_folder)):
+                            path = os.path.join(watch_folder, name)
+                            if (os.path.isfile(path)
+                                    and os.path.splitext(name)[1].lower()
+                                    in cfg.general.supported_formats
+                                    and not is_intermediate_download(name)):
+                                watcher.consider(path)
+                    except OSError as exc:
+                        print(f"[Watch] WARNING: retry sweep could not read "
+                              f"{watch_folder}: {exc}")
         except KeyboardInterrupt:
             print("\nStopping...")
             watcher.stop()
