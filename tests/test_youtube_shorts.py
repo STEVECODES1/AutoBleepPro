@@ -199,6 +199,7 @@ def test_the_clip_config_carries_the_shorts_settings():
         youtube_shorts = {"token_path": "./youtube_shorts_token.json",
                           "channel": "@STACKSWOPO10K"}
         zernio = {}
+        posting = {}
         youtube = _YouTube()
         general = _General()
 
@@ -230,6 +231,7 @@ def test_the_clip_config_carries_the_shared_client_secrets():
         features = {}
         youtube_shorts = {}
         zernio = {}
+        posting = {}
         youtube = _YouTube()
         general = _General()
 

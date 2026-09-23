@@ -339,3 +339,55 @@ def test_other_platforms_are_unaffected_by_detail(monkeypatch, tmp_path):
     ok = clip_queue.publish("youtube_shorts", str(video), "caption", {},
                             dry_run=False, detail={})
     assert ok is True
+
+
+def test_clip_config_lets_upload_post_see_which_platforms_are_enabled(
+        tmp_path):
+    """The actual root cause behind "haven't seen a single X clip": every
+    caller that builds UploadPostPublisher's config from main._clip_config()
+    (real clips) or the announce_upload() literal (full-stream announces)
+    passed cfg.posting as a SEPARATE keyword, never inside the config dict
+    itself. UploadPostPublisher.post_clip() only ever looks at
+    config["posting"]["platforms"] to auto-detect targets - so that lookup
+    was always {}, platform_names({}) was always [], and it silently fell
+    back to its hardcoded default list (instagram, tiktok, youtube_shorts,
+    facebook), which has no "x" in it. Every clip sent through upload_post
+    skipped X no matter what posting.platforms.x.enabled said."""
+    import sys
+
+    sys.path.insert(0, _UPLOADER)
+    from main import _clip_config
+    from publishers.upload_post import UploadPostPublisher
+
+    class _General:
+        logs_folder = "logs"
+
+    class _YouTube:
+        client_secrets_path = ""
+        channel = ""
+
+    class _Cfg:
+        instagram = {}
+        facebook = {}
+        clips = {}
+        features = {}
+        youtube_shorts = {}
+        zernio = {}
+        posting = {"platforms": {
+            "x": {"enabled": True},
+            "instagram": {"enabled": True},
+        }}
+        youtube = _YouTube()
+        general = _General()
+
+    built = _clip_config(_Cfg())
+    assert "posting" in built, "upload_post cannot see any enabled flags"
+
+    video = tmp_path / "clip.mp4"
+    video.write_bytes(b"x")
+    publisher = UploadPostPublisher(built)
+    targets = publisher.post_clip(str(video), "caption", dry_run=True)
+
+    assert "x" in targets, (
+        "x is enabled in posting.platforms but was not detected as a "
+        f"target: {targets}")

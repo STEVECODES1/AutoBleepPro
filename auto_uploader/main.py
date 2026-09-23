@@ -1716,6 +1716,14 @@ def _clip_config(cfg) -> dict:
             "clips": cfg.clips, "features": cfg.features,
             "youtube_shorts": cfg.youtube_shorts,
             "zernio": cfg.zernio,
+            # upload_post reads its own target-platform list from
+            # config["posting"] (see UploadPostPublisher.post_clip). Without
+            # this key that lookup is always {}, so it never sees which
+            # platforms are actually enabled and always falls back to its
+            # hardcoded default list - which has no "x" in it. Every clip
+            # sent through upload_post skipped X for exactly this reason,
+            # regardless of what posting.platforms.x.enabled said.
+            "posting": cfg.posting,
             # The Shorts publisher falls back to the VOD channel's
             # client_secrets.json - same app, different channel.
             "youtube": {"client_secrets_path": cfg.youtube.client_secrets_path,
@@ -2799,7 +2807,12 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
                                     "instagram": ({**cfg.instagram,
                                                    "vertical": False}
                                                   if _vertical else cfg.instagram),
-                                    "clips": cfg.clips},
+                                    "clips": cfg.clips,
+                                    # Same reason as _clip_config(): upload_post
+                                    # reads its target list from config["posting"],
+                                    # not from the separate `posting=` kwarg above.
+                                    # Without this key it never sees X as enabled.
+                                    "posting": cfg.posting},
                             all_uploads=results,
                             # The Reel platforms were handled above, by
                             # the queue. Announcing to them here as well
