@@ -352,6 +352,20 @@ entirely on delivery, tone, or "you had to be there," and the words
 alone are ugly, leave it out. This is not the same test as "does it make
 sense" - a line can be perfectly clear and still wrong to post.
 
+DO NOT FILL THE BATCH FROM ONE SCENE. A long, static conversation - an
+interrogation, a courtroom bit, two people sitting at one table with the
+camera locked - produces dozens of candidates that are each individually
+defensible and, picked together, are one clip four times. A viewer
+scrolling past four Shorts that all show the same room, the same two
+people, the same unmoving camera does not see four different moments -
+they see the algorithm repeating itself, whether or not the words
+happened to be different each time. If several strong candidates come
+from the same continuous scene or conversation, pick the ONE or TWO
+that land hardest and let the rest go, even if they would have scored
+well on their own. Spread picks across DIFFERENT moments of the
+stream - different scenes, different setups, different parts of what
+happened - over cramming the batch with one bit's leftovers.
+
 For each one you pick, write a TITLE:
 - what actually happens in it, in the streamer's own words where possible
 - NEVER reproduce a slur or a masked word. Some transcripts arrive with

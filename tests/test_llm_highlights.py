@@ -711,3 +711,33 @@ def test_the_floor_matches_what_the_prompt_tells_the_model():
     from autoreel.llm_highlights import MIN_CLIP_SCORE, SYSTEM_PROMPT
 
     assert f"below {int(MIN_CLIP_SCORE)}" in SYSTEM_PROMPT
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Don't fill the batch from one scene
+#
+# A real batch: four Rumble Shorts, "7 hours ago" each, all from what is
+# visibly one static courtroom/interrogation scene - same room, same two
+# people, same locked camera - titled "Claims lawyer gets paid", "Claims
+# body cam missing", "Claims $20M...". Each candidate is individually
+# defensible (a different claim was made each time) and the SET of four
+# reads as one clip repeated, which is what "they all look alike" means.
+# Nothing in the funny/makes-sense checks catches this - each one, judged
+# alone, can pass both. This is a batch-level rule, not a per-candidate one.
+# ═════════════════════════════════════════════════════════════════════════════
+
+def test_the_model_is_told_not_to_fill_the_batch_from_one_scene():
+    from autoreel.llm_highlights import SYSTEM_PROMPT
+
+    assert "DO NOT FILL THE BATCH FROM ONE SCENE" in SYSTEM_PROMPT
+    assert "same room" in SYSTEM_PROMPT
+    assert "Spread picks across DIFFERENT moments" in SYSTEM_PROMPT
+
+
+def test_the_scene_rule_applies_even_when_each_candidate_scores_well():
+    """The failure mode is exactly this: none of the four clips was
+    individually weak."""
+    from autoreel.llm_highlights import SYSTEM_PROMPT
+
+    assert "even if they would have scored" in SYSTEM_PROMPT
+    assert "well on their own" in SYSTEM_PROMPT
