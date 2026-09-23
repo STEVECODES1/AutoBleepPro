@@ -793,12 +793,64 @@ class ModelBundle:
 
 
 def detect_device() -> tuple[str, str]:
+    """Pick the fastest available device: NVIDIA GPU (CUDA) if present,
+    else CPU.
+
+    Asks the library that is ACTUALLY going to run the model, not just
+    torch. This used to consult only torch - the same bug already found
+    and fixed once in this project, in autoreel/transcription.py's copy
+    of this exact function, and never ported to this one. On a machine
+    with a working GPU but no CUDA-enabled torch in THIS app's own
+    Python environment (a very ordinary way for a packaged/frozen build
+    to end up bundling the CPU-only torch wheel while a separate CLI
+    tool on the same machine has the CUDA one), this silently fell back
+    to CPU - a multi-hour video that transcribes in minutes on the GPU
+    took most of a day, with the only evidence a device label buried in
+    a routine status line nobody was watching for it.
+
+    faster-whisper - the backend this app prefers - runs on ctranslate2,
+    not torch, so torch reporting no CUDA does not mean the GPU cannot
+    be used. torch is still tried first, because it names the card and
+    that is worth printing when it works; ctranslate2 only counts them.
+    """
     if torch is not None:
         try:
             if torch.cuda.is_available():
                 return "cuda", torch.cuda.get_device_name(0)
         except Exception:  # pragma: no cover - driver-dependent
             pass
+
+    # pip puts the CUDA DLLs it installs (nvidia-cublas-cu12,
+    # nvidia-cudnn-cu12, ...) under site-packages, and the Windows loader
+    # searches PATH, not site-packages - so "pip says it's installed" and
+    # "ctranslate2 says the library is not found" are both true at once
+    # until something registers those directories. torch does this as a
+    # side effect of importing, which is why it is usually invisible; a
+    # process that imports ctranslate2 without ever importing a
+    # CUDA-enabled torch first (a real possibility in a packaged/frozen
+    # build that bundles CPU-only torch) never gets it done. Best-effort:
+    # this project's own autoreel.transcription already has the fix
+    # (found once, in that file, after it cost a four-hour VOD a day of
+    # CPU transcription) - reused here rather than re-solving it, and a
+    # failure to import it is not fatal, just a lost chance at the GPU.
+    try:
+        from autoreel.transcription import register_cuda_dlls
+
+        register_cuda_dlls()
+    except Exception:  # pragma: no cover - best-effort
+        pass
+
+    # The one that matters: ctranslate2 is what faster-whisper actually
+    # runs on, and it can see a GPU torch cannot.
+    try:
+        import ctranslate2
+
+        count = int(ctranslate2.get_cuda_device_count())
+        if count > 0:
+            return "cuda", f"{count} CUDA device(s) via ctranslate2"
+    except Exception:  # pragma: no cover - driver-dependent
+        pass
+
     return "cpu", f"{os.cpu_count() or 1} CPU cores"
 
 
@@ -814,6 +866,19 @@ def configure_threads() -> None:
 def load_model_speed(model_name: str, compute_pref: str) -> ModelBundle:
     """Load `model_name`, preferring faster-whisper > stable-ts > openai-whisper."""
     device, dev_label = detect_device()
+    if device == "cpu":
+        # Loud on purpose, not just folded into the routine "Loaded: ..."
+        # status line below - that line reads identically whether the
+        # model landed on a GPU in under a minute or is about to spend
+        # most of a day on CPU, and the difference is not something to
+        # notice by watching a percentage crawl for twenty minutes.
+        print(f"[AutoBleep] WARNING: no GPU detected - transcribing on "
+              f"CPU ({dev_label}). A multi-hour video will take hours, "
+              f"not minutes. If this machine has an NVIDIA GPU, check "
+              f"that CUDA-enabled torch/ctranslate2 are installed in "
+              f"THIS app's own Python environment - a frozen/packaged "
+              f"build can end up bundling the CPU-only wheel even when "
+              f"another tool on the same machine has the GPU one.")
 
     if SPEED_MODE and stable_whisper is not None:
         compute_type = compute_pref
