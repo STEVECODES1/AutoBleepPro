@@ -307,10 +307,18 @@ PLATFORM_KICK = "kick"
 def platform_of(url: str) -> str:
     """Which site this URL is on. Decides which flags are legal.
 
-    Not cosmetic: --live-from-start is a YouTube-only capability (it walks
-    back through the DASH manifest's sequence numbers). Neither Twitch nor
-    Kick has an equivalent, and passing it there produces a warning and no
-    benefit.
+    Not cosmetic: --live-from-start is YouTube and Twitch only, and the
+    two work differently under the hood. YouTube walks back through the
+    DASH manifest's own sequence numbers. Twitch has no equivalent
+    manifest history - instead, yt-dlp finds the VOD Twitch is already
+    recording of this same broadcast (most channels have this on by
+    default) and downloads THAT, seeked to its own start, in place of
+    the live edge. Confirmed by reading yt-dlp's twitch.py directly
+    (TwitchStreamIE._real_extract): with --live-from-start it looks up
+    the channel's in-progress VOD first and only falls back to the
+    ordinary live edge - with one warning, nothing broken - if no VOD
+    is found. Kick has neither mechanism, and passing the flag there
+    produces a warning and no benefit.
     """
     lowered = (url or "").lower()
     if "twitch.tv" in lowered:
@@ -1148,11 +1156,14 @@ class Recorder:
             "--newline",
             "-o", output_path,
         ]
-        if platform_of(self.url) == PLATFORM_YOUTUBE:
-            # YouTube only. It walks back through the DASH manifest's
-            # sequence numbers to pull what is still in the DVR buffer, so
-            # starting late does not automatically cost the beginning.
-            # Twitch has no equivalent and warns if it is passed.
+        if platform_of(self.url) in (PLATFORM_YOUTUBE, PLATFORM_TWITCH):
+            # YouTube walks back through the DASH manifest's sequence
+            # numbers. Twitch downloads the channel's own in-progress VOD
+            # instead of the live edge - see platform_of()'s docstring.
+            # Either way, starting the recorder late no longer
+            # automatically costs the beginning of the stream. Kick has
+            # neither mechanism and is deliberately left out here - see
+            # platform_of().
             args.append("--live-from-start")
         if wait:
             args += ["--wait-for-video", str(self.poll_seconds)]

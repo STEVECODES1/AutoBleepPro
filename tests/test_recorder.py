@@ -695,9 +695,14 @@ def test_youtube_gets_live_from_start(recorder):
     assert "--live-from-start" in recorder.download_args("/tmp/out.ts")
 
 
-def test_twitch_does_not_get_live_from_start(tmp_path):
-    """It is a YouTube capability - it walks back through the DASH
-    manifest's sequence numbers. Twitch warns and does nothing."""
+def test_twitch_also_gets_live_from_start(tmp_path):
+    """yt-dlp added Twitch support for this after the comment that used
+    to sit here was written - confirmed by reading twitch.py directly:
+    TwitchStreamIE._real_extract looks up the channel's own in-progress
+    VOD first when --live-from-start is set, and only falls back to the
+    live edge (one warning, nothing broken) if no VOD is found. Passing
+    the flag is a strict improvement: best case it recovers the start of
+    the stream, worst case it behaves exactly as it did before."""
     from record_stream import PLATFORM_TWITCH, platform_of
 
     assert platform_of("https://www.twitch.tv/stackswopo") == PLATFORM_TWITCH
@@ -705,7 +710,7 @@ def test_twitch_does_not_get_live_from_start(tmp_path):
                       staging=str(tmp_path / "s"),
                       watch_folder=str(tmp_path / "w"), name="Stackswopo")
     args = twitch.download_args("/tmp/out.ts")
-    assert "--live-from-start" not in args
+    assert "--live-from-start" in args
     # Everything that keeps a long recording alive still applies.
     assert args[args.index("--fragment-retries") + 1] == "infinite"
     assert "--hls-use-mpegts" in args
@@ -859,8 +864,10 @@ def test_the_clips_fetcher_leaves_live_recordings_alone(tmp_path, monkeypatch):
 
 
 def test_kick_is_recognised(tmp_path):
-    """Kick is HLS live with no live-from-start equivalent, same as
-    Twitch - sending YouTube's flag there only warns."""
+    """Kick is HLS live with no live-from-start equivalent - unlike
+    Twitch, which gained one; see test_kick_still_does_not_get_live_from_start
+    and test_twitch_also_gets_live_from_start. Sending the flag to Kick
+    only warns."""
     from record_stream import PLATFORM_KICK, platform_of
 
     assert platform_of("https://kick.com/stackswopo1k") == PLATFORM_KICK
