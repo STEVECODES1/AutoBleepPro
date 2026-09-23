@@ -29,13 +29,38 @@ def _post_discord(webhook_url: str, message: str) -> None:
 def _post_twitter(message: str) -> None:
     import tweepy  # optional dependency
 
+    from publishers.errors import NotConfigured
+
     client = tweepy.Client(
         consumer_key=os.environ["TWITTER_API_KEY"],
         consumer_secret=os.environ["TWITTER_API_SECRET"],
         access_token=os.environ["TWITTER_ACCESS_TOKEN"],
         access_token_secret=os.environ["TWITTER_ACCESS_SECRET"],
     )
-    client.create_tweet(text=message[:280])
+    try:
+        client.create_tweet(text=message[:280])
+    except tweepy.errors.HTTPException as exc:
+        # 402 Payment Required - X's free API tier stopped covering
+        # posting; this account needs a paid plan. Not one of tweepy's
+        # named exceptions (BadRequest/Unauthorized/Forbidden/...), so it
+        # falls through to the generic HTTPException - caught here
+        # specifically so it reads as a setup problem, not a failed post.
+        #
+        # Without this, every attempt was a genuine, counted failure:
+        # three of them and the circuit breaker opens on an account that
+        # was never going to work until the plan changes, for a call
+        # that will keep failing the exact same way every time it is
+        # retried. NotConfigured is not counted against the breaker -
+        # see announce_to_platforms's own handling of it.
+        status = getattr(getattr(exc, "response", None), "status_code", None)
+        if status == 402:
+            raise NotConfigured(
+                "X's free API tier is not covering posts any more (HTTP "
+                "402 Payment Required) - needs a paid X API plan, or "
+                "connect X on upload-post.com instead and post clips "
+                "through that (see UploadPostPublisher) rather than "
+                "this link-only path.") from exc
+        raise
 
 
 REDDIT_FIELDS = ("CLIENT_ID", "CLIENT_SECRET", "USERNAME", "PASSWORD")

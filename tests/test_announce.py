@@ -772,3 +772,128 @@ def test_a_real_post_failure_still_trips_the_breaker(monkeypatch, tmp_path):
     guard = PublishGuard(posting, posting["state_path"])
     assert guard.consecutive_failures("facebook") == 3
     assert not guard.check("facebook").allowed
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# X's free API tier ran out of credits - HTTP 402, not one of tweepy's
+# named exceptions
+#
+# Every attempt was a genuine, counted failure before this: three of them
+# and the circuit breaker opened on an account that was never going to
+# work until the plan changed, for a call that fails the exact same way
+# every single time it is retried. The account this shipped on had X
+# genuinely connected on upload-post.com - the video path was already
+# fixed - but this link-only announcement path has no equivalent there
+# (upload-post posts files, not bare text) and stays broken until the
+# API is paid for. The fix here is not making it work; it is making the
+# failure read as a setup problem instead of spending the breaker on it.
+# ═════════════════════════════════════════════════════════════════════════════
+
+class _FakeResponse:
+    def __init__(self, status_code, reason="Payment Required"):
+        self.status_code = status_code
+        self.reason = reason
+
+
+def _http_exception(tweepy_mod, status_code, reason="Payment Required"):
+    """A real tweepy.errors.HTTPException, built the way tweepy's own
+    request() does - response_json={} explicitly, so it does not try
+    response.json() on a fake response that has none."""
+    return tweepy_mod.errors.HTTPException(
+        _FakeResponse(status_code, reason), response_json={})
+
+
+def _make_402(monkeypatch):
+    import tweepy
+
+    from utils import social_promoter as sp
+
+    class FakeClient:
+        def __init__(self, **kwargs):
+            pass
+
+        def create_tweet(self, text):
+            raise _http_exception(tweepy, 402)
+
+    monkeypatch.setattr(tweepy, "Client", FakeClient)
+    for name in ("TWITTER_API_KEY", "TWITTER_API_SECRET",
+                "TWITTER_ACCESS_TOKEN", "TWITTER_ACCESS_SECRET"):
+        monkeypatch.setenv(name, "x")
+    return sp
+
+
+def test_a_402_from_x_is_reported_as_not_configured(monkeypatch):
+    pytest.importorskip("tweepy")
+    from publishers.errors import NotConfigured
+
+    sp = _make_402(monkeypatch)
+    with pytest.raises(NotConfigured):
+        sp._post_twitter("hello")
+
+
+def test_a_402_names_the_real_cause_and_the_working_alternative(monkeypatch):
+    pytest.importorskip("tweepy")
+    from publishers.errors import NotConfigured
+
+    sp = _make_402(monkeypatch)
+    with pytest.raises(NotConfigured) as excinfo:
+        sp._post_twitter("hello")
+    message = str(excinfo.value)
+    assert "402" in message
+    assert "upload-post.com" in message
+
+
+def test_some_other_x_error_is_not_swallowed_as_not_configured(monkeypatch):
+    """Only 402 gets this treatment - a real failure (say, a bad token)
+    must still read as one."""
+    pytest.importorskip("tweepy")
+    import tweepy
+
+    from publishers.errors import NotConfigured
+    from utils import social_promoter as sp
+
+    class FakeClient:
+        def __init__(self, **kwargs):
+            pass
+
+        def create_tweet(self, text):
+            raise tweepy.errors.Unauthorized(
+                _FakeResponse(401, "Unauthorized"), response_json={})
+
+    monkeypatch.setattr(tweepy, "Client", FakeClient)
+    for name in ("TWITTER_API_KEY", "TWITTER_API_SECRET",
+                "TWITTER_ACCESS_TOKEN", "TWITTER_ACCESS_SECRET"):
+        monkeypatch.setenv(name, "x")
+
+    with pytest.raises(tweepy.errors.Unauthorized):
+        sp._post_twitter("hello")
+    # And specifically not miscategorised as a payment problem.
+    try:
+        sp._post_twitter("hello")
+    except NotConfigured:
+        pytest.fail("a 401 must not be reported as the 402 payment issue")
+    except tweepy.errors.Unauthorized:
+        pass
+
+
+def test_the_402_does_not_trip_the_circuit_breaker(tmp_path, publishers,
+                                                    monkeypatch):
+    """End to end through announce_to_platforms: NotConfigured is already
+    handled specially there (skipped, not counted) - confirming the 402
+    actually reaches that handling rather than falling into the
+    generic except-and-fail branch."""
+    _make_402(monkeypatch)
+    posting = make_posting(tmp_path, x={"enabled": True, "daily_cap": 3,
+                                        "min_minutes_between": 0})
+
+    for _ in range(5):
+        result = announce_to_platforms(posting, "DAMN", UPLOADS)
+        assert "x" not in result
+
+    from publish_guard import PublishGuard
+
+    guard = PublishGuard(posting, posting.get("state_path"))
+    decision = guard.check("x")
+    assert decision, \
+        "five 402s opened the circuit breaker - they should have been " \
+        "skipped as a configuration problem instead"
