@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import os
 import sys
+import time
 
 import pytest
 
@@ -1352,6 +1353,99 @@ def test_a_runaway_log_has_a_ceiling():
     from record_stream import MAX_LOG_BYTES
 
     assert 1_000_000 <= MAX_LOG_BYTES <= 50_000_000
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# A watch that never saw the channel go live - nothing worth keeping,
+# and unlike KEEP_LOGS' count-based rule, aged out on its own clock so a
+# channel that streams most nights does not leave an idle night's log
+# sitting around for weeks waiting for 60 busier ones to pile up after it.
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _idle_log(path, hours_old):
+    path.write_text(
+        "[wait] Remaining time until next attempt: 00:01:00\n"
+        "[youtube:tab] @stackswopo_: The channel is not currently live\n")
+    stamp = time.time() - hours_old * 3600
+    os.utime(path, (stamp, stamp))
+
+
+def _real_recording_log(path, hours_old):
+    path.write_text(
+        "[download] Destination: Stackswopo 2026-09-24.part01.ts\n"
+        "[download]  12.3% of ~4.20GiB at 3.10MiB/s\n")
+    stamp = time.time() - hours_old * 3600
+    os.utime(path, (stamp, stamp))
+
+
+def test_an_old_idle_only_log_is_deleted(tmp_path):
+    from record_stream import IDLE_LOG_MAX_AGE_S, prune_idle_logs
+
+    log = tmp_path / "Stackswopo twitch live 2026-09-23 05_34.log"
+    _idle_log(log, hours_old=IDLE_LOG_MAX_AGE_S / 3600 + 1)
+
+    removed = prune_idle_logs(str(tmp_path))
+
+    assert removed == 1
+    assert not log.exists()
+
+
+def test_a_recent_idle_log_is_left_alone(tmp_path):
+    """Under ten hours, a wait could still be ongoing."""
+    from record_stream import prune_idle_logs
+
+    log = tmp_path / "Stackswopo twitch live 2026-09-24 05_34.log"
+    _idle_log(log, hours_old=1)
+
+    assert prune_idle_logs(str(tmp_path)) == 0
+    assert log.exists()
+
+
+def test_an_old_log_with_a_real_recording_in_it_is_never_deleted(tmp_path):
+    """The one thing that must never happen: a real recording's log,
+    possibly still being read to answer "why did this stop", swept just
+    for being old. A real stream can run well past ten hours on its own."""
+    from record_stream import IDLE_LOG_MAX_AGE_S, prune_idle_logs
+
+    log = tmp_path / "Stackswopo youtube live 2026-09-23 05_34.log"
+    _real_recording_log(log, hours_old=IDLE_LOG_MAX_AGE_S / 3600 + 5)
+
+    assert prune_idle_logs(str(tmp_path)) == 0
+    assert log.exists()
+
+
+def test_a_mix_only_removes_the_idle_ones(tmp_path):
+    from record_stream import IDLE_LOG_MAX_AGE_S, prune_idle_logs
+
+    old_hours = IDLE_LOG_MAX_AGE_S / 3600 + 2
+    idle = tmp_path / "Stackswopo twitch live 2026-09-23 05_34.log"
+    real = tmp_path / "Stackswopo youtube live 2026-09-23 05_34.log"
+    _idle_log(idle, hours_old=old_hours)
+    _real_recording_log(real, hours_old=old_hours)
+
+    removed = prune_idle_logs(str(tmp_path))
+
+    assert removed == 1
+    assert not idle.exists()
+    assert real.exists()
+
+
+def test_pruning_idle_logs_leaves_videos_alone(tmp_path):
+    from record_stream import IDLE_LOG_MAX_AGE_S, prune_idle_logs
+
+    (tmp_path / "stream.ts").write_text("video")
+    old = time.time() - (IDLE_LOG_MAX_AGE_S + 3600)
+    os.utime(str(tmp_path / "stream.ts"), (old, old))
+
+    prune_idle_logs(str(tmp_path))
+
+    assert (tmp_path / "stream.ts").exists()
+
+
+def test_a_missing_folder_is_not_a_crash_for_idle_prune():
+    from record_stream import prune_idle_logs
+
+    assert prune_idle_logs("/nonexistent/path") == 0
 
 
 def test_the_title_is_written_beside_the_recording(tmp_path):

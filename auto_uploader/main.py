@@ -2406,6 +2406,68 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
 
         return vertical_path(_censored["path"])
 
+    # A generated thumbnail, shared by whichever platform asks for one
+    # first - see thumbnail_path_for(). Locked rather than lazily
+    # checked-then-set like _censored/_vertical above: unlike censoring,
+    # BOTH do_youtube() and do_rumble() can genuinely want this for the
+    # SAME video at once (Rumble stays uncensored by design, so it never
+    # goes near _censored's own check at all) - and two threads asking
+    # Gemini vision to pick a frame for the same video at once is both a
+    # wasted API call and exactly the kind of "two things happening at
+    # once, messed up" this project has already been burned by elsewhere.
+    _thumbnail: dict = {}
+    _thumbnail_lock = threading.Lock()
+
+    def thumbnail_path_for(platform_configured: str) -> str:
+        """A generated thumbnail, or `platform_configured` if the
+        platform already has one set, or "" if neither is available.
+
+        autoreel.thumbnail.make() already exists and already does this
+        well - it is what clips.pick_thumbnails turns on for clips
+        (samples several frames, asks the same Gemini vision pass this
+        project already tuned which one would make someone stop
+        scrolling, falls back to a sane fixed frame if no model answers).
+        It was never used for the FULL STREAM upload, which is the actual
+        gap - not a missing capability, a missing call site.
+
+        `platform_configured` only wins when the file it names actually
+        EXISTS. config.json's own shipped default points every platform
+        at ./thumbnails/default.jpg, and nothing has ever put a file
+        there - the folder ships with nothing but a .gitkeep. A bare
+        non-empty-string check would have read that stale placeholder as
+        "already handled" forever, permanently skipping generation on
+        the exact config nearly everyone actually runs. The publishers
+        themselves already check existence the same way before using a
+        thumbnail_path (see youtube_uploader.py, rumble_uploader.py) -
+        this matches that, not a new rule.
+        """
+        if platform_configured and os.path.exists(platform_configured):
+            return platform_configured
+        if not cfg.general.auto_thumbnail:
+            return ""
+
+        with _thumbnail_lock:
+            if "path" in _thumbnail:
+                return _thumbnail["path"]
+            from autoreel import thumbnail as autoreel_thumbnail
+
+            duration = media_duration(video_path) or 0.0
+            basename = os.path.splitext(os.path.basename(video_path))[0]
+            os.makedirs(cfg.general.censored_folder, exist_ok=True)
+            out_path = os.path.join(
+                cfg.general.censored_folder, f"{basename}_thumbnail.jpg")
+            try:
+                made = autoreel_thumbnail.make(
+                    video_path, duration, out_path=out_path)
+            except Exception as exc:
+                print(f"[Thumbnail] Could not generate one: {exc}")
+                made = ""
+            if made:
+                print(f"[Thumbnail] Picked a frame -> "
+                      f"{os.path.basename(made)}")
+            _thumbnail["path"] = made
+            return made
+
     run_started_at = time.time()
     # Counted here so the receipt at the very end can report it - the
     # clip block's own `delivered` does not outlive its try.
@@ -2520,7 +2582,7 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
                     chunk_mb=float(getattr(cfg.youtube, 'upload_chunk_mb', 8) or 8),
                     privacy=cfg.youtube.privacy, category_id=cfg.youtube.category_id,
                     made_for_kids=cfg.youtube.made_for_kids,
-                    thumbnail_path=cfg.youtube.thumbnail_path or None,
+                    thumbnail_path=thumbnail_path_for(cfg.youtube.thumbnail_path) or None,
                     playlist_id=cfg.youtube.playlist_id or None,
                     progress_callback=progress_reporter("YouTube", parallel),
                 ),
@@ -2580,7 +2642,8 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
             url = retry_with_backoff(
                 lambda: rb.upload(
                     rb_source, rb_title, rb_description, cfg.rumble.tags,
-                    privacy=cfg.rumble.privacy, thumbnail_path=cfg.rumble.thumbnail_path or None,
+                    privacy=cfg.rumble.privacy,
+                    thumbnail_path=thumbnail_path_for(cfg.rumble.thumbnail_path) or None,
                     progress_callback=rb_progress,
                 ),
                 max_retries=cfg.general.max_retries, delays=cfg.general.retry_delays, on_retry=rb_on_retry,

@@ -618,6 +618,71 @@ def prune_logs(folder: str, keep: int = KEEP_LOGS) -> int:
             pass
     return removed
 
+
+# A watch that never saw the channel go live leaves a log that is pure
+# "[wait] Remaining time until next attempt" - nothing a recording could
+# ever be mid-way through, and nothing worth reading once it is old.
+# Aged out on its own clock rather than folded into KEEP_LOGS' count: a
+# channel that streams most nights only reaches that count slowly, so an
+# idle night's log could otherwise sit around for weeks between the
+# genuinely busy ones ahead of it in the count.
+IDLE_LOG_MAX_AGE_S = 10 * 3600
+
+
+def _log_saw_a_real_recording(path: str) -> bool:
+    """True if this log has even one line showing bytes actually moved.
+
+    The one thing that must never happen: deleting the log for a
+    recording that is still running, or one recent enough somebody might
+    still want to read - "it just stopped" is unanswerable without it.
+    Checked by CONTENT, not just age, because a real recording can run
+    well past ten hours on its own and its log must never be swept just
+    for being that old.
+    """
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as handle:
+            return any(is_recording_line(line) for line in handle)
+    except OSError:
+        return False
+
+
+def prune_idle_logs(folder: str, max_age_s: float = IDLE_LOG_MAX_AGE_S,
+                    now: Optional[float] = None) -> int:
+    """Delete old logs from a watch that never saw the channel go live.
+
+    Never touches a log that shows a real recording happened - see
+    _log_saw_a_real_recording. Those are left to prune_logs' count-based
+    KEEP_LOGS instead, which is the more conservative rule and the
+    correct one for something that might still be worth reading.
+    """
+    now = time.time() if now is None else now
+    try:
+        names = os.listdir(folder)
+    except OSError:
+        return 0
+
+    removed = 0
+    for name in names:
+        if not name.endswith(".log"):
+            continue
+        path = os.path.join(folder, name)
+        try:
+            age = now - os.path.getmtime(path)
+        except OSError:
+            continue
+        if age < max_age_s:
+            continue
+        if _log_saw_a_real_recording(path):
+            continue
+        try:
+            os.remove(path)
+            removed += 1
+        except OSError:
+            # Another recorder got there first, or Windows has it open.
+            pass
+    return removed
+
+
 _REFUSAL = re.compile(r"HTTP Error (?:403|401|410)\b.*Retrying fragment",
                       re.IGNORECASE)
 
@@ -1379,6 +1444,18 @@ class Recorder:
                                     f"Full detail: {log_path or 'the log'}",
                                     every_seconds=WAIT_HEARTBEAT_S):
                                 pass
+                            # Swept on the same heartbeat as the "still
+                            # watching" line, not just once at process
+                            # start - a wait that runs all night through
+                            # one long _run() call would otherwise never
+                            # get a second chance to prune anything.
+                            if log_path:
+                                gone = prune_idle_logs(
+                                    os.path.dirname(os.path.abspath(log_path)))
+                                if gone:
+                                    self.say(f"Cleared {gone} old idle-watch "
+                                            f"log(s) - nothing ever went "
+                                            f"live in them.")
                             last_heartbeat = now
                         continue
 

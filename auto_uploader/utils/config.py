@@ -144,6 +144,15 @@ class GeneralConfig:
     # a per-platform version of this setting for a while; this is the
     # same decision for the stream, and it defaults the same way.
     censor_categories: str = "slurs"
+    # Picks a real frame near the transcript's highest-energy moment
+    # instead of leaving the thumbnail to whatever the platform's own
+    # algorithm lands on - see utils/thumbnail.py. Only ever runs when a
+    # transcript is already on disk for free (the censor pass already
+    # wrote one); never triggers a transcription pass of its own, so
+    # turning this off costs nothing but a slightly more generic
+    # thumbnail. A platform-specific thumbnail_path, when one is set,
+    # always wins over this either way.
+    auto_thumbnail: bool = True
     # Optional; defaulted so older config.json files keep loading.
     filename_channel_prefixes: tuple = ()
     cleanup: dict = None
@@ -430,6 +439,7 @@ def load_config(config_path: str = "config.json", env_path: str = ".env") -> App
         censor_padding_ms=int(gen.get("censor_padding_ms", 250)),
         censor_mute_whole_segment=bool(gen.get("censor_mute_whole_segment", False)),
         censor_categories=str(gen.get("censor_categories", "slurs")),
+        auto_thumbnail=bool(gen.get("auto_thumbnail", True)),
     )
 
     # The posting block's paths are resolved against the config file, not
