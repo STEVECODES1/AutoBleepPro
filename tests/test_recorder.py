@@ -418,6 +418,69 @@ def test_a_clean_run_does_not_print_a_scary_tail(recorder, tmp_path, capsys):
 
 
 # ═════════════════════════════════════════════════════════════════════════════
+# "like on the terminal when the stream live i see the time" - the wait
+# already prints a "[HH:MM:SS] Still watching" line every half hour; once
+# recording actually starts, everything printed was yt-dlp's own raw
+# progress line with no clock time in it anywhere until this.
+# ═════════════════════════════════════════════════════════════════════════════
+
+def test_a_clock_heartbeat_prints_during_a_long_recording(
+        recorder, tmp_path, monkeypatch, capsys):
+    import record_stream
+
+    recorder.title = "Already have a title"  # skip the title-retry path -
+    # it would otherwise call stream_title(), a real subprocess, on every
+    # line once waiting is False.
+
+    script = (
+        "print('[download] Destination: show.part01.ts', flush=True)\n"
+        "for i in range(4):\n"
+        "    print(f'[download] {i*10}.0% of ~4.20GiB at 3.10MiB/s', "
+        "flush=True)\n"
+    )
+
+    # Jumps forward by a full heartbeat interval on every time.time() call,
+    # so the real half-hour wait does not have to actually pass.
+    fake_now = [1_000_000.0]
+
+    def fake_time():
+        fake_now[0] += record_stream.WAIT_HEARTBEAT_S
+        return fake_now[0]
+
+    monkeypatch.setattr(record_stream.time, "time", fake_time)
+
+    recorder._run([sys.executable, "-c", script],
+                  str(tmp_path / "rec" / "run.log"))
+
+    out = capsys.readouterr().out
+    assert "Recording..." in out
+    assert "h so far" in out
+
+
+def test_no_heartbeat_before_recording_actually_starts(
+        recorder, tmp_path, monkeypatch, capsys):
+    """Only once bytes are moving - the wait's own heartbeat already
+    covers "still watching, nothing live yet"."""
+    import record_stream
+
+    recorder.title = "Already have a title"
+    script = "print('[wait] Remaining time until next attempt: 00:01:00')\n"
+
+    fake_now = [1_000_000.0]
+
+    def fake_time():
+        fake_now[0] += record_stream.WAIT_HEARTBEAT_S
+        return fake_now[0]
+
+    monkeypatch.setattr(record_stream.time, "time", fake_time)
+
+    recorder._run([sys.executable, "-c", script],
+                  str(tmp_path / "rec" / "run.log"))
+
+    assert "Recording..." not in capsys.readouterr().out
+
+
+# ═════════════════════════════════════════════════════════════════════════════
 # Did we actually get the whole stream?
 # ═════════════════════════════════════════════════════════════════════════════
 

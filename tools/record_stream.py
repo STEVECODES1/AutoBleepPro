@@ -1306,6 +1306,13 @@ class Recorder:
             # machine would report it as a stream starting.
             waiting = quiet_wait
             waiting_since = last_heartbeat = 0.0
+            # Once actual recording starts, everything printed is yt-dlp's
+            # own raw progress line ("[download] 45.2% of ~3.2GiB at
+            # 5.1MiB/s") - real information, but with no clock time in it
+            # anywhere. The wait above prints "[HH:MM:SS] Still watching"
+            # every half hour; recording itself went quiet on that the
+            # moment it started. This is the same heartbeat, continued.
+            recording_heartbeat = 0.0
             # Said once per run, not once per poll - this loop retries
             # every 60 seconds and would otherwise repeat the advice all
             # night.
@@ -1458,6 +1465,14 @@ class Recorder:
                                             f"live in them.")
                             last_heartbeat = now
                         continue
+                elif self.recording_started_at:
+                    now = time.time()
+                    if not recording_heartbeat:
+                        recording_heartbeat = now
+                    elif now - recording_heartbeat >= WAIT_HEARTBEAT_S:
+                        elapsed = (now - self.recording_started_at) / 3600
+                        self.say(f"Recording... ({elapsed:.1f}h so far).")
+                        recording_heartbeat = now
 
                 print(line, flush=True)
             return process.wait()
