@@ -63,8 +63,8 @@ def test_all_four_note_names_are_found():
     found = cleanup.sidecar_paths("/w/Clip 01.mp4")
 
     assert sorted(os.path.basename(p) for p in found) == [
-        "Clip 01.txt", "Clip 01_caption.txt", "Clip 01_line.txt",
-        "Clip 01_subject.txt"]
+        "Clip 01.txt", "Clip 01_caption.txt", "Clip 01_captions.json",
+        "Clip 01_line.txt", "Clip 01_subject.txt"]
 
 
 def test_a_vertical_copy_also_claims_the_clips_own_notes():
@@ -97,6 +97,33 @@ def test_a_note_whose_video_is_gone_is_swept(tmp_path):
 
     assert cleanup.prune_orphan_sidecars(cfg) == 1
     assert not note.exists()
+
+
+def test_a_captions_json_whose_video_is_gone_is_swept(tmp_path):
+    """The exact clutter reported: a clip long posted and gone still left
+    its per-platform caption cache sitting in the watch folder forever,
+    because nothing that swept sidecars had ever heard of _captions.json
+    - it only knew about the .txt notes."""
+    cfg = _cfg(tmp_path)
+    note = tmp_path / "watch" / "'Halfa Mill' Stackswopo Stream - Clip 01_captions.json"
+    note.write_text('{"instagram": "caption"}', encoding="utf-8")
+    _old(note)
+
+    assert cleanup.prune_orphan_sidecars(cfg) == 1
+    assert not note.exists()
+
+
+def test_a_captions_json_whose_video_is_still_there_is_left(tmp_path):
+    """Not posted everywhere yet - still read once per remaining
+    platform."""
+    cfg = _cfg(tmp_path)
+    (tmp_path / "watch" / "Clip 01.mp4").write_bytes(b"x")
+    note = tmp_path / "watch" / "Clip 01_captions.json"
+    note.write_text('{"instagram": "caption"}', encoding="utf-8")
+    _old(note)
+
+    assert cleanup.prune_orphan_sidecars(cfg) == 0
+    assert note.exists()
 
 
 def test_a_note_whose_video_is_still_there_is_left(tmp_path):

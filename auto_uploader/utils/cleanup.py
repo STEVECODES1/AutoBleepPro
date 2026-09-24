@@ -237,8 +237,9 @@ def _page_dumps_since(cfg, since_ts: Optional[float]) -> list:
 # ── The notes beside a video ─────────────────────────────────────────────
 #
 # Every clip carries its caption, its spoken line and its tags in small
-# .txt files named after it. They are read at POST time, once per
-# platform, so they have to outlive the upload to the first one.
+# .txt files named after it, plus a per-platform caption cache written as
+# JSON by autoreel.llm_captions. All of them are read at POST time, once
+# per platform, so they have to outlive the upload to the first one.
 #
 # Nothing ever deleted them. The video went to uploaded/ or was removed,
 # and the notes stayed in the watch folder for good:
@@ -254,6 +255,15 @@ def _page_dumps_since(cfg, since_ts: Optional[float]) -> list:
 #    then a post could still be waiting to use it.
 
 SIDECAR_SUFFIXES = ("_subject.txt", "_caption.txt", "_line.txt", ".txt")
+
+# The model-written caption cache (autoreel.llm_captions._sidecar) is the
+# same shape of note - read once per platform, so it has to outlive the
+# first post - but is JSON, not a .txt, and was never added here. It
+# piled up in the watch folder exactly the way the .txt notes above were
+# fixed to stop doing: a clip fully posted and long gone still left its
+# "<clip name>_captions.json" behind forever, one per clip, because
+# nothing that swept sidecars had ever heard of this suffix.
+JSON_SIDECAR_SUFFIXES = ("_captions.json",)
 
 # Past this, the queue has abandoned any job that could still want one -
 # the same reasoning as VERTICAL_MIN_AGE_S, and the same number.
@@ -279,15 +289,15 @@ def sidecar_paths(video_path: str) -> list:
         re.sub(r"^_?vertical[_\s]+", "", os.path.basename(stem), flags=re.I))
     stems.add(plain)
     return [base + suffix for base in sorted(stems)
-            for suffix in SIDECAR_SUFFIXES]
+            for suffix in SIDECAR_SUFFIXES + JSON_SIDECAR_SUFFIXES]
 
 
 def _sidecar_stem(name: str) -> str:
     """The video basename a note belongs to, or "" if it is not a note."""
     lowered = name.lower()
-    if not lowered.endswith(".txt"):
+    if not (lowered.endswith(".txt") or lowered.endswith(".json")):
         return ""
-    for suffix in SIDECAR_SUFFIXES:
+    for suffix in SIDECAR_SUFFIXES + JSON_SIDECAR_SUFFIXES:
         if lowered.endswith(suffix):
             base = name[:len(name) - len(suffix)]
             break
@@ -336,7 +346,9 @@ def prune_orphan_sidecars(cfg, min_age_s: float = ORPHAN_SIDECAR_MIN_AGE_S) -> i
                 stem = re.sub(r"^_?vertical[_\s]+", "",
                               os.path.splitext(name)[0], flags=re.I)
                 videos.add(stem.lower())
-            elif extension == ".txt":
+            elif extension == ".txt" or (
+                    extension == ".json"
+                    and name.lower().endswith(JSON_SIDECAR_SUFFIXES)):
                 notes.append((folder, name))
 
     now = time.time()
