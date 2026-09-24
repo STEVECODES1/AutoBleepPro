@@ -70,6 +70,12 @@ SAFE_CHARS = " -_.,'!()[]"
 # overnight, short enough to prove the window is still alive.
 WAIT_HEARTBEAT_S = 1800
 
+# While recording, yt-dlp runs with --no-progress and prints nothing at all
+# between "Destination:" and the end of the stream. The clock and the size
+# on disk come from a timer instead - the only sign in the window that
+# bytes are still arriving.
+RECORDING_HEARTBEAT_S = 300
+
 # Lines that are true of the RUN, not of one channel. Every watcher runs
 # on its own thread and would otherwise print them all at once.
 _SAID_FOR_EVERYONE: set = set()
@@ -745,6 +751,26 @@ def _missed_stream(tail) -> str:
     return ""
 
 
+def bytes_saved(output_path: str) -> int:
+    """Everything on disk for this recording so far. yt-dlp writes the
+    video and audio tracks to their own "<name>.f299.mp4.part" files,
+    so every file that starts with the output name counts."""
+    folder = os.path.dirname(os.path.abspath(output_path))
+    stem = os.path.basename(output_path)
+    try:
+        names = os.listdir(folder)
+    except OSError:
+        return 0
+    total = 0
+    for name in names:
+        if name.startswith(stem):
+            try:
+                total += os.path.getsize(os.path.join(folder, name))
+            except OSError:
+                pass
+    return total
+
+
 def is_recording_line(line: str) -> bool:
     """True once bytes are actually being fetched."""
     if any(marker in line for marker in _RECORDING_MARKERS):
@@ -1265,6 +1291,28 @@ class Recorder:
         args.append(self.url)
         return args
 
+    def _recording_clock(self, stop: threading.Event, output_path: str) -> None:
+        """Every RECORDING_HEARTBEAT_S of recording: the time, and how much
+        is saved. Counted from recording_started_at, so a long wait before
+        the stream starts does not count as recording time."""
+        began = time.time()
+        mark = RECORDING_HEARTBEAT_S
+        while not stop.wait(min(RECORDING_HEARTBEAT_S, 5.0)):
+            started = self.recording_started_at
+            # A start left over from an earlier run is not this one's.
+            if not started or started < began:
+                continue
+            elapsed = time.time() - started
+            if elapsed < mark:
+                continue
+            mark = (elapsed // RECORDING_HEARTBEAT_S + 1) * RECORDING_HEARTBEAT_S
+            minutes = int(elapsed // 60)
+            saved = bytes_saved(output_path) if output_path else 0
+            size = (f"{saved / 1e9:.2f} GB" if saved >= 1e9
+                    else f"{saved / 1e6:.0f} MB")
+            self.say(f"Still recording: {minutes // 60}:{minutes % 60:02d} in"
+                     + (f", {size} saved." if saved else "."))
+
     def _run(self, args: list, log_path: str = "",
              quiet_wait: bool = True) -> int:
         """Run yt-dlp, echoing its output and keeping a copy on disk.
@@ -1284,6 +1332,8 @@ class Recorder:
 
         tail: list = []
         log = None
+        clock_stop = threading.Event()
+        clock = None
         try:
             if log_path:
                 folder = os.path.dirname(os.path.abspath(log_path))
@@ -1306,13 +1356,11 @@ class Recorder:
             # machine would report it as a stream starting.
             waiting = quiet_wait
             waiting_since = last_heartbeat = 0.0
-            # Once actual recording starts, everything printed is yt-dlp's
-            # own raw progress line ("[download] 45.2% of ~3.2GiB at
-            # 5.1MiB/s") - real information, but with no clock time in it
-            # anywhere. The wait above prints "[HH:MM:SS] Still watching"
-            # every half hour; recording itself went quiet on that the
-            # moment it started. This is the same heartbeat, continued.
-            recording_heartbeat = 0.0
+            output_path = args[args.index("-o") + 1] if "-o" in args else ""
+            clock = threading.Thread(
+                target=self._recording_clock, args=(clock_stop, output_path),
+                daemon=True)
+            clock.start()
             # Said once per run, not once per poll - this loop retries
             # every 60 seconds and would otherwise repeat the advice all
             # night.
@@ -1465,14 +1513,6 @@ class Recorder:
                                             f"live in them.")
                             last_heartbeat = now
                         continue
-                elif self.recording_started_at:
-                    now = time.time()
-                    if not recording_heartbeat:
-                        recording_heartbeat = now
-                    elif now - recording_heartbeat >= WAIT_HEARTBEAT_S:
-                        elapsed = (now - self.recording_started_at) / 3600
-                        self.say(f"Recording... ({elapsed:.1f}h so far).")
-                        recording_heartbeat = now
 
                 print(line, flush=True)
             return process.wait()
@@ -1481,6 +1521,9 @@ class Recorder:
             self.say("Stopped by Ctrl+C.")
             return 130
         finally:
+            clock_stop.set()
+            if clock:
+                clock.join(timeout=10)
             if log:
                 log.close()
             # A stream that was FOUND and then produced nothing is not

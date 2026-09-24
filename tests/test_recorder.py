@@ -418,66 +418,97 @@ def test_a_clean_run_does_not_print_a_scary_tail(recorder, tmp_path, capsys):
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# "like on the terminal when the stream live i see the time" - the wait
-# already prints a "[HH:MM:SS] Still watching" line every half hour; once
-# recording actually starts, everything printed was yt-dlp's own raw
-# progress line with no clock time in it anywhere until this.
+# "like on the terminal when the stream live i see the time". The real
+# recording runs yt-dlp with --no-progress: after "Destination:" it prints
+# NOTHING until the stream ends. A clock driven by yt-dlp's output never
+# ticked - the first live run sat on two Destination lines and a cursor.
+# So these children go silent exactly the way the real one does.
 # ═════════════════════════════════════════════════════════════════════════════
 
-def test_a_clock_heartbeat_prints_during_a_long_recording(
+def _silent_recording(seconds, part=""):
+    """A child that starts a recording and then prints nothing, optionally
+    writing a growing .part file the way yt-dlp does."""
+    lines = ["import sys, time",
+             "print('[download] Destination: show.part01.ts.f299.mp4', "
+             "flush=True)"]
+    if part:
+        lines.append(f"open({part!r}, 'wb').write(b'x' * 5_000_000)")
+    lines.append(f"time.sleep({seconds})")
+    return "\n".join(lines)
+
+
+def test_the_clock_ticks_while_yt_dlp_is_silent(
         recorder, tmp_path, monkeypatch, capsys):
     import record_stream
 
-    recorder.title = "Already have a title"  # skip the title-retry path -
-    # it would otherwise call stream_title(), a real subprocess, on every
-    # line once waiting is False.
+    monkeypatch.setattr(record_stream, "RECORDING_HEARTBEAT_S", 0.2)
+    recorder.title = "Already have a title"   # no real stream_title() call
 
-    script = (
-        "print('[download] Destination: show.part01.ts', flush=True)\n"
-        "for i in range(4):\n"
-        "    print(f'[download] {i*10}.0% of ~4.20GiB at 3.10MiB/s', "
-        "flush=True)\n"
-    )
-
-    # Jumps forward by a full heartbeat interval on every time.time() call,
-    # so the real half-hour wait does not have to actually pass.
-    fake_now = [1_000_000.0]
-
-    def fake_time():
-        fake_now[0] += record_stream.WAIT_HEARTBEAT_S
-        return fake_now[0]
-
-    monkeypatch.setattr(record_stream.time, "time", fake_time)
-
-    recorder._run([sys.executable, "-c", script],
+    recorder._run([sys.executable, "-c", _silent_recording(1.5)],
                   str(tmp_path / "rec" / "run.log"))
 
-    out = capsys.readouterr().out
-    assert "Recording..." in out
-    assert "h so far" in out
+    assert "Still recording: 0:00 in" in capsys.readouterr().out
 
 
-def test_no_heartbeat_before_recording_actually_starts(
+def test_the_clock_says_how_much_is_saved(
         recorder, tmp_path, monkeypatch, capsys):
-    """Only once bytes are moving - the wait's own heartbeat already
-    covers "still watching, nothing live yet"."""
+    """Size on disk is the proof bytes are still arriving - the one thing
+    the window could not show while yt-dlp was silent."""
     import record_stream
 
+    monkeypatch.setattr(record_stream, "RECORDING_HEARTBEAT_S", 0.2)
     recorder.title = "Already have a title"
-    script = "print('[wait] Remaining time until next attempt: 00:01:00')\n"
+    output = str(tmp_path / "show.part01.ts")
+    part = output + ".f299.mp4.part"
 
-    fake_now = [1_000_000.0]
+    recorder._run([sys.executable, "-c", _silent_recording(1.5, part),
+                   "-o", output], str(tmp_path / "rec" / "run.log"))
 
-    def fake_time():
-        fake_now[0] += record_stream.WAIT_HEARTBEAT_S
-        return fake_now[0]
+    assert "5 MB saved" in capsys.readouterr().out
 
-    monkeypatch.setattr(record_stream.time, "time", fake_time)
+
+def test_no_clock_before_the_stream_starts(
+        recorder, tmp_path, monkeypatch, capsys):
+    """The wait has its own "Still watching" line."""
+    import record_stream
+
+    monkeypatch.setattr(record_stream, "RECORDING_HEARTBEAT_S", 0.2)
+    recorder.title = "Already have a title"
+    script = ("import time\n"
+              "print('[wait] Remaining time until next attempt: 00:01:00', "
+              "flush=True)\n"
+              "time.sleep(1.0)\n")
 
     recorder._run([sys.executable, "-c", script],
                   str(tmp_path / "rec" / "run.log"))
 
-    assert "Recording..." not in capsys.readouterr().out
+    assert "Still recording" not in capsys.readouterr().out
+
+
+def test_the_clock_stops_when_yt_dlp_does(
+        recorder, tmp_path, monkeypatch, capsys):
+    import record_stream
+
+    monkeypatch.setattr(record_stream, "RECORDING_HEARTBEAT_S", 0.2)
+    recorder.title = "Already have a title"
+    recorder._run([sys.executable, "-c", _silent_recording(0.5)],
+                  str(tmp_path / "rec" / "run.log"))
+    capsys.readouterr()
+
+    time.sleep(0.8)
+
+    assert "Still recording" not in capsys.readouterr().out
+
+
+def test_bytes_saved_counts_both_tracks_and_nothing_else(tmp_path):
+    from record_stream import bytes_saved
+
+    output = str(tmp_path / "show.part01.ts")
+    (tmp_path / "show.part01.ts.f299.mp4.part").write_bytes(b"v" * 300)
+    (tmp_path / "show.part01.ts.f140.mp4.part").write_bytes(b"a" * 50)
+    (tmp_path / "other stream.part01.ts").write_bytes(b"o" * 999)
+
+    assert bytes_saved(output) == 350
 
 
 # ═════════════════════════════════════════════════════════════════════════════
