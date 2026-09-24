@@ -367,3 +367,156 @@ def test_giving_up_on_a_stuck_rumble_after_the_timeout(scene, tmp_path,
     assert results["youtube"].startswith("https://youtube")
     out = capsys.readouterr().out
     assert "starting anyway" in out
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# A generated thumbnail, shared by both platforms
+#
+# thumbnail_path always meant one hand-picked image reused for every
+# upload, and nothing ever wrote one - the folder shipped with nothing
+# but a .gitkeep. autoreel.thumbnail.make() already existed for clips
+# (clips.pick_thumbnails); thumbnail_path_for() is the same call, reused
+# for the full stream upload - not a new capability, a missing call
+# site. And - the same concern the censor pass itself already has a
+# test for above - both YouTube's and Rumble's threads can genuinely
+# want one for the SAME video at once.
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _capture_thumbnail_kwarg(main, monkeypatch):
+    """Replaces both uploaders with fakes that just record what
+    thumbnail_path they were called with, and returns the dict they
+    write into."""
+    seen = {}
+
+    def uploader(platform):
+        class Fake:
+            def __init__(self, *a, **k):
+                pass
+
+            def upload(self, path, *args, **kwargs):
+                seen[platform] = kwargs.get("thumbnail_path")
+                return f"https://{platform}.example/watch"
+
+            def get_service(self):
+                return None
+        return Fake
+
+    monkeypatch.setattr(main, "YouTubeUploader", uploader("youtube"))
+    monkeypatch.setattr(main, "RumbleUploader", uploader("rumble"))
+    return seen
+
+
+def test_a_generated_thumbnail_is_shared_not_made_twice(
+        scene, tmp_path, monkeypatch):
+    main, cfg, video, recorder = scene
+
+    calls = []
+
+    def fake_make(video_path, duration, out_path=""):
+        calls.append(out_path)
+        with open(out_path, "wb") as fh:
+            fh.write(b"jpeg")
+        return out_path
+
+    import autoreel.thumbnail as thumbnail_module
+    monkeypatch.setattr(thumbnail_module, "make", fake_make)
+    seen = _capture_thumbnail_kwarg(main, monkeypatch)
+
+    run(main, cfg, video, tmp_path)
+
+    assert len(calls) == 1, (
+        "the thumbnail was generated once per platform instead of shared - "
+        "two threads asking Gemini vision to pick a frame for the same "
+        "video at once")
+    assert seen["youtube"] == calls[0]
+    assert seen["rumble"] == calls[0]
+
+
+def test_a_configured_thumbnail_that_exists_is_never_overridden(
+        scene, tmp_path, monkeypatch):
+    main, cfg, video, recorder = scene
+    hand_picked = tmp_path / "hand-picked.jpg"
+    hand_picked.write_bytes(b"a real, hand-made thumbnail")
+    # Both platforms - Rumble's own configured default (unset here) would
+    # otherwise still fall through to auto-generation on its own thread,
+    # which is correct behaviour but not what THIS test is isolating.
+    cfg.youtube.thumbnail_path = str(hand_picked)
+    cfg.rumble.thumbnail_path = str(hand_picked)
+
+    import autoreel.thumbnail as thumbnail_module
+
+    called = []
+    monkeypatch.setattr(thumbnail_module, "make",
+                        lambda *a, **k: called.append(1))
+    seen = _capture_thumbnail_kwarg(main, monkeypatch)
+
+    run(main, cfg, video, tmp_path)
+
+    assert seen["youtube"] == str(hand_picked)
+    assert seen["rumble"] == str(hand_picked)
+    assert not called, "a configured thumbnail must never be regenerated"
+
+
+def test_a_configured_thumbnail_that_does_not_exist_is_not_trusted(
+        scene, tmp_path, monkeypatch):
+    """config.json's own shipped default points at
+    ./thumbnails/default.jpg, and nothing has ever put a file there -
+    the folder ships with only a .gitkeep. That stale, non-empty string
+    must not permanently block auto-generation from ever running on the
+    exact config nearly everyone actually has."""
+    main, cfg, video, recorder = scene
+    cfg.youtube.thumbnail_path = str(tmp_path / "does-not-exist.jpg")
+
+    calls = []
+
+    def fake_make(video_path, duration, out_path=""):
+        calls.append(out_path)
+        with open(out_path, "wb") as fh:
+            fh.write(b"jpeg")
+        return out_path
+
+    import autoreel.thumbnail as thumbnail_module
+    monkeypatch.setattr(thumbnail_module, "make", fake_make)
+    seen = _capture_thumbnail_kwarg(main, monkeypatch)
+
+    run(main, cfg, video, tmp_path)
+
+    assert calls, "a missing configured file never fell back to generation"
+    assert seen["youtube"] == calls[0]
+
+
+def test_auto_thumbnail_can_be_turned_off(scene, tmp_path, monkeypatch):
+    main, cfg, video, recorder = scene
+    cfg.general.auto_thumbnail = False
+
+    import autoreel.thumbnail as thumbnail_module
+
+    called = []
+    monkeypatch.setattr(thumbnail_module, "make",
+                        lambda *a, **k: called.append(1))
+    seen = _capture_thumbnail_kwarg(main, monkeypatch)
+
+    run(main, cfg, video, tmp_path)
+
+    assert seen["youtube"] is None
+    assert seen["rumble"] is None
+    assert not called
+
+
+def test_a_failed_generation_does_not_crash_the_upload(scene, tmp_path,
+                                                        monkeypatch):
+    """Matches make()'s own contract - never blocks a post."""
+    main, cfg, video, recorder = scene
+
+    import autoreel.thumbnail as thumbnail_module
+    monkeypatch.setattr(
+        thumbnail_module, "make",
+        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no ffmpeg")))
+    seen = _capture_thumbnail_kwarg(main, monkeypatch)
+
+    results = run(main, cfg, video, tmp_path)
+
+    assert results["youtube"].startswith("https://youtube")
+    assert results["rumble"].startswith("https://rumble")
+    assert seen["youtube"] is None
+    assert seen["rumble"] is None
