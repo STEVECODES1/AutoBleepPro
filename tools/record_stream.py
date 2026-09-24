@@ -1529,6 +1529,23 @@ class Recorder:
         # gone for good.
         report = coverage_report(probe_duration(destination),
                                  expected_duration(self.url))
+        if not report.startswith("SHORT") and channel_is_live(
+                resolved_watch_url(self.url, self.video_id)):
+            # expected_duration() asks yt-dlp the same question that can
+            # be wrong for the same reason channel_is_live() exists at
+            # all - see that function's own docstring: a --live-from-start
+            # download can lock onto an early, wrong length and exit 0
+            # while the broadcast is still running past it. A coverage
+            # check built entirely from "what does yt-dlp currently
+            # believe about this URL" agrees with itself even when that
+            # belief is wrong, so the exact failure this project already
+            # found once - a stream delivered and uploaded while it was
+            # still genuinely live - would read here as "complete" just
+            # as confidently as a stream that actually ended. This is the
+            # one signal that does not come from the same place: the
+            # platform's live_status, asked fresh, right now.
+            report = (f"SHORT: {report} - but {self.name} is still live "
+                     f"right now, so this cannot be the whole stream.")
         self.say(report)
         # Said out loud because a delay between the voice and the picture
         # is invisible in a duration and obvious to everyone watching.

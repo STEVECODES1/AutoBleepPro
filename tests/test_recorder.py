@@ -808,6 +808,100 @@ def test_segments_are_removed_after_a_clean_join(recorder, monkeypatch):
 
 
 # ═════════════════════════════════════════════════════════════════════════════
+# A coverage check that agrees with itself is not independent
+#
+# coverage_report() compares the recording against expected_duration(),
+# which asks yt-dlp the same question channel_is_live() exists to double-
+# check: a --live-from-start download can lock onto an early, wrong length
+# and exit 0 while the broadcast is still running past it (see
+# channel_is_live()'s own docstring). When that happens, expected_duration()
+# asks the SAME misled source and gets back the SAME wrong, short duration -
+# so it agrees with the equally-short recording, and coverage_report reads
+# "complete". The one signal that does not come from the same place is the
+# platform's live_status, asked fresh, right now.
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _staged_single_segment(recorder):
+    os.makedirs(recorder.staging, exist_ok=True)
+    path = os.path.join(recorder.staging, "show.part01.ts")
+    with open(path, "wb") as f:
+        f.write(b"segment")
+    return path
+
+
+def test_a_complete_looking_recording_is_flagged_if_the_channel_is_live(
+        recorder, monkeypatch, capsys):
+    """"why are you uploading the live stream that's going on right now" -
+    both readings say the recording is complete. Only the independent
+    live_status check catches that the channel disagrees."""
+    import record_stream
+
+    _staged_single_segment(recorder)
+    monkeypatch.setattr(Recorder, "_remux", lambda self, src, dst:
+                        (open(dst, "wb").write(b"mp4"), True)[1])
+    monkeypatch.setattr(record_stream, "probe_duration", lambda p: 3600.0)
+    monkeypatch.setattr(record_stream, "expected_duration", lambda url: 3600.0)
+    monkeypatch.setattr(record_stream, "channel_is_live", lambda url: True)
+    monkeypatch.setattr(Recorder, "_replace_with_vod",
+                        lambda self, base, cur: None)
+
+    recorder.finalise("show")
+
+    out = capsys.readouterr().out
+    reports = [line for line in out.splitlines() if "recorded" in line.lower()]
+    assert reports, "no coverage report was printed at all"
+    assert reports[0].lstrip("[]0123456789: ").startswith("SHORT"), (
+        "a recording that measures as complete but whose channel is "
+        "still live right now must not be reported as complete")
+    assert "still live" in reports[0]
+
+
+def test_a_complete_recording_of_an_offline_channel_is_trusted(
+        recorder, monkeypatch, capsys):
+    """The override must not fire on an ordinary, genuinely finished
+    recording - only when the channel is provably still live."""
+    import record_stream
+
+    _staged_single_segment(recorder)
+    monkeypatch.setattr(Recorder, "_remux", lambda self, src, dst:
+                        (open(dst, "wb").write(b"mp4"), True)[1])
+    monkeypatch.setattr(record_stream, "probe_duration", lambda p: 3600.0)
+    monkeypatch.setattr(record_stream, "expected_duration", lambda url: 3600.0)
+    monkeypatch.setattr(record_stream, "channel_is_live", lambda url: False)
+
+    recorder.finalise("show")
+
+    out = capsys.readouterr().out
+    reports = [line for line in out.splitlines() if "recorded" in line.lower()]
+    assert reports
+    assert not reports[0].lstrip("[]0123456789: ").startswith("SHORT")
+
+
+def test_the_override_never_fires_on_a_genuinely_short_recording(
+        recorder, monkeypatch, capsys):
+    """A recording that really is short must still say so, whatever
+    channel_is_live() answers - this only adds a case SHORT is missed,
+    never removes one."""
+    import record_stream
+
+    _staged_single_segment(recorder)
+    monkeypatch.setattr(Recorder, "_remux", lambda self, src, dst:
+                        (open(dst, "wb").write(b"mp4"), True)[1])
+    monkeypatch.setattr(record_stream, "probe_duration", lambda p: 1800.0)
+    monkeypatch.setattr(record_stream, "expected_duration", lambda url: 3600.0)
+    monkeypatch.setattr(record_stream, "channel_is_live", lambda url: False)
+    monkeypatch.setattr(Recorder, "_replace_with_vod",
+                        lambda self, base, cur: None)
+
+    recorder.finalise("show")
+
+    out = capsys.readouterr().out
+    reports = [line for line in out.splitlines() if "recorded" in line.lower()]
+    assert reports
+    assert reports[0].lstrip("[]0123456789: ").startswith("SHORT")
+
+
+# ═════════════════════════════════════════════════════════════════════════════
 # More than one platform, one watch folder
 # ═════════════════════════════════════════════════════════════════════════════
 
