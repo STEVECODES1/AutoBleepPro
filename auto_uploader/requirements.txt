@@ -73,8 +73,8 @@ moviepy>=2.2.1 ; python_version >= "3.13"
 psutil==7.2.2
 
 # Optional social posting (only if you enable them in config features):
-# tweepy   - Twitter/X
-# praw     - Reddit
+tweepy   # Twitter/X - native X API path (social_promoter._post_twitter)
+# praw     - Reddit (still off: posting.platforms.reddit.enabled is false)
 
 # Kick recording (tools/record_stream.py). Kick is behind Cloudflare, and
 # yt-dlp needs a real browser TLS fingerprint to reach it - without this

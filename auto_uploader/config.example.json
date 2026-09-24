@@ -184,6 +184,12 @@
         "daily_cap": 6,
         "min_minutes_between": 150
       },
+      "postplanify": {
+        "_note": "PostPlanify (postplanify.com): posts each clip to every account connected on its dashboard - Instagram, TikTok, X, Facebook, YouTube. Paid plan, no monthly quota; its own limit is 6 posts/hour and 25/day PER ACCOUNT, so keep daily_cap under 25. Set POSTPLANIFY_API_KEY in .env. Runs before upload_post; upload_post is then only asked for accounts PostPlanify did not reach.",
+        "enabled": true,
+        "daily_cap": 20,
+        "min_minutes_between": 20
+      },
       "upload_post": {
         "_note": "Upload-Post: one API call posts to ALL connected platforms (TikTok, Instagram, YouTube, Facebook, X, ...) at once. Set UPLOAD_POST_API_KEY + UPLOAD_POST_USER in .env. See https://upload-post.com. When enabled, the clip pipeline uses it as the PRIMARY path and the per-platform functions become fallbacks.",
         "enabled": true,
