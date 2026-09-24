@@ -95,3 +95,9 @@ tweepy   # Twitter/X - native X API path (social_promoter._post_twitter)
 # Check it worked - every line must NOT say "(unavailable)":
 #     python -m yt_dlp --list-impersonate-targets
 yt-dlp[default,curl-cffi]
+
+# YouTube's audio and full-quality video URLs are scrambled; yt-dlp needs a
+# JavaScript runtime to unscramble them or those downloads fail with 403
+# (COMPILE.bat's first run got the video and no audio). This is Deno as a
+# pip package, so no separate installer.
+deno

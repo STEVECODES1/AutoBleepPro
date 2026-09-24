@@ -309,3 +309,82 @@ def test_it_has_its_own_login_not_the_vod_uploaders():
     assert cc.DEFAULTS["token_path"] != "youtube_token.json"
     assert cc.DEFAULTS["token_path"].endswith("_token.json"), \
         "matches .gitignore's auto_uploader/*_token.json"
+
+
+# ── downloading ─────────────────────────────────────────────────────────────
+# The first real run: yt-dlp fetched the HLS video (format 616) and then
+# got 403 on the audio - YouTube's audio URLs need a JavaScript runtime to
+# unscramble - and the tool took "<id>.f616.mp4", a video with no sound,
+# and handed it to ffmpeg, which failed on "-map 0:a:0".
+
+def _fake_ytdlp(monkeypatch, make):
+    """cc._run with yt-dlp replaced by `make(folder, video_id)`; ffprobe
+    still runs for real so the audio check is the real one."""
+    real = cc._run
+
+    def run(command, timeout):
+        if "-o" in command:
+            template = command[command.index("-o") + 1]
+            folder = os.path.dirname(template)
+            vid = os.path.basename(template).split(".")[0]
+            make(folder, vid)
+            return subprocess.CompletedProcess(
+                command, 1, "", "ERROR: unable to download video data: "
+                                "HTTP Error 403: Forbidden")
+        return real(command, timeout)
+
+    monkeypatch.setattr(cc, "_run", run)
+    monkeypatch.setattr(cc, "_js_runtime_args", lambda: [])
+
+
+def _video_only(path):
+    subprocess.run(["ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+                    "-f", "lavfi", "-i", "testsrc=size=320x240:rate=30",
+                    "-t", "1", "-c:v", "libx264", "-preset", "ultrafast",
+                    path], check=True)
+
+
+@needs_ffmpeg
+def test_half_a_download_is_not_taken_for_a_video(tmp_path, monkeypatch):
+    _fake_ytdlp(monkeypatch, lambda folder, vid: _video_only(
+        os.path.join(folder, f"{vid}.f616.mp4")))
+    with pytest.raises(RuntimeError, match="403"):
+        cc.download(Video("abc", "Clips #1", 60), str(tmp_path), _settings())
+    assert os.listdir(tmp_path) == [], "the useless half is cleaned up"
+
+
+@needs_ffmpeg
+def test_a_merged_file_with_no_sound_is_refused(tmp_path, monkeypatch):
+    _fake_ytdlp(monkeypatch, lambda folder, vid: _video_only(
+        os.path.join(folder, f"{vid}.mp4")))
+    with pytest.raises(RuntimeError, match="without its audio"):
+        cc.download(Video("abc", "Clips #1", 60), str(tmp_path), _settings())
+
+
+@needs_ffmpeg
+def test_a_proper_download_is_returned(tmp_path, monkeypatch):
+    _fake_ytdlp(monkeypatch, lambda folder, vid: _synthetic(
+        os.path.join(folder, f"{vid}.mp4"), 1, "1280x720", 30, 1.0))
+    path = cc.download(Video("abc", "Clips #1", 60), str(tmp_path),
+                       _settings())
+    assert os.path.basename(path) == "abc.mp4"
+
+
+def test_the_original_audio_track_is_asked_for_not_a_dub():
+    fmt = cc.FORMAT.format(h=1080)
+    assert fmt.split("/")[0].endswith("+ba[format_note*=original]")
+    assert "[height<=1080]" in fmt
+
+
+def test_no_javascript_runtime_stops_before_downloading(monkeypatch):
+    monkeypatch.setattr(cc.shutil, "which", lambda name: None)
+    monkeypatch.setattr(cc, "_deno_from_pip", lambda: "")
+    with pytest.raises(RuntimeError, match="pip install --user deno"):
+        cc._js_runtime_args()
+
+
+def test_a_deno_from_pip_is_named_to_yt_dlp(monkeypatch):
+    monkeypatch.setattr(cc.shutil, "which", lambda name: None)
+    monkeypatch.setattr(cc, "_deno_from_pip", lambda: r"C:\py\Scripts\deno.exe")
+    assert cc._js_runtime_args() == ["--js-runtimes",
+                                     r"deno:C:\py\Scripts\deno.exe"]

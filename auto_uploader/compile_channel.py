@@ -154,18 +154,59 @@ def ytdlp_command() -> list:
     return [sys.executable, "-m", "yt_dlp"]
 
 
+def _deno_from_pip() -> str:
+    """The deno binary the `deno` pip package ships, installing that
+    package once if it is missing. It lands in Python's Scripts folder,
+    which is usually not on PATH on Windows - so it is found by asking the
+    package, not by searching PATH."""
+    for attempt in range(2):
+        try:
+            import deno  # type: ignore
+
+            path = deno.find_deno_bin()
+            if path and os.path.isfile(path):
+                return path
+        except Exception:
+            pass
+        if attempt == 0:
+            _say("Installing Deno (YouTube needs it for the audio and the "
+                 "full-quality video) ...")
+            subprocess.run([sys.executable, "-m", "pip", "install", "--user",
+                            "-q", "deno"], capture_output=True, timeout=600)
+    return ""
+
+
 def _js_runtime_args() -> list:
-    """YouTube now needs a JavaScript runtime to unlock the full-quality
-    formats. yt-dlp only enables deno by itself; without one it quietly
-    falls back to low-resolution formats, which is a compilation that
-    looks worse than the channels it is copying. node or bun, when that
-    is what is installed, has to be named."""
+    """YouTube's audio and full-quality video URLs are scrambled, and
+    yt-dlp needs a JavaScript runtime to unscramble them. Without one it
+    still LISTS every format - and then the download of the scrambled ones
+    fails with 403 Forbidden. That is exactly the first real run: the HLS
+    video (not scrambled) came down, the audio did not, and ffmpeg was
+    handed a video with no sound. yt-dlp only looks for deno on PATH; any
+    other runtime, or a deno somewhere else, has to be named."""
     if shutil.which("deno"):
         return []
+    found = _deno_from_pip()
+    if found:
+        return ["--js-runtimes", f"deno:{found}"]
     for runtime in ("node", "bun"):
         if shutil.which(runtime):
             return ["--js-runtimes", runtime]
-    return []
+    raise RuntimeError(
+        "no JavaScript runtime for yt-dlp, so YouTube will not hand over "
+        "the audio. Run:  python -m pip install --user deno")
+
+
+# Plain https H.264 first - it is what every browser plays, it needs no
+# re-download of HLS fragments, and it is what the normalise pass decodes
+# fastest. The ORIGINAL audio track by name: these videos carry dubbed
+# French/Spanish/German/Portuguese tracks too, and a bare "ba" can pick
+# one of those.
+FORMAT = ("bv*[height<={h}][vcodec^=avc1][protocol^=https]"
+          "+ba[format_note*=original]/"
+          "bv*[height<={h}]+ba[format_note*=original]/"
+          "bv*[height<={h}]+ba/"
+          "b[height<={h}]/b")
 
 
 def _cookie_args(settings: dict) -> list:
@@ -449,26 +490,43 @@ def download(video: Video, folder: str, settings: dict) -> str:
     os.makedirs(folder, exist_ok=True)
     template = os.path.join(folder, f"{video.id}.%(ext)s")
     command = ytdlp_command() + _js_runtime_args() + _cookie_args(settings) + [
-        "--no-playlist", "--no-warnings", "--no-part",
-        "-f", (f"bv*[height<={settings['height']}]+ba/"
-               f"b[height<={settings['height']}]/b"),
+        "--no-playlist", "--no-warnings",
+        "-f", FORMAT.format(h=settings["height"]),
         "--merge-output-format", "mp4",
         "--retries", "10", "--fragment-retries", "10",
         "--socket-timeout", "30",
         "-o", template, video.url,
     ]
-    done = _run(command, timeout=60 * 60)
-    for name in os.listdir(folder):
-        if name.startswith(video.id + ".") and name.endswith(
-                (".mp4", ".mkv", ".webm")):
-            path = os.path.join(folder, name)
-            height = probe_height(path)
-            if height and height < 720:
-                _say(f"  Warning: only {height}p was available. Install Deno "
-                     f"(https://deno.com) so yt-dlp can get the full quality.")
-            return path
-    raise RuntimeError(f"download failed for {video.title}: "
-                       f"{(done.stderr or '').strip()[-400:]}")
+    done = _run(command, timeout=3 * 60 * 60)
+    merged = os.path.join(folder, f"{video.id}.mp4")
+    # Only the MERGED file counts. "<id>.f616.mp4" is one half of a
+    # download whose other half failed - taking it is how a video with no
+    # sound reached ffmpeg.
+    leftovers = [n for n in os.listdir(folder)
+                 if n.startswith(video.id + ".") and
+                 os.path.join(folder, n) != merged]
+    for name in leftovers:
+        try:
+            os.remove(os.path.join(folder, name))
+        except OSError:
+            pass
+    if not os.path.isfile(merged):
+        raise RuntimeError(f"download failed for {video.title}: "
+                           f"{(done.stderr or '').strip()[-400:]}")
+    if not has_audio(merged):
+        os.remove(merged)
+        raise RuntimeError(f"{video.title} downloaded without its audio. "
+                           f"yt-dlp said: {(done.stderr or '').strip()[-300:]}")
+    height = probe_height(merged)
+    if height and height < 720:
+        _say(f"  Note: only {height}p was available for this one.")
+    return merged
+
+
+def has_audio(path: str) -> bool:
+    done = _run(["ffprobe", "-v", "error", "-select_streams", "a",
+                 "-show_entries", "stream=index", "-of", "csv=p=0", path], 60)
+    return bool(done.stdout.strip())
 
 
 def probe_duration(path: str) -> float:
@@ -498,13 +556,28 @@ def encoder_args(encoder: str) -> list:
             "-g", "60"]
 
 
-def pick_encoder(preference: str) -> str:
+def _nvenc_ok() -> bool:
+    """One real test encode at a real-ish size. NVENC refuses frames below
+    a minimum width on many cards, so a tiny test frame can fail on a GPU
+    that encodes 1080p perfectly well."""
     try:
-        from utils.ffmpeg_tools import pick_video_encoder
-
-        return pick_video_encoder(preference)
+        done = _run(["ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+                     "-f", "lavfi", "-i", "color=c=black:s=640x360:d=0.5",
+                     "-c:v", "h264_nvenc", "-f", "null", "-"], timeout=60)
     except Exception:
+        return False
+    return done.returncode == 0
+
+
+def pick_encoder(preference: str) -> str:
+    preference = (preference or "auto").strip().lower()
+    if preference == "cpu":
         return "libx264"
+    if _nvenc_ok():
+        return "h264_nvenc"
+    _say("NVIDIA encoding is not available to ffmpeg here - using the CPU, "
+         "which is several times slower for a two-hour video.")
+    return "libx264"
 
 
 def normalize_command(source: str, target: str, duration: float,
