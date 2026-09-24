@@ -383,6 +383,9 @@ def _publisher_for(platform: str, config: dict):
     if platform == "upload_post":
         from publishers.upload_post import UploadPostPublisher
         return UploadPostPublisher(config)
+    if platform == "postplanify":
+        from publishers.postplanify import PostPlanifyPublisher
+        return PostPlanifyPublisher(config)
     return None
 
 

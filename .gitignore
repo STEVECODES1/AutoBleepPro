@@ -93,3 +93,8 @@ auto_uploader/logs/*
 # Downloaded stream media - large, and re-downloadable from the VOD.
 auto_uploader/downloaded_clips/
 auto_uploader/downloaded_vods/
+
+# COMPILE.bat's working folder (deleted after each upload) and its ledger
+# of which source videos have been used - per machine, like posting_state.
+auto_uploader/compilations/
+auto_uploader/compilation_ledger.json

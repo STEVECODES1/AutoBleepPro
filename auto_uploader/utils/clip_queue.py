@@ -54,8 +54,19 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 #
 # Order matters: it runs first so that what it covers can be skipped
 # below rather than posted twice.
-CLIP_PLATFORMS = ("upload_post", "instagram", "facebook", "tiktok",
-                  "zernio_twitter", "zernio_tiktok", "youtube_shorts")
+#
+# postplanify goes before upload_post. It is the route with no monthly
+# quota (upload_post's free plan is 10 uploads a MONTH, hence its cap of
+# 1/day), so it takes every account it has connected, and upload_post is
+# then only asked for what is left - never the same account twice.
+CLIP_PLATFORMS = ("postplanify", "upload_post", "instagram", "facebook",
+                  "tiktok", "zernio_twitter", "zernio_tiktok",
+                  "youtube_shorts")
+
+# The routes that reach several platforms in one call. What each one
+# actually reached is read back from its own result (platforms_reached)
+# and skipped for every route and publisher after it.
+FAN_OUT_ROUTES = ("postplanify", "upload_post")
 
 # What one upload_post call already reaches, under this project's names.
 # A clip posted through it and then posted AGAIN by the direct publisher
@@ -68,7 +79,8 @@ UPLOAD_POST_COVERS = ("instagram", "facebook", "tiktok", "x",
 # is deliberately absent - it is the uncensored channel, and the titles
 # there are the line actually spoken, which is the point.
 CLEAN_TEXT_PLATFORMS = ("instagram", "facebook", "tiktok", "x",
-                        "youtube_shorts", "zernio_twitter", "zernio_tiktok")
+                        "youtube_shorts", "zernio_twitter", "zernio_tiktok",
+                        "postplanify")
 
 # A blocked clip is worth keeping for about a day. Past that the stream it
 # came from is stale and posting it is worse than not.
@@ -429,6 +441,11 @@ CENSOR_AUDIO_DEFAULTS = {
     # carrying the SAME audio, so the decision is made once at the bridge
     # and every platform downstream inherits it.
     "upload_post": "slurs",
+    # postplanify is the same shape: one upload, reused for every
+    # connected account, so the audio decision is made once here. Missing
+    # from this table it would default to False - the original audio to
+    # Instagram, TikTok and X at once.
+    "postplanify": "slurs",
     # tiktok (standalone, via tiktok_free/tiktok_api_client) is not wired
     # through the clip queue today, so this is kept only as the default a
     # caller reaches for by name when wiring it up. "slurs" here matches
@@ -583,9 +600,12 @@ def publish(platform: str, video_path: str, caption: str,
         # see _resolve_final_result) change what "posted" means here: at
         # least one platform genuinely succeeded, not merely accepted.
         reached: set = set()
-        if platform == "upload_post":
+        if platform in FAN_OUT_ROUTES:
             try:
-                from publishers.upload_post import platforms_reached
+                if platform == "postplanify":
+                    from publishers.postplanify import platforms_reached
+                else:
+                    from publishers.upload_post import platforms_reached
 
                 reached = platforms_reached(posted)
             except Exception:
@@ -711,16 +731,47 @@ def offer(posting: dict, config: dict, video_path: str,
     guard = PublishGuard(posting, posting.get("state_path"))
     queue = _queue(posting)
 
-    # Filled in when upload_post posts this clip, so the per-platform
-    # publishers below do not post it a second time.
+    # Filled in when a fan-out route (postplanify, upload_post) posts this
+    # clip, so nothing after it posts to the same account a second time.
     covered: set = set()
+    covered_by: dict = {}
 
     for platform in platforms:
         if platform in covered:
-            outcome[platform] = "skipped: sent by upload_post"
-            print(f"[Clips] {platform}: already sent in the upload_post "
+            route = covered_by.get(platform, "upload_post")
+            outcome[platform] = f"skipped: sent by {route}"
+            print(f"[Clips] {platform}: already sent in the {route} "
                   f"call - not posting it twice.")
             continue
+
+        # upload_post after postplanify: asked only for what postplanify
+        # did not reach, so an account connected on both services does
+        # not get the same Reel twice.
+        call_config = config
+        if platform == "upload_post" and covered:
+            natural = [
+                name for name in UPLOAD_POST_COVERS
+                if (posting.get("platforms", {}).get(name, {}) or {})
+                .get("enabled")
+            ]
+            remaining = [name for name in natural if name not in covered]
+            if not remaining:
+                outcome[platform] = "skipped: sent by postplanify"
+                print(f"[Clips] upload_post: everything it reaches was "
+                      f"already sent by postplanify - not using its quota.")
+                continue
+            if not guard.check(platform):
+                # Not queued: the narrowed target list is not stored with
+                # a job, so a queued call would drain later to its FULL
+                # list and repost what postplanify already sent. Whatever
+                # it would have added still has its direct publisher.
+                outcome[platform] = "skipped: waiting, and the rest went " \
+                                    "via postplanify"
+                print(f"[Clips] upload_post: not free right now - "
+                      f"{', '.join(remaining)} left to the direct "
+                      f"publishers.")
+                continue
+            call_config = dict(config or {}, target_platforms=remaining)
 
         already = _already_posted(queue, platform, video_path)
         if already is not None and already.state == "done":
@@ -741,7 +792,7 @@ def offer(posting: dict, config: dict, video_path: str,
             _journal(config, "skip", platform, video_path, decision.reason)
             continue
 
-        publisher = _publisher(platform, config)
+        publisher = _publisher(platform, call_config)
         ready = getattr(publisher, "ready", None) if publisher else None
         if publisher is None or (ready is not None and not ready()):
             outcome[platform] = "skipped: not configured"
@@ -767,7 +818,7 @@ def offer(posting: dict, config: dict, video_path: str,
 
         detail: dict = {}
         try:
-            ok = publish(platform, video_path, caption, config, dry_run,
+            ok = publish(platform, video_path, caption, call_config, dry_run,
                         detail=detail)
         except NotConfigured as exc:
             queue.block(job_id, str(exc), MAX_DEFERRED_AGE_S)
@@ -800,7 +851,7 @@ def offer(posting: dict, config: dict, video_path: str,
         if ok:
             queue.complete(job_id)
             outcome[platform] = "posted"
-            if platform == "upload_post":
+            if platform in FAN_OUT_ROUTES:
                 # What upload-post's OWN polled status says actually
                 # succeeded (see publish()'s `detail` / publishers.
                 # upload_post.platforms_reached) - not a guess from
@@ -818,15 +869,26 @@ def offer(posting: dict, config: dict, video_path: str,
                 # truly nothing to read a real answer from (a dry run, or
                 # an old-shaped response with no polled results) - see
                 # publish()'s own fallback for the matching case.
-                covered = detail.get("covers") or set()
-                if not covered:
-                    covered = {
+                #
+                # postplanify reports per account the same way (see
+                # publishers.postplanify.platforms_reached) and gets no
+                # config-guess fallback: it posts to what is CONNECTED
+                # there, which this project's config cannot see.
+                reached = set(detail.get("covers") or ())
+                if not reached and platform == "upload_post":
+                    reached = {
                         name for name in UPLOAD_POST_COVERS
                         if (posting.get("platforms", {}).get(name, {}) or {})
                         .get("enabled")
                     }
-                shown = ", ".join(sorted(covered)) or "nothing else enabled"
-                print(f"[Clips] upload_post: posted - covers {shown}.")
+                    if call_config is not config:
+                        reached &= set(call_config.get("target_platforms")
+                                       or ())
+                for name in reached:
+                    covered_by.setdefault(name, platform)
+                covered |= reached
+                shown = ", ".join(sorted(reached)) or "nothing else enabled"
+                print(f"[Clips] {platform}: posted - covers {shown}.")
             else:
                 print(f"[Clips] {platform}: posted a Reel.")
             _journal(config, "ok", platform, video_path, "posted")

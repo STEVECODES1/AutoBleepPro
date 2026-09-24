@@ -43,7 +43,9 @@ def test_it_runs_before_the_platforms_it_covers():
     """Order is what makes the de-duplication possible: what it covers
     can only be skipped if it has already run."""
     order = list(CLIP_PLATFORMS)
-    assert order[0] == "upload_post"
+    # postplanify is the one route allowed ahead of it: also a fan-out,
+    # and the one without a monthly quota (see test_postplanify.py).
+    assert order[:2] == ["postplanify", "upload_post"]
     for name in ("instagram", "facebook", "youtube_shorts"):
         assert order.index("upload_post") < order.index(name)
 
@@ -94,7 +96,7 @@ def test_only_enabled_platforms_are_suppressed():
     # two `if platform == "upload_post":` blocks now - one decides
     # what publish() reports back, the other decides what offer() does
     # with it).
-    marker = 'covered = detail.get("covers")'
+    marker = 'reached = set(detail.get("covers") or ())'
     assert marker in body
     block = body[body.index(marker):]
     assert '.get("enabled")' in block[:400]
