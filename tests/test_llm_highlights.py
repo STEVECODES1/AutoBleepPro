@@ -401,6 +401,177 @@ def test_both_calls_send_them(monkeypatch):
     assert all("safetySettings" in payload for payload in sent)
 
 
+# ═════════════════════════════════════════════════════════════════════════════
+# The free tier's ~20 requests/day on the strong flash model is not the
+# end of Gemini for the day - flash-lite is still Gemini, still
+# multimodal, and its own free allowance measures roughly 25x larger.
+# ═════════════════════════════════════════════════════════════════════════════
+
+_QUOTA_ERROR = ("HTTP 429: You exceeded your current quota... Quota exceeded "
+               "for metric: generativelanguage.googleapis.com/"
+               "generate_content_free_tier_requests, limit: 20")
+
+
+def test_resolve_lite_model_prefers_the_catalogue(monkeypatch):
+    from autoreel import llm_highlights
+
+    monkeypatch.setattr(llm_highlights, "list_models",
+                        lambda provider, key: [
+                            "gemini-3-pro", "gemini-3-flash",
+                            "gemini-3-flash-lite", "gemini-2-flash-lite"])
+    assert llm_highlights.resolve_lite_model("k") == "gemini-3-flash-lite"
+
+
+def test_resolve_lite_model_never_returns_the_one_to_avoid(monkeypatch):
+    from autoreel import llm_highlights
+
+    monkeypatch.setattr(llm_highlights, "list_models",
+                        lambda provider, key: ["gemini-3-flash-lite"])
+    assert llm_highlights.resolve_lite_model(
+        "k", avoid="gemini-3-flash-lite") == llm_highlights.GEMINI_LITE_FALLBACK
+
+
+def test_resolve_lite_model_falls_back_when_the_catalogue_is_empty(monkeypatch):
+    from autoreel import llm_highlights
+
+    monkeypatch.setattr(llm_highlights, "list_models", lambda p, k: [])
+    assert (llm_highlights.resolve_lite_model("k") ==
+            llm_highlights.GEMINI_LITE_FALLBACK)
+
+
+def test_resolve_lite_model_gives_up_once_the_fallback_is_also_avoided(
+        monkeypatch):
+    """Nothing left to try - must return "" rather than offer the same
+    exhausted name back as its own fallback."""
+    from autoreel import llm_highlights
+
+    monkeypatch.setattr(llm_highlights, "list_models", lambda p, k: [])
+    assert llm_highlights.resolve_lite_model(
+        "k", avoid=llm_highlights.GEMINI_LITE_FALLBACK) == ""
+
+
+def test_a_quota_exhausted_flash_falls_back_to_flash_lite(monkeypatch):
+    from autoreel import llm_highlights
+
+    monkeypatch.setattr(llm_highlights, "resolve_lite_model",
+                        lambda key, avoid="": "gemini-3.5-flash-lite")
+    calls = []
+
+    def fake_post_detailed(url, payload, headers, timeout=None):
+        calls.append(url)
+        if "flash-lite" in url:
+            return {"candidates": [{"content": {"parts": [{"text": "ok"}]}}]}, ""
+        return None, _QUOTA_ERROR
+
+    monkeypatch.setattr(llm_highlights, "_post_detailed", fake_post_detailed)
+
+    reply = llm_highlights._ask_gemini("k", "gemini-3.5-flash", "prompt")
+
+    assert reply == "ok"
+    assert len(calls) == 2
+    assert "gemini-3.5-flash" in calls[0] and "lite" not in calls[0]
+    assert "flash-lite" in calls[1]
+
+
+def test_a_non_quota_failure_never_tries_lite(monkeypatch):
+    """A busy/overloaded model is not out of quota - it clears on its own,
+    and the existing 20s retry already covers it against the SAME model."""
+    from autoreel import llm_highlights
+
+    tried_lite = []
+    monkeypatch.setattr(llm_highlights, "resolve_lite_model",
+                        lambda key, avoid="": tried_lite.append(1) or "x")
+    monkeypatch.setattr(llm_highlights, "time",
+                        type("T", (), {"sleep": staticmethod(lambda s: None)}))
+    calls = []
+
+    def fake_post_detailed(url, payload, headers, timeout=None):
+        calls.append(url)
+        return None, "HTTP 503: This model is currently experiencing high demand"
+
+    monkeypatch.setattr(llm_highlights, "_post_detailed", fake_post_detailed)
+
+    llm_highlights._ask_gemini("k", "gemini-3.5-flash", "prompt")
+
+    assert not tried_lite, "a transient 503 must not be treated as quota exhaustion"
+    # The existing busy-retry still fires, against the SAME model both times.
+    assert len(calls) == 2
+    assert calls[0] == calls[1]
+
+
+def test_a_quota_exhausted_lite_model_is_not_retried_as_its_own_fallback(
+        monkeypatch):
+    """model already IS the lite model - there is nothing lower to fall
+    back to within Gemini, and asking resolve_lite_model would either
+    loop or offer the same exhausted name back."""
+    from autoreel import llm_highlights
+
+    tried_lite = []
+    monkeypatch.setattr(llm_highlights, "resolve_lite_model",
+                        lambda key, avoid="": tried_lite.append(1) or "")
+    monkeypatch.setattr(llm_highlights, "_post_detailed",
+                        lambda url, payload, headers, timeout=None:
+                        (None, _QUOTA_ERROR))
+
+    llm_highlights._ask_gemini("k", "gemini-3.5-flash-lite", "prompt")
+
+    assert not tried_lite
+
+
+def test_the_vision_pass_falls_back_to_lite_on_quota_exhaustion(monkeypatch):
+    from autoreel import llm_highlights
+
+    monkeypatch.setattr(llm_highlights, "resolve_lite_model",
+                        lambda key, avoid="": "gemini-3.5-flash-lite")
+    calls = []
+
+    def fake_post_detailed(url, payload, headers, timeout=None):
+        calls.append(url)
+        if "flash-lite" in url:
+            return {"candidates": [{"content": {"parts": [{"text": "ok"}]}}]}, ""
+        return None, _QUOTA_ERROR
+
+    monkeypatch.setattr(llm_highlights, "_post_detailed", fake_post_detailed)
+
+    reply, why = llm_highlights._ask_gemini_vision(
+        "k", "gemini-3.5-flash", [{"text": "x"}])
+
+    assert reply == "ok" and why == ""
+    assert len(calls) == 2
+    assert "flash-lite" in calls[1]
+
+
+def test_a_lite_fallback_that_is_also_busy_is_retried_against_lite_not_flash(
+        monkeypatch):
+    """After switching to lite on a quota error, the existing 20s
+    busy-retry must retry LITE, not go back to the already-exhausted
+    flash model."""
+    from autoreel import llm_highlights
+
+    monkeypatch.setattr(llm_highlights, "resolve_lite_model",
+                        lambda key, avoid="": "gemini-3.5-flash-lite")
+    monkeypatch.setattr(llm_highlights, "time",
+                        type("T", (), {"sleep": staticmethod(lambda s: None)}))
+    calls = []
+
+    def fake_post_detailed(url, payload, headers, timeout=None):
+        calls.append(url)
+        if "flash-lite" in url and len(calls) >= 3:
+            return {"candidates": [{"content": {"parts": [{"text": "ok"}]}}]}, ""
+        if "flash-lite" in url:
+            return None, "HTTP 503: high demand"
+        return None, _QUOTA_ERROR
+
+    monkeypatch.setattr(llm_highlights, "_post_detailed", fake_post_detailed)
+
+    reply = llm_highlights._ask_gemini("k", "gemini-3.5-flash", "prompt")
+
+    assert reply == "ok"
+    assert len(calls) == 3
+    assert "gemini-3.5-flash" in calls[0] and "lite" not in calls[0]
+    assert "flash-lite" in calls[1] and "flash-lite" in calls[2]
+
+
 @pytest.mark.parametrize("reply,expected", [
     ({"promptFeedback": {"blockReason": "SAFETY"}}, "blocked"),
     ({"candidates": [{"finishReason": "SAFETY"}]}, "stopped"),
