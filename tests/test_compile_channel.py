@@ -214,15 +214,18 @@ def test_the_chapters_match_the_real_lengths(built):
 
 
 class FakeUploader:
-    def __init__(self, channel="STACKSWOPOVODS", fail=False):
+    def __init__(self, channel="STACKSWOPOVODS", fail=False,
+                 handle="@stackswopo10k"):
         self.channel, self.fail, self.calls = channel, fail, []
+        self.handle = handle
 
     def get_service(self):
         uploader = self
 
         class _Request:
             def execute(self):
-                return {"items": [{"snippet": {"title": uploader.channel}}]}
+                return {"items": [{"snippet": {"title": uploader.channel,
+                                               "customUrl": uploader.handle}}]}
 
         class _Channels:
             def list(self, **kwargs):
@@ -258,10 +261,10 @@ def test_upload_records_the_footage_and_deletes_the_work(built, monkeypatch):
 @needs_ffmpeg
 def test_it_will_not_upload_to_the_wrong_channel(built, monkeypatch):
     job, settings, ledger, work = built
-    fake = FakeUploader(channel="StackswopoGames Shorts")
+    fake = FakeUploader(channel="Stackswopo Games", handle="@stackswopogames")
     monkeypatch.setattr(cc, "youtube_uploader", lambda s: fake)
 
-    with pytest.raises(RuntimeError, match="not \"STACKSWOPOVODS\""):
+    with pytest.raises(RuntimeError, match="not @STACKSWOPO10K"):
         cc.upload(job, settings, ledger, work)
     assert not fake.calls
     assert os.path.isfile(job["final"]), "kept for the next run"
@@ -289,3 +292,20 @@ def test_a_failed_upload_is_retried_from_the_finished_file(
     assert cc.run(["--config", str(config)]) == 0
     assert len(fake.calls) == 1
     assert not os.path.exists(work)
+
+
+def test_the_channel_is_recognised_by_name_or_handle():
+    """STACKSWOPOVODS is @STACKSWOPO10K - either spelling in config must
+    match, and the VOD channel's login must not."""
+    vods = FakeUploader(channel="STACKSWOPOVODS", handle="@stackswopo10k")
+    cc.check_channel(vods, "@STACKSWOPO10K")
+    cc.check_channel(vods, "STACKSWOPOVODS")
+    games = FakeUploader(channel="Stackswopo Games", handle="@stackswopogames")
+    with pytest.raises(RuntimeError):
+        cc.check_channel(games, "@STACKSWOPO10K")
+
+
+def test_it_has_its_own_login_not_the_vod_uploaders():
+    assert cc.DEFAULTS["token_path"] != "youtube_token.json"
+    assert cc.DEFAULTS["token_path"].endswith("_token.json"), \
+        "matches .gitignore's auto_uploader/*_token.json"

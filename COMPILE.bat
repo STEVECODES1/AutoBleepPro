@@ -18,6 +18,10 @@ REM    COMPILE.bat --count 3       make three in a row
 REM    COMPILE.bat --minutes 60    one hour instead of two
 REM    COMPILE.bat --no-upload     build it and keep it, do not upload
 REM
+REM  FIRST RUN: a browser opens to sign in to YouTube. Pick STACKSWOPOVODS
+REM  (@STACKSWOPO10K) - it has its own login, separate from the VOD
+REM  uploader's, and uploads refuse to go to any other channel.
+REM
 REM  Settings: the "compilation" block in auto_uploader\config.json.
 REM ============================================================================
 title AutoBleep COMPILATION

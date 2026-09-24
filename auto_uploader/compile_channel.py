@@ -16,7 +16,8 @@ WHAT IT MAKES
 
 WHERE THE FOOTAGE COMES FROM
     compilation.sources in config.json - Stackswopo's own channel by
-    default. NOT the other compilation channels: every one of them is a
+    default, reposted to his own second channel (STACKSWOPOVODS,
+    @STACKSWOPO10K) with his OK. NOT the other compilation channels: every one of them is a
     re-cut of that same channel, so pulling from them is re-uploading
     somebody else's re-upload - the same videos again, a generation worse,
     and the thing channel_vods.py already declines to do ("other people's
@@ -89,10 +90,14 @@ DEFAULTS = {
              "Whiteboy Trolling"],
     "privacy": "public",
     "category_id": "20",
-    # The upload refuses to go anywhere else. Empty = no check.
-    "expect_channel": "STACKSWOPOVODS",
-    # Empty = the VOD uploader's youtube_token.json.
-    "token_path": "",
+    # The upload refuses to go anywhere else. Matched against the channel
+    # name AND its @handle - STACKSWOPOVODS is @STACKSWOPO10K. Empty = no
+    # check.
+    "expect_channel": "@STACKSWOPO10K",
+    # Its own login, separate from the VOD uploader's youtube_token.json
+    # (that one is @StackswopoGames). The first run opens a browser to sign
+    # in: pick STACKSWOPOVODS there.
+    "token_path": "youtube_compilation_token.json",
     "cookies": "cookies.txt",
     "work_folder": "./compilations",
     "ledger_path": "./compilation_ledger.json",
@@ -607,22 +612,27 @@ def youtube_uploader(settings: dict):
     return YouTubeUploader(secrets, token)
 
 
-def channel_title(uploader) -> str:
+def channel_identity(uploader) -> tuple:
+    """(name, @handle) of the channel this login uploads to."""
     items = uploader.get_service().channels().list(
         part="snippet", mine=True).execute().get("items") or []
-    return items[0]["snippet"]["title"] if items else ""
+    if not items:
+        return "", ""
+    snippet = items[0]["snippet"]
+    return snippet.get("title", ""), snippet.get("customUrl", "")
 
 
-def check_channel(uploader, expected: str) -> None:
+def check_channel(uploader, expected: str, token_path: str = "") -> None:
     if not expected:
         return
-    found = channel_title(uploader)
-    if _normal(found) != _normal(expected):
+    name, handle = channel_identity(uploader)
+    if _normal(expected) not in {_normal(name), _normal(handle)}:
+        where = f" ({token_path})" if token_path else ""
         raise RuntimeError(
-            f"the YouTube login is for \"{found}\", not \"{expected}\". "
-            f"Nothing was uploaded. Point compilation.token_path at a token "
-            f"for {expected} (delete that file and the next run opens a "
-            f"browser to pick the channel).")
+            f"the YouTube login{where} is for \"{name}\" {handle}, not "
+            f"{expected}. Nothing was uploaded. Delete that token file and "
+            f"run again - a browser opens to sign in; pick {expected} there.")
+    _say(f"Uploading to {name} {handle}")
 
 
 # ── one run ─────────────────────────────────────────────────────────────────
@@ -689,8 +699,13 @@ def build(series: str, picks: List[Video], settings: dict,
 
 
 def upload(job: dict, settings: dict, ledger: Ledger, work: str) -> str:
+    token = settings.get("token_path") or ""
+    if token and not os.path.isfile(_resolve(token)):
+        _say(f"First upload to this channel: a browser will open to sign in. "
+             f"Choose {settings.get('expect_channel') or 'the channel'} "
+             f"there.")
     uploader = youtube_uploader(settings)
-    check_channel(uploader, settings.get("expect_channel", ""))
+    check_channel(uploader, settings.get("expect_channel", ""), token)
     _say(f"Uploading \"{job['title']}\" ...")
     last = [-1]
 
