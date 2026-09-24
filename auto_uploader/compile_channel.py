@@ -183,6 +183,16 @@ def _refused(stderr: str) -> bool:
     return bool(re.search(r"HTTP Error 403|Forbidden", stderr or ""))
 
 
+def _warnings(stderr: str, keep: int = 5) -> List[str]:
+    seen: List[str] = []
+    for line in (stderr or "").splitlines():
+        if line.startswith("WARNING:"):
+            text = line[len("WARNING:"):].strip()
+            if text not in seen:
+                seen.append(text)
+    return seen[-keep:]
+
+
 def _deno_from_pip() -> str:
     """The deno binary the `deno` pip package ships, installing that
     package once if it is missing. It lands in Python's Scripts folder,
@@ -236,6 +246,15 @@ FORMAT = ("bv*[height<={h}][vcodec^=avc1][protocol^=https]"
           "bv*[height<={h}]+ba[format_note*=original]/"
           "bv*[height<={h}]+ba/"
           "b[height<={h}]/b")
+
+# YouTube's streaming (HLS) copy, for when it refuses the direct files. On
+# the real machine it did exactly that: the HLS video came down while the
+# https audio was refused, then the https video was refused too - with
+# yt-dlp current, and the live recorder (also streaming) working fine.
+HLS_FORMAT = ("bv*[height<={h}][protocol^=m3u8]"
+              "+ba[protocol^=m3u8][format_note*=original]/"
+              "bv*[height<={h}][protocol^=m3u8]+ba[protocol^=m3u8]/"
+              "b[height<={h}][protocol^=m3u8]")
 
 
 def _cookie_args(settings: dict) -> list:
@@ -531,32 +550,34 @@ def _clear_halves(folder: str, video_id: str, merged: str) -> None:
 def download(video: Video, folder: str, settings: dict) -> str:
     os.makedirs(folder, exist_ok=True)
     template = os.path.join(folder, f"{video.id}.%(ext)s")
-    command = ytdlp_command() + _js_runtime_args() + _cookie_args(settings) + [
-        "--no-playlist", "--no-warnings",
-        "-f", FORMAT.format(h=settings["height"]),
-        "--merge-output-format", "mp4",
-        "--retries", "10", "--fragment-retries", "10",
-        "--socket-timeout", "30",
-        "-o", template, video.url,
-    ]
     merged = os.path.join(folder, f"{video.id}.mp4")
-    done = _run(command, timeout=3 * 60 * 60)
-    _clear_halves(folder, video.id, merged)
-    # A sudden 403 on a video that is public and plays fine in a browser is
-    # almost always yt-dlp behind YouTube's latest player change - it
-    # follows within days. A real run stopped the whole compilation at the
-    # first video over exactly this, when a one-minute update fixes it.
+    base = ytdlp_command() + _js_runtime_args() + _cookie_args(settings)
+
+    def fetch(fmt: str) -> subprocess.CompletedProcess:
+        # Warnings are captured, not printed - they only surface below,
+        # if the download fails. They name the cause; the ERROR does not.
+        done = _run(base + [
+            "--no-playlist",
+            "-f", fmt.format(h=settings["height"]),
+            "--merge-output-format", "mp4",
+            "--retries", "10", "--fragment-retries", "10",
+            "--socket-timeout", "30",
+            "-o", template, video.url,
+        ], timeout=3 * 60 * 60)
+        _clear_halves(folder, video.id, merged)
+        return done
+
+    done = fetch(FORMAT)
     if not os.path.isfile(merged) and _refused(done.stderr):
-        _say("  YouTube refused the download (403). That usually means "
-             "yt-dlp is out of date - updating it and trying again ...")
+        _say("  YouTube refused the direct download (403). Updating yt-dlp, "
+             "then trying YouTube's streaming copy instead ...")
         updated, detail = update_yt_dlp()
-        if updated:
-            _say(f"  yt-dlp {detail}.")
-            done = _run(command, timeout=3 * 60 * 60)
-            _clear_halves(folder, video.id, merged)
-        else:
-            _say(f"  Could not update yt-dlp ({detail}).")
+        _say(f"  yt-dlp {detail}." if updated
+             else f"  Could not update yt-dlp ({detail}).")
+        done = fetch(HLS_FORMAT)
     if not os.path.isfile(merged):
+        for line in _warnings(done.stderr):
+            _say(f"  yt-dlp warned: {line}")
         raise RuntimeError(f"download failed for {video.title}: "
                            f"{(done.stderr or '').strip()[-400:]}")
     if not has_audio(merged):

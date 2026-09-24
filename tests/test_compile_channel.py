@@ -404,6 +404,19 @@ def _answers(monkeypatch, *outcomes):
     return calls
 
 
+def _format_of(command):
+    return command[command.index("-f") + 1]
+
+
+def test_the_first_try_is_still_the_direct_file(tmp_path, monkeypatch):
+    """Machines that are not refused keep the fast plain-https path."""
+    calls = _answers(monkeypatch, "ERROR: [youtube] abc: Video unavailable")
+    with pytest.raises(RuntimeError):
+        cc.download(Video("abc", "Clips #1", 60), str(tmp_path), _settings())
+    assert "protocol^=https" in _format_of(calls[0])
+    assert "m3u8" not in _format_of(calls[0])
+
+
 @needs_ffmpeg
 def test_a_refused_download_updates_yt_dlp_and_tries_again(tmp_path,
                                                             monkeypatch):
@@ -419,6 +432,7 @@ def test_a_refused_download_updates_yt_dlp_and_tries_again(tmp_path,
     assert os.path.basename(path) == "abc.mp4"
     assert len(updates) == 1
     assert len(calls) == 2
+    assert "m3u8" in _format_of(calls[1])
 
 
 def test_the_retry_after_an_update_is_what_gets_returned(tmp_path,
@@ -437,16 +451,43 @@ def test_the_retry_after_an_update_is_what_gets_returned(tmp_path,
 
     assert path == str(tmp_path / "abc.mp4")
     assert len(calls) == 2
+    assert "m3u8" in _format_of(calls[1])
 
 
-def test_a_failed_update_is_not_followed_by_a_pointless_retry(tmp_path,
+def test_the_streaming_copy_is_tried_even_if_the_update_fails(tmp_path,
                                                               monkeypatch):
-    calls = _answers(monkeypatch, _REFUSED)
-    monkeypatch.setattr(cc, "update_yt_dlp", lambda: (False, "no network"))
+    """The second real run: yt-dlp was already current and the retry of
+    the same direct file was refused again. The streaming copy does not
+    depend on the update."""
+    def make(path):
+        open(path, "wb").write(b"mp4")
 
-    with pytest.raises(RuntimeError, match="403"):
+    calls = _answers(monkeypatch, _REFUSED, make)
+    monkeypatch.setattr(cc, "update_yt_dlp", lambda: (False, "no network"))
+    monkeypatch.setattr(cc, "has_audio", lambda path: True)
+    monkeypatch.setattr(cc, "probe_height", lambda path: 1080)
+
+    cc.download(Video("abc", "Clips #1", 60), str(tmp_path), _settings())
+
+    assert "m3u8" in _format_of(calls[1])
+
+
+def test_yt_dlps_warnings_are_shown_when_it_finally_fails(tmp_path,
+                                                         monkeypatch, capsys):
+    """The ERROR line says "403"; the WARNING lines say why. They were
+    thrown away with --no-warnings, so every failure looked the same."""
+    why = ("WARNING: [youtube] abc: Some web client https formats have been "
+           "skipped as they are missing a url.")
+    refused = why + "\n" + why + "\n" + _REFUSED
+    _answers(monkeypatch, refused, refused)
+    monkeypatch.setattr(cc, "update_yt_dlp", lambda: (True, "already the "
+                                                      "latest version"))
+
+    with pytest.raises(RuntimeError):
         cc.download(Video("abc", "Clips #1", 60), str(tmp_path), _settings())
-    assert len(calls) == 1
+
+    out = capsys.readouterr().out
+    assert out.count("missing a url") == 1
 
 
 def test_still_refused_after_updating_stops_after_one_retry(tmp_path,
