@@ -337,6 +337,8 @@ def _fake_ytdlp(monkeypatch, make):
 
     monkeypatch.setattr(cc, "_run", run)
     monkeypatch.setattr(cc, "_js_runtime_args", lambda: [])
+    # These fakes always answer 403. A real pip upgrade has no place here.
+    monkeypatch.setattr(cc, "update_yt_dlp", lambda: (False, "not in tests"))
 
 
 def _video_only(path):
@@ -370,6 +372,138 @@ def test_a_proper_download_is_returned(tmp_path, monkeypatch):
     path = cc.download(Video("abc", "Clips #1", 60), str(tmp_path),
                        _settings())
     assert os.path.basename(path) == "abc.mp4"
+
+
+# ── a refused download ──────────────────────────────────────────────────────
+# The second real run: "[1/5] Whiteboy Trolling Clips #122 ... download
+# failed: HTTP Error 403: Forbidden", and the whole compilation stopped. A
+# public video refused out of nowhere is almost always yt-dlp behind
+# YouTube's latest player change.
+
+_REFUSED = "ERROR: unable to download video data: HTTP Error 403: Forbidden"
+
+
+def _answers(monkeypatch, *outcomes):
+    """cc._run answering each yt-dlp download with the next outcome: a
+    callable make(merged_path) that succeeds, or a stderr string."""
+    queue = list(outcomes)
+    calls = []
+
+    def run(command, timeout):
+        template = command[command.index("-o") + 1]
+        merged = template.replace("%(ext)s", "mp4")
+        calls.append(command)
+        outcome = queue.pop(0)
+        if callable(outcome):
+            outcome(merged)
+            return subprocess.CompletedProcess(command, 0, "", "")
+        return subprocess.CompletedProcess(command, 1, "", outcome)
+
+    monkeypatch.setattr(cc, "_run", run)
+    monkeypatch.setattr(cc, "_js_runtime_args", lambda: [])
+    return calls
+
+
+@needs_ffmpeg
+def test_a_refused_download_updates_yt_dlp_and_tries_again(tmp_path,
+                                                            monkeypatch):
+    calls = _answers(monkeypatch, _REFUSED,
+                     lambda path: _synthetic(path, 1, "1280x720", 30, 1.0))
+    updates = []
+    monkeypatch.setattr(cc, "update_yt_dlp",
+                        lambda: updates.append(1) or (True, "updated to 2026.9.20"))
+
+    path = cc.download(Video("abc", "Whiteboy Trolling Clips #122", 60),
+                       str(tmp_path), _settings())
+
+    assert os.path.basename(path) == "abc.mp4"
+    assert len(updates) == 1
+    assert len(calls) == 2
+
+
+def test_the_retry_after_an_update_is_what_gets_returned(tmp_path,
+                                                         monkeypatch):
+    """Same as above with the ffprobe checks faked, so it runs anywhere."""
+    def make(path):
+        open(path, "wb").write(b"mp4")
+
+    calls = _answers(monkeypatch, _REFUSED, make)
+    monkeypatch.setattr(cc, "update_yt_dlp", lambda: (True, "updated"))
+    monkeypatch.setattr(cc, "has_audio", lambda path: True)
+    monkeypatch.setattr(cc, "probe_height", lambda path: 1080)
+
+    path = cc.download(Video("abc", "Clips #1", 60), str(tmp_path),
+                       _settings())
+
+    assert path == str(tmp_path / "abc.mp4")
+    assert len(calls) == 2
+
+
+def test_a_failed_update_is_not_followed_by_a_pointless_retry(tmp_path,
+                                                              monkeypatch):
+    calls = _answers(monkeypatch, _REFUSED)
+    monkeypatch.setattr(cc, "update_yt_dlp", lambda: (False, "no network"))
+
+    with pytest.raises(RuntimeError, match="403"):
+        cc.download(Video("abc", "Clips #1", 60), str(tmp_path), _settings())
+    assert len(calls) == 1
+
+
+def test_still_refused_after_updating_stops_after_one_retry(tmp_path,
+                                                            monkeypatch):
+    calls = _answers(monkeypatch, _REFUSED, _REFUSED)
+    monkeypatch.setattr(cc, "update_yt_dlp",
+                        lambda: (True, "already the latest version"))
+
+    with pytest.raises(RuntimeError, match="403"):
+        cc.download(Video("abc", "Clips #1", 60), str(tmp_path), _settings())
+    assert len(calls) == 2
+
+
+def test_a_failure_that_is_not_a_refusal_never_updates(tmp_path, monkeypatch):
+    _answers(monkeypatch, "ERROR: [youtube] abc: Video unavailable")
+    monkeypatch.setattr(cc, "update_yt_dlp", lambda: pytest.fail(
+        "a deleted video is not fixed by a newer yt-dlp"))
+
+    with pytest.raises(RuntimeError, match="unavailable"):
+        cc.download(Video("abc", "Clips #1", 60), str(tmp_path), _settings())
+
+
+class _Ran:
+    def __init__(self, code=0, out="", err=""):
+        self.returncode, self.stdout, self.stderr = code, out, err
+
+
+def test_the_updater_brings_the_challenge_solver_along():
+    """yt-dlp[default] pins yt-dlp-ejs to one exact version; a bare
+    `-U yt-dlp` would leave the old solver behind the new yt-dlp."""
+    seen = []
+    cc.update_yt_dlp(runner=lambda cmd, **k: seen.append(cmd) or _Ran())
+    assert seen[0][0] == sys.executable
+    assert seen[0][-1] == "yt-dlp[default]"
+
+
+def test_the_updater_reports_the_new_version():
+    ok, detail = cc.update_yt_dlp(runner=lambda *a, **k: _Ran(
+        out="Successfully installed yt-dlp-ejs-0.9.0 yt-dlp-2026.9.20"))
+    assert ok and detail == "updated to 2026.9.20"
+
+
+def test_the_updater_says_when_it_was_already_current():
+    ok, detail = cc.update_yt_dlp(
+        runner=lambda *a, **k: _Ran(out="Requirement already satisfied"))
+    assert ok and "latest" in detail
+
+
+def test_the_updater_never_raises():
+    def explode(*_a, **_k):
+        raise OSError("pip is gone")
+
+    ok, detail = cc.update_yt_dlp(runner=explode)
+    assert not ok and "pip is gone" in detail
+    ok, detail = cc.update_yt_dlp(
+        runner=lambda *a, **k: _Ran(code=1, err="ERROR: no such option"))
+    assert not ok and "no such option" in detail
 
 
 def test_the_original_audio_track_is_asked_for_not_a_dub():

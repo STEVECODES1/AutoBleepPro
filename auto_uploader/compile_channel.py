@@ -154,6 +154,35 @@ def ytdlp_command() -> list:
     return [sys.executable, "-m", "yt_dlp"]
 
 
+def update_yt_dlp(runner=None) -> tuple:
+    """(updated, detail). Never raises.
+
+    With the "default" extra, not bare: that extra pins yt-dlp-ejs, the
+    script that solves YouTube's download challenges, to one exact
+    version. Upgrading yt-dlp alone leaves the old solver behind.
+    """
+    runner = runner or subprocess.run
+    command = [sys.executable, "-m", "pip", "install", "-U", "yt-dlp[default]"]
+    try:
+        done = runner(command, capture_output=True, text=True, timeout=300)
+    except Exception as exc:
+        return False, str(exc)
+    if getattr(done, "returncode", 1) != 0:
+        detail = (getattr(done, "stderr", "") or "").strip().splitlines()
+        return False, (detail[-1] if detail else "pip failed")
+    out = getattr(done, "stdout", "") or ""
+    if "Successfully installed" in out:
+        for word in out.split():
+            if word.startswith("yt-dlp-") and word[7:8].isdigit():
+                return True, f"updated to {word[7:]}"
+        return True, "updated"
+    return True, "already the latest version"
+
+
+def _refused(stderr: str) -> bool:
+    return bool(re.search(r"HTTP Error 403|Forbidden", stderr or ""))
+
+
 def _deno_from_pip() -> str:
     """The deno binary the `deno` pip package ships, installing that
     package once if it is missing. It lands in Python's Scripts folder,
@@ -486,6 +515,19 @@ def _run(command: list, timeout: int) -> subprocess.CompletedProcess:
                           encoding="utf-8", errors="replace", timeout=timeout)
 
 
+def _clear_halves(folder: str, video_id: str, merged: str) -> None:
+    # Only the MERGED file counts. "<id>.f616.mp4" is one half of a
+    # download whose other half failed - taking it is how a video with no
+    # sound reached ffmpeg.
+    for name in os.listdir(folder):
+        path = os.path.join(folder, name)
+        if name.startswith(video_id + ".") and path != merged:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+
+
 def download(video: Video, folder: str, settings: dict) -> str:
     os.makedirs(folder, exist_ok=True)
     template = os.path.join(folder, f"{video.id}.%(ext)s")
@@ -497,19 +539,23 @@ def download(video: Video, folder: str, settings: dict) -> str:
         "--socket-timeout", "30",
         "-o", template, video.url,
     ]
-    done = _run(command, timeout=3 * 60 * 60)
     merged = os.path.join(folder, f"{video.id}.mp4")
-    # Only the MERGED file counts. "<id>.f616.mp4" is one half of a
-    # download whose other half failed - taking it is how a video with no
-    # sound reached ffmpeg.
-    leftovers = [n for n in os.listdir(folder)
-                 if n.startswith(video.id + ".") and
-                 os.path.join(folder, n) != merged]
-    for name in leftovers:
-        try:
-            os.remove(os.path.join(folder, name))
-        except OSError:
-            pass
+    done = _run(command, timeout=3 * 60 * 60)
+    _clear_halves(folder, video.id, merged)
+    # A sudden 403 on a video that is public and plays fine in a browser is
+    # almost always yt-dlp behind YouTube's latest player change - it
+    # follows within days. A real run stopped the whole compilation at the
+    # first video over exactly this, when a one-minute update fixes it.
+    if not os.path.isfile(merged) and _refused(done.stderr):
+        _say("  YouTube refused the download (403). That usually means "
+             "yt-dlp is out of date - updating it and trying again ...")
+        updated, detail = update_yt_dlp()
+        if updated:
+            _say(f"  yt-dlp {detail}.")
+            done = _run(command, timeout=3 * 60 * 60)
+            _clear_halves(folder, video.id, merged)
+        else:
+            _say(f"  Could not update yt-dlp ({detail}).")
     if not os.path.isfile(merged):
         raise RuntimeError(f"download failed for {video.title}: "
                            f"{(done.stderr or '').strip()[-400:]}")
