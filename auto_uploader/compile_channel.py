@@ -663,6 +663,31 @@ def fetch_thumbnail(videos: List[Video], folder: str) -> str:
     return ""
 
 
+def frame_thumbnail(video_path: str, folder: str, at: float) -> str:
+    """A 1280x720 frame from the finished video, for when the source
+    thumbnail cannot be fetched - so an upload never goes out with
+    YouTube's auto-picked frame."""
+    target = os.path.join(folder, "thumbnail.jpg")
+    done = _run(["ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+                 "-ss", f"{max(0.0, at):.2f}", "-i", video_path,
+                 "-frames:v", "1", "-vf", "scale=1280:720", "-q:v", "2",
+                 target], timeout=120)
+    return target if done.returncode == 0 and os.path.isfile(target) else ""
+
+
+def make_thumbnail(videos: List[Video], final: str, total: float,
+                   folder: str) -> str:
+    path = fetch_thumbnail(videos, folder)
+    if path:
+        best = max(videos, key=lambda v: v.views)
+        _say(f"Thumbnail: from \"{best.title}\" (its own thumbnail)")
+        return path
+    path = frame_thumbnail(final, folder, total * 0.1)
+    _say("Thumbnail: a frame from the video (the source thumbnail could not "
+         "be fetched)" if path else "Thumbnail: none - YouTube will pick one")
+    return path
+
+
 # ── uploading ───────────────────────────────────────────────────────────────
 
 def _normal(name: str) -> str:
@@ -763,7 +788,7 @@ def build(series: str, picks: List[Video], settings: dict,
         "description": make_description(series, length, picks, durations,
                                         settings),
         "tags": list(settings["tags"]),
-        "thumbnail": fetch_thumbnail(picks, work),
+        "thumbnail": make_thumbnail(picks, final, total, work),
         "videos": [vars(v) for v in picks],
     }
     with open(os.path.join(work, PENDING), "w", encoding="utf-8") as handle:

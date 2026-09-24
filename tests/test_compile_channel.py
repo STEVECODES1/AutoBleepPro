@@ -179,6 +179,8 @@ def built(tmp_path, monkeypatch):
         return path
 
     monkeypatch.setattr(cc, "download", fake_download)
+    # No network in a test: the source thumbnail cannot be fetched, so the
+    # frame fallback is what gets exercised.
     monkeypatch.setattr(cc, "fetch_thumbnail", lambda videos, folder: "")
     picks = [Video("a", "Clips #1", 6, views=5), Video("b", "Clips #2", 5),
              Video("c", "Clips #3", 7)]
@@ -202,7 +204,7 @@ def test_mismatched_sources_join_into_one_video(built):
     assert (stream["width"], stream["height"]) == (640, 360)
     assert stream["r_frame_rate"] == "30/1"
     leftovers = sorted(os.listdir(work))
-    assert leftovers == ["compilation.mp4", "pending.json"], \
+    assert leftovers == ["compilation.mp4", "pending.json", "thumbnail.jpg"], \
         "downloads and parts are deleted as soon as they are used"
 
 
@@ -388,3 +390,39 @@ def test_a_deno_from_pip_is_named_to_yt_dlp(monkeypatch):
     monkeypatch.setattr(cc, "_deno_from_pip", lambda: r"C:\py\Scripts\deno.exe")
     assert cc._js_runtime_args() == ["--js-runtimes",
                                      r"deno:C:\py\Scripts\deno.exe"]
+
+
+@needs_ffmpeg
+def test_there_is_always_a_thumbnail_even_offline(built):
+    """The source thumbnail is fetched from YouTube; when that fails the
+    upload still gets one, a frame of the video, rather than whatever
+    YouTube auto-picks."""
+    job, *_ = built
+    assert os.path.basename(job["thumbnail"]) == "thumbnail.jpg"
+    probe = subprocess.run(
+        ["ffprobe", "-v", "error", "-show_entries", "stream=width,height",
+         "-of", "csv=p=0", job["thumbnail"]], capture_output=True, text=True)
+    assert probe.stdout.strip() == "1280,720"
+
+
+def test_the_thumbnail_goes_up_with_the_video(monkeypatch, tmp_path):
+    """Same call the VOD uploader uses: YouTubeUploader.upload(...,
+    thumbnail_path=) -> thumbnails().set."""
+    seen = {}
+
+    class Uploader(FakeUploader):
+        def upload(self, path, title, description, tags, **kwargs):
+            seen.update(kwargs)
+            return "https://www.youtube.com/watch?v=X"
+
+    monkeypatch.setattr(cc, "youtube_uploader", lambda s: Uploader())
+    work = tmp_path / "work"
+    work.mkdir()
+    thumb = work / "thumbnail.jpg"
+    thumb.write_bytes(b"jpg")
+    job = {"final": str(work / "c.mp4"), "series": "S", "number": 1,
+           "title": "t", "description": "d", "tags": [],
+           "thumbnail": str(thumb), "videos": []}
+    cc.upload(job, _settings(ledger_path=str(tmp_path / "l.json")),
+              Ledger(str(tmp_path / "l.json")), str(work))
+    assert seen["thumbnail_path"] == str(thumb)
