@@ -4,7 +4,7 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from autoreel.highlights import HighlightScorer
+from autoreel.highlights import Highlight, HighlightScorer
 
 
 def segment(start, end, text, words=None):
@@ -266,3 +266,100 @@ class GapRelaxationTests(unittest.TestCase):
         for asked in (5.0, 90.0, 0.0):
             for gap in HighlightScorer._gap_ladder(asked):
                 self.assertLessEqual(gap, asked)
+
+
+class RegionSpreadTests(unittest.TestCase):
+    """"the clips are so close alike and barely make sense" - a long,
+    static scene produces dozens of individually-defensible windows, and
+    a plain best-score-first shortlist can fill an entire pool from one
+    of them before ever looking at the rest of the stream. Everything
+    downstream (the LLM prompt's "DO NOT FILL THE BATCH FROM ONE SCENE",
+    or the scorer's own fallback top-N when there is no model opinion at
+    all) was relying on that never happening - it was never actually
+    prevented."""
+
+    def _highlight(self, start, score, length=20.0):
+        return Highlight(start=start, end=start + length, score=score,
+                         text=f"moment at {start}")
+
+    def test_one_region_cannot_supply_a_second_pick_before_others_get_a_first(self):
+        # Five strong, adjacent candidates from one scene (0-100s), and
+        # three weaker but real candidates scattered far across the rest
+        # of a long stream.
+        dominant = [self._highlight(i * 20.0, 90.0 - i) for i in range(5)]
+        scattered = [self._highlight(t, 40.0) for t in (600.0, 1200.0, 1800.0)]
+        candidates = dominant + scattered   # already best-first, as
+                                            # candidate_windows() returns
+
+        spread = HighlightScorer()._spread_by_region(candidates, regions=8)
+
+        # The first pick from EACH scattered location must come before
+        # the SECOND pick from the dominant scene.
+        first_scattered_positions = []
+        for t in (600.0, 1200.0, 1800.0):
+            first_scattered_positions.append(
+                next(i for i, h in enumerate(spread) if h.start == t))
+        second_dominant_position = next(
+            i for i, h in enumerate(spread)
+            if h.start == dominant[1].start)
+
+        for position in first_scattered_positions:
+            self.assertLess(position, second_dominant_position,
+                            "a second pick from the loud scene was offered "
+                            "before every other part of the stream had a "
+                            "first pick")
+
+    def test_a_single_pick_still_takes_the_global_best(self):
+        """With only one clip wanted, spreading must not cost the single
+        best candidate overall - it must recover exactly the same choice
+        as plain best-first ordering."""
+        candidates = [self._highlight(0.0, 50.0),
+                     self._highlight(600.0, 95.0),
+                     self._highlight(1200.0, 40.0)]
+
+        spread = HighlightScorer()._spread_by_region(candidates, regions=8)
+
+        self.assertEqual(spread[0].start, 600.0)
+
+    def test_one_region_or_fewer_is_a_no_op(self):
+        candidates = [self._highlight(0.0, 50.0), self._highlight(5.0, 80.0)]
+        scorer = HighlightScorer()
+
+        self.assertEqual(scorer._spread_by_region(candidates, regions=1),
+                        candidates)
+        self.assertEqual(scorer._spread_by_region([], regions=8), [])
+
+    def test_real_windows_from_one_scene_do_not_crowd_out_the_rest_of_the_stream(self):
+        """End to end through select_clips(), not the internal helper -
+        real transcript segments, with the dominant scene given far MORE
+        room than the requested count could ever exhaust on its own (so
+        the existing min_gap ladder alone has no reason to ever leave
+        it), and a few weaker-but-real moments elsewhere in the stream."""
+        scorer = HighlightScorer(min_duration=10, max_duration=30)
+        segments = []
+
+        def run_of(start, count, text):
+            at = start
+            for n in range(count):
+                segments.append(segment(at, at + 4.0,
+                                        f"{text} number {n}"))
+                at += 4.2
+
+        # One scene, loud and VERY long - a strong moment every 40s across
+        # 20 minutes, far more non-overlapping room (at min_gap=90) than
+        # the six clips wanted could ever use up.
+        for offset in range(0, 1200, 40):
+            run_of(offset, 3,
+                  "Insane, unbelievable, no way, let's gooo, actually insane")
+        # Three other real, but milder, moments well outside that scene.
+        for offset in (1800.0, 2400.0, 3000.0):
+            run_of(offset, 3, "Wow, huge, crazy")
+
+        clips = scorer.select_clips(segments, count=6, min_gap=90.0)
+
+        scattered_represented = sum(
+            1 for offset in (1800.0, 2400.0, 3000.0)
+            if any(offset <= c.start < offset + 40.0 for c in clips))
+        self.assertGreaterEqual(scattered_represented, 1,
+                                "the one loud scene crowded out every "
+                                "other real moment in the stream")

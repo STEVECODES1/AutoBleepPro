@@ -84,6 +84,13 @@ BOUNDARY_PAUSE = 0.35
 # A window needs more than a couple of stray "bro"s to be worth cutting.
 MIN_WINDOW_SCORE = 3.0
 
+# How many equal-length buckets the stream is split into for
+# _spread_by_region below. Bounded on both ends: too few and one loud
+# scene can still supply most of a large pool between them; too many
+# and a short stream's buckets end up empty, spreading nothing.
+MIN_REGIONS = 6
+MAX_REGIONS = 20
+
 # Whisper loops on music and silence, emitting the same line over and
 # over. Below this share of distinct lines, the window is a hallucination.
 MIN_DISTINCT_RATIO = 0.5
@@ -409,6 +416,58 @@ class HighlightScorer:
         return [gap for i, gap in enumerate(ladder)
                 if gap <= min_gap and gap not in ladder[:i]]
 
+    @staticmethod
+    def _region_of(start: float, floor: float, span: float, regions: int) -> int:
+        """Which of `regions` equal buckets across the stream `start` falls in."""
+        if span <= 0 or regions <= 1:
+            return 0
+        index = int((start - floor) / span * regions)
+        return min(max(index, 0), regions - 1)
+
+    def _spread_by_region(self, candidates: list, regions: int) -> list:
+        """The same candidates (best-first), reordered so one part of the
+        stream cannot supply several picks in a row before every other
+        part has had a turn.
+
+        candidate_windows() hands back a single best-score-first list,
+        which is exactly the ordering that lets a greedy taker fill an
+        entire pool from one loud argument before ever looking at the
+        rest of the stream - a long, static scene produces dozens of
+        individually-defensible windows, and nothing upstream of the
+        language model ever thinned them. "DO NOT FILL THE BATCH FROM
+        ONE SCENE" was, until this, a request made only of the model -
+        real, and honoured by a strong one, but the shortlist itself
+        still WAS one scene whenever the model reading it was a weaker
+        fallback, or there was no model opinion at all and the scorer's
+        own top-N stood as the final picks.
+
+        Multi-round, not a fixed per-region queue: each round takes
+        every region's current-best remaining candidate, offered
+        best-score-first across regions, before any region gets a
+        second turn. With one clip wanted this recovers exactly "the
+        single best candidate overall" - a second candidate from the
+        same region is only ever offered after every other region's
+        first has already had its turn ahead of it.
+        """
+        if not candidates or regions <= 1:
+            return list(candidates)
+        floor = min(c.start for c in candidates)
+        span = max(c.end for c in candidates) - floor
+
+        buckets: dict[int, list] = {}
+        for candidate in candidates:              # already best-first
+            region = self._region_of(candidate.start, floor, span, regions)
+            buckets.setdefault(region, []).append(candidate)
+
+        ordered: list = []
+        while buckets:
+            for region in sorted(buckets, key=lambda r: buckets[r][0].score,
+                                 reverse=True):
+                ordered.append(buckets[region].pop(0))
+                if not buckets[region]:
+                    del buckets[region]
+        return ordered
+
     def select_clips(
         self,
         segments: Iterable[dict],
@@ -428,11 +487,19 @@ class HighlightScorer:
         together should still produce a full set - spreading them out is
         a preference, and coming back with one clip to honour it is not
         what anybody wanted.
+
+        Before any of that, the candidates are reordered by
+        _spread_by_region so the gap ladder - and whatever reads this
+        list afterwards, model or none - is working from a shortlist
+        that already favours different parts of the stream over more of
+        the same one.
         """
         candidates = self.candidate_windows(segments)
+        regions = max(MIN_REGIONS, min(count, MAX_REGIONS)) if count > 0 else 1
+        spread = self._spread_by_region(candidates, regions)
         selected: list[Highlight] = []
         for gap in self._gap_ladder(min_gap):
-            selected = self._take(candidates, count, gap)
+            selected = self._take(spread, count, gap)
             if len(selected) >= count:
                 break
 
