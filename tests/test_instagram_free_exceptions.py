@@ -166,3 +166,117 @@ def test_a_bad_symbol_name_is_not_blamed_on_pillow():
         assert "NotFound" in problem
     finally:
         m._INSTA_OK, m._INSTA_IMPORT_ERROR = saved_ok, saved_err
+
+
+# ── a fresh/expired session gets 2FA-challenged on login ──────────────────
+#
+# "Instagram returned a Bloks two-factor context from the CAA login flow;
+# provide verification_code for login" - every cl.login() call inside
+# _ensure_client() was unguarded, so this (instagrapi's own
+# TwoFactorRequired) came straight out as a raw exception on any run where
+# the saved session was stale or missing. post_reel_from_file() had no
+# handling for it either, so it failed the post outright and, after six of
+# those, opened the circuit breaker for the whole platform - not because
+# anything was actually broken, just because nothing ever offered to type
+# the code in.
+
+def _publisher(monkeypatch):
+    monkeypatch.setenv("INSTA_USERNAME", "stackswopo")
+    monkeypatch.setenv("INSTA_PASSWORD", "hunter2")
+    return m.InstagramFreePublisher({})
+
+
+class _FakeClient:
+    """login() raises TwoFactorRequired until given a code, then succeeds."""
+
+    def __init__(self):
+        self.calls = []
+
+    def login(self, username, password, verification_code=""):
+        self.calls.append(verification_code)
+        if not verification_code:
+            raise m.TwoFactorRequired(
+                "Instagram returned a Bloks two-factor context from the "
+                "CAA login flow; provide verification_code for login")
+        return True
+
+
+def test_a_two_factor_challenge_is_solved_with_a_prompted_code(monkeypatch):
+    monkeypatch.setattr(m, "TwoFactorRequired", ValueError)
+    publisher = _publisher(monkeypatch)
+    cl = _FakeClient()
+    monkeypatch.setattr("builtins.input", lambda prompt: "123456")
+
+    assert publisher._login(cl) is True
+    assert cl.calls == ["", "123456"], (
+        "the retry must pass the exact code the user typed as "
+        "verification_code")
+
+
+def test_an_ordinary_login_never_prompts(monkeypatch):
+    monkeypatch.setattr(m, "TwoFactorRequired", ValueError)
+    publisher = _publisher(monkeypatch)
+
+    class _Clean:
+        def login(self, username, password, verification_code=""):
+            return True
+
+    def _boom(prompt):
+        pytest.fail("input() must not be called when login succeeds outright")
+
+    monkeypatch.setattr("builtins.input", _boom)
+
+    assert publisher._login(_Clean()) is True
+
+
+def test_no_code_entered_fails_without_crashing(monkeypatch):
+    monkeypatch.setattr(m, "TwoFactorRequired", ValueError)
+    publisher = _publisher(monkeypatch)
+
+    class _Challenged:
+        def login(self, username, password, verification_code=""):
+            if not verification_code:
+                raise ValueError("2FA required")
+            return True
+
+    monkeypatch.setattr("builtins.input", lambda prompt: "")
+
+    assert publisher._login(_Challenged()) is False
+
+
+def test_a_wrong_code_fails_without_crashing(monkeypatch):
+    monkeypatch.setattr(m, "TwoFactorRequired", ValueError)
+    publisher = _publisher(monkeypatch)
+
+    class _WrongCode:
+        def login(self, username, password, verification_code=""):
+            if not verification_code:
+                raise ValueError("2FA required")
+            raise RuntimeError("Please check the code you entered")
+
+    monkeypatch.setattr("builtins.input", lambda prompt: "000000")
+
+    assert publisher._login(_WrongCode()) is False
+
+
+def test_ensure_client_no_longer_raises_a_raw_two_factor_error(
+        monkeypatch, tmp_path):
+    """The exact crash from the log: _ensure_client() (called from
+    post_reel_from_file) must return None, not let TwoFactorRequired
+    propagate out to the caller as an unrecognised exception."""
+    monkeypatch.setattr(m, "TwoFactorRequired", ValueError)
+    monkeypatch.setenv("INSTA_USERNAME", "stackswopo")
+    monkeypatch.setenv("INSTA_PASSWORD", "hunter2")
+    monkeypatch.setenv("INSTA_SESSION_FILE",
+                       str(tmp_path / ".instagrapi_session.json"))
+    publisher = m.InstagramFreePublisher({})
+
+    class _AlwaysChallenged:
+        def login(self, username, password, verification_code=""):
+            raise ValueError("2FA required")
+
+    monkeypatch.setattr(m, "InstagrapiClient", _AlwaysChallenged,
+                        raising=False)
+    monkeypatch.setattr("builtins.input", lambda prompt: "")
+
+    assert publisher._ensure_client() is None

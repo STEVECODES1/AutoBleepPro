@@ -107,6 +107,7 @@ LoginRequired = _insta_exc("LoginRequired")
 NotFound = _insta_exc("NotFoundError")
 RetryAfterContent = _insta_exc("RateLimitError")
 UploadError = _insta_exc("ClipNotUpload")
+TwoFactorRequired = _insta_exc("TwoFactorRequired")
 
 
 def instagrapi_problem() -> str:
@@ -183,6 +184,49 @@ class InstagramFreePublisher:
 
     # ── login (lazy, with session persistence) ─────────────────────────
 
+    def _login(self, cl: "InstagrapiClient") -> bool:
+        """Log `cl` in, solving a 2FA challenge once if Instagram asks.
+
+        Every cl.login() call in _ensure_client() used to be unguarded, so
+        a fresh/expired session (the saved cookies are stale, or there is
+        no session file yet) that made Instagram challenge the login for
+        2FA raised straight out of _ensure_client() as a raw
+        TwoFactorRequired: "Instagram returned a Bloks two-factor context
+        from the CAA login flow; provide verification_code for login" -
+        which post_reel_from_file() had no handling for either, so it
+        surfaced all the way to the caller as an unrecognised exception,
+        failed the post, and after enough of those opened the circuit
+        breaker for the whole platform. Nothing about that was a real
+        problem with the account or the code - Instagram just wanted the
+        code, and nothing ever offered to type it in.
+
+        Same pattern as Rumble's own 2FA prompt (utils/rumble_uploader.py:
+        `input("[Rumble] 2FA code requested...")`): a blocking input() on
+        the console this process is running in. This can also run from
+        --watch's background thread, but that thread shares the process's
+        own console, so the prompt still appears there and still reads
+        back whatever gets typed into that window - it just means nobody
+        watching it will sit there until someone is.
+        """
+        try:
+            cl.login(self._user, self._password)
+            return True
+        except TwoFactorRequired:
+            pass
+        code = input("[Instagram] 2FA code requested - check your "
+                     "authenticator app, SMS or email and enter it "
+                     "here: ").strip()
+        if not code:
+            log.error("Instagram (instagrapi): no 2FA code entered - "
+                      "cannot finish logging in.")
+            return False
+        try:
+            cl.login(self._user, self._password, verification_code=code)
+            return True
+        except Exception as exc:
+            log.error("Instagram (instagrapi): 2FA login failed: %s", exc)
+            return False
+
     def _ensure_client(self) -> Optional[InstagrapiClient]:
         """Log in once, keep the client. Returns None on auth failure."""
         if self._client is not None and self._logged_in:
@@ -196,16 +240,19 @@ class InstagramFreePublisher:
         if os.path.isfile(self._session_file):
             try:
                 cl.load_settings(self._session_file)
-                cl.login(self._user, self._password)
+                if not self._login(cl):
+                    return None
                 log.info("Instagram (instagrapi): restored session for %s",
                          self._user)
             except Exception as exc:
                 log.warning("Instagram (instagrapi): session restore failed "
                             "(re-logging in): %s", exc)
                 cl = InstagrapiClient()
-                cl.login(self._user, self._password)
+                if not self._login(cl):
+                    return None
         else:
-            cl.login(self._user, self._password)
+            if not self._login(cl):
+                return None
 
         self._client = cl
         self._logged_in = True
