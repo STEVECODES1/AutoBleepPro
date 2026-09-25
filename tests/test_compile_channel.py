@@ -30,6 +30,15 @@ import compile_channel as cc  # noqa: E402
 from compile_channel import Ledger, Video  # noqa: E402
 
 
+@pytest.fixture(autouse=True)
+def _fresh_route():
+    """download() remembers a refusal for the rest of a run; every test
+    is a run of its own."""
+    cc.reset_route()
+    yield
+    cc.reset_route()
+
+
 def _settings(**overrides):
     settings = dict(cc.DEFAULTS)
     settings.update(overrides)
@@ -388,8 +397,12 @@ def _answers(monkeypatch, *outcomes):
     callable make(merged_path) that succeeds, or a stderr string."""
     queue = list(outcomes)
     calls = []
+    real = cc._run
 
     def run(command, timeout):
+        if "-o" not in command:
+            # ffprobe and friends run for real - only yt-dlp is scripted.
+            return real(command, timeout)
         template = command[command.index("-o") + 1]
         merged = template.replace("%(ext)s", "mp4")
         calls.append(command)
@@ -601,3 +614,48 @@ def test_the_thumbnail_goes_up_with_the_video(monkeypatch, tmp_path):
     cc.upload(job, _settings(ledger_path=str(tmp_path / "l.json")),
               Ledger(str(tmp_path / "l.json")), str(work))
     assert seen["thumbnail_path"] == str(thumb)
+
+
+def test_after_one_refusal_the_rest_of_the_run_skips_the_direct_file(
+        tmp_path, monkeypatch):
+    """The real run: every video was refused the direct file and each paid
+    for a refused attempt and an update check before the streaming copy.
+    One refusal is enough to know; one update per run is enough."""
+    def make(path):
+        open(path, "wb").write(b"mp4")
+
+    calls = _answers(monkeypatch, _REFUSED, make, make, make)
+    updates = []
+    monkeypatch.setattr(cc, "update_yt_dlp",
+                        lambda: updates.append(1) or (True, "already"))
+    monkeypatch.setattr(cc, "has_audio", lambda path: True)
+    monkeypatch.setattr(cc, "probe_height", lambda path: 1080)
+
+    for vid in ("a", "b", "c"):
+        cc.download(Video(vid, f"Clips #{vid}", 60), str(tmp_path),
+                    _settings())
+
+    formats = [_format_of(c) for c in calls]
+    assert "m3u8" not in formats[0], "the first video still tries direct"
+    assert all("m3u8" in f for f in formats[1:]), formats
+    assert len(calls) == 4, "no refused attempt for the 2nd and 3rd video"
+    assert len(updates) == 1
+
+
+def test_if_the_streaming_copy_fails_later_the_direct_file_is_tried(
+        tmp_path, monkeypatch):
+    def make(path):
+        open(path, "wb").write(b"mp4")
+
+    calls = _answers(monkeypatch, _REFUSED, make,
+                     "ERROR: fragment 3 not found", make)
+    monkeypatch.setattr(cc, "update_yt_dlp", lambda: (True, "already"))
+    monkeypatch.setattr(cc, "has_audio", lambda path: True)
+    monkeypatch.setattr(cc, "probe_height", lambda path: 1080)
+
+    cc.download(Video("a", "Clips #1", 60), str(tmp_path), _settings())
+    path = cc.download(Video("b", "Clips #2", 60), str(tmp_path), _settings())
+
+    assert os.path.basename(path) == "b.mp4"
+    assert "m3u8" in _format_of(calls[2])
+    assert "m3u8" not in _format_of(calls[3])
