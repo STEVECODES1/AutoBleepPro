@@ -1176,6 +1176,19 @@ def _rumble_channel_url(cfg) -> str:
     return channel
 
 
+def _already_on_rumble(title: str, cfg) -> str:
+    """The channel's link for this title, or "" - never raises."""
+    channel = _rumble_channel_url(cfg)
+    if not channel:
+        return ""
+    try:
+        from utils.channel_vods import find_on_channel
+
+        return find_on_channel(channel, title) or ""
+    except Exception:
+        return ""
+
+
 def _confirm_on_rumble(url: str, title: str, cfg) -> str:
     """Turn an unconfirmed Rumble upload into a verified answer.
 
@@ -2639,13 +2652,30 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
             def rb_on_retry(attempt, delay, exc):
                 rb_logger.warning(f"{filename}: attempt {attempt} failed ({exc}); retrying in {delay}s")
 
-            url = retry_with_backoff(
-                lambda: rb.upload(
+            rb_attempts = [0]
+
+            def rb_attempt():
+                # A retry after a failure that came AFTER Rumble accepted
+                # the video (waiting for the published page, reading the
+                # link) used to upload the whole file again - one clip,
+                # two videos on the channel. Look before sending it twice.
+                if rb_attempts[0]:
+                    already = _already_on_rumble(rb_title, cfg)
+                    if already:
+                        print(f"[Rumble] Already on the channel from the "
+                              f"last attempt -> {already}. Not uploading "
+                              f"it again.")
+                        return already
+                rb_attempts[0] += 1
+                return rb.upload(
                     rb_source, rb_title, rb_description, cfg.rumble.tags,
                     privacy=cfg.rumble.privacy,
                     thumbnail_path=thumbnail_path_for(cfg.rumble.thumbnail_path) or None,
                     progress_callback=rb_progress,
-                ),
+                )
+
+            url = retry_with_backoff(
+                rb_attempt,
                 max_retries=cfg.general.max_retries, delays=cfg.general.retry_delays, on_retry=rb_on_retry,
                 # A browser that is not running, or is signed out, fails
                 # exactly the same way on attempt two and attempt three.

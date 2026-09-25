@@ -520,3 +520,56 @@ def test_a_failed_generation_does_not_crash_the_upload(scene, tmp_path,
     assert results["rumble"].startswith("https://rumble")
     assert seen["youtube"] is None
     assert seen["rumble"] is None
+
+
+# ── a Rumble retry must not upload the video a second time ──────────────────
+
+def test_a_rumble_retry_finds_the_video_it_already_uploaded(
+        scene, tmp_path, monkeypatch):
+    """The first attempt got the file onto Rumble and then failed waiting
+    for the published page. The retry used to upload it all again."""
+    main, cfg, video, recorder = scene
+    uploads = []
+
+    class FailsAfterPublishing:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def upload(self, *args, **kwargs):
+            uploads.append(1)
+            raise RuntimeError("timed out waiting for the published page")
+
+    monkeypatch.setattr(main, "RumbleUploader", FailsAfterPublishing)
+    monkeypatch.setattr(main, "_already_on_rumble",
+                        lambda title, cfg: "https://rumble.com/v7abc1-a-stream.html")
+    monkeypatch.setattr(main, "_confirm_on_rumble", lambda url, title, cfg: url)
+
+    results = run(main, cfg, video, tmp_path)
+
+    assert len(uploads) == 1, "the retry uploaded the video a second time"
+    assert results["rumble"] == "https://rumble.com/v7abc1-a-stream.html"
+
+
+def test_a_rumble_retry_still_uploads_when_nothing_landed(
+        scene, tmp_path, monkeypatch):
+    main, cfg, video, recorder = scene
+    uploads = []
+
+    class FailsOnce:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def upload(self, *args, **kwargs):
+            uploads.append(1)
+            if len(uploads) == 1:
+                raise RuntimeError("connection dropped at 40%")
+            return "https://rumble.com/v7abc2-a-stream.html"
+
+    monkeypatch.setattr(main, "RumbleUploader", FailsOnce)
+    monkeypatch.setattr(main, "_already_on_rumble", lambda title, cfg: "")
+    monkeypatch.setattr(main, "_confirm_on_rumble", lambda url, title, cfg: url)
+
+    results = run(main, cfg, video, tmp_path)
+
+    assert len(uploads) == 2
+    assert results["rumble"] == "https://rumble.com/v7abc2-a-stream.html"
