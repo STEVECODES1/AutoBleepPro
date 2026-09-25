@@ -1154,6 +1154,16 @@ class RumbleUploader:
 
             self._set_visibility(page, privacy)
 
+            if callable(thumbnail_path):
+                # Made now, while the video is already on its way up - not
+                # before the upload starts, where a thumbnail pass (frame
+                # sampling plus a model call, with its own retries) held
+                # the whole Rumble upload back.
+                try:
+                    thumbnail_path = thumbnail_path()
+                except Exception as exc:
+                    print(f"[Rumble] No thumbnail - {exc}")
+                    thumbnail_path = None
             if thumbnail_path and os.path.exists(thumbnail_path):
                 thumb_input = page.locator("input[type='file'][accept*='image']")
                 if thumb_input.count() > 0:

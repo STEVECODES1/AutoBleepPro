@@ -394,7 +394,10 @@ def _capture_thumbnail_kwarg(main, monkeypatch):
                 pass
 
             def upload(self, path, *args, **kwargs):
-                seen[platform] = kwargs.get("thumbnail_path")
+                value = kwargs.get("thumbnail_path")
+                # Rumble is handed a function it calls once the video
+                # is already uploading.
+                seen[platform] = value() if callable(value) else value
                 return f"https://{platform}.example/watch"
 
             def get_service(self):

@@ -2595,7 +2595,8 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
                     chunk_mb=float(getattr(cfg.youtube, 'upload_chunk_mb', 8) or 8),
                     privacy=cfg.youtube.privacy, category_id=cfg.youtube.category_id,
                     made_for_kids=cfg.youtube.made_for_kids,
-                    thumbnail_path=thumbnail_path_for(cfg.youtube.thumbnail_path) or None,
+                    thumbnail_path=lambda: thumbnail_path_for(
+                        cfg.youtube.thumbnail_path) or None,
                     playlist_id=cfg.youtube.playlist_id or None,
                     progress_callback=progress_reporter("YouTube", parallel),
                 ),
@@ -2670,7 +2671,8 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
                 return rb.upload(
                     rb_source, rb_title, rb_description, cfg.rumble.tags,
                     privacy=cfg.rumble.privacy,
-                    thumbnail_path=thumbnail_path_for(cfg.rumble.thumbnail_path) or None,
+                    thumbnail_path=lambda: thumbnail_path_for(
+                        cfg.rumble.thumbnail_path) or None,
                     progress_callback=rb_progress,
                 )
 
@@ -2793,6 +2795,18 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
 
     parallel = len(jobs) > 1 and bool(
         (cfg.general.speed or {}).get("parallel_uploads", True))
+    # The thumbnail (frame sampling plus a model call that can sit through
+    # its own 503 retries) is started alongside the uploads, and each
+    # uploader only asks for it once its video is already moving. Made
+    # inline, it held back whichever upload asked first - Rumble's start
+    # waited 20s+ on a Gemini retry in a real run.
+    wanted = {"youtube": cfg.youtube.thumbnail_path,
+              "rumble": cfg.rumble.thumbnail_path}
+    if jobs and cfg.general.auto_thumbnail and any(
+            not (wanted.get(name) and os.path.exists(wanted[name]))
+            for name, _ in jobs):
+        threading.Thread(target=thumbnail_path_for, args=("",),
+                         daemon=True).start()
     if parallel:
         if rumble_will_run:
             print(f"[Upload] Rumble first - YouTube waits for it to "

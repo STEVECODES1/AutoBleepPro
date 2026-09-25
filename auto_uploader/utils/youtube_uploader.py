@@ -226,6 +226,13 @@ class YouTubeUploader:
 
         video_id = response["id"]
 
+        if callable(thumbnail_path):
+            # Made while the video was uploading, and only needed now.
+            try:
+                thumbnail_path = thumbnail_path()
+            except Exception as exc:
+                print(f"[YouTube] No thumbnail - {exc}")
+                thumbnail_path = None
         if thumbnail_path and os.path.exists(thumbnail_path):
             try:
                 service.thumbnails().set(

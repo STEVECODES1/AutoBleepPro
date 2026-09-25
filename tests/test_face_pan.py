@@ -213,11 +213,18 @@ _SEGMENTS = [
 def test_the_maker_renders_a_pan_and_deletes_its_command_file(
         tmp_path, monkeypatch):
     """The .cmds script is scratch. It was never cleaned - a hidden file
-    beside every clip, left for the life of the folder."""
+    beside every clip, left for the life of the folder.
+
+    Driven through the motion crop: the moving face_pan crop is retired
+    (crop_strategy.RETIRED_STRATEGIES - it chased NPC faces in GTA), and
+    motion is the pan that still writes a .cmds file today. This test
+    faked face_region.path_for, which nothing calls any more, so it
+    failed the moment ffmpeg was present to run it.
+    """
     import subprocess
 
     import autoreel.clip_maker as clip_maker
-    from autoreel.clip_maker import ClipSpec, have_ffmpeg
+    from autoreel.clip_maker import have_ffmpeg
 
     if not have_ffmpeg():
         import pytest
@@ -231,34 +238,32 @@ def test_the_maker_renders_a_pan_and_deletes_its_command_file(
         "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest",
         source], check=True)
 
-    # Stand in for mediapipe: somebody who walks across the pane.
-    size = {"x": 0.05, "y": 0.10, "width": 0.30, "height": 0.50}
-    path = [(0.0, 0.20, 0.30), (1.0, 0.28, 0.36), (2.0, 0.36, 0.42)]
-    monkeypatch.setattr(clip_maker.face_region, "path_for",
-                        lambda *a, **k: (size, path))
+    # Stand in for the frame-difference read: action drifting right.
+    monkeypatch.setattr(clip_maker.motion_region, "path_for",
+                        lambda *a, **k: [(0.0, 0.40), (1.0, 0.50),
+                                         (2.0, 0.60)])
+    monkeypatch.setattr(clip_maker.motion_region, "is_worth_moving",
+                        lambda path: True)
 
-    # Prove the pan was actually taken. Without this the test passes just
-    # as happily on a run that fell back to the static crop and therefore
-    # had no .cmds file to leave behind.
     seen = {}
     real_render = clip_maker.render_clip
 
     def spy(*args, **kwargs):
         seen["commands"] = kwargs.get("motion_commands", "")
-        seen["region"] = args[8] if len(args) > 8 else kwargs.get("region")
         seen["existed"] = os.path.exists(seen["commands"] or "")
         return real_render(*args, **kwargs)
 
     monkeypatch.setattr(clip_maker, "render_clip", spy)
 
-    results = _maker(tmp_path).make(source, _SEGMENTS, basename="stream")
+    maker = clip_maker.ClipMaker(
+        output_dir=str(tmp_path / "clips"), count=1,
+        min_seconds=2.0, max_seconds=5.0, preset="ultrafast",
+        captions=False, config={"clips": {"crop_strategy": "motion"}})
+    results = maker.make(source, _SEGMENTS, basename="stream")
 
     assert seen.get("commands", "").endswith(".cmds"), \
-        "the maker rendered without a path at all"
+        "the maker rendered without a pan at all"
     assert seen["existed"], "the sendcmd script was not written before render"
-    assert seen["region"] == size, \
-        "the measured box was dropped - the crop would be a 9:16 slice of " \
-        "the whole desktop"
     assert results, "a clearly clip-worthy segment produced nothing"
     assert all(os.path.exists(r.path) for r in results)
     leftovers = [p for p in os.listdir(tmp_path / "clips")
