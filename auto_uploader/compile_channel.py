@@ -547,6 +547,17 @@ def _clear_halves(folder: str, video_id: str, merged: str) -> None:
                 pass
 
 
+# What this run has learned about YouTube. On the real machine the direct
+# files were refused for every video, and each one paid for a refused
+# attempt plus a yt-dlp update check before the streaming copy that works.
+# One refusal is enough to know; one update check per run is enough too.
+_ROUTE = {"direct_refused": False, "updated": False}
+
+
+def reset_route() -> None:
+    _ROUTE.update(direct_refused=False, updated=False)
+
+
 def download(video: Video, folder: str, settings: dict) -> str:
     os.makedirs(folder, exist_ok=True)
     template = os.path.join(folder, f"{video.id}.%(ext)s")
@@ -567,14 +578,25 @@ def download(video: Video, folder: str, settings: dict) -> str:
         _clear_halves(folder, video.id, merged)
         return done
 
-    done = fetch(FORMAT)
-    if not os.path.isfile(merged) and _refused(done.stderr):
-        _say("  YouTube refused the direct download (403). Updating yt-dlp, "
-             "then trying YouTube's streaming copy instead ...")
-        updated, detail = update_yt_dlp()
-        _say(f"  yt-dlp {detail}." if updated
-             else f"  Could not update yt-dlp ({detail}).")
+    if _ROUTE["direct_refused"]:
+        # Refused once this run, refused every time: straight to the
+        # streaming copy. The direct file is still tried if that fails.
         done = fetch(HLS_FORMAT)
+        if not os.path.isfile(merged):
+            done = fetch(FORMAT)
+    else:
+        done = fetch(FORMAT)
+        if not os.path.isfile(merged) and _refused(done.stderr):
+            _ROUTE["direct_refused"] = True
+            if not _ROUTE["updated"]:
+                _ROUTE["updated"] = True
+                _say("  YouTube refused the direct download (403). Updating "
+                     "yt-dlp, then using YouTube's streaming copy - for this "
+                     "video and every one after it in this run ...")
+                updated, detail = update_yt_dlp()
+                _say(f"  yt-dlp {detail}." if updated
+                     else f"  Could not update yt-dlp ({detail}).")
+            done = fetch(HLS_FORMAT)
     if not os.path.isfile(merged):
         for line in _warnings(done.stderr):
             _say(f"  yt-dlp warned: {line}")
