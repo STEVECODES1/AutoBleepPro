@@ -29,6 +29,7 @@ Those are skipped with the guard's own reason, exactly as before.
 from __future__ import annotations
 
 import re
+import json
 import os
 import sys
 from typing import Optional
@@ -103,6 +104,43 @@ def _queue(posting: dict):
     from job_queue import JobQueue
 
     return JobQueue(path=(posting or {}).get("queue_path") or "./clip_jobs.json")
+
+
+def _reach_path(posting: dict) -> str:
+    queue_path = (posting or {}).get("queue_path") or "./clip_jobs.json"
+    return os.path.join(os.path.dirname(os.path.abspath(queue_path)),
+                        "fanout_reach.json")
+
+
+def remembered_reach(posting: dict, route: str) -> set:
+    """Which platforms this fan-out route reached the last time it posted.
+
+    postplanify posts to whatever is connected on its side, which this
+    project's config cannot see - so the only honest answer to "what will
+    it cover when its wait is up" is what it covered last time.
+    """
+    try:
+        with open(_reach_path(posting), encoding="utf-8") as handle:
+            return set(json.load(handle).get(route) or ())
+    except (OSError, ValueError, AttributeError):
+        return set()
+
+
+def _remember_reach(posting: dict, route: str, reached: set) -> None:
+    path = _reach_path(posting)
+    try:
+        with open(path, encoding="utf-8") as handle:
+            known = json.load(handle)
+    except (OSError, ValueError):
+        known = {}
+    if not isinstance(known, dict):
+        known = {}
+    known[route] = sorted(reached)
+    try:
+        with open(path, "w", encoding="utf-8") as handle:
+            json.dump(known, handle, indent=2)
+    except OSError:
+        pass
 
 
 def _publisher(platform: str, config: dict):
@@ -804,13 +842,33 @@ def offer(posting: dict, config: dict, video_path: str,
         # Recorded before the attempt, so the queue is also the ledger of
         # what has been posted - which is what stops a re-run of the same
         # file posting it twice.
-        job_id = queue.enqueue(platform, video_path, caption)
+        # A narrowed upload_post call keeps its narrowed list. Stored on
+        # the job, because a retry that drained to the FULL list would
+        # repost everything postplanify had already sent.
+        targets = (call_config.get("target_platforms")
+                   if call_config is not config else None)
+        job_id = queue.begin(platform, video_path, caption,
+                             extra={"target_platforms": list(targets)}
+                             if targets else None)
 
         if not decision:
             queue.block(job_id, decision.reason, decision.retry_after_s)
             outcome[platform] = "queued"
             print(f"[Clips] {platform}: {decision.reason} - queued, back in "
                   f"{decision.retry_after_s / 60:.0f} min.")
+            if platform in FAN_OUT_ROUTES:
+                # It WILL post this clip when its wait is up. Posting it
+                # directly as well meant the same Reel twice - Clip 01 went
+                # to Instagram directly while postplanify held it for its
+                # 20-minute spacing, then postplanify sent it there too.
+                later = remembered_reach(posting, platform) - covered
+                for name in later:
+                    covered_by.setdefault(name, platform)
+                covered |= later
+                if later:
+                    print(f"[Clips] {platform}: will cover "
+                          f"{', '.join(sorted(later))} when it goes - "
+                          f"not posting those directly.")
             _journal(config, "wait", platform, video_path,
                      f"{decision.reason} - back in "
                      f"{decision.retry_after_s / 60:.0f} min")
@@ -887,6 +945,8 @@ def offer(posting: dict, config: dict, video_path: str,
                 for name in reached:
                     covered_by.setdefault(name, platform)
                 covered |= reached
+                if reached and not dry_run:
+                    _remember_reach(posting, platform, reached)
                 shown = ", ".join(sorted(reached)) or "nothing else enabled"
                 print(f"[Clips] {platform}: posted - covers {shown}.")
             else:
@@ -945,6 +1005,15 @@ def recaption(posting: dict, config: dict) -> list:
     if changed:
         queue._save()
     return changed
+
+
+def _sent_by_other_route(queue, job) -> bool:
+    wanted = clip_key(job.clip_path)
+    return any(other.platform in FAN_OUT_ROUTES
+               and other.platform != job.platform
+               and other.state == "done"
+               and clip_key(other.clip_path) == wanted
+               for other in queue.list_jobs())
 
 
 def drain(posting: dict, config: dict, limit: int = 0,
@@ -1013,8 +1082,26 @@ def drain(posting: dict, config: dict, limit: int = 0,
         # by itself, with nothing to re-run.
         caption = _current_caption(job, config)
 
+        job_config = config
+        targets = (job.extra or {}).get("target_platforms")
+        if targets:
+            job_config = dict(config or {}, target_platforms=list(targets))
+        elif job.platform == "upload_post" and _sent_by_other_route(
+                queue, job):
+            # Queued before its narrowed list was stored. Its full list
+            # includes what postplanify already sent this clip to.
+            queue.abandon(job.id, "postplanify already posted this clip; "
+                          "the narrowed target list was not stored", now=now)
+            _journal(config, "skip", job.platform, job.clip_path,
+                     "already sent by postplanify")
+            if not quiet:
+                print(f"[Clips] upload_post: dropped "
+                      f"{os.path.basename(job.clip_path)} - postplanify "
+                      f"already posted it.")
+            continue
+
         try:
-            ok = publish(job.platform, job.clip_path, caption, config,
+            ok = publish(job.platform, job.clip_path, caption, job_config,
                          dry_run)
         except NotConfigured as exc:
             # Held, not failed: the clip is fine, the token is not. It

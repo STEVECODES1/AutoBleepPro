@@ -64,7 +64,11 @@ PLATFORM_ALIASES = {
     "instagram": "instagram",
     "facebook": "facebook",
     "tiktok": "tiktok",
-    "x": "twitter",
+    # "x", not "twitter". Upload-Post refused every call that named
+    # "twitter" - "Invalid platforms: ['twitter']" - and a refused call
+    # posts to NONE of its platforms, so TikTok and Instagram went down
+    # with it on every clip. Its own SDK (2.13) lists "x".
+    "x": "x",
     "youtube_shorts": "youtube",
     "youtube": "youtube",
     "threads": "threads",
@@ -90,6 +94,8 @@ _ALIAS_TO_PROJECT_NAME = {
     alias: name for name, alias in PLATFORM_ALIASES.items()
     if name in _THIS_PROJECT_PLATFORMS
 }
+# Results written by an older API version may still say "twitter".
+_ALIAS_TO_PROJECT_NAME.setdefault("twitter", "x")
 
 
 def platforms_reached(result: Optional[Dict[str, Any]]) -> set:

@@ -30,7 +30,7 @@ def test_the_platform_aliases_are_reachable_from_the_publisher():
     from publishers import upload_post as up
 
     assert isinstance(up.PLATFORM_ALIASES, dict)
-    assert up.PLATFORM_ALIASES.get("x") == "twitter"
+    assert up.PLATFORM_ALIASES.get("x") == "x"
 
     body = open(up.__file__, encoding="utf-8").read()
     code = "\n".join(line for line in body.splitlines()
@@ -140,3 +140,23 @@ def test_a_busy_or_broken_server_is_still_retried():
                     "HTTP 502: bad gateway",
                     "the request timed out"):
         assert _is_transient(problem), problem
+
+
+def test_x_is_sent_to_upload_post_as_x_not_twitter():
+    """A real run, every clip: 'REST upload rejected (HTTP 400):
+    {"success":false,"message":"Invalid platforms: ['twitter']"}' - and a
+    rejected call posts to none of its platforms. Upload-Post's own SDK
+    (2.13) names it "x"."""
+    from publishers import upload_post as up
+
+    assert up.PLATFORM_ALIASES["x"] == "x"
+    assert "twitter" not in up.PLATFORM_ALIASES.values()
+
+
+def test_a_result_that_says_twitter_still_counts_as_x():
+    from publishers import upload_post as up
+
+    reached = up.platforms_reached({"results": [
+        {"platform": "twitter", "success": True},
+        {"platform": "x", "success": True}]})
+    assert reached == {"x"}

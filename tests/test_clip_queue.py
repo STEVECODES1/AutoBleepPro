@@ -718,3 +718,144 @@ def test_a_config_that_explicitly_asks_for_whole_sentence_still_gets_it(
         {"general": {"censor_mute_whole_segment": True}})
 
     assert captured["mute_whole_segment"] is True
+
+
+# ── the same clip posted twice ──────────────────────────────────────────────
+# A real run: Clip 02 went to Instagram and TikTok through postplanify, and
+# 34 seconds later the watcher's drain "posted a queued Reel" - the same
+# clip again. The poster queued the job as pending before uploading, and a
+# pending job is what the drain picks up.
+
+def test_the_drain_cannot_repost_a_clip_that_is_still_uploading(
+        publisher, posting, clips):
+    drained = []
+
+    def post_and_drain_meanwhile(self, path, caption="", share_to_feed=True):
+        drained.append(publisher.drain(posting, CONFIG, quiet=True))
+        FakePublisher.posted.append((os.path.basename(path), caption))
+        return True
+
+    FakePublisher.post_reel_from_file = post_and_drain_meanwhile
+    try:
+        publisher.offer(posting, CONFIG, clips[0], platforms=("instagram",))
+    finally:
+        del FakePublisher.post_reel_from_file
+
+    assert drained == [{}]
+    assert len(FakePublisher.posted) == 1
+
+
+def test_a_stale_queue_copy_cannot_undo_a_finished_post(tmp_path):
+    """Two holders of one file: the drain's older copy saving must not put
+    a job the poster finished back to in_progress, where the lease would
+    bring it back to post again."""
+    from job_queue import DONE, JobQueue
+
+    path = str(tmp_path / "clip_jobs.json")
+    poster = JobQueue(path=path)
+    job_id = poster.begin("instagram", "/clips/a.mp4")
+    drain = JobQueue(path=path)                 # reads it in_progress
+    other = drain.enqueue("facebook", "/clips/b.mp4")
+
+    poster.complete(job_id)
+    drain.block(other, "spacing", 600)          # saves its older copy
+
+    assert JobQueue(path=path).get(job_id).state == DONE
+    assert JobQueue(path=path).get(other).state == "blocked"
+
+
+def test_a_begun_job_is_not_claimable(tmp_path):
+    from job_queue import JobQueue
+
+    path = str(tmp_path / "clip_jobs.json")
+    JobQueue(path=path).begin("instagram", "/clips/a.mp4")
+    assert JobQueue(path=path).claim() is None
+
+
+# ── fan-out routes and the direct publishers ────────────────────────────────
+
+def _fanout_posting(posting):
+    posting = dict(posting)
+    posting["platforms"] = dict(posting["platforms"])
+    posting["platforms"]["postplanify"] = {
+        "enabled": True, "daily_cap": 50, "min_minutes_between": 20}
+    posting["platforms"]["upload_post"] = {
+        "enabled": True, "daily_cap": 50, "min_minutes_between": 0}
+    return posting
+
+
+class _Ready:
+    def ready(self):
+        return True
+
+
+def _record_publish(publisher, monkeypatch):
+    calls = []
+
+    def publish(platform, path, caption, config, dry_run=False, detail=None):
+        calls.append((platform, os.path.basename(path),
+                      list((config or {}).get("target_platforms") or ())))
+        return True
+
+    monkeypatch.setattr(publisher, "publish", publish)
+    monkeypatch.setattr(publisher, "_publisher", lambda p, c: _Ready())
+    return calls
+
+
+def test_a_clip_postplanify_is_holding_is_not_posted_directly(
+        publisher, posting, clips, monkeypatch):
+    """Clip 01, a real run: postplanify held it for its 20-minute spacing,
+    Instagram posted it directly, then postplanify sent it there too."""
+    from publish_guard import PublishGuard
+
+    posting = _fanout_posting(posting)
+    publisher._remember_reach(posting, "postplanify", {"instagram", "tiktok"})
+    PublishGuard(posting, posting["state_path"]).record_result(
+        "postplanify", True)                      # just posted another clip
+    calls = _record_publish(publisher, monkeypatch)
+
+    outcome = publisher.offer(posting, CONFIG, clips[0],
+                              platforms=("postplanify", "instagram"))
+
+    assert outcome["postplanify"] == "queued"
+    assert outcome["instagram"].startswith("skipped: sent by postplanify")
+    assert calls == []
+
+
+def test_a_narrowed_upload_post_retry_keeps_its_narrowed_list(
+        publisher, posting, clips, monkeypatch):
+    from job_queue import JobQueue
+
+    posting = _fanout_posting(posting)
+    queue = JobQueue(path=posting["queue_path"])
+    job_id = queue.begin("upload_post", clips[0],
+                         extra={"target_platforms": ["x"]})
+    queue.fail(job_id, "Invalid platforms")
+    queue.get(job_id).not_before = 0
+    queue._save()
+    calls = _record_publish(publisher, monkeypatch)
+
+    publisher.drain(posting, CONFIG, quiet=True)
+
+    assert calls == [("upload_post", "clip00.mp4", ["x"])]
+
+
+def test_an_old_upload_post_retry_is_dropped_if_postplanify_sent_the_clip(
+        publisher, posting, clips, monkeypatch):
+    """Queued before the narrowed list was stored: draining it would post
+    to its FULL list, including what postplanify already sent."""
+    from job_queue import JobQueue
+
+    posting = _fanout_posting(posting)
+    queue = JobQueue(path=posting["queue_path"])
+    queue.complete(queue.begin("postplanify", clips[0]))
+    queue.fail(queue.enqueue("upload_post", clips[0]), "Invalid platforms")
+    for job in queue.list_jobs():
+        job.not_before = 0
+    queue._save()
+    calls = _record_publish(publisher, monkeypatch)
+
+    publisher.drain(posting, CONFIG, quiet=True)
+
+    assert calls == []
+    assert JobQueue(path=posting["queue_path"]).counts().get("failed") == 1

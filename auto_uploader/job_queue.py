@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -49,6 +50,10 @@ BLOCKED = "blocked"              # guard said no; retry later, not a failure
 NEEDS_APPROVAL = "needs_approval"
 
 ACTIVE_STATES = (PENDING, IN_PROGRESS, BLOCKED)
+
+# One per process. The clip poster and the watcher's drain each hold their
+# own JobQueue on the same file, on different threads.
+_FILE_LOCK = threading.RLock()
 
 # A claimed job whose worker vanished returns to pending after this.
 DEFAULT_LEASE_SECONDS = 30 * 60
@@ -102,6 +107,8 @@ class JobQueue:
     lease_seconds: int = DEFAULT_LEASE_SECONDS
     backoff_seconds: tuple = DEFAULT_BACKOFF_SECONDS
     _jobs: dict = field(default_factory=dict, init=False)
+    _deleted: set = field(default_factory=set, init=False)
+    _loaded: dict = field(default_factory=dict, init=False)
 
     def __post_init__(self) -> None:
         self.path = str(self.path)   # accept a Path
@@ -127,8 +134,39 @@ class JobQueue:
             job_id: Job.from_dict(data)
             for job_id, data in (jobs or {}).items() if isinstance(data, dict)
         }
+        self._loaded = self._snapshot()
+
+    def _snapshot(self) -> dict:
+        return json.loads(json.dumps(
+            {jid: job.to_dict() for jid, job in self._jobs.items()}))
+
+    def _merge_from_disk(self) -> None:
+        """Take in what other holders of this file wrote since we read it.
+
+        Every holder used to write its whole snapshot back, so a thread
+        with an older copy could put a job it never touched back the way
+        it had been - a clip marked done by the poster reverted to
+        in_progress by the drain's save, and 30 minutes later the lease
+        expired and it posted again. Now only the jobs THIS holder
+        changed since it last read the file are written over what is
+        there.
+        """
+        before = self._loaded
+        changed = {}
+        for job_id, job in self._jobs.items():
+            if before.get(job_id) != json.loads(json.dumps(job.to_dict())):
+                changed[job_id] = job
+        self._load()
+        self._jobs.update(changed)
+        for job_id in self._deleted:
+            self._jobs.pop(job_id, None)
 
     def _save(self) -> None:
+        with _FILE_LOCK:
+            self._merge_from_disk()
+            self._write()
+
+    def _write(self) -> None:
         directory = os.path.dirname(os.path.abspath(self.path))
         os.makedirs(directory, exist_ok=True)
         # PID in the temp name so two processes writing at once cannot
@@ -139,6 +177,7 @@ class JobQueue:
             with open(tmp, "w", encoding="utf-8") as f:
                 json.dump(payload, f, indent=2)
             os.replace(tmp, self.path)   # atomic on POSIX and Windows
+            self._loaded = self._snapshot()
         except OSError:
             try:
                 os.remove(tmp)
@@ -234,15 +273,44 @@ class JobQueue:
               now: Optional[float] = None) -> Optional[Job]:
         """Take the next eligible job and mark it in_progress."""
         now = time.time() if now is None else now
-        candidates = self.ready(platform, now)
-        if not candidates:
-            return None
-        job = candidates[0]
-        job.state = IN_PROGRESS
-        job.claimed_at = now
-        job.updated_at = now
-        self._save()
-        return job
+        with _FILE_LOCK:
+            # Chosen from what is on disk NOW, not from when this queue
+            # was opened - the clip poster may have started it since.
+            self._merge_from_disk()
+            candidates = self.ready(platform, now)
+            if not candidates:
+                return None
+            job = candidates[0]
+            job.state = IN_PROGRESS
+            job.claimed_at = now
+            job.updated_at = now
+            self._write()
+            return job
+
+    def begin(self, platform: str, clip_path: str, caption: str = "",
+              extra: Optional[Dict[str, Any]] = None,
+              now: Optional[float] = None) -> str:
+        """Queue a clip that is being posted RIGHT NOW, already claimed.
+
+        enqueue() leaves it pending, and a pending job is exactly what the
+        watcher's drain picks up - so a clip the poster was still
+        uploading got posted a second time by the drain: the same Reel
+        on Instagram and TikTok 34 seconds apart. Claimed from the start,
+        only this caller can finish it; the lease still brings it back if
+        the process dies mid-upload.
+        """
+        now = time.time() if now is None else now
+        with _FILE_LOCK:
+            self._merge_from_disk()
+            job = self.add(platform, clip_path, caption=caption,
+                           extra=extra, now=now)
+            if extra:
+                job.extra.update(extra)
+            job.state = IN_PROGRESS
+            job.claimed_at = now
+            job.updated_at = now
+            self._write()
+            return job.id
 
     def acquire(self, platform: Optional[str] = None) -> Optional[dict]:
         """claim(), as a plain dict."""
@@ -431,6 +499,7 @@ class JobQueue:
         ]
         for jid in doomed:
             del self._jobs[jid]
+            self._deleted.add(jid)
         if doomed:
             self._save()
         return len(doomed)
