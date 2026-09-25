@@ -29,10 +29,18 @@ from .profanity_extra import contains_extra
 # Whether bleep_engine is importable at runtime. If it is, compliance.py prefers
 # its check_word() for profanity detection because it understands leet-speak,
 # homophones and context triggers that the base profanity list misses.
+#
+# Looked up, not imported: bleep_engine imports the autoreel package, whose
+# __init__ imports this module. Importing it back from here made a cycle
+# that deadlocked a real upload - "deadlock detected by
+# _ModuleLock('autoreel.compliance')" - when the censor pass and the
+# parallel Rumble upload imported at the same moment. It is imported where
+# it is used, by which time nothing is half-loaded.
 try:
-    import bleep_engine  # type: ignore[import-untyped]
-    _BLEEP_ENGINE_AVAILABLE = True
-except ImportError:  # pragma: no cover - bare copy without bleep_engine
+    import importlib.util as _importlib_util
+    _BLEEP_ENGINE_AVAILABLE = (
+        _importlib_util.find_spec("bleep_engine") is not None)
+except (ImportError, ValueError):  # pragma: no cover
     _BLEEP_ENGINE_AVAILABLE = False
 
 # Non-explicit keyword phrases for kid-unfriendly topics beyond raw
