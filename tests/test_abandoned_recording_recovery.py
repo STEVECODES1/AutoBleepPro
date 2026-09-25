@@ -252,3 +252,136 @@ def test_a_real_abandoned_ts_is_recovered_and_delivered(tmp_path):
     assert not abandoned.exists()
     assert not (staging / f"{BASE}.part01.ts").exists(), (
         "the segment should have been consumed by finalise, not left behind")
+
+
+# ── the halves of a live-from-start recording ────────────────────────────
+# A real 115-minute stream: yt-dlp was stopped at the end of the broadcast
+# before merging, leaving "...part01.ts.f299.mp4" (video) and
+# "...part01.ts.f140.mp4" (audio). Neither was recognised as a half, so
+# finalise printed "Joining 2 segments (the recording was interrupted and
+# resumed)" and concatenated the audio AFTER the video.
+
+VIDEO = f"{BASE}.part01.ts.f299.mp4"
+AUDIO = f"{BASE}.part01.ts.f140.mp4"
+
+
+def test_halves_with_an_extension_are_halves():
+    assert rs.is_format_fragment(VIDEO)
+    assert rs.is_format_fragment(AUDIO)
+    assert not rs.is_format_fragment(f"{BASE}.part01.ts.mp4")
+    assert not rs.is_format_fragment(f"{BASE}.part01.ts")
+
+
+def test_video_and_audio_are_never_counted_as_two_segments(tmp_path):
+    _write(str(tmp_path / VIDEO))
+    _write(str(tmp_path / AUDIO))
+
+    assert rs.existing_segments(str(tmp_path), BASE) == []
+    assert len(rs.leftover_fragments(str(tmp_path), BASE)) == 2
+
+
+def _finalising_recorder(tmp_path, monkeypatch):
+    recorder = rs.Recorder(url="https://www.youtube.com/@x/live",
+                           staging=str(tmp_path), watch_folder=str(tmp_path / "watch"))
+    calls = {"ffmpeg": [], "concat": []}
+
+    def ffmpeg(args):
+        calls["ffmpeg"].append(args)
+        _write(args[-1])
+        return True
+
+    monkeypatch.setattr(recorder, "_ffmpeg", ffmpeg)
+    monkeypatch.setattr(recorder, "_remux", lambda source, target: (
+        os.rename(source, target) or True))
+    monkeypatch.setattr(recorder, "_concat", lambda segments, target: (
+        calls["concat"].append(list(segments)) or _write(target) or True))
+    monkeypatch.setattr(rs, "probe_duration", lambda path: 100.0)
+    monkeypatch.setattr(rs, "coverage_report", lambda have, expected: "ok")
+    monkeypatch.setattr(rs, "sync_report", lambda path: "ok")
+    monkeypatch.setattr(rs, "channel_is_live", lambda url: False)
+    return recorder, calls
+
+
+def test_the_real_sequence_merges_side_by_side(tmp_path, monkeypatch):
+    """Still wearing .part, exactly as yt-dlp left them."""
+    _write(str(tmp_path / (VIDEO + ".part")))
+    _write(str(tmp_path / (AUDIO + ".part")))
+    recorder, calls = _finalising_recorder(tmp_path, monkeypatch)
+
+    assert recorder.finalise(BASE) is not None
+
+    assert calls["concat"] == [], "video and audio were joined end to end"
+    merge = calls["ffmpeg"][0]
+    assert merge.count("-i") == 2
+    assert merge[-1] == str(tmp_path / f"{BASE}.part01.ts")
+
+
+def test_a_resumed_recording_keeps_its_first_section(tmp_path, monkeypatch):
+    """Section 1 left as halves, section 2 finished cleanly: both go in,
+    in order."""
+    _write(str(tmp_path / VIDEO))
+    _write(str(tmp_path / AUDIO))
+    _write(str(tmp_path / f"{BASE}.part02.ts.mp4"))
+    recorder, calls = _finalising_recorder(tmp_path, monkeypatch)
+
+    recorder.finalise(BASE)
+
+    assert calls["concat"] == [[str(tmp_path / f"{BASE}.part01.ts"),
+                                str(tmp_path / f"{BASE}.part02.ts.mp4")]]
+
+
+def test_halves_yt_dlp_already_merged_are_not_merged_twice(tmp_path, monkeypatch):
+    _write(str(tmp_path / VIDEO))
+    _write(str(tmp_path / AUDIO))
+    _write(str(tmp_path / f"{BASE}.part01.ts.mp4"))
+    recorder, calls = _finalising_recorder(tmp_path, monkeypatch)
+
+    recorder.finalise(BASE)
+
+    assert not any("-i" in args and VIDEO in " ".join(args)
+                   for args in calls["ffmpeg"])
+
+
+def test_sweep_finds_orphaned_halves(tmp_path):
+    """Including ones an interrupted finalise had already renamed - the
+    state the real recording was left in after Ctrl+C."""
+    _write(str(tmp_path / VIDEO))
+    _write(str(tmp_path / AUDIO))
+    assert rs.sweep_abandoned_recordings(str(tmp_path), NAME) == [BASE]
+
+
+def test_sweep_finds_orphaned_halves_still_wearing_part(tmp_path):
+    _write(str(tmp_path / (VIDEO + ".part")))
+    assert rs.sweep_abandoned_recordings(str(tmp_path), NAME) == [BASE]
+
+
+@pytest.mark.skipif(not _have_ffmpeg(), reason="ffmpeg not installed")
+def test_real_halves_become_one_file_with_picture_and_sound(tmp_path):
+    staging = tmp_path / "recording"
+    watch = tmp_path / "watch_folder"
+    staging.mkdir()
+    subprocess.run(["ffmpeg", "-y", "-v", "error", "-f", "lavfi",
+                    "-i", "testsrc=size=320x240:rate=10:duration=2",
+                    "-c:v", "libx264", "-preset", "ultrafast",
+                    str(staging / VIDEO)], check=True)
+    subprocess.run(["ffmpeg", "-y", "-v", "error", "-f", "lavfi",
+                    "-i", "sine=duration=2", "-c:a", "aac",
+                    str(staging / AUDIO)], check=True)
+
+    recorder = rs.Recorder(url="https://www.youtube.com/@stackswopo_/live",
+                           staging=str(staging), watch_folder=str(watch),
+                           name=NAME)
+    for orphan_base in rs.sweep_abandoned_recordings(recorder.staging,
+                                                      recorder.name):
+        recorder.finalise(orphan_base)
+
+    delivered = watch / f"{BASE}.mp4"
+    assert delivered.exists()
+    probe = subprocess.run(
+        ["ffprobe", "-v", "error", "-show_entries",
+         "stream=codec_type:format=duration", "-of", "csv=p=0",
+         str(delivered)], capture_output=True, text=True).stdout
+    assert "video" in probe and "audio" in probe
+    duration = float([l for l in probe.splitlines()
+                      if l and l[0].isdigit()][-1])
+    assert 1.5 < duration < 3.0, f"{duration}s - joined end to end?"

@@ -388,8 +388,11 @@ def _answers(monkeypatch, *outcomes):
     callable make(merged_path) that succeeds, or a stderr string."""
     queue = list(outcomes)
     calls = []
+    real = cc._run
 
     def run(command, timeout):
+        if "-o" not in command:
+            return real(command, timeout)   # ffprobe, for real
         template = command[command.index("-o") + 1]
         merged = template.replace("%(ext)s", "mp4")
         calls.append(command)
