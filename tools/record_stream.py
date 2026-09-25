@@ -1038,8 +1038,11 @@ def existing_segments(staging: str, base: str) -> list:
 
 # yt-dlp downloads video and audio as separate streams and merges them
 # afterwards, naming the halves "name.ts.f299" / "name.ts.f140" while it
-# works. Those are the recording - they just have not been joined yet.
-_FRAGMENT = re.compile(r"\.f\d+$")
+# works - or, for a YouTube live-from-start recording, "name.ts.f299.mp4"
+# and "name.ts.f140.mp4". Those are the recording - they just have not
+# been joined yet. Missing the ".mp4" form had a stream's video and audio
+# concatenated end to end as if they were two halves of the broadcast.
+_FRAGMENT = re.compile(r"\.f\d+(?:\.[A-Za-z0-9]+)?$")
 
 
 def is_format_fragment(name: str) -> bool:
@@ -1137,11 +1140,19 @@ def sweep_abandoned_recordings(staging: str, name: str) -> list:
     prefix = f"{safe_name(name)} "
     bases = set()
     for filename in os.listdir(staging):
-        if not filename.startswith(prefix) or not filename.lower().endswith(".part"):
+        if not filename.startswith(prefix):
+            continue
+        stem = filename
+        if stem.lower().endswith(".part"):
+            stem = stem[: -len(".part")]
+        elif not is_format_fragment(stem):
             continue
         if os.path.getsize(os.path.join(staging, filename)) <= 0:
             continue
-        match = _ABANDONED_BASE.match(filename[: -len(".part")])
+        # An unmerged half ("...part01.ts.f299.mp4") is as orphaned as a
+        # .part file - including one already renamed by a finalise that
+        # was then interrupted.
+        match = _ABANDONED_BASE.match(_FRAGMENT.sub("", stem))
         if match:
             bases.add(match.group(1))
     return sorted(bases)
@@ -1605,13 +1616,12 @@ class Recorder:
             self.say(f"Recovered {len(recovered)} segment(s) yt-dlp never "
                      f"finished renaming after this recording was stopped - "
                      f"the content is intact, only the rename never ran.")
+        # Before looking for segments, not only when there are none: a
+        # resumed recording can leave section 1 as unmerged halves and
+        # section 2 finished, and joining only section 2 would silently
+        # drop the start of the stream.
+        self._merge_fragments(base)
         segments = existing_segments(self.staging, base)
-        if not segments:
-            # The merge may simply not have run. The halves still hold the
-            # whole stream, so recover them rather than declaring failure.
-            recovered = self._merge_fragments(base)
-            if recovered:
-                segments = [recovered]
         if not segments:
             self.say("Nothing was recorded.")
             return None
@@ -1791,37 +1801,44 @@ class Recorder:
         except Exception:
             pass
 
-    def _merge_fragments(self, base: str) -> Optional[str]:
-        """Join yt-dlp's leftover video-only and audio-only halves.
+    def _merge_fragments(self, base: str) -> list:
+        """Join yt-dlp's leftover video-only and audio-only halves, one
+        section at a time, side by side - never end to end.
 
-        yt-dlp normally does this itself; when it is killed mid-merge the
-        halves are all that survive, and they contain the full recording.
+        yt-dlp normally does this itself, but only on a clean finish; a
+        recording it was stopped from (a stale manifest, the stream
+        ending under it, Ctrl+C) leaves the halves, and they contain the
+        full recording. Each section's halves become that section's
+        segment, "<base>.partNN.ts", so the usual join puts sections in
+        order afterwards.
         """
-        fragments = leftover_fragments(self.staging, base)
-        if not fragments:
-            return None
-
-        self.say(f"Found {len(fragments)} unmerged stream half/halves - "
-                 "yt-dlp did not finish joining them. Recovering...")
-        target = segment_path(self.staging, base, 1)
-        args = []
-        for path in fragments:
-            args += ["-i", path]
-        args += ["-c", "copy", target]
-
-        if not self._ffmpeg(args):
-            self.say("Could not join them automatically. They are still in "
-                     f"{self.staging} and hold the full recording - join them "
-                     "with: ffmpeg -i <video>.f<N> -i <audio>.f<N> -c copy out.mp4")
-            return None
-
-        for path in fragments:
-            try:
-                os.remove(path)
-            except OSError:
-                pass
-        self.say("Recovered.")
-        return target
+        sections: dict = {}
+        for path in leftover_fragments(self.staging, base):
+            sections.setdefault(_FRAGMENT.sub("", path), []).append(path)
+        finished = existing_segments(self.staging, base)
+        merged = []
+        for target, halves in sorted(sections.items()):
+            if any(p.startswith(target) for p in finished):
+                # yt-dlp merged this section and was stopped before it
+                # tidied up. The merged file is the recording.
+                continue
+            self.say(f"Joining the video and audio of "
+                     f"{os.path.basename(target)} - yt-dlp was stopped "
+                     f"before it could.")
+            args = []
+            for path in halves:
+                args += ["-i", path]
+            args += ["-c", "copy", target]
+            if not self._ffmpeg(args):
+                self.say("Could not join them automatically. They are still "
+                         f"in {self.staging} and hold the full recording - "
+                         "join them with: ffmpeg -i <video>.f<N>.mp4 "
+                         "-i <audio>.f<N>.mp4 -c copy out.mp4")
+                continue
+            for path in halves:
+                _remove(path)
+            merged.append(target)
+        return merged
 
     def _remux(self, source: str, target: str) -> bool:
         """TS -> MP4, video copied, audio put back on the video's clock.
