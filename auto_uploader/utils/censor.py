@@ -21,7 +21,8 @@ import sys
 from dataclasses import dataclass
 from typing import Optional
 
-from utils.ffmpeg_tools import StageTimer, extract_audio, have_ffmpeg, mux_audio
+from utils.ffmpeg_tools import (StageTimer, extract_audio, have_ffmpeg,
+                                media_duration, mux_audio)
 
 # autoreel/ lives one level up, alongside this auto_uploader/ folder.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
@@ -285,6 +286,49 @@ def _settings_fingerprint(padding_ms: int, mute_whole_segment: bool,
     return hashlib.sha1(payload.encode("utf-8")).hexdigest()[:10]
 
 
+# A censored copy this much shorter than its source was not finished.
+_SHORT_BY_S = 5.0
+
+
+def _cut_short(candidate: str, source_path: str) -> bool:
+    """True when a cached censored copy is measurably shorter than the
+    video it was made from - a render that was interrupted. Unmeasurable
+    counts as fine, as it always did."""
+    have = media_duration(candidate)
+    want = media_duration(source_path)
+    if not have or not want:
+        return False
+    if have + _SHORT_BY_S < want:
+        print(f"[Censor] The censored copy from an earlier run is "
+              f"{have / 60:.1f} min of a {want / 60:.1f} min video - it was "
+              f"never finished. Censoring again.")
+        return True
+    return False
+
+
+# Below this many words a minute, a long video's transcript is not a clean
+# stream - it is a transcription that failed quietly (a broken GPU run, a
+# silent audio track read by mistake). "No slurs found" in it would upload
+# the ORIGINAL, uncensored, to every platform that asked for censoring.
+_MIN_WORDS_PER_MINUTE = 1.0
+_CHECK_AFTER_MINUTES = 10.0
+
+
+def _refuse_empty_transcript(segments, source_path: str) -> None:
+    minutes = (media_duration(source_path) or 0.0) / 60.0
+    if minutes < _CHECK_AFTER_MINUTES:
+        return
+    words = sum(len(str(seg.get("text", "")).split())
+                for seg in (segments or []))
+    if words < minutes * _MIN_WORDS_PER_MINUTE:
+        raise RuntimeError(
+            f"the transcript of this {minutes:.0f}-minute video has only "
+            f"{words} word(s). That is a transcription that failed, not a "
+            f"clean stream - not uploading the uncensored original. "
+            f"Delete the cached transcript in the censored folder and "
+            f"try again.")
+
+
 def censor_video(
     source_path: str,
     work_dir: str,
@@ -322,7 +366,9 @@ def censor_video(
                 f"{_settings_fingerprint(padding_ms, mute_whole_segment, only_categories, custom_words)}")
     output_video_path = os.path.join(work_dir, f"{basename}_CENSORED_{cache_key}.mp4")
 
-    if os.path.exists(output_video_path) and os.path.getsize(output_video_path) > 0:
+    if (os.path.exists(output_video_path)
+            and os.path.getsize(output_video_path) > 0
+            and not _cut_short(output_video_path, source_path)):
         # Already censored on a previous attempt with these exact settings
         # (e.g. an earlier run got this far, then failed on the actual
         # upload) - re-transcribing with Whisper is expensive, so reuse it.
@@ -399,6 +445,7 @@ def censor_video(
 
         if not violations:
             timer.mark("scan")
+            _refuse_empty_transcript(result["segments"], source_path)
             return CensorResult(output_path=source_path, was_censored=False,
                                 violation_count=0, censored_words=[])
 
@@ -412,7 +459,17 @@ def censor_video(
         censored_audio.export(clean_audio_path, format="wav")
         timer.mark("censor audio")
 
-        strategy = _render(source_path, clean_audio_path, output_video_path, speed)
+        # Rendered under a temporary name and renamed only once complete.
+        # ffmpeg wrote straight to the final name, and a finished-looking
+        # file there is reused by the check at the top of this function -
+        # so a render cut short by Ctrl+C, a crash or a power cut was
+        # picked up next run as "Reusing existing censored copy" and
+        # uploaded truncated.
+        partial = output_video_path[:-len(".mp4")] + ".partial.mp4"
+        if os.path.exists(partial):
+            os.remove(partial)
+        strategy = _render(source_path, clean_audio_path, partial, speed)
+        os.replace(partial, output_video_path)
         timer.mark(f"render [{strategy}]")
         _verify_sync(output_video_path)
         if timer.enabled:
