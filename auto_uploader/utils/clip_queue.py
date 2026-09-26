@@ -736,8 +736,11 @@ def clip_key(video_path: str) -> str:
     clip filenames already carry the stream and the index, so two clips
     sharing one are the same clip.
     """
-    name = os.path.basename(video_path or "")
-    return re.sub(r"^_?vertical[_\s]+", "", name, flags=re.I).lower()
+    from utils.social_promoter import plain_clip_name
+
+    stem, ext = os.path.splitext(os.path.basename(video_path or ""))
+    # The censored copy is the same clip too - see plain_clip_name.
+    return (plain_clip_name(stem) + ext).lower()
 
 
 def _already_posted(queue, platform: str, video_path: str):

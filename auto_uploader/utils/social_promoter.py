@@ -597,6 +597,21 @@ def copy_sidecars(source: str, target: str) -> int:
     return brought
 
 
+# The censor pass names its copy "<clip>_CENSORED_<settings>.mp4". That is
+# the file posted whenever a clip had anything muted, and its notes - and
+# its title - belong to "<clip>". Missing this posted the file name as the
+# caption: "'I Feel Sorry' Stackswoop Stream - Clip 01 CENSORED
+# silence-large-v3-turbo-ae263651d1" went out on Instagram.
+_CENSORED_SUFFIX = re.compile(r"_CENSORED_[A-Za-z0-9._-]+$")
+
+
+def plain_clip_name(name: str) -> str:
+    """A clip's own name, from any copy of it: the 9:16 re-frame prefix
+    and the censor suffix removed."""
+    name = re.sub(r"^_?vertical[_\s]+", "", name or "", flags=re.I)
+    return _CENSORED_SUFFIX.sub("", name)
+
+
 def spoken_line(video_path: str, folders=()) -> str:
     """The line actually said in this clip, from the file beside it.
 
@@ -609,8 +624,7 @@ def spoken_line(video_path: str, folders=()) -> str:
     # The temp vertical copy is named "_vertical_<clip>.mp4"; its sidecar
     # belongs to the clip, not to the copy.
     plain = os.path.join(os.path.dirname(stem),
-                         re.sub(r"^_?vertical[_\s]+", "",
-                                os.path.basename(stem), flags=re.I))
+                         plain_clip_name(os.path.basename(stem)))
     # Somewhere else entirely, when the file being posted is the 9:16
     # re-frame: that lives in censored/ and the notes were written beside
     # the CLIP, in the watch folder. New clips get their notes copied
@@ -676,7 +690,8 @@ def clip_title(video_path: str, folders=()) -> str:
     if said:
         return said
 
-    stem = os.path.splitext(os.path.basename(video_path or ""))[0]
+    stem = plain_clip_name(
+        os.path.splitext(os.path.basename(video_path or ""))[0])
     for marker in (" clips ", " twitch ", " youtube ",
                    "_clips_", "_twitch_", "_youtube_"):
         if marker in stem:
