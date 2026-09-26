@@ -959,3 +959,45 @@ def test_an_empty_reply_without_an_outage_still_gets_the_second_ask(monkeypatch)
     lh._ask_one_provider("gemini", "key", "gemini-x", shortlist, 2, "", silent)
 
     assert len(calls) == 2
+
+
+def _always_overloaded(monkeypatch):
+    from autoreel import llm_highlights
+
+    monkeypatch.setattr(llm_highlights, "time",
+                        type("T", (), {"sleep": staticmethod(lambda s: None)}))
+    calls = []
+
+    def post(url, payload, headers, timeout=None):
+        calls.append(url)
+        return None, "HTTP 503: This model is currently experiencing high demand"
+
+    monkeypatch.setattr(llm_highlights, "_post_detailed", post)
+    return calls
+
+
+def test_gemini_is_left_alone_after_a_retry_that_is_still_overloaded(monkeypatch):
+    """A real watcher run: 503 on nearly every call for hours, and every
+    clip waited 20-40s on it before falling back anyway."""
+    from autoreel import llm_highlights
+
+    calls = _always_overloaded(monkeypatch)
+    llm_highlights._ask_gemini("k", "gemini-3.5-flash", "first clip")
+    assert len(calls) == 2
+
+    assert llm_highlights._ask_gemini("k", "gemini-3.5-flash", "next") == ""
+    text, why = llm_highlights._ask_gemini_vision("k", "gemini-3.5-flash", [])
+    assert len(calls) == 2, "asked again while it was still resting"
+    assert text == "" and "overloaded" in why
+    assert llm_highlights.last_outage()
+
+
+def test_gemini_is_asked_again_once_the_rest_is_over(monkeypatch):
+    from autoreel import llm_highlights
+
+    calls = _always_overloaded(monkeypatch)
+    llm_highlights._ask_gemini("k", "gemini-3.5-flash", "first clip")
+    llm_highlights._GEMINI_COOLDOWN["until"] = 0.0
+
+    llm_highlights._ask_gemini("k", "gemini-3.5-flash", "an hour later")
+    assert len(calls) == 4

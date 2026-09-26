@@ -68,3 +68,18 @@ def _no_live_llm_keys(monkeypatch):
     """
     for name in _LLM_KEY_NAMES:
         monkeypatch.delenv(name, raising=False)
+
+
+@pytest.fixture(autouse=True)
+def _gemini_not_resting():
+    """autoreel.llm_highlights leaves Gemini alone for 10 minutes after an
+    overload - module state that must not leak from one test into the
+    next."""
+    try:
+        from autoreel import llm_highlights
+    except Exception:
+        yield
+        return
+    llm_highlights._GEMINI_COOLDOWN.update(until=0.0, why="")
+    yield
+    llm_highlights._GEMINI_COOLDOWN.update(until=0.0, why="")

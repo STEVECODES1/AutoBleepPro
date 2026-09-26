@@ -859,3 +859,18 @@ def test_an_old_upload_post_retry_is_dropped_if_postplanify_sent_the_clip(
 
     assert calls == []
     assert JobQueue(path=posting["queue_path"]).counts().get("failed") == 1
+
+
+def test_a_post_is_summarised_not_dumped(publisher):
+    """The whole upload-post reply went to the console - account e-mail,
+    internal ids and signed file URLs - in a log that gets pasted into
+    chats."""
+    reply = {"status": "completed", "request_id": "4cc2d2bf",
+             "results": [{"user_email": "someone@example.com",
+                          "platform": "facebook", "success": True,
+                          "post_url": "https://www.facebook.com/reel/1",
+                          "prevalidation_metadata": {
+                              "remote_public_url": "https://x/secret.mp4"}}]}
+    line = publisher._posted_summary(reply)
+    assert line == "facebook ok https://www.facebook.com/reel/1"
+    assert "@" not in line and "secret" not in line

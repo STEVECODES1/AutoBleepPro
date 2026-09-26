@@ -577,6 +577,28 @@ def _censored_clip(platform: str, video_path: str, config: dict) -> tuple:
     return video_path, ""
 
 
+def _posted_summary(posted) -> str:
+    """One readable line about a post, for the console.
+
+    The whole reply was printed - account e-mail, internal ids and
+    signed file URLs included - into a log that gets screenshotted and
+    pasted into chats.
+    """
+    if not isinstance(posted, dict):
+        return str(posted)
+    lines = []
+    for entry in posted.get("results") or ():
+        if not isinstance(entry, dict):
+            continue
+        where = entry.get("platform") or "?"
+        if entry.get("account"):
+            where += f" ({entry['account']})"
+        state = "ok" if entry.get("success") else "FAILED"
+        url = entry.get("post_url") or ""
+        lines.append(f"{where} {state}{' ' + url if url else ''}")
+    return "; ".join(lines) or "accepted"
+
+
 def publish(platform: str, video_path: str, caption: str,
             config: dict, dry_run: bool = False,
             detail: Optional[dict] = None) -> bool:
@@ -660,7 +682,7 @@ def publish(platform: str, video_path: str, caption: str,
                 posted = posted if reached else None
 
         if posted:
-            print(f"[Clips] {platform}: {posted}")
+            print(f"[Clips] {platform}: {_posted_summary(posted)}")
             # Where it went, joined to why it was cut. This is the half
             # of the loop that makes the numbers mean anything later.
             from autoreel.memory import remember_post

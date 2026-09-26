@@ -1027,7 +1027,33 @@ def _gemini_url(model: str, key: str) -> str:
            f"{model}:generateContent?key={key}")
 
 
+# After Gemini is still overloaded on its retry, it is left alone for a
+# while. A real watcher run hit 503 on nearly every call for hours, and
+# each clip paid 20-40s of waiting on it before falling back anyway.
+_GEMINI_REST_S = 600
+_GEMINI_COOLDOWN = {"until": 0.0, "why": ""}
+_clock = time.time      # its own name: tests stand in for `time.sleep`
+
+
+def _gemini_resting() -> str:
+    """Why Gemini is being skipped right now, or ""."""
+    if _clock() < _GEMINI_COOLDOWN["until"]:
+        return _GEMINI_COOLDOWN["why"]
+    return ""
+
+
+def _rest_gemini(problem: str) -> None:
+    _GEMINI_COOLDOWN["until"] = _clock() + _GEMINI_REST_S
+    _GEMINI_COOLDOWN["why"] = problem
+    print(f"[Clips] Gemini is still overloaded - not asking it again for "
+          f"{_GEMINI_REST_S // 60} min.")
+
+
 def _ask_gemini(key: str, model: str, prompt: str) -> str:
+    resting = _gemini_resting()
+    if resting:
+        _LAST_OUTAGE["why"] = resting
+        return ""
     payload = {
         "systemInstruction": {"parts": [{"text": SYSTEM_PROMPT}]},
         "contents": [{"parts": [{"text": prompt}]}],
@@ -1059,6 +1085,8 @@ def _ask_gemini(key: str, model: str, prompt: str) -> str:
               f"once more...")
         time.sleep(_BUSY_RETRY_SECONDS)
         data, problem = _post_detailed(active_url, payload, {})
+        if problem and _is_transient(problem):
+            _rest_gemini(problem)
     if not isinstance(data, dict):
         if problem and _is_transient(problem):
             _LAST_OUTAGE["why"] = problem
@@ -1095,6 +1123,9 @@ def _ask_gemini_vision(key: str, model: str, parts: list) -> tuple:
     }
     images = sum(1 for part in parts if "inline_data" in part)
     megabytes = len(json.dumps(payload)) / 1e6
+    resting = _gemini_resting()
+    if resting:
+        return "", f"Gemini was overloaded a moment ago ({resting})"
     active_url = _gemini_url(model, key)
 
     # 429/5xx here is "this model is busy or briefly down", not "you are
@@ -1124,6 +1155,8 @@ def _ask_gemini_vision(key: str, model: str, parts: list) -> tuple:
         time.sleep(_BUSY_RETRY_SECONDS)
         data, problem = _post_detailed(active_url, payload, {},
                                        timeout=_VISION_TIMEOUT)
+        if problem and _is_transient(problem):
+            _rest_gemini(problem)
 
     if problem:
         return "", f"{problem} ({images} images, {megabytes:.1f} MB)"
