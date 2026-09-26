@@ -2970,6 +2970,10 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
         clips_delivered = cut_clips_from_stream(
             cfg, video_path, is_clip, title=stream_title,
             content_hash=file_hash) or 0
+        # Its own line in the timing. It used to fall under "cleanup",
+        # so a real run read "cleanup took 539.3s" - nine minutes that
+        # were Gemini retries and four clips rendering, not file deletes.
+        stage_timer.mark("clips")
 
     # Only now is the VOD finished with. It had two jobs - the upload and
     # the clips - and this used to run between them.

@@ -944,6 +944,17 @@ def _remember_refusal(why: str) -> None:
     _LAST_REFUSAL["why"] = why
 
 
+# The last time the provider was simply unavailable (503 overloaded, 429
+# busy) - kept apart from refusals. A real run treated a 503 as "the model
+# would not write titles", asked again for another 20s wait and another
+# 503, then advised checking the model name - none of which was the cause.
+_LAST_OUTAGE = {"why": ""}
+
+
+def last_outage() -> str:
+    return _LAST_OUTAGE["why"]
+
+
 def _refusal(data: dict) -> str:
     """Why Gemini gave no answer, in its own words. "" if it did answer."""
     if not isinstance(data, dict):
@@ -1049,6 +1060,8 @@ def _ask_gemini(key: str, model: str, prompt: str) -> str:
         time.sleep(_BUSY_RETRY_SECONDS)
         data, problem = _post_detailed(active_url, payload, {})
     if not isinstance(data, dict):
+        if problem and _is_transient(problem):
+            _LAST_OUTAGE["why"] = problem
         return ""
     try:
         return data["candidates"][0]["content"]["parts"][0]["text"]
@@ -1659,12 +1672,19 @@ def _ask_one_provider(provider, key, model, shortlist, count, source_path,
     if not raw:
         prompt = build_prompt(shortlist, count)
         speak = ask or asker_for(provider)
+        _LAST_OUTAGE["why"] = ""
         try:
             raw = speak(key, model, prompt)
         except Exception:
             return [], shortlist
 
     picked = parse_reply(raw, len(shortlist))
+    if not picked and not str(raw or "").strip() and last_outage():
+        # Down, not refusing: asking again "without titles" only waits
+        # through the same outage. The next provider is the answer.
+        print(f"[Clips] {provider} is unavailable right now "
+              f"({last_outage()}) - moving on.")
+        return [], shortlist
     if not picked:
         # Once more, asking for NO TITLES.
         #

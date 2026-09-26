@@ -912,3 +912,50 @@ def test_the_scene_rule_applies_even_when_each_candidate_scores_well():
 
     assert "even if they would have scored" in SYSTEM_PROMPT
     assert "well on their own" in SYSTEM_PROMPT
+
+
+# ── a provider that is down is not a provider that refused ──────────────────
+# A real run: Gemini answered 503 (overloaded) twice. The empty reply was
+# read as "the model would not write titles", so it was asked again - a
+# second 20s wait, a second 503 - and then the advice was to check the
+# model name. The next provider was the only useful move.
+
+def test_an_outage_moves_on_instead_of_asking_again(monkeypatch, capsys):
+    import autoreel.llm_highlights as lh
+
+    monkeypatch.setattr(lh, "resolve_model", lambda provider, key, model: model)
+    calls = []
+
+    def down(key, model, prompt):
+        calls.append(prompt)
+        lh._LAST_OUTAGE["why"] = "HTTP 503: This model is currently experiencing high demand."
+        return ""
+
+    shortlist = [Highlight(start=10.0 * n, end=10.0 * n + 30, score=1.0,
+                           text=f"moment {n}") for n in range(5)]
+    picked, _ = lh._ask_one_provider("gemini", "key", "gemini-x", shortlist,
+                                     2, "", down)
+
+    out = capsys.readouterr().out
+    assert picked == []
+    assert len(calls) == 1, "asked again through the same outage"
+    assert "unavailable" in out
+    assert "check the model name" not in out
+    assert "would not write titles" not in out
+
+
+def test_an_empty_reply_without_an_outage_still_gets_the_second_ask(monkeypatch):
+    import autoreel.llm_highlights as lh
+
+    monkeypatch.setattr(lh, "resolve_model", lambda provider, key, model: model)
+    calls = []
+
+    def silent(key, model, prompt):
+        calls.append(prompt)
+        return ""
+
+    shortlist = [Highlight(start=10.0 * n, end=10.0 * n + 30, score=1.0,
+                           text=f"moment {n}") for n in range(5)]
+    lh._ask_one_provider("gemini", "key", "gemini-x", shortlist, 2, "", silent)
+
+    assert len(calls) == 2
