@@ -255,6 +255,22 @@ def _say_once(key: str, message: str) -> None:
 from utils.censor import censor_video
 from utils.ffmpeg_tools import StageTimer, media_duration
 
+# Loaded here, on the main thread, before any upload thread exists. Its
+# package __init__ imports autoreel.compliance; a thread that imported
+# autoreel.compliance directly while another was still running that
+# __init__ took the compliance lock, then waited for the package - held by
+# the thread waiting for compliance. Two real runs died on it: "deadlock
+# detected by _ModuleLock('autoreel.compliance')" from the censor pass
+# racing the Rumble upload, and again from the thumbnail thread racing the
+# censor pass. Once the package is fully loaded, a later import of any of
+# these from a thread is a dictionary lookup.
+import autoreel  # noqa: E402,F401
+import autoreel.compliance  # noqa: E402,F401
+import autoreel.hotwords  # noqa: E402,F401
+import autoreel.llm_highlights  # noqa: E402,F401
+import autoreel.thumbnail  # noqa: E402,F401
+import autoreel.transcription  # noqa: E402,F401
+
 # Anything at or under this many seconds is a clip rather than a stream.
 # Twitch clips top out around 90 seconds; the margin covers a highlight
 # exported by hand. A five-hour VOD is never close to this.

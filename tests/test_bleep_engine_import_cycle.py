@@ -26,3 +26,17 @@ def test_compliance_does_not_import_bleep_engine_at_import_time():
                  "c._BLEEP_ENGINE_AVAILABLE)")
     assert out == "False True"
 
+
+
+def test_the_uploader_loads_autoreel_before_any_upload_thread():
+    """The same deadlock came back from the thumbnail thread: whichever
+    thread ran autoreel's package __init__ could deadlock with one
+    importing autoreel.compliance directly. Importing main must leave
+    the package, and the modules the upload threads reach for, loaded."""
+    out = _fresh(
+        "import sys; sys.path.insert(0, 'auto_uploader')\n"
+        "import main\n"
+        "wanted = ['autoreel', 'autoreel.compliance', 'autoreel.thumbnail',\n"
+        "          'autoreel.hotwords', 'autoreel.transcription']\n"
+        "print([m for m in wanted if m not in sys.modules])\n")
+    assert out.splitlines()[-1] == "[]"
