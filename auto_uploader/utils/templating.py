@@ -132,6 +132,12 @@ def extract_title_from_filename(filename: str, channel_prefixes=()) -> Optional[
         match = pattern.search(name)
         if match:
             candidate = name[: match.start()].strip(" _-'\"")
+            # "Stackswopo - STIZZ SHOW - 09-25-26 (FULL STREAM)" went up
+            # as '"Stackswopo - STIZZ SHOW" 9/25/26 Stackswopo Stream' -
+            # the channel named twice. The yt-dlp branch below already
+            # stripped the "<channel> - " lead; this one never did.
+            candidate = strip_channel_prefix(candidate, channel_prefixes)
+            candidate = candidate.strip(" _-'\"")
             if candidate:
                 return _collapse_spaces(candidate)
 

@@ -357,3 +357,15 @@ def test_tidying_does_not_let_a_title_past_the_cap():
 def test_a_missing_name_leaves_no_stranded_punctuation_either():
     out = _titled("", "8/17/26", "{title} - {date} - Stackswopo Stream")
     assert out == "8/17/26 - Stackswopo Stream"
+
+
+def test_a_dated_name_with_the_channel_in_front_is_not_named_twice():
+    """A real upload went up as '"Stackswopo - STIZZ SHOW" 9/25/26
+    Stackswopo Stream'."""
+    from utils.templating import extract_title_from_filename
+
+    assert extract_title_from_filename(
+        "Stackswopo - STIZZ SHOW - 09-25-26 (FULL STREAM).ts",
+        ("Stackswopo",)) == "STIZZ SHOW"
+    assert extract_title_from_filename(
+        "!howl 2026-03-19_21_23.mp4", ("Stackswopo",)) == "!howl"
