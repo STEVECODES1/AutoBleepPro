@@ -58,6 +58,33 @@ def is_permanent(exc: BaseException) -> bool:
     return isinstance(exc, RumbleSetupError)
 
 
+# A healthy attach takes a few seconds; Playwright's default is 180s.
+CDP_ATTACH_TIMEOUT_MS = 60_000
+
+# After Chrome fails to attach, clips skip Rumble at once for this long
+# instead of each waiting out the timeout again. A real watcher run spent
+# three minutes per clip, ten clips in a row, on the same frozen Chrome.
+CHROME_RETRY_AFTER_S = 600
+_CHROME_DOWN = {"until": 0.0, "why": ""}
+
+_CHROME_HANG_FIX = (
+    "Chrome answered but never finished connecting - that is almost always "
+    "one frozen tab in that window (a big upload running in another tab, a "
+    "'Leave site?' dialog). Close that Chrome window completely; the next "
+    "Rumble upload starts it again.")
+
+
+def _note_chrome_unreachable(why: str) -> None:
+    _CHROME_DOWN["until"] = time.time() + CHROME_RETRY_AFTER_S
+    _CHROME_DOWN["why"] = why
+
+
+def _chrome_recently_unreachable() -> str:
+    if time.time() < _CHROME_DOWN["until"]:
+        return _CHROME_DOWN["why"]
+    return ""
+
+
 def should_retry(exc: BaseException) -> bool:
     """Pass to retry_with_backoff: retry everything except setup errors."""
     return not is_permanent(exc)
@@ -300,10 +327,17 @@ class RumbleUploader:
                 # looks from outside like the tool ignored the setting.
                 from utils.chrome_cdp import ensure_chrome
 
+                recent = _chrome_recently_unreachable()
+                if recent:
+                    raise RumbleSetupError(
+                        f"Chrome at {self.cdp_url} did not answer a few "
+                        f"minutes ago ({recent}) - not waiting on it again "
+                        f"yet. {_CHROME_HANG_FIX}")
                 ready, detail = ensure_chrome(self.cdp_url)
                 print(f"[Rumble] {detail}")
                 try:
-                    browser = p.chromium.connect_over_cdp(self.cdp_url)
+                    browser = p.chromium.connect_over_cdp(
+                        self.cdp_url, timeout=CDP_ATTACH_TIMEOUT_MS)
                     context = browser.contexts[0] if browser.contexts else browser.new_context()
                     page = context.new_page()
                     should_close_browser = False  # the user's window - don't close it
@@ -334,12 +368,19 @@ class RumbleUploader:
                     # unreachable, say exactly that, at once, and stop.
                     print(f"[Rumble] Could not attach to Chrome at {self.cdp_url} ({exc}).")
                     browser = page = None
+                    _note_chrome_unreachable(str(exc).splitlines()[0][:120])
+                    if "ws connected" in str(exc):
+                        # It answered, then never finished attaching.
+                        advice = _CHROME_HANG_FIX
+                    else:
+                        advice = ("Rumble uploads go through your own "
+                                  "signed-in Chrome, so start it with "
+                                  "--remote-debugging-port=9222, log into "
+                                  "rumble.com in that window, and leave it "
+                                  "open.")
                     raise RumbleSetupError(
                         f"Chrome is not reachable at {self.cdp_url} ({exc}). "
-                        f"Startup check said: {detail}. Rumble uploads go "
-                        "through your own signed-in Chrome, so start it with "
-                        "--remote-debugging-port=9222, log into rumble.com in "
-                        "that window, and leave it open."
+                        f"Startup check said: {detail}. {advice}"
                     ) from exc
 
             # Only reachable with no cdp_url configured at all - an

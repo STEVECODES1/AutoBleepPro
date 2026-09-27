@@ -106,6 +106,16 @@ def _queue(posting: dict):
     return JobQueue(path=(posting or {}).get("queue_path") or "./clip_jobs.json")
 
 
+def _record_reached(queue, job_id: str, reached: set) -> None:
+    """Keep, on the job itself, which platforms a fan-out post reached -
+    so a later pass over the same clip knows exactly what not to post."""
+    job = queue.get(job_id)
+    if job is None:
+        return
+    job.extra = dict(job.extra or {}, reached=sorted(reached))
+    queue._save()
+
+
 def _reach_path(posting: dict) -> str:
     queue_path = (posting or {}).get("queue_path") or "./clip_jobs.json"
     return os.path.join(os.path.dirname(os.path.abspath(queue_path)),
@@ -841,6 +851,22 @@ def offer(posting: dict, config: dict, video_path: str,
             # This clip has been through here before - a re-run of the
             # same file must not post it a second time.
             outcome[platform] = "skipped: already posted"
+            if platform in FAN_OUT_ROUTES:
+                # And neither may anything it reached. A clip whose Rumble
+                # upload failed came back through here; postplanify was
+                # skipped as done, but Instagram and TikTok - which it
+                # HAD sent the clip to - were not marked, so Instagram
+                # posted it directly and upload_post was queued with its
+                # full list.
+                earlier = set((already.extra or {}).get("reached")
+                              or remembered_reach(posting, platform))
+                earlier -= covered
+                for name in earlier:
+                    covered_by.setdefault(name, platform)
+                covered |= earlier
+                if earlier:
+                    print(f"[Clips] {platform}: already sent this clip to "
+                          f"{', '.join(sorted(earlier))} - not again.")
             continue
 
         caption = caption_for(platform, video_path, fallback_caption, config)
@@ -972,6 +998,7 @@ def offer(posting: dict, config: dict, video_path: str,
                 covered |= reached
                 if reached and not dry_run:
                     _remember_reach(posting, platform, reached)
+                    _record_reached(queue, job_id, reached)
                 shown = ", ".join(sorted(reached)) or "nothing else enabled"
                 print(f"[Clips] {platform}: posted - covers {shown}.")
             else:
@@ -1125,9 +1152,10 @@ def drain(posting: dict, config: dict, limit: int = 0,
                       f"already posted it.")
             continue
 
+        detail: dict = {}
         try:
             ok = publish(job.platform, job.clip_path, caption, job_config,
-                         dry_run)
+                         dry_run, detail=detail)
         except NotConfigured as exc:
             # Held, not failed: the clip is fine, the token is not. It
             # comes back once somebody fixes the scope.
@@ -1155,6 +1183,9 @@ def drain(posting: dict, config: dict, limit: int = 0,
         guard.record_result(job.platform, ok)
         if ok:
             queue.complete(job.id)
+            if job.platform in FAN_OUT_ROUTES and detail.get("covers"):
+                _record_reached(queue, job.id, set(detail["covers"]))
+                _remember_reach(posting, job.platform, set(detail["covers"]))
             posted[job.platform] = posted.get(job.platform, 0) + 1
             print(f"[Clips] {job.platform}: posted a queued Reel "
                   f"({os.path.basename(job.clip_path)}).")

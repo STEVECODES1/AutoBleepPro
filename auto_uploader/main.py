@@ -2195,6 +2195,12 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
               f"applies.")
     if not existing_rb and cfg.rumble.skip_if_exists and not generic:
         existing_rb = dup_checker.find_platform_title("rumble", rb_title)
+        # Recorded against THIS file below, like the other two matches. It
+        # was the one match that was not, so a stream found this way never
+        # counted as done: "'halfa mill' ... left in place (not every
+        # platform succeeded yet)" with both platforms up, and the watcher
+        # picked it up again every pass.
+        existing_rb_match_url = existing_rb or None
         if not existing_rb and existing_rumble_videos:
             rb_match = find_existing_video(existing_rumble_videos, now, stream_title)
             if rb_match:

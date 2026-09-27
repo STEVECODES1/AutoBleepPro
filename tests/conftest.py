@@ -83,3 +83,20 @@ def _gemini_not_resting():
     llm_highlights._GEMINI_COOLDOWN.update(until=0.0, why="")
     yield
     llm_highlights._GEMINI_COOLDOWN.update(until=0.0, why="")
+
+
+@pytest.fixture(autouse=True)
+def _chrome_not_marked_down():
+    """utils.rumble_uploader skips Chrome for 10 minutes after it fails to
+    attach - module state, reset between tests."""
+    import sys as _sys
+
+    _sys.path.insert(0, _UPLOADER)
+    try:
+        from utils import rumble_uploader
+    except Exception:
+        yield
+        return
+    rumble_uploader._CHROME_DOWN.update(until=0.0, why="")
+    yield
+    rumble_uploader._CHROME_DOWN.update(until=0.0, why="")

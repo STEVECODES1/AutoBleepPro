@@ -874,3 +874,31 @@ def test_a_post_is_summarised_not_dumped(publisher):
     line = publisher._posted_summary(reply)
     assert line == "facebook ok https://www.facebook.com/reel/1"
     assert "@" not in line and "secret" not in line
+
+
+def test_a_clip_that_comes_back_is_not_posted_where_postplanify_sent_it(
+        publisher, posting, clips, monkeypatch):
+    """'Halfa Mill' Clip 02, a real run: postplanify sent it to Instagram
+    and TikTok, its Rumble upload failed, so the watcher ran it again - and
+    on that pass Instagram started posting it directly (and asked for a
+    2FA code), while upload_post was queued with its FULL list."""
+    from job_queue import JobQueue
+
+    posting = _fanout_posting(posting)
+    posting["platforms"]["instagram"]["min_minutes_between"] = 0
+    queue = JobQueue(path=posting["queue_path"])
+    done = queue.begin("postplanify", clips[0])
+    queue.complete(done)
+    publisher._record_reached(queue, done, {"instagram", "tiktok"})
+    calls = _record_publish(publisher, monkeypatch)
+
+    outcome = publisher.offer(posting, CONFIG, clips[0],
+                              platforms=("postplanify", "upload_post",
+                                         "instagram"))
+
+    assert outcome["postplanify"] == "skipped: already posted"
+    assert outcome["instagram"].startswith("skipped: sent by postplanify")
+    assert all(name != "instagram" for name, _, _ in calls)
+    for name, _, targets in calls:
+        if name == "upload_post":
+            assert "instagram" not in targets and "tiktok" not in targets

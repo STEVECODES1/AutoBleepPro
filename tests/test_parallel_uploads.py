@@ -576,3 +576,51 @@ def test_a_rumble_retry_still_uploads_when_nothing_landed(
 
     assert len(uploads) == 2
     assert results["rumble"] == "https://rumble.com/v7abc2-a-stream.html"
+
+
+def test_a_stream_found_on_rumble_counts_as_done_for_this_file(
+        scene, tmp_path, monkeypatch):
+    """'halfa mill': both platforms had it, yet every run printed "left
+    in place (not every platform succeeded yet)" and the watcher picked
+    the file up again. Rumble was matched from the local upload history
+    by title - an earlier copy of the same stream - and that match, unlike
+    the others, was never recorded against this file."""
+    from utils.duplicate_checker import DuplicateChecker, hash_file
+    from utils.logging_setup import setup_logger
+
+    main, cfg, video, recorder = scene
+    cfg.rumble.skip_if_exists = True
+    monkeypatch.setattr(main, "_rumble_channel_url", lambda cfg: "")
+
+    store = str(tmp_path / "uploads.json")
+    checker = DuplicateChecker(store)
+    uploads = []
+
+    class Rumble:
+        def __init__(self, *a, **k):
+            pass
+
+        def upload(self, *a, **k):
+            uploads.append(1)
+            return "https://rumble.com/v7new-a-stream.html"
+
+    monkeypatch.setattr(main, "RumbleUploader", Rumble)
+    logs = str(tmp_path / "logs")
+
+    def run_once(path):
+        return main.process_file(
+            path, cfg, "A Stream", checker,
+            setup_logger("youtube", logs), setup_logger("rumble", logs),
+            False, existing_youtube_videos=[], existing_rumble_videos=[],
+            allow_prompt=False)
+
+    run_once(video)                             # the first copy goes up
+    other = os.path.join(os.path.dirname(video), "A Stream 2026-08-10 (2).mp4")
+    with open(other, "wb") as f:
+        f.write(b"a re-encode of the same stream" * 100)
+
+    results = run_once(other)
+
+    assert len(uploads) == 1, "the second copy was uploaded again"
+    assert results["rumble"] == "https://rumble.com/v7new-a-stream.html"
+    assert DuplicateChecker(store).is_fully_uploaded(hash_file(other))
