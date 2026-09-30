@@ -1192,6 +1192,18 @@ def _rumble_channel_url(cfg) -> str:
     return channel
 
 
+# YouTube refusals no retry can change. A real run spent 60s, 300s and 900s
+# retrying "Access forbidden" (reason 'forbidden') - what an upload to a
+# channel whose uploads are disabled returns - on a 6.6 GB stream.
+_YOUTUBE_FINAL = ("'reason': 'forbidden'", "quotaExceeded",
+                  "uploadLimitExceeded", "HttpError 401")
+
+
+def youtube_should_retry(exc: BaseException) -> bool:
+    text = str(exc)
+    return not any(marker in text for marker in _YOUTUBE_FINAL)
+
+
 def _already_on_rumble(title: str, cfg) -> str:
     """The channel's link for this title, or "" - never raises."""
     channel = _rumble_channel_url(cfg)
@@ -2623,6 +2635,7 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
                     progress_callback=progress_reporter("YouTube", parallel),
                 ),
                 max_retries=cfg.general.max_retries, delays=cfg.general.retry_delays, on_retry=yt_on_retry,
+                should_retry=youtube_should_retry,
             )
             if not parallel:
                 print()

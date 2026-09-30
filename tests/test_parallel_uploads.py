@@ -624,3 +624,42 @@ def test_a_stream_found_on_rumble_counts_as_done_for_this_file(
     assert len(uploads) == 1, "the second copy was uploaded again"
     assert results["rumble"] == "https://rumble.com/v7new-a-stream.html"
     assert DuplicateChecker(store).is_fully_uploaded(hash_file(other))
+
+
+def test_a_forbidden_youtube_upload_is_not_retried(scene, tmp_path, monkeypatch):
+    """A real run retried "Access forbidden" three times, 60s/300s/900s
+    apart - what a channel with uploads disabled answers every time."""
+    main, cfg, video, recorder = scene
+    cfg.general.max_retries = 3
+    cfg.general.retry_delays = (0,)
+    tries = []
+
+    class Forbidden:
+        def __init__(self, *a, **k):
+            pass
+
+        def upload(self, *a, **k):
+            tries.append(1)
+            raise RuntimeError(
+                "YouTube upload failed: <HttpError 403 ... \"[{'message': "
+                "'Access forbidden. The request may not be properly "
+                "authorized.', 'domain': 'youtube.common', 'reason': "
+                "'forbidden'}]\">")
+
+        def get_service(self):
+            return None
+
+    monkeypatch.setattr(main, "YouTubeUploader", Forbidden)
+
+    results = run(main, cfg, video, tmp_path)
+
+    assert len(tries) == 1
+    assert results["youtube"].startswith("FAILED")
+
+
+def test_a_busy_youtube_is_still_retried():
+    import main
+
+    assert main.youtube_should_retry(RuntimeError("HttpError 503 backendError"))
+    assert main.youtube_should_retry(RuntimeError(
+        "HttpError 403 'reason': 'rateLimitExceeded'"))
