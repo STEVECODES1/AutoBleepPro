@@ -264,6 +264,8 @@
     "_link_comment": "Upload-Post writes one caption across all platforms, so keep it generic enough to fit each one. Per-platform title overrides are supported via the overrides block."
   },
   "clips": {
+    "_max_slurs_comment": "A clip with this many slurs or more (counted before muting) is held back from every social platform - Instagram, TikTok, Facebook, Shorts, upload-post, postplanify. Rumble still gets it. YouTube's vulgar-language policy age-restricts a clip focused on that language, and its hate speech policy says nothing about muting. 0 turns this off.",
+    "max_slurs_for_social": 3,
     "_auto_clip_comment": "Any VOD dropped in auto_clip_folder is turned into clips by `--watch`, one per pass, without a command. The folder is a LIBRARY: nothing in it is moved, renamed or deleted. A .clipped.json beside it remembers what has been done, so nothing is cut twice. Set auto_clip_folder to \"\" to switch this off.",
     "auto_clip_folder": "./downloaded_vods",
     "auto_clip_count": 3,

@@ -787,6 +787,67 @@ def _already_posted(queue, platform: str, video_path: str):
     return None
 
 
+# YouTube's vulgar-language policy names "a clip taken out of context"
+# focused on that language as the thing that gets age-restricted, and its
+# hate speech policy counts slurs whether or not they are audible - it
+# says nothing about muting. A 16-second clip carrying five muted slurs
+# is exactly that clip. At this many, it does not go to the short-form
+# platforms at all. Set clips.max_slurs_for_social to 0 to turn it off.
+DEFAULT_MAX_SLURS_FOR_SOCIAL = 3
+
+
+def _clip_segments(video_path: str, config: dict):
+    """The clip's own word-level transcript from its censor pass, or None.
+
+    Looked up under the CLIP's name - the file posted is often the
+    censored copy, whose own transcript has the slurs muted out.
+    """
+    from utils.censor import words_cache_path
+    from utils.social_promoter import plain_clip_name
+
+    stem = plain_clip_name(os.path.splitext(os.path.basename(video_path))[0])
+    folders = [os.path.dirname(os.path.abspath(video_path))]
+    folders += list((config or {}).get("note_folders", ()) or ())
+    for folder in folders:
+        path = words_cache_path(folder, stem)
+        try:
+            with open(path, encoding="utf-8") as handle:
+                segments = json.load(handle).get("segments")
+        except (OSError, ValueError, AttributeError):
+            continue
+        if isinstance(segments, list):
+            return segments
+    return None
+
+
+def _slur_heavy(video_path: str, config: dict) -> str:
+    """Why this clip is held back from social platforms, or "".
+
+    No transcript found means no judgement - the clip is not held.
+    """
+    clips = (config or {}).get("clips", {}) or {}
+    limit = clips.get("max_slurs_for_social", DEFAULT_MAX_SLURS_FOR_SOCIAL)
+    try:
+        limit = int(limit)
+    except (TypeError, ValueError):
+        limit = DEFAULT_MAX_SLURS_FOR_SOCIAL
+    if limit <= 0:
+        return ""
+    segments = _clip_segments(video_path, config)
+    if not segments:
+        return ""
+    from autoreel.compliance import ComplianceEngine
+
+    hits = ComplianceEngine(only_categories=("hate_speech",)).scan_segments(
+        segments)
+    if len(hits) < limit:
+        return ""
+    seconds = max((float(seg.get("end", 0) or 0) for seg in segments),
+                  default=0.0)
+    length = f" in {seconds:.0f}s" if seconds else ""
+    return f"{len(hits)} slurs{length} (limit {limit})"
+
+
 def offer(posting: dict, config: dict, video_path: str,
           fallback_caption: str = "", platforms=CLIP_PLATFORMS,
           dry_run: bool = False) -> dict:
@@ -799,6 +860,15 @@ def offer(posting: dict, config: dict, video_path: str,
 
     outcome: dict = {}
     if not posting or not video_path:
+        return outcome
+
+    held = _slur_heavy(video_path, config)
+    if held:
+        for platform in platforms:
+            outcome[platform] = f"skipped: held - {held}"
+        print(f"[Clips] Held back from every social platform: {held}. "
+              f"Rumble still gets it. Post it by hand if you judge it fine.")
+        _journal(config, "skip", "social", video_path, f"held: {held}")
         return outcome
 
     guard = PublishGuard(posting, posting.get("state_path"))

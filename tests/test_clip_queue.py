@@ -902,3 +902,79 @@ def test_a_clip_that_comes_back_is_not_posted_where_postplanify_sent_it(
     for name, _, targets in calls:
         if name == "upload_post":
             assert "instagram" not in targets and "tiktok" not in targets
+
+
+# ── clips made mostly of slurs stay off the short-form platforms ────────────
+# YouTube's vulgar-language policy names "a clip taken out of context"
+# focused on that language as what gets age-restricted, and its hate speech
+# policy says nothing about muting. A real clip was 16s with five muted.
+
+def _transcript(folder, clip_name, slurs, seconds=16.0):
+    import json as _json
+
+    from autoreel.compliance import DEFAULT_CATEGORIES
+
+    term = DEFAULT_CATEGORIES["hate_speech"][0]
+    words = [{"word": term, "start": n + 0.2, "end": n + 0.6}
+             for n in range(slurs)]
+    words.append({"word": "bro", "start": seconds - 1, "end": seconds - 0.5})
+    segments = [{"start": 0.0, "end": seconds,
+                 "text": " ".join(w["word"] for w in words), "words": words}]
+    path = os.path.join(folder, f"{clip_name}_transcript_words.json")
+    with open(path, "w", encoding="utf-8") as handle:
+        _json.dump({"segments": segments}, handle)
+
+
+def test_a_slur_heavy_clip_is_held_from_every_social_platform(
+        publisher, posting, clips, tmp_path, monkeypatch):
+    calls = _record_publish(publisher, monkeypatch)
+    _transcript(str(tmp_path), "clip00", slurs=5)
+
+    outcome = publisher.offer(posting, CONFIG, clips[0],
+                              platforms=("instagram", "facebook"))
+
+    assert calls == []
+    assert all(v.startswith("skipped: held - 5 slurs in 16s") for v in outcome.values())
+
+
+def test_the_censored_copy_is_judged_by_the_clips_own_transcript(
+        publisher, posting, clips, tmp_path, monkeypatch):
+    """The file offered is often "<clip>_CENSORED_<settings>.mp4"; its own
+    transcript has the slurs muted out and would read clean."""
+    calls = _record_publish(publisher, monkeypatch)
+    _transcript(str(tmp_path), "clip00", slurs=4)
+    censored = tmp_path / "clip00_CENSORED_silence-large-v3-turbo-ae26.mp4"
+    censored.write_bytes(b"video")
+
+    publisher.offer(posting, CONFIG, str(censored), platforms=("instagram",))
+
+    assert calls == []
+
+
+def test_a_clip_under_the_limit_still_posts(publisher, posting, clips,
+                                            tmp_path, monkeypatch):
+    calls = _record_publish(publisher, monkeypatch)
+    _transcript(str(tmp_path), "clip00", slurs=2)
+
+    publisher.offer(posting, CONFIG, clips[0], platforms=("instagram",))
+
+    assert [name for name, _, _ in calls] == ["instagram"]
+
+
+def test_the_limit_can_be_turned_off(publisher, posting, clips, tmp_path,
+                                     monkeypatch):
+    calls = _record_publish(publisher, monkeypatch)
+    _transcript(str(tmp_path), "clip00", slurs=9)
+    config = dict(CONFIG, clips={"max_slurs_for_social": 0})
+
+    publisher.offer(posting, config, clips[0], platforms=("instagram",))
+
+    assert [name for name, _, _ in calls] == ["instagram"]
+
+
+def test_no_transcript_is_no_judgement(publisher, posting, clips, monkeypatch):
+    calls = _record_publish(publisher, monkeypatch)
+
+    publisher.offer(posting, CONFIG, clips[0], platforms=("instagram",))
+
+    assert [name for name, _, _ in calls] == ["instagram"]
