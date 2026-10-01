@@ -70,6 +70,8 @@ def scene(tmp_path, monkeypatch):
     # hung test suite here.
     cfg.general.max_retries = 1
     cfg.general.retry_delays = (0,)
+    # Never the real logs folder: the YouTube block note is written here.
+    cfg.general.logs_folder = str(tmp_path / "logs")
     os.makedirs(cfg.general.watch_folder, exist_ok=True)
     video = os.path.join(cfg.general.watch_folder, "A Stream 2026-08-10.mp4")
     with open(video, "wb") as f:
@@ -663,3 +665,37 @@ def test_a_busy_youtube_is_still_retried():
     assert main.youtube_should_retry(RuntimeError("HttpError 503 backendError"))
     assert main.youtube_should_retry(RuntimeError(
         "HttpError 403 'reason': 'rateLimitExceeded'"))
+
+
+def test_a_forbidden_channel_is_not_asked_again_for_hours(scene, tmp_path,
+                                                          monkeypatch):
+    """The watcher's 30-minute sweep re-read each stuck stream, asked
+    YouTube again and got the same 'forbidden', all day."""
+    main, cfg, video, recorder = scene
+    tries = []
+
+    class Forbidden:
+        def __init__(self, *a, **k):
+            pass
+
+        def upload(self, *a, **k):
+            tries.append(1)
+            raise RuntimeError("HttpError 403 ... 'reason': 'forbidden'")
+
+        def get_service(self):
+            return None
+
+    monkeypatch.setattr(main, "YouTubeUploader", Forbidden)
+
+    run(main, cfg, video, tmp_path)
+    second = run(main, cfg, video, tmp_path)
+
+    assert len(tries) == 1
+    assert second["youtube"].startswith("FAILED")
+
+    import json as _json
+    with open(os.path.join(cfg.general.logs_folder, "youtube_blocked.json"),
+              "w", encoding="utf-8") as handle:
+        _json.dump({"until": 0}, handle)
+    run(main, cfg, video, tmp_path)
+    assert len(tries) == 2, "never tried again once the block was over"

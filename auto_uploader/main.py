@@ -1199,6 +1199,34 @@ _YOUTUBE_FINAL = ("'reason': 'forbidden'", "quotaExceeded",
                   "uploadLimitExceeded", "HttpError 401")
 
 
+# How long a 'forbidden' refusal is believed. Without it the watcher's
+# 30-minute retry sweep re-read each stuck 3.6 GB stream, asked YouTube
+# again, got the same refusal and spent a Gemini call on a thumbnail
+# nobody would see - all day, for every stream the block caught.
+YOUTUBE_BLOCK_HOURS = 6
+
+
+def _youtube_blocked_until(cfg, now=None, block: bool = False) -> float:
+    """The time YouTube may be tried again, or 0.0 if it may be now."""
+    path = os.path.join(cfg.general.logs_folder, "youtube_blocked.json")
+    now = time.time() if now is None else now
+    if block:
+        until = now + YOUTUBE_BLOCK_HOURS * 3600
+        try:
+            os.makedirs(cfg.general.logs_folder, exist_ok=True)
+            with open(path, "w", encoding="utf-8") as handle:
+                json.dump({"until": until}, handle)
+        except OSError:
+            pass
+        return until
+    try:
+        with open(path, encoding="utf-8") as handle:
+            until = float(json.load(handle).get("until", 0))
+    except (OSError, ValueError, TypeError, AttributeError):
+        return 0.0
+    return until if until > now else 0.0
+
+
 def youtube_should_retry(exc: BaseException) -> bool:
     text = str(exc)
     return not any(marker in text for marker in _YOUTUBE_FINAL)
@@ -2656,6 +2684,11 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
             print(f"          Full details: {os.path.join(cfg.general.logs_folder, 'youtube.log')}")
             yt_logger.error(f"{filename}: FAILED: {exc}")
             notify("YouTube upload FAILED", f"{filename}: {exc}", cfg.general.enable_desktop_notifications)
+            if "'reason': 'forbidden'" in str(exc):
+                _youtube_blocked_until(cfg, now=time.time(), block=True)
+                print(f"[YouTube] The channel refused the upload outright - "
+                      f"usually uploads disabled by a strike. Not trying "
+                      f"YouTube again for {YOUTUBE_BLOCK_HOURS} hours.")
             with upload_lock:
                 results["youtube"] = f"FAILED: {exc}"
         finally:
@@ -2825,6 +2858,13 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
             print("[YouTube] Skipped - --only rumble.")
     elif existing_yt:
         results["youtube"] = existing_yt  # already announced above
+    elif _youtube_blocked_until(cfg):
+        # Recorded as a failure, never a success: the file stays put and
+        # the first run after the block lifts uploads it.
+        until = time.strftime("%H:%M", time.localtime(_youtube_blocked_until(cfg)))
+        print(f"[YouTube] Skipped - the channel refused uploads earlier; "
+              f"trying again after {until}.")
+        results["youtube"] = "FAILED: YouTube refused uploads (forbidden) - waiting"
     else:
         jobs.append(("youtube", do_youtube))
 
