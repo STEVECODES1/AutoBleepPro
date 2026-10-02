@@ -1199,11 +1199,13 @@ _YOUTUBE_FINAL = ("'reason': 'forbidden'", "quotaExceeded",
                   "uploadLimitExceeded", "HttpError 401")
 
 
-# How long a 'forbidden' refusal is believed. Without it the watcher's
+# How long a 'forbidden' refusal is believed - an hour, so uploads resume
+# within the hour of a ban lifting. A retry while banned costs one ~1s call.
+# Without it the watcher's
 # 30-minute retry sweep re-read each stuck 3.6 GB stream, asked YouTube
 # again, got the same refusal and spent a Gemini call on a thumbnail
 # nobody would see - all day, for every stream the block caught.
-YOUTUBE_BLOCK_HOURS = 6
+YOUTUBE_BLOCK_HOURS = 1
 _BLOCKED_RESULT = "FAILED: YouTube refused uploads (forbidden) - waiting"
 
 # Files whose only missing platform is a blocked YouTube: path -> when the
@@ -2703,7 +2705,7 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
                 _youtube_blocked_until(cfg, now=time.time(), block=True)
                 print(f"[YouTube] The channel refused the upload outright - "
                       f"usually uploads disabled by a strike. Not trying "
-                      f"YouTube again for {YOUTUBE_BLOCK_HOURS} hours.")
+                      f"YouTube again for {YOUTUBE_BLOCK_HOURS} hour(s).")
             with upload_lock:
                 results["youtube"] = f"FAILED: {exc}"
         finally:
