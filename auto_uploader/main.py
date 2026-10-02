@@ -1204,6 +1204,21 @@ _YOUTUBE_FINAL = ("'reason': 'forbidden'", "quotaExceeded",
 # again, got the same refusal and spent a Gemini call on a thumbnail
 # nobody would see - all day, for every stream the block caught.
 YOUTUBE_BLOCK_HOURS = 6
+_BLOCKED_RESULT = "FAILED: YouTube refused uploads (forbidden) - waiting"
+
+# Files whose only missing platform is a blocked YouTube: path -> when the
+# block lifts. The retry sweep skips them until then rather than re-reading
+# gigabytes to arrive at the same skip.
+_WAITING_ON_YOUTUBE: dict = {}
+
+
+class _QuietPass(Exception):
+    """Nothing new to report for this pass."""
+
+
+def waiting_on_youtube(path: str, now=None) -> bool:
+    until = _WAITING_ON_YOUTUBE.get(os.path.abspath(path), 0.0)
+    return until > (time.time() if now is None else now)
 
 
 def _youtube_blocked_until(cfg, now=None, block: bool = False) -> float:
@@ -2864,7 +2879,7 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
         until = time.strftime("%H:%M", time.localtime(_youtube_blocked_until(cfg)))
         print(f"[YouTube] Skipped - the channel refused uploads earlier; "
               f"trying again after {until}.")
-        results["youtube"] = "FAILED: YouTube refused uploads (forbidden) - waiting"
+        results["youtube"] = _BLOCKED_RESULT
     else:
         jobs.append(("youtube", do_youtube))
 
@@ -3102,9 +3117,23 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
     # Sent whether or not anything was newly uploaded: "everything was
     # already up, nothing to do" is a real answer, and the announcement
     # path deliberately stays silent about it.
+    # A pass that only skipped YouTube for the block, with everything else
+    # already done, is not news - a real night posted the same "1 of 2
+    # landed, 1 failed" receipt to Discord every 30 minutes. It is also
+    # the file the retry sweep should leave alone until the block lifts.
+    waiting_only_on_block = (
+        str(results.get("youtube", "")).startswith(_BLOCKED_RESULT)
+        and all(not str(v).startswith("FAILED")
+                for k, v in results.items() if k != "youtube")
+        and not newly_uploaded and not clips_delivered)
+    if waiting_only_on_block:
+        _WAITING_ON_YOUTUBE[os.path.abspath(video_path)] = \
+            _youtube_blocked_until(cfg)
     try:
         from utils.job_report import JobReport, report_job
 
+        if waiting_only_on_block:
+            raise _QuietPass
         report_job(cfg, JobReport(
             title=yt_title or filename,
             filename=filename,
@@ -3117,6 +3146,8 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
             seconds=time.time() - run_started_at,
             is_clip=bool(is_clip),
         ))
+    except _QuietPass:
+        pass
     except Exception as exc:
         print(f"[Report] Could not post the receipt: {exc}")
 
@@ -4845,7 +4876,8 @@ def main(argv=None) -> int:
                             if (os.path.isfile(path)
                                     and os.path.splitext(name)[1].lower()
                                     in cfg.general.supported_formats
-                                    and not is_intermediate_download(name)):
+                                    and not is_intermediate_download(name)
+                                    and not waiting_on_youtube(path)):
                                 watcher.consider(path)
                     except OSError as exc:
                         print(f"[Watch] WARNING: retry sweep could not read "

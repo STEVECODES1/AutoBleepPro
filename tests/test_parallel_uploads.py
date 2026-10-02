@@ -699,3 +699,28 @@ def test_a_forbidden_channel_is_not_asked_again_for_hours(scene, tmp_path,
         _json.dump({"until": 0}, handle)
     run(main, cfg, video, tmp_path)
     assert len(tries) == 2, "never tried again once the block was over"
+
+
+def test_a_pass_that_only_waits_on_a_blocked_youtube_stays_quiet(
+        scene, tmp_path, monkeypatch):
+    """A real night: the same two streams, already on Rumble, went round
+    every 30 minutes - a 3.6 GB re-read and a "1 of 2 landed, 1 failed"
+    Discord receipt each time - while YouTube stayed blocked."""
+    import utils.job_report as job_report
+
+    main, cfg, video, recorder = scene
+    main._youtube_blocked_until(cfg, block=True)
+    receipts = []
+    monkeypatch.setattr(job_report, "report_job",
+                        lambda cfg, report, say=print: receipts.append(report))
+    monkeypatch.setattr(main, "RumbleUploader", type("R", (), {
+        "__init__": lambda self, *a, **k: None,
+        "upload": lambda self, *a, **k: "https://rumble.com/v7x-a-stream.html"}))
+    monkeypatch.setattr(main, "_confirm_on_rumble", lambda url, title, cfg: url)
+
+    run(main, cfg, video, tmp_path)      # Rumble lands: that is news
+    assert len(receipts) == 1
+    run(main, cfg, video, tmp_path)      # nothing left but the block
+
+    assert len(receipts) == 1
+    assert main.waiting_on_youtube(video)
