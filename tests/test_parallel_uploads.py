@@ -756,3 +756,48 @@ def test_our_own_broken_upload_is_not_taken_for_the_finished_one(
 
     assert results["youtube"] == "https://youtube.example/watch", \
         "the broken half-upload was trusted instead of uploading again"
+
+
+# ── the stream uploader checks which channel it is signed into ──────────────
+
+class _ChannelService:
+    def __init__(self, title, handle):
+        self.items = [{"snippet": {"title": title, "customUrl": handle}}]
+
+    def channels(self):
+        return self
+
+    def list(self, **kwargs):
+        return self
+
+    def execute(self):
+        return {"items": self.items}
+
+
+def test_the_right_channel_is_let_through(scene, monkeypatch):
+    main, cfg, video, recorder = scene
+    cfg.youtube.channel = "@StackswopoGames"
+    monkeypatch.setitem(main._YOUTUBE_WRONG_CHANNEL, "why", "")
+
+    assert main.check_youtube_channel(
+        cfg, _ChannelService("StacksWopo Games", "@stackswopogames")) == ""
+
+
+def test_a_login_for_another_channel_never_uploads_there(
+        scene, tmp_path, monkeypatch):
+    """A real startup said "Found 29 existing video(s)" - not StacksWopo
+    Games, which has 170 - and nothing stopped a stream going up on that
+    other channel while Games was under an upload block."""
+    main, cfg, video, recorder = scene
+    cfg.youtube.channel = "@StackswopoGames"
+    monkeypatch.setitem(main._YOUTUBE_WRONG_CHANNEL, "why", "")
+
+    why = main.check_youtube_channel(
+        cfg, _ChannelService("STACKSWOPO STREAMS", "@stackswopostreams"))
+    assert "STACKSWOPO STREAMS" in why and "@StackswopoGames" in why
+
+    result = run(main, cfg, video, tmp_path)
+
+    assert result["youtube"] == main._WRONG_CHANNEL_RESULT
+    assert "youtube" not in recorder.spans
+    assert "rumble" in recorder.spans          # Rumble is unaffected

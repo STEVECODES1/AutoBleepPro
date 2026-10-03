@@ -1192,3 +1192,23 @@ def test_hours_until_open(monkeypatch, window, hour, expected):
     monkeypatch.setattr(publish_guard, "_local_hour", lambda now: hour)
     assert publish_guard.hours_until_open(window, 0) == pytest.approx(
         expected)
+
+
+def test_x_keeps_the_swearing_but_not_the_slurs(publisher, clips,
+                                                monkeypatch):
+    """X allows swearing, like Rumble. Instagram's caption is still
+    masked, and a slur comes out of both."""
+    from utils import social_promoter
+
+    monkeypatch.setattr(social_promoter, "clip_title",
+                        lambda path, folders=(): "what the fuck nigga")
+    config = {"instagram": {"caption_template": "{title}"},
+              "x": {"caption_template": "{title}"},
+              "clips": {}, "model_captions": False}
+
+    on_x = publisher.caption_for("postproxy_x", clips[0], "", config)
+    on_ig = publisher.caption_for("postproxy_instagram", clips[0], "", config)
+
+    assert "fuck" in on_x
+    assert "fuck" not in on_ig
+    assert "nigga" not in on_x and "nigga" not in on_ig

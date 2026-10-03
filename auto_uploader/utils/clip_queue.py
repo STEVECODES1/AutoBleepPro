@@ -90,6 +90,23 @@ def base_platform(platform: str) -> str:
 CLEAN_TEXT_PLATFORMS = ("instagram", "facebook", "tiktok", "x",
                         "youtube_shorts", "zernio_twitter", "zernio_tiktok")
 
+# Where ordinary swearing stays in the caption, as spoken. X allows it;
+# slurs are still taken out there - X's hateful conduct rules cover them,
+# and the account is what is at risk. The audio follows the same split
+# through the x block's censor_uploads ("slurs").
+SWEARING_OK = ("x",)
+
+
+def _slurs_only_checker():
+    """The compliance list cut down to hate speech, or None."""
+    try:
+        from autoreel.compliance import ComplianceEngine
+
+        return ComplianceEngine(only_categories=("hate_speech",))
+    except Exception:
+        return None
+
+
 # A blocked clip is worth keeping for about a day. Past that the stream it
 # came from is stale and posting it is worse than not.
 MAX_DEFERRED_AGE_S = 36 * 3600
@@ -432,7 +449,8 @@ def caption_for(platform: str, video_path: str, fallback: str,
     if platform in CLEAN_TEXT_PLATFORMS:
         from autoreel.safe_text import clean_lines
 
-        caption = clean_lines(caption)
+        caption = clean_lines(caption, _slurs_only_checker()
+                              if platform in SWEARING_OK else None)
 
     # Last, so the pointer survives the cleaner and the tag builder and
     # is measured against what actually gets posted.

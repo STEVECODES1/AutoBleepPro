@@ -1257,6 +1257,50 @@ def waiting_on_youtube(path: str, now=None) -> bool:
     return until > (time.time() if now is None else now)
 
 
+# Set at startup when the YouTube login is not youtube.channel in
+# config.json. Every stream then skips YouTube instead of going up on
+# whichever channel the token happens to be for.
+_YOUTUBE_WRONG_CHANNEL: dict = {"why": ""}
+_WRONG_CHANNEL_RESULT = "FAILED: signed into the wrong YouTube channel"
+
+
+def _channel_key(name: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", (name or "").lower())
+
+
+def check_youtube_channel(cfg, service) -> str:
+    """Why YouTube must not be used this run, or "".
+
+    The stream uploader never asked which channel its token was for. A
+    token made while signed into another channel kept uploading there -
+    the startup line said "Found 29 existing video(s)" on a run meant for
+    StacksWopo Games, which has 170. During an upload block that is also
+    the one thing that turns a week-long block into losing the channels:
+    YouTube forbids using another channel to get around it.
+    """
+    expected = str(getattr(cfg.youtube, "channel", "") or "").strip()
+    _YOUTUBE_WRONG_CHANNEL["why"] = ""
+    if not expected or service is None:
+        return ""
+    try:
+        items = service.channels().list(
+            part="snippet", mine=True).execute().get("items") or []
+    except Exception:
+        return ""                  # cannot tell - the upload says the rest
+    snippet = (items[0].get("snippet") or {}) if items else {}
+    name, handle = snippet.get("title", ""), snippet.get("customUrl", "")
+    if _channel_key(expected) in {_channel_key(name), _channel_key(handle)}:
+        print(f"[YouTube] Signed in as {name} {handle}.")
+        return ""
+    why = (f"the YouTube login is for \"{name}\" {handle}, not {expected}. "
+           f"Streams will NOT go to YouTube until that is fixed: stop the "
+           f"uploader, delete {cfg.youtube.token_path}, start it again and "
+           f"pick {expected} on the Google page.")
+    _YOUTUBE_WRONG_CHANNEL["why"] = why
+    print(f"[YouTube] WARNING: {why}")
+    return why
+
+
 def _youtube_blocked_until(cfg, now=None, block: bool = False) -> float:
     """The time YouTube may be tried again, or 0.0 if it may be now."""
     path = os.path.join(cfg.general.logs_folder, "youtube_blocked.json")
@@ -2938,6 +2982,9 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
         print(f"[YouTube] Skipped - the channel refused uploads earlier; "
               f"trying again after {until}.")
         results["youtube"] = _BLOCKED_RESULT
+    elif _YOUTUBE_WRONG_CHANNEL["why"]:
+        print(f"[YouTube] Skipped - {_YOUTUBE_WRONG_CHANNEL['why']}")
+        results["youtube"] = _WRONG_CHANNEL_RESULT
     else:
         jobs.append(("youtube", do_youtube))
 
@@ -3178,14 +3225,19 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
     # already done, is not news - a real night posted the same "1 of 2
     # landed, 1 failed" receipt to Discord every 30 minutes. It is also
     # the file the retry sweep should leave alone until the block lifts.
+    # The wrong-channel skip waits the same way: it cannot change until
+    # someone restarts the uploader with the right login.
+    wrong_channel = str(results.get("youtube", "")) == _WRONG_CHANNEL_RESULT
     waiting_only_on_block = (
-        str(results.get("youtube", "")).startswith(_BLOCKED_RESULT)
+        (str(results.get("youtube", "")).startswith(_BLOCKED_RESULT)
+         or wrong_channel)
         and all(not str(v).startswith("FAILED")
                 for k, v in results.items() if k != "youtube")
         and not newly_uploaded and not clips_delivered)
     if waiting_only_on_block:
-        _WAITING_ON_YOUTUBE[os.path.abspath(video_path)] = \
-            _youtube_blocked_until(cfg)
+        _WAITING_ON_YOUTUBE[os.path.abspath(video_path)] = max(
+            _youtube_blocked_until(cfg),
+            time.time() + 3600 if wrong_channel else 0.0)
     try:
         from utils.job_report import JobReport, report_job
 
@@ -4690,6 +4742,7 @@ def main(argv=None) -> int:
         yt_for_check = YouTubeUploader(cfg.youtube.client_secrets_path, cfg.youtube.token_path)
         existing_youtube_videos = fetch_existing_videos(yt_for_check.get_service())
         print(f"[YouTube] Found {len(existing_youtube_videos)} existing video(s) on the channel for dedup checks.")
+        check_youtube_channel(cfg, yt_for_check.get_service())
     except Exception as exc:
         existing_videos_fetch_failed = True
         print(f"[WARN] Could not fetch existing YouTube videos ({exc}); dedup-by-date check will be skipped.")
