@@ -1301,6 +1301,19 @@ def check_youtube_channel(cfg, service) -> str:
     return why
 
 
+def youtube_safe_title(title: str) -> str:
+    """The stream's title fit for YouTube: slurs dropped, other swearing
+    masked (f***), mild words left as they are. The original when there
+    is nothing to change, or when cleaning would leave nothing."""
+    try:
+        from autoreel.safe_text import clean
+
+        cleaned = clean(title or "")
+    except Exception:
+        return title
+    return cleaned or title
+
+
 def _youtube_blocked_until(cfg, now=None, block: bool = False) -> float:
     """The time YouTube may be tried again, or 0.0 if it may be now."""
     path = os.path.join(cfg.general.logs_folder, "youtube_blocked.json")
@@ -2258,8 +2271,15 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
                  else cfg.youtube.title_format)
     rb_format = (cfg.rumble.clip_title_format if is_clip
                  else cfg.rumble.title_format)
-    yt_title = build_title(stream_title, date_str, yt_format)
-    yt_description = build_description(cfg.youtube.description_template, date_str, stream_title)
+    # YouTube's ad rules read the TITLE as well as the audio: swearing in
+    # a title limits ads whatever the video says, and a slur in one is a
+    # hate speech problem on its own. Rumble keeps the title as written.
+    yt_stream_title = youtube_safe_title(stream_title)
+    if yt_stream_title != stream_title:
+        print(f"[YouTube] Title cleaned for YouTube: {yt_stream_title}")
+    yt_title = build_title(yt_stream_title, date_str, yt_format)
+    yt_description = build_description(cfg.youtube.description_template,
+                                       date_str, yt_stream_title)
     rb_title = build_title(stream_title, date_str, rb_format)
     rb_description = build_description(cfg.rumble.description_template, date_str, stream_title)
     if is_clip:
@@ -2530,12 +2550,15 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
                     _where = f"auto -> {detect_device()[0]}"
                 except Exception:
                     _where = "auto"
-            from utils.clip_queue import scope_categories
+            from utils.clip_queue import scope_allow, scope_categories
 
             _scope = cfg.general.censor_categories
             _only = scope_categories(_scope)
-            print(f"[Censor] Transcribing + scanning for "
-                  f"{'slurs' if _only else 'profanity'} "
+            _allow = scope_allow(_scope)
+            _what = ("slurs" if _only else
+                     "every swear word, slur and flagged phrase (YouTube-safe)"
+                     if _allow else "profanity")
+            print(f"[Censor] Transcribing + scanning for {_what} "
                   f"(model={cfg.general.censor_model}, device={_where})...")
             censor_result = censor_video(
                 video_path, cfg.general.censored_folder,
@@ -2549,6 +2572,7 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
                 # Was omitted entirely, which meant every category - so
                 # the whole VOD got a mute on every ordinary swear.
                 only_categories=_only,
+                allow_words=_allow,
             )
             _censored["path"] = censor_result.output_path
             if censor_result.violation_count == -1:

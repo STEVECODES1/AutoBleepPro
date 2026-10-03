@@ -257,7 +257,8 @@ def _report_risk(violations, mute_whole_segment: bool = False) -> None:
 
 
 def _settings_fingerprint(padding_ms: int, mute_whole_segment: bool,
-                          only_categories: tuple, custom_words: tuple) -> str:
+                          only_categories: tuple, custom_words: tuple,
+                          allow_words: tuple = ()) -> str:
     """A short, stable fingerprint of every setting that changes what
     actually gets muted - not just which model transcribed it or whether
     the method is a beep or silence.
@@ -277,12 +278,16 @@ def _settings_fingerprint(padding_ms: int, mute_whole_segment: bool,
     Included, not the raw strings: only_categories and custom_words can
     both change what gets flagged, and belong here for the same reason.
     """
-    payload = repr((
+    fields = (
         int(padding_ms),
         bool(mute_whole_segment),
         tuple(sorted(str(c).lower() for c in (only_categories or ()))),
         tuple(sorted(str(w).lower() for w in (custom_words or ()))),
-    ))
+    )
+    if allow_words:
+        # Only when set, so every copy made before it keeps its key.
+        fields += (tuple(sorted(str(w).lower() for w in allow_words)),)
+    payload = repr(fields)
     return hashlib.sha1(payload.encode("utf-8")).hexdigest()[:10]
 
 
@@ -341,6 +346,7 @@ def censor_video(
     padding_ms: int = 250,
     mute_whole_segment: bool = True,
     only_categories: tuple = (),
+    allow_words: tuple = (),
 ) -> CensorResult:
     """Transcribe `source_path`, bleep any flagged words, and return the
     path that should actually be uploaded (a censored copy, or the
@@ -363,7 +369,7 @@ def censor_video(
     # Without this, changing the config appears to do nothing on any file
     # that was already processed.
     cache_key = (f"{bleep_method}-{model_name}-"
-                f"{_settings_fingerprint(padding_ms, mute_whole_segment, only_categories, custom_words)}")
+                f"{_settings_fingerprint(padding_ms, mute_whole_segment, only_categories, custom_words, allow_words)}")
     output_video_path = os.path.join(work_dir, f"{basename}_CENSORED_{cache_key}.mp4")
 
     if (os.path.exists(output_video_path)
@@ -405,7 +411,8 @@ def censor_video(
                 transcriber.hotwords = build_hotwords(
                     config=None,
                     engine=ComplianceEngine(custom_words=tuple(custom_words),
-                                            only_categories=tuple(only_categories)),
+                                            only_categories=tuple(only_categories),
+                                            allow_words=tuple(allow_words)),
                     # What this channel has actually been heard saying,
                     # most-said first - see autoreel/vocabulary.py. The
                     # cap is small and this is what decides who spends
@@ -440,7 +447,8 @@ def censor_video(
         engine = ComplianceEngine(custom_words=custom_words,
                                   padding_ms=padding_ms,
                                   mute_whole_segment=mute_whole_segment,
-                                  only_categories=tuple(only_categories))
+                                  only_categories=tuple(only_categories),
+                                  allow_words=tuple(allow_words))
         violations = engine.scan_segments(result["segments"])
 
         if not violations:

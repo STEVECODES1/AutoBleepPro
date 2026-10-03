@@ -78,6 +78,17 @@ DEFAULT_CATEGORIES: dict[str, list[str]] = {
     ],
 }
 
+# Words YouTube's advertiser-friendly guidelines leave alone ("mild
+# profanity": damn, hell) and ordinary words the profanity filter flags
+# anyway (god, kill, stupid). Muting them is what put 1135 mutes in one
+# stream and made the audio cut out every few seconds - for nothing an
+# advertiser or a strike cares about. The "ad_safe" scope mutes
+# everything else.
+MILD_WORDS: tuple = ("hell", "damn", "damned", "dammit", "crap", "god",
+                     "sucks", "suck", "kill", "killed", "killing", "dead",
+                     "stupid", "idiot", "dumb", "shut", "dang", "darn",
+                     "shoot", "heck", "gosh")
+
 # Categories serious enough that muting the single word isn't enough - the
 # sentence around it usually carries the same meaning, so the whole
 # segment goes. YouTube acts on context, not just the audible word.
@@ -178,6 +189,8 @@ class ComplianceEngine:
     # survives. Turn it on only if a platform is acting on context rather
     # than on the audible word.
     mute_whole_segment: bool = False
+    # Never flagged, whatever any list says - see MILD_WORDS.
+    allow_words: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         self.categories: dict[str, list[str]] = {
@@ -204,6 +217,8 @@ class ComplianceEngine:
                 self.categories.setdefault(category, [])
                 self.categories[category].extend(phrases)
         self.custom_words = tuple(w.strip().lower() for w in self.custom_words if w.strip())
+        self._allowed = {w.strip().lower() for w in self.allow_words
+                         if w.strip()}
         self._patterns = {name: _matcher(words)
                           for name, words in self.categories.items()}
         self._custom = _matcher(self.custom_words)
@@ -217,6 +232,9 @@ class ComplianceEngine:
         # "word's"), which stops exact-match profanity checks from firing on
         # the base word. Check both forms.
         core = re.sub(r"'(s|ll|d|m|re|ve|t)$", "", normalized)
+        if self._allowed and (normalized in self._allowed
+                              or core in self._allowed):
+            return None
 
         for candidate in (normalized, core):
             # High-severity categories are checked FIRST. better_profanity

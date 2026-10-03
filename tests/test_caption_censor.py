@@ -314,6 +314,11 @@ def test_every_platform_bleeps_slurs_and_leaves_the_swearing():
     from utils.clip_queue import CENSOR_AUDIO_DEFAULTS, _CENSOR_SCOPES
 
     for platform, mode in CENSOR_AUDIO_DEFAULTS.items():
+        if platform == "youtube_shorts":
+            # YouTube is the heavily guarded one, by the owner's call -
+            # see test_youtube_ad_safe.py.
+            assert mode == "ad_safe"
+            continue
         assert mode == "slurs", f"{platform} is back to muting everything"
         engine = ComplianceEngine(only_categories=_CENSOR_SCOPES[mode])
         assert engine._flag_reason("nigga") == "hate_speech", platform
@@ -329,7 +334,11 @@ def test_the_stream_and_its_clips_agree_on_what_counts():
     from utils.clip_queue import scope_categories
     from utils.config import GeneralConfig
 
-    assert GeneralConfig.censor_categories == "slurs"
+    # The stream's YouTube copy and its Shorts both use "ad_safe".
+    from utils.clip_queue import CENSOR_AUDIO_DEFAULTS
+
+    assert GeneralConfig.censor_categories == "ad_safe"
+    assert CENSOR_AUDIO_DEFAULTS["youtube_shorts"] == "ad_safe"
     assert scope_categories("slurs") == ("hate_speech",)
     # A typo must over-censor and be noticed, never quietly publish one.
     assert scope_categories("sluurs") == ()

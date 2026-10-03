@@ -143,7 +143,11 @@ class GeneralConfig:
     # became a hole in the audio of the whole VOD. The clip path has had
     # a per-platform version of this setting for a while; this is the
     # same decision for the stream, and it defaults the same way.
-    censor_categories: str = "slurs"
+    # What the YouTube copy of a stream has muted. "ad_safe": every swear
+    # word, slur and flagged phrase except the mild words YouTube's
+    # advertiser-friendly guidelines allow. "slurs": slurs only. "all":
+    # everything, mild words included. Rumble always gets the original.
+    censor_categories: str = "ad_safe"
     # Picks a real frame near the transcript's highest-energy moment
     # instead of leaving the thumbnail to whatever the platform's own
     # algorithm lands on - see utils/thumbnail.py. Only ever runs when a
@@ -445,7 +449,7 @@ def load_config(config_path: str = "config.json", env_path: str = ".env") -> App
         censored_folder=_resolve_path(project_root, gen.get("censored_folder", "./censored")),
         censor_padding_ms=int(gen.get("censor_padding_ms", 250)),
         censor_mute_whole_segment=bool(gen.get("censor_mute_whole_segment", False)),
-        censor_categories=str(gen.get("censor_categories", "slurs")),
+        censor_categories=str(gen.get("censor_categories", "ad_safe")),
         auto_thumbnail=bool(gen.get("auto_thumbnail", True)),
         thumbnail_logo=_resolve_path(project_root, gen.get("thumbnail_logo")
                                      or "") if gen.get("thumbnail_logo")

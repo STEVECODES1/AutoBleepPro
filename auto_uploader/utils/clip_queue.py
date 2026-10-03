@@ -508,7 +508,8 @@ def _char_limit(platform: str) -> int:
 # it. Neither BANS it - slurs are the line that actually costs a
 # channel, and that line is still held here.
 CENSOR_AUDIO_DEFAULTS = {
-    "youtube_shorts": "slurs",
+    # Shorts earn from the Shorts ad pool on the same guidelines.
+    "youtube_shorts": "ad_safe",
     "instagram": "slurs",
     "facebook": "slurs",
     "zernio_twitter": "slurs",
@@ -529,7 +530,20 @@ CENSOR_AUDIO_DEFAULTS = {
 # hate speech only. Public because the full-VOD upload path in main.py
 # resolves the same setting - a stream and a clip cut from that stream
 # disagreeing about what counts would be indefensible.
-CENSOR_SCOPES = {"all": (), "slurs": ("hate_speech",)}
+# "ad_safe" - YouTube, heavily guarded: every category and every swear
+# word, slurs included, EXCEPT the mild words YouTube's advertiser-
+# friendly guidelines allow (compliance.MILD_WORDS). Anyone who wants it
+# uncensored has Rumble.
+CENSOR_SCOPES = {"all": (), "slurs": ("hate_speech",), "ad_safe": ()}
+
+
+def scope_allow(mode: str) -> tuple:
+    """Words a scope leaves alone even though a list flags them."""
+    if str(mode or "").strip().lower() != "ad_safe":
+        return ()
+    from autoreel.compliance import MILD_WORDS
+
+    return MILD_WORDS
 
 # The old private name, kept because tests and callers import it.
 _CENSOR_SCOPES = CENSOR_SCOPES
@@ -566,6 +580,7 @@ def _censored_clip(platform: str, video_path: str, config: dict) -> tuple:
     # any config.json already in the wild says.
     mode = "all" if wanted is True else str(wanted)
     scope = _CENSOR_SCOPES.get(mode, ())
+    allow = scope_allow(mode)
 
     general = (config or {}).get("general", {}) or {}
     try:
@@ -593,7 +608,8 @@ def _censored_clip(platform: str, video_path: str, config: dict) -> tuple:
             # against clips that were not (this path, still wrong).
             mute_whole_segment=bool(
                 general.get("censor_mute_whole_segment", False)),
-            only_categories=scope)
+            only_categories=scope,
+            allow_words=allow)
     except Exception as exc:
         # A clip that cannot be censored must not go out UNcensored to a
         # platform that asked for it - that is the one failure worth
