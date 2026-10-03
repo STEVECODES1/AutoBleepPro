@@ -105,3 +105,8 @@ deno
 # Claude (ANTHROPIC_API_KEY in .env) - for picking clips and thumbnails
 # when Gemini is overloaded. Optional: without a key it is never used.
 anthropic>=1.0
+
+# Twelve Labs (TWELVELABS_API_KEY in .env, clips.use_twelvelabs true) - a
+# video model that watches the stream and marks moments worth clipping.
+# Optional and off by default.
+twelvelabs>=1.3

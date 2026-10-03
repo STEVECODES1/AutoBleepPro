@@ -444,10 +444,34 @@ def make_clips(cfg, source_path: str, title: str,
               else "[Clips] No chat replay on this one - the other signals "
                    "decide.")
 
+    # Twelve Labs watching the stream itself. Opt-in (it uploads a small
+    # copy of the stream and the free plan is 600 minutes in total), and
+    # only with TWELVELABS_API_KEY set - see autoreel/twelvelabs_moments.
+    seen: list = []
+    if bool(clips_cfg.get("use_twelvelabs", False)):
+        from autoreel import twelvelabs_moments as tl
+
+        if not tl.api_key():
+            print("[Clips] use_twelvelabs is on but TWELVELABS_API_KEY is "
+                  "not in .env - skipping it.")
+        else:
+            from utils.ffmpeg_tools import media_duration
+
+            length = media_duration(source_path) or 0.0
+            moments = tl.find_moments(
+                source_path, length,
+                logs_folder=getattr(cfg.general, "logs_folder", "logs"),
+                allowance=float(clips_cfg.get("twelvelabs_minutes",
+                                              tl.DEFAULT_MINUTES)))
+            seen = tl.seen_curve(moments, length)
+            if moments:
+                print(f"[Clips] Twelve Labs picked {len(moments)} moment(s); "
+                      f"clips overlapping them score higher.")
+
     base = os.path.splitext(os.path.basename(source_path))[0]
     try:
         results = maker.make(source_path, segments, basename=base, chat=chat,
-                             heat=heat)
+                             heat=heat, seen=seen)
     except ClipError as exc:
         _journal(cfg, "FAIL", "cut", title or base, str(exc))
         return ClipRun([], [], output_dir, str(exc))

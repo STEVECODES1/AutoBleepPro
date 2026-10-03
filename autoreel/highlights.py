@@ -159,6 +159,9 @@ class HighlightScorer:
     # in a way typing does not. Empty means no opinion, which is the
     # normal answer for a video too new to have one.
     heat: list = field(default_factory=list)
+    # Twelve Labs' video model's picks, one value per second (0..1), from
+    # twelvelabs_moments.seen_curve(). Empty means no opinion.
+    seen: list = field(default_factory=list)
 
     # ── Segment scoring ──────────────────────────────────────────────────
 
@@ -331,9 +334,18 @@ class HighlightScorer:
 
             replayed = heat_bonus(self.heat, start, end)
 
+        # What a model watching the picture and sound picked. Capped like
+        # the others: it lifts a window, the transcript still decides.
+        watched = 1.0
+        if self.seen:
+            from .twelvelabs_moments import seen_bonus
+
+            watched = seen_bonus(self.seen, start, end)
+
         intensity = base / (duration ** 0.5)
         score = (intensity * placement * boundary * conversation * density
-                 * (0.6 + 0.4 * speech_ratio) * loud * reaction * replayed)
+                 * (0.6 + 0.4 * speech_ratio) * loud * reaction * replayed
+                 * watched)
 
         text = _clean(" ".join(t for t in (s.get("text", "") for s in segments) if t))
         hook = self.best_line([ordered[peak].get("text", "")]) \

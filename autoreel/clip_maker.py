@@ -634,6 +634,7 @@ def specs_from_segments(segments: Iterable[dict], count: int = DEFAULT_CLIP_COUN
                         energy: Optional[list] = None,
                         chat: Optional[list] = None,
                         heat: Optional[list] = None,
+                        seen: Optional[list] = None,
                         llm_rank: bool = True,
                         llm_provider: str = "",
                         llm_model: str = "",
@@ -655,7 +656,8 @@ def specs_from_segments(segments: Iterable[dict], count: int = DEFAULT_CLIP_COUN
                              skip_outro_seconds=skip_outro_seconds,
                              energy=list(energy or []),
                              chat=list(chat or []),
-                             heat=list(heat or []))
+                             heat=list(heat or []),
+                             seen=list(seen or []))
     # Spread them out. A fixed 90s gap sounds generous until you ask for
     # twenty clips: on a stream where one guest is on camera for twenty
     # minutes, six clips 90 seconds apart are six versions of the same
@@ -963,7 +965,8 @@ class ClipMaker:
 
     def make(self, source_path: str, segments: Iterable[dict],
              basename: str = "", chat: Optional[list] = None,
-             heat: Optional[list] = None) -> list:
+             heat: Optional[list] = None,
+             seen: Optional[list] = None) -> list:
         """Render clips for one video. Returns ClipResults, newest last.
 
         A clip that fails to render does not abort the rest: three clips
@@ -994,6 +997,7 @@ class ClipMaker:
                                     # boolean read as a heatmap is not a
                                     # crash - it is wrong clips.
                                     heat=heat,
+                                    seen=seen,
                                     llm_rank=self.llm_rank,
                                     llm_provider=self.llm_provider,
                                     llm_model=self.llm_model,
