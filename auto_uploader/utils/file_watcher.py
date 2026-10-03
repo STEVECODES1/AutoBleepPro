@@ -110,6 +110,22 @@ def is_sidecar_file(path: str) -> bool:
     return not looks_like_a_video_attempt(path)
 
 
+# A clip this tool cut is finished before it is moved in - it is
+# rendered elsewhere and arrives whole. The long wait exists for a LIVE
+# recorder (Olived) writing straight into the folder, where a network
+# stall looked like a finished file; a rendered clip cannot stall, so
+# making it wait ten minutes only delayed every post.
+CLIP_STABILITY_S = 5
+
+# How clip_maker names what it renders: "<label> - Clip 01.mp4".
+_OWN_CLIP = re.compile(r" - Clip \d{2,3}\.[A-Za-z0-9]+$")
+
+
+def is_finished_clip(path: str) -> bool:
+    """True for a clip this tool rendered (see clip_maker.clip_filename)."""
+    return bool(_OWN_CLIP.search(os.path.basename(path or "")))
+
+
 class _NewVideoHandler(FileSystemEventHandler):
     def __init__(self, supported_formats: tuple, stability_seconds: int, on_ready: Callable[[str], None]):
         self.supported_formats = supported_formats
@@ -150,6 +166,8 @@ class _NewVideoHandler(FileSystemEventHandler):
             # download - would otherwise hold this thread for days, and the
             # path stays in _pending so it can never be re-queued either.
             deadline = time.time() + MAX_STABILITY_WAIT_S
+            needed = (min(self.stability_seconds, CLIP_STABILITY_S)
+                      if is_finished_clip(path) else self.stability_seconds)
             while True:
                 try:
                     size = os.path.getsize(path)
@@ -171,7 +189,7 @@ class _NewVideoHandler(FileSystemEventHandler):
                 if size != last_size:
                     last_size = size
                     stable_since = now
-                elif stable_since and (now - stable_since) >= self.stability_seconds:
+                elif stable_since and (now - stable_since) >= needed:
                     break
                 if now >= deadline:
                     print(f"[Watch] {os.path.basename(path)} is still growing "

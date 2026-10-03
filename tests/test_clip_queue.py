@@ -1212,3 +1212,21 @@ def test_x_keeps_the_swearing_but_not_the_slurs(publisher, clips,
     assert "fuck" in on_x
     assert "fuck" not in on_ig
     assert "nigga" not in on_x and "nigga" not in on_ig
+
+
+def test_a_rendered_clip_does_not_wait_ten_minutes(tmp_path):
+    """The 10-minute stability wait exists for a live recorder writing
+    into the folder. A clip this tool rendered arrives whole."""
+    import threading
+    from utils.file_watcher import _NewVideoHandler, is_finished_clip
+
+    assert is_finished_clip("I Dont Belong Here Stackswopo Stream - Clip 01.mp4")
+    assert not is_finished_clip("Stackswopo youtube live 2026-10-03 18_06.ts")
+    assert not is_finished_clip("My Clip.mp4")
+
+    clip = tmp_path / "Stream - Clip 01.mp4"
+    clip.write_bytes(b"x" * 10)
+    ready = threading.Event()
+    handler = _NewVideoHandler((".mp4",), 600, lambda path: ready.set())
+    handler._maybe_watch(str(clip))
+    assert ready.wait(timeout=15), "a finished clip waited the full 10 minutes"
