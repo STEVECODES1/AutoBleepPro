@@ -26,7 +26,41 @@ _DATE_PATTERNS = (
     (re.compile(r"(?<!\d)(\d{4})\D(\d{1,2})\D(\d{1,2})(?!\d)"), lambda m: (int(m[1]), int(m[2]), int(m[3]))),  # YYYY-MM-DD
     (re.compile(r"(?<!\d)(\d{1,2})\D(\d{1,2})\D(\d{4})(?!\d)"), lambda m: (int(m[3]), int(m[1]), int(m[2]))),  # M-D-YYYY
     (re.compile(r"(?<!\d)(\d{1,2})\D(\d{1,2})\D(\d{2})(?!\d)"), lambda m: (2000 + int(m[3]), int(m[1]), int(m[2]))),  # M-D-YY
+    # "10226" - a date typed with no separators, M D YY run together. A
+    # real file "I DONT BELONG HERE 10226 Stackswopo Stream" was titled
+    # with the digits in it and dated the day it was uploaded.
+    (re.compile(r"(?<![\d-])(\d{5,6})(?![\d-])"), lambda m: _compact_date(m[1])),
 )
+
+
+def _compact_date(digits: str, today: Optional[datetime] = None) -> tuple:
+    """(year, month, day) from "10226" / "092126", or ValueError.
+
+    Five digits are ambiguous - "10226" is 1/02/26 or 10/2/26 - so every
+    reading that is a real date is considered and the one closest to
+    today, without being in the future, wins. Only years 20-39 count, so
+    an ordinary number in a title is not taken for a date.
+    """
+    today = today or datetime.now()
+    year = 2000 + int(digits[-2:])
+    if not 2020 <= year <= 2039:
+        raise ValueError(digits)
+    head = digits[:-2]
+    splits = ([(head[:2], head[2:])] if len(head) == 4
+              else [(head[:1], head[1:]), (head[:2], head[2:])])
+    best = None
+    for month, day in splits:
+        try:
+            when = datetime(year, int(month), int(day))
+        except ValueError:
+            continue
+        if when.date() > today.date():
+            continue
+        if best is None or when > best:
+            best = when
+    if best is None:
+        raise ValueError(digits)
+    return best.year, best.month, best.day
 
 
 def extract_date_from_filename(filename: str) -> Optional[datetime]:

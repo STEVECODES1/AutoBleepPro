@@ -369,3 +369,19 @@ def test_a_dated_name_with_the_channel_in_front_is_not_named_twice():
         ("Stackswopo",)) == "STIZZ SHOW"
     assert extract_title_from_filename(
         "!howl 2026-03-19_21_23.mp4", ("Stackswopo",)) == "!howl"
+
+
+def test_a_date_typed_without_separators_is_read():
+    """'I DONT BELONG HERE 10226 Stackswopo Stream' went up titled with
+    the digits in it and dated the day it was uploaded."""
+    from datetime import datetime
+
+    from utils.templating import (_compact_date, extract_date_from_filename,
+                                  extract_title_from_filename)
+
+    name = "I DONT BELONG HERE 10226 Stackswopo Stream.mp4"
+    assert extract_title_from_filename(name, ("Stackswopo",)) == "I DONT BELONG HERE"
+    assert _compact_date("10226", datetime(2026, 10, 3)) == (2026, 10, 2)
+    assert _compact_date("092126", datetime(2026, 10, 3)) == (2026, 9, 21)
+    assert _compact_date("10226", datetime(2026, 5, 1)) == (2026, 1, 2)
+    assert extract_date_from_filename("clip with 12345 views.mp4") is None

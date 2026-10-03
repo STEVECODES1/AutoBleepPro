@@ -2255,6 +2255,21 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
         # includes the date. Rumble is NOT skipped in this case - these
         # old VODs were typically only ever uploaded to YouTube manually.
         existing_yt_match = find_existing_video(existing_youtube_videos, now, stream_title)
+        previous = ((dup_checker._seen.get(file_hash) or {})
+                    .get("results", {}).get("youtube", ""))
+        if (existing_yt_match
+                and str(previous).startswith("FAILED")
+                and (existing_yt_match.upload_status or "").lower()
+                not in ("", "processed")):
+            # Our own last upload of THIS file failed, and the match is a
+            # video YouTube has not finished receiving - that is the broken
+            # attempt itself, not a copy that made it. A real run dropped
+            # at 50% ("Errno 10053"), matched its own half-upload on the
+            # next pass and retired the stream as uploaded.
+            print(f"[YouTube] {existing_yt_match.url} is the earlier upload "
+                  f"that broke off ({existing_yt_match.upload_status}) - "
+                  f"uploading again. Delete that one in Studio.")
+            existing_yt_match = None
         if existing_yt_match:
             existing_yt = existing_yt_match.url
         else:

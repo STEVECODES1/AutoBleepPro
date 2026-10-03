@@ -22,6 +22,9 @@ class ExistingVideo:
     title: str
     video_id: str
     url: str
+    # YouTube's own uploadStatus ("processed" once really finished), or ""
+    # when it could not be read.
+    upload_status: str = ""
 
 
 def fetch_existing_videos(youtube_service) -> list:
@@ -63,6 +66,7 @@ def fetch_existing_videos(youtube_service) -> list:
     kept, dropped = [], []
     for video in videos:
         upload, processing = states.get(video.video_id, ("", ""))
+        video.upload_status = upload
         if is_really_up(upload, processing, published.get(video.video_id, "")):
             kept.append(video)
         else:

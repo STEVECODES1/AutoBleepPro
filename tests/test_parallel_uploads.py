@@ -724,3 +724,35 @@ def test_a_pass_that_only_waits_on_a_blocked_youtube_stays_quiet(
 
     assert len(receipts) == 1
     assert main.waiting_on_youtube(video)
+
+
+def test_our_own_broken_upload_is_not_taken_for_the_finished_one(
+        scene, tmp_path, monkeypatch):
+    """A real run dropped at 50% (Errno 10053); the next pass matched that
+    half-upload on the channel by title and retired the stream as done."""
+    from datetime import datetime
+
+    from utils.duplicate_checker import DuplicateChecker, hash_file
+    from utils.logging_setup import setup_logger
+    from utils.templating import build_title, format_date
+    from utils.youtube_checker import ExistingVideo
+
+    main, cfg, video, recorder = scene
+    checker = DuplicateChecker(str(tmp_path / "uploads.json"))
+    checker.record_platform_result(hash_file(video), os.path.basename(video),
+                                   "youtube", "FAILED: [Errno 10053] aborted")
+    when = main.extract_date_from_filename(os.path.basename(video)) or datetime.now()
+    title = build_title("A Stream", format_date(when, cfg.general.date_style),
+                        cfg.youtube.title_format)
+    half = ExistingVideo(title, "half", "https://www.youtube.com/watch?v=half",
+                         upload_status="uploaded")
+    logs = str(tmp_path / "logs")
+
+    results = main.process_file(
+        video, cfg, "A Stream", checker,
+        setup_logger("youtube", logs), setup_logger("rumble", logs),
+        False, existing_youtube_videos=[half], existing_rumble_videos=[],
+        allow_prompt=False)
+
+    assert results["youtube"] == "https://youtube.example/watch", \
+        "the broken half-upload was trusted instead of uploading again"
