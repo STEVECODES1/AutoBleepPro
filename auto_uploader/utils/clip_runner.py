@@ -381,6 +381,8 @@ def make_clips(cfg, source_path: str, title: str,
         # and is left alone.
         per_clip_framing=asked_for_auto,
         pick_thumbnails=bool(clips_cfg.get("pick_thumbnails", False)),
+        # More colour and punch on every clip - see clip_maker.CLIP_GRADE.
+        grade=bool(clips_cfg.get("grade", True)),
         caption_uppercase=bool(clips_cfg.get("caption_uppercase", True)),
         count=int(count or clips_cfg.get("count", 3)),
         min_seconds=float(clips_cfg.get("min_seconds", 15)),

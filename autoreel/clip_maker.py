@@ -357,8 +357,15 @@ CROP_WIDTH_EXPR = "min(iw,ih*9/16)"
 STACK_HALF_HEIGHT = VERTICAL_HEIGHT // 2
 
 
+# The look: more colour and a little punch. Stream frames come out dark
+# and flat, and the clips that win on this footage are visibly brighter
+# and more saturated. Applied after the crop and before the captions, so
+# the caption text keeps its own colours. clips.grade false turns it off.
+CLIP_GRADE = "eq=contrast=1.08:saturation=1.30:brightness=0.02"
+
+
 def stack_filter(halves: dict, caption_path: Optional[str] = None,
-                 watermark: bool = True) -> str:
+                 watermark: bool = True, grade: bool = True) -> str:
     """Two rectangles from one frame, stacked, filling 1080x1920.
 
     This is a filter_complex rather than a -vf chain: -vf is one stream
@@ -381,6 +388,8 @@ def stack_filter(halves: dict, caption_path: Optional[str] = None,
             f"crop={VERTICAL_WIDTH}:{STACK_HALF_HEIGHT},setsar=1[{label}]")
 
     chain = f"[t][b]vstack=inputs=2"
+    if grade:
+        chain += f",{CLIP_GRADE}"
     if caption_path:
         chain += f",subtitles='{escape_filter_path(caption_path)}'"
     if watermark:
@@ -442,10 +451,11 @@ def build_filter(strategy: str = DEFAULT_CROP_STRATEGY,
                  caption_path: Optional[str] = None,
                  region: Optional[dict] = None,
                  watermark: bool = True,
-                 motion_commands: str = "") -> str:
+                 motion_commands: str = "",
+                 grade: bool = True) -> str:
     """Compose the full ffmpeg -vf filter chain for one clip.
 
-    Order: crop/fit  ->  captions (optional)  ->  watermark.
+    Order: crop/fit  ->  grade  ->  captions (optional)  ->  watermark.
     """
     # face_pan is retired (see crop_strategy.RETIRED_STRATEGIES): the
     # moving crop chased NPC faces across GTA footage. A config that
@@ -464,6 +474,8 @@ def build_filter(strategy: str = DEFAULT_CROP_STRATEGY,
         chain = motion_crop_filter(motion_commands)
     else:
         chain = crop_filter(strategy, region)
+    if grade:
+        chain += f",{CLIP_GRADE}"
     if caption_path:
         chain += f",subtitles='{escape_filter_path(caption_path)}'"
     if watermark:
@@ -496,7 +508,8 @@ def render_clip(source_path: str, spec: ClipSpec, output_path: str,
                 region: Optional[dict] = None,
                 watermark: bool = True,
                 motion_commands: str = "",
-                stack: Optional[dict] = None) -> str:
+                stack: Optional[dict] = None,
+                grade: bool = True) -> str:
     """Cut, crop and (optionally) caption one clip. Returns the path."""
     if not have_ffmpeg():
         raise ClipError("ffmpeg is not on PATH - clip rendering needs it")
@@ -518,11 +531,12 @@ def render_clip(source_path: str, spec: ClipSpec, output_path: str,
         "-t", f"{spec.duration:.3f}",
         # A stack reads the same input twice and joins the halves, which
         # -vf cannot express - it is one stream in, one out.
-        *(["-filter_complex", stack_filter(stack, caption_path, watermark),
+        *(["-filter_complex", stack_filter(stack, caption_path, watermark,
+                                           grade),
            "-map", "[v]", "-map", "0:a?"]
           if strategy == CROP_STACK and stack else
           ["-vf", build_filter(strategy, caption_path, region, watermark,
-                               motion_commands)]),
+                               motion_commands, grade)]),
         *_encoder_args(encoder, preset, crf),
         "-c:a", "aac", "-b:a", "128k", "-ac", "2",
         # Vertical feeds are 30fps; leaving a 60fps source at 60 doubles
@@ -555,7 +569,7 @@ def render_clip(source_path: str, spec: ClipSpec, output_path: str,
                                caption_path, encoder, preset, crf, region,
                                watermark=False,
                                motion_commands=motion_commands,
-                               stack=stack)
+                               stack=stack, grade=grade)
         # An empty stderr with a non-zero exit is what "suppressing" the
         # fontconfig message produced last time: ten clips failed and the
         # reason printed was ";". Say the exit code and the filter chain
@@ -835,6 +849,8 @@ class ClipMaker:
     # the one worth showing. Off by default like every other addition
     # here; clips.pick_thumbnails turns it on.
     pick_thumbnails: bool = False
+    # CLIP_GRADE on every rendered clip (clips.grade).
+    grade: bool = True
     # The clip's own title, held at the top of the frame for the whole
     # clip. Off by default: it is a real change to how every clip looks,
     # and the person whose account it is should choose it rather than
@@ -1142,7 +1158,7 @@ class ClipMaker:
                             caption_path, self.encoder, self.preset,
                             self.crf, region,
                             motion_commands=motion_commands,
-                            stack=self.stack)
+                            stack=self.stack, grade=self.grade)
             except ClipError as exc:
                 failures.append(str(exc))
                 continue

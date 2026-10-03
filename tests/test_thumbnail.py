@@ -394,3 +394,25 @@ def test_a_stream_thumbnail_is_720p_with_logo_and_sticker(tmp_path):
     # Sticker: on the right edge, standing on the bottom.
     r, g, b = _pixel(out, 62, 30)
     assert b > 150 and r < 80
+
+
+@pytest.mark.skipif(not _have_ffmpeg(), reason="ffmpeg not installed")
+def test_a_rendered_clip_is_graded_too(tmp_path):
+    """Clips get more colour, like the thumbnail - clips.grade."""
+    import subprocess as _sp
+    from autoreel.clip_maker import ClipSpec, render_clip
+
+    source = tmp_path / "s.mp4"
+    _sp.run(["ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i",
+             "testsrc2=size=1280x720:rate=30:duration=4",
+             "-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo",
+             "-shortest", "-vf", "eq=saturation=0.35",
+             "-pix_fmt", "yuv420p", str(source)], check=True)
+    spec = ClipSpec(index=1, start=0.5, end=2.5)
+
+    plain = render_clip(str(source), spec, str(tmp_path / "plain.mp4"),
+                        "fit", watermark=False, grade=False)
+    graded = render_clip(str(source), spec, str(tmp_path / "graded.mp4"),
+                         "fit", watermark=False)
+
+    assert _mean_saturation(graded) > _mean_saturation(plain) * 1.15

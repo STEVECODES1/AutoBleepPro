@@ -146,8 +146,10 @@ def test_gameplay_motion_is_untouched_by_any_of_this():
     from autoreel.clip_maker import (CROP_WIDTH_EXPR, build_filter,
                                      motion_crop_filter)
 
+    # The crop itself, byte-identical; the colour grade (clips.grade) is
+    # a separate step after it and is checked off here.
     chain = build_filter(CROP_MOTION, None, None, watermark=False,
-                         motion_commands="/tmp/pan.cmds")
+                         motion_commands="/tmp/pan.cmds", grade=False)
 
     assert chain == motion_crop_filter("/tmp/pan.cmds")
     assert CROP_WIDTH_EXPR in chain
