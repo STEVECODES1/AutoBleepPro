@@ -17,6 +17,8 @@ from __future__ import annotations
 
 import json
 import os
+
+import pytest
 import sys
 
 _REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -73,7 +75,7 @@ def test_junk_is_no_answer():
 # ── making one ───────────────────────────────────────────────────────
 
 def _fake_ffmpeg(monkeypatch, grabbed):
-    def grab(source, at, out_path, width=0):
+    def grab(source, at, out_path, width=0, **_k):
         grabbed.append(round(at, 2))
         with open(out_path, "wb") as handle:
             handle.write(b"\xff\xd8jpeg")
@@ -159,7 +161,7 @@ def test_the_looks_are_small_and_the_keeper_is_not(tmp_path, monkeypatch):
     clip.write_bytes(b"x")
     widths = []
 
-    def grab(source, at, out_path, width=0):
+    def grab(source, at, out_path, width=0, **_k):
         widths.append(width)
         with open(out_path, "wb") as handle:
             handle.write(b"\xff\xd8")
@@ -178,3 +180,79 @@ def test_it_is_off_unless_asked_for():
     from autoreel.clip_maker import ClipMaker
 
     assert ClipMaker(output_dir="/out").pick_thumbnails is False
+
+
+# ── the grade and the logo, with real ffmpeg ────────────────────────────────
+
+def _have_ffmpeg():
+    import shutil as _shutil
+    return _shutil.which("ffmpeg") is not None
+
+
+def _mean_saturation(path):
+    """Average (max-min) over RGB, from ffmpeg's own decode."""
+    import subprocess as _sp
+    raw = _sp.run(["ffmpeg", "-v", "error", "-i", path, "-vf",
+                   "scale=64:36", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"],
+                  capture_output=True, check=True).stdout
+    px = [raw[i:i + 3] for i in range(0, len(raw), 3)]
+    return sum(max(p) - min(p) for p in px) / len(px)
+
+
+def _pixel(path, x, y, w=64, h=36):
+    import subprocess as _sp
+    raw = _sp.run(["ffmpeg", "-v", "error", "-i", path, "-vf",
+                   f"scale={w}:{h}", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"],
+                  capture_output=True, check=True).stdout
+    i = (y * w + x) * 3
+    return tuple(raw[i:i + 3])
+
+
+@pytest.mark.skipif(not _have_ffmpeg(), reason="ffmpeg not installed")
+def test_the_thumbnail_is_graded(tmp_path):
+    import subprocess as _sp
+    clip = tmp_path / "clip.mp4"
+    # Muted on purpose: a stream frame is dark and flat, testsrc2 is not.
+    _sp.run(["ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i",
+             "testsrc2=size=640x360:rate=10:duration=3",
+             "-vf", "eq=saturation=0.35:brightness=-0.1",
+             "-pix_fmt", "yuv420p", str(clip)], check=True)
+    plain = make(str(clip), 3.0, str(tmp_path / "plain.jpg"),
+                 ask=lambda p, f: '{"frame": 2}', grade=False)
+    graded = make(str(clip), 3.0, str(tmp_path / "graded.jpg"),
+                  ask=lambda p, f: '{"frame": 2}')
+    assert _mean_saturation(graded) > _mean_saturation(plain) * 1.1
+
+
+@pytest.mark.skipif(not _have_ffmpeg(), reason="ffmpeg not installed")
+def test_a_logo_goes_in_the_top_left_corner_only(tmp_path):
+    import subprocess as _sp
+    clip = tmp_path / "clip.mp4"
+    _sp.run(["ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i",
+             "color=c=black:size=640x360:rate=10:duration=3",
+             "-pix_fmt", "yuv420p", str(clip)], check=True)
+    logo = tmp_path / "logo.png"
+    _sp.run(["ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i",
+             "color=c=red:size=200x100", "-frames:v", "1", str(logo)],
+            check=True)
+    out = make(str(clip), 3.0, str(tmp_path / "t.jpg"),
+               ask=lambda p, f: '{"frame": 1}', logo_path=str(logo))
+
+    r, g, b = _pixel(out, 5, 3)
+    assert r > 150 and g < 80, "no logo in the corner"
+    assert max(_pixel(out, 60, 33)) < 40, "the logo spread across the frame"
+
+
+def test_a_missing_logo_file_is_simply_no_logo(tmp_path, monkeypatch):
+    clip = tmp_path / "clip.mp4"
+    clip.write_bytes(b"x")
+    stamped = []
+    monkeypatch.setattr(thumbnail, "_grab", lambda *a, **k: (
+        open(a[2], "wb").write(b"\xff\xd8") and True))
+    monkeypatch.setattr(thumbnail, "_stamp_logo",
+                        lambda pic, logo: stamped.append(logo))
+    monkeypatch.setattr(thumbnail.shutil, "which", lambda name: "/bin/ffmpeg")
+
+    assert make(str(clip), 10.0, str(tmp_path / "t.jpg"),
+                ask=lambda p, f: None, logo_path=str(tmp_path / "nope.png"))
+    assert stamped == []

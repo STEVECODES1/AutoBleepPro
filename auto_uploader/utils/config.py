@@ -153,6 +153,9 @@ class GeneralConfig:
     # thumbnail. A platform-specific thumbnail_path, when one is set,
     # always wins over this either way.
     auto_thumbnail: bool = True
+    # A picture (PNG with transparency is best) put in the top-left corner
+    # of the full stream's thumbnail. Empty = no logo.
+    thumbnail_logo: str = ""
     # Optional; defaulted so older config.json files keep loading.
     filename_channel_prefixes: tuple = ()
     cleanup: dict = None
@@ -440,6 +443,7 @@ def load_config(config_path: str = "config.json", env_path: str = ".env") -> App
         censor_mute_whole_segment=bool(gen.get("censor_mute_whole_segment", False)),
         censor_categories=str(gen.get("censor_categories", "slurs")),
         auto_thumbnail=bool(gen.get("auto_thumbnail", True)),
+        thumbnail_logo=str(gen.get("thumbnail_logo", "") or ""),
     )
 
     # The posting block's paths are resolved against the config file, not

@@ -417,7 +417,7 @@ def test_a_generated_thumbnail_is_shared_not_made_twice(
 
     calls = []
 
-    def fake_make(video_path, duration, out_path=""):
+    def fake_make(video_path, duration, out_path="", **_k):
         calls.append(out_path)
         with open(out_path, "wb") as fh:
             fh.write(b"jpeg")
@@ -474,7 +474,7 @@ def test_a_configured_thumbnail_that_does_not_exist_is_not_trusted(
 
     calls = []
 
-    def fake_make(video_path, duration, out_path=""):
+    def fake_make(video_path, duration, out_path="", **_k):
         calls.append(out_path)
         with open(out_path, "wb") as fh:
             fh.write(b"jpeg")

@@ -10,10 +10,17 @@ cutting. Asking the same model which of eight frames is the one worth
 showing is a small extra question with a large effect on whether anyone
 presses play.
 
-The picture is used AS IT IS. No burned-in text, no zoom, no border. A
-thumbnail that looks made rather than captured reads as an ad, and the
-clips already carry their title across the top of the frame - saying it
-twice is worse than saying it once.
+No burned-in text, no zoom, no border. A thumbnail that looks made
+rather than captured reads as an ad, and the clips already carry their
+title across the top of the frame - saying it twice is worse than saying
+it once.
+
+What it does get: a grade. Stream frames come out dark and flat next to
+the thumbnails that win on the same footage - contrast, saturation and
+sharpness all visibly pushed (a re-upload channel took 10-14k views on
+the same streams this channel posted to 300-800). And, only when a
+picture is supplied for it, a small logo in the top-left corner - the
+game's mark, so the scroller knows the game before reading anything.
 """
 
 from __future__ import annotations
@@ -40,21 +47,38 @@ PROMPT = """\
 These are %(count)d frames from one short video clip, in order.
 
 Pick the ONE that would make somebody scrolling past stop and watch.
-That is usually a face mid-reaction, a moment of impact, or something
-plainly odd on screen. Avoid loading screens, menus, plain scenery, motion
-blur, and frames where nothing is happening.
+Strongly prefer a frame where ONE character is close to the camera and
+fills a large part of the picture against a simple background, and where
+the stream's overlay - chat box, minimap, health bars, alerts, webcam
+box - is least visible. After that: a face mid-reaction, a moment of
+impact, or something plainly odd on screen. Avoid loading screens, menus,
+plain scenery, crowded wide shots, motion blur, and frames where nothing
+is happening.
 
 Answer as JSON: {"frame": <number from 1 to %(count)d>}
 No other text.
 """
 
 
-def _grab(source: str, at: float, out_path: str, width: int = 0) -> bool:
+# Contrast, saturation, a touch of brightness, then sharpening. Enough to
+# read as a thumbnail rather than a paused stream; not so much that skin
+# turns orange.
+GRADE = ("eq=contrast=1.12:saturation=1.30:brightness=0.02,"
+         "unsharp=5:5:0.8:5:5:0.0")
+
+# The logo's width as a share of the thumbnail's, and its inset.
+LOGO_WIDTH = 0.20
+LOGO_MARGIN = 0.03
+
+
+def _grab(source: str, at: float, out_path: str, width: int = 0,
+          vf: str = "") -> bool:
     """One JPEG at one timestamp. False if it could not be read."""
     args = ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
             "-ss", f"{max(0.0, at):.2f}", "-i", source, "-frames:v", "1"]
-    if width:
-        args += ["-vf", f"scale={width}:-2"]
+    filters = [f for f in (f"scale={width}:-2" if width else "", vf) if f]
+    if filters:
+        args += ["-vf", ",".join(filters)]
     args += ["-q:v", "2", out_path]
     try:
         subprocess.run(args, timeout=120, stdout=subprocess.DEVNULL,
@@ -123,8 +147,28 @@ def _read_number(raw: str, count: int) -> Optional[int]:
     return number if 1 <= number <= count else None
 
 
+def _stamp_logo(picture: str, logo: str) -> bool:
+    """Put `logo` in the top-left corner of `picture`, in place."""
+    stamped = picture + ".logo.jpg"
+    margin = f"main_w*{LOGO_MARGIN}"
+    args = ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+            "-i", picture, "-i", logo, "-filter_complex",
+            f"[1:v][0:v]scale2ref=w=main_w*{LOGO_WIDTH}:h=ow/mdar[mark][base];"
+            f"[base][mark]overlay={margin}:{margin}",
+            "-frames:v", "1", "-q:v", "2", stamped]
+    try:
+        subprocess.run(args, timeout=120, stdout=subprocess.DEVNULL,
+                       stderr=subprocess.DEVNULL)
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    if not (os.path.isfile(stamped) and os.path.getsize(stamped) > 0):
+        return False
+    os.replace(stamped, picture)
+    return True
+
+
 def make(clip_path: str, duration: float, out_path: str = "",
-         ask=None) -> str:
+         ask=None, logo_path: str = "", grade: bool = True) -> str:
     """Write a thumbnail for this clip. "" when one cannot be made.
 
     Never raises and never blocks a post: a clip with no thumbnail is a
@@ -165,8 +209,11 @@ def make(clip_path: str, duration: float, out_path: str = "",
               and 0 <= picked < len(kept_marks)
               else duration * FALLBACK_FRACTION)
         # The real one, full size, from the timestamp that was chosen.
-        if not _grab(clip_path, at, out_path):
+        if not _grab(clip_path, at, out_path, vf=GRADE if grade else ""):
             return ""
+        if logo_path and os.path.isfile(logo_path):
+            # A logo that will not go on costs the logo, not the picture.
+            _stamp_logo(out_path, logo_path)
         return out_path
     finally:
         shutil.rmtree(workspace, ignore_errors=True)

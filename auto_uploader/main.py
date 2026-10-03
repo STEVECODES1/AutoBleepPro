@@ -2550,7 +2550,8 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
                 cfg.general.censored_folder, f"{basename}_thumbnail.jpg")
             try:
                 made = autoreel_thumbnail.make(
-                    video_path, duration, out_path=out_path)
+                    video_path, duration, out_path=out_path,
+                    logo_path=cfg.general.thumbnail_logo)
             except Exception as exc:
                 print(f"[Thumbnail] Could not generate one: {exc}")
                 made = ""
