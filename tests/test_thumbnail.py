@@ -142,15 +142,28 @@ def test_a_clip_with_no_duration_is_not_a_crash(tmp_path):
     assert make(str(clip), 0.0) == ""
 
 
-def test_the_picture_is_not_decorated(tmp_path, monkeypatch):
-    """No text, no zoom, no border. A thumbnail that looks made rather
-    than captured reads as an ad, and the clip already carries its title
-    across the top of the frame."""
+def test_a_clip_thumbnail_is_not_decorated(tmp_path, monkeypatch):
+    """No text, no zoom, no border on a CLIP. A thumbnail that looks made
+    rather than captured reads as an ad, and the clip already carries its
+    title across the top of the frame."""
     body = open(os.path.join(_REPO, "autoreel", "thumbnail.py"),
                 encoding="utf-8").read()
-
     assert "drawtext" not in body
-    assert "crop=" not in body
+
+    clip = tmp_path / "clip.mp4"
+    clip.write_bytes(b"x")
+    filters = []
+
+    def grab(source, at, out_path, width=0, vf=""):
+        filters.append(vf)
+        with open(out_path, "wb") as handle:
+            handle.write(b"\xff\xd8")
+        return True
+
+    monkeypatch.setattr(thumbnail, "_grab", grab)
+    monkeypatch.setattr(thumbnail.shutil, "which", lambda n: "/usr/bin/" + n)
+    make(str(clip), 60.0, ask=lambda p, f: '{"frame": 1}')
+    assert "crop=" not in filters[-1]
 
 
 def test_the_looks_are_small_and_the_keeper_is_not(tmp_path, monkeypatch):
@@ -256,3 +269,128 @@ def test_a_missing_logo_file_is_simply_no_logo(tmp_path, monkeypatch):
     assert make(str(clip), 10.0, str(tmp_path / "t.jpg"),
                 ask=lambda p, f: None, logo_path=str(tmp_path / "nope.png"))
     assert stamped == []
+
+
+# ── full-stream thumbnails ──────────────────────────────────────────────────
+# The stream thumbnail that prompted these was a dark wide shot with the
+# people a fifth of the height, next to channels winning on the same
+# footage with one bright character filling the frame.
+
+def test_the_zoom_puts_the_character_big_and_left_of_centre():
+    from autoreel.thumbnail import SUBJECT_X, zoom_window
+
+    x, y, w, h = zoom_window((0.45, 0.30, 0.55, 0.70))
+    assert abs(h - 0.40 / 0.80) < 1e-6          # head-to-waist fills 80%
+    assert w == h                                # stays 16:9
+    assert abs((0.50 - x) / w - SUBJECT_X) < 1e-6
+    assert 0 <= x <= 1 - w and 0 <= y <= 1 - h
+
+
+def test_the_zoom_never_goes_past_the_limit_or_off_the_frame():
+    from autoreel.thumbnail import MAX_ZOOM, zoom_window
+
+    x, y, w, h = zoom_window((0.97, 0.90, 0.99, 0.95))   # tiny, in a corner
+    assert abs(w - 1 / MAX_ZOOM) < 1e-6
+    assert x + w <= 1.0 + 1e-9 and y + h <= 1.0 + 1e-9
+
+
+def test_no_box_is_a_gentle_zoom_on_the_middle():
+    from autoreel.thumbnail import DEFAULT_ZOOM, zoom_window
+
+    x, y, w, h = zoom_window(None)
+    assert abs(w - 1 / DEFAULT_ZOOM) < 1e-6
+    assert abs(x - (1 - w) / 2) < 1e-6
+
+
+def test_the_models_box_is_read():
+    from autoreel.thumbnail import _read_box
+
+    assert _read_box('{"frame": 2, "box": [100, 200, 600, 400]}') == \
+        (0.2, 0.1, 0.4, 0.6)
+    assert _read_box('{"frame": 2}') is None
+    assert _read_box('{"frame": 2, "box": [0, 0, 1000, 1000]}') is None
+    assert _read_box("junk") is None
+
+
+def _stream_scene(monkeypatch, stats):
+    grabbed = []
+
+    def grab(source, at, out_path, width=0, vf=""):
+        grabbed.append((round(at, 1), vf))
+        with open(out_path, "wb") as handle:
+            handle.write(b"\xff\xd8")
+        return True
+
+    marks = thumbnail.timestamps(1000.0, thumbnail.STREAM_SAMPLES)
+    lookup = dict(zip([round(m, 1) for m in marks], stats))
+    order = iter(stats)
+    monkeypatch.setattr(thumbnail, "_grab", grab)
+    monkeypatch.setattr(thumbnail, "_measure", lambda path: next(order))
+    monkeypatch.setattr(thumbnail.shutil, "which", lambda n: "/usr/bin/" + n)
+    return grabbed, marks, lookup
+
+
+def test_dark_frames_never_reach_the_model(tmp_path, monkeypatch):
+    stats = [(30.0, 10.0)] * 15 + [(120.0, 40.0)]
+    grabbed, marks, _ = _stream_scene(monkeypatch, stats)
+    seen = []
+    clip = tmp_path / "stream.mp4"
+    clip.write_bytes(b"x")
+
+    make(str(clip), 1000.0, str(tmp_path / "t.jpg"), style="stream",
+         ask=lambda p, frames: seen.append(len(frames)) or '{"frame": 1}')
+
+    assert seen == [1]
+    assert grabbed[-1][0] == round(marks[-1], 1)
+
+
+def test_with_no_model_the_brightest_most_colourful_look_wins(
+        tmp_path, monkeypatch):
+    stats = [(80.0, 10.0)] * 16
+    stats[7] = (140.0, 60.0)
+    grabbed, marks, _ = _stream_scene(monkeypatch, stats)
+    clip = tmp_path / "stream.mp4"
+    clip.write_bytes(b"x")
+
+    make(str(clip), 1000.0, str(tmp_path / "t.jpg"), style="stream",
+         ask=lambda p, f: "busy")
+
+    at, vf = grabbed[-1]
+    assert at == round(marks[7], 1)
+    assert "crop=" in vf and "scale=1280:720" in vf
+
+
+def test_a_dark_pick_is_lifted_and_a_bright_one_is_not():
+    from autoreel.thumbnail import stream_filters, zoom_window
+
+    assert "gamma=" in stream_filters(zoom_window(None), 60.0)
+    assert "gamma=" not in stream_filters(zoom_window(None), 130.0)
+
+
+@pytest.mark.skipif(not _have_ffmpeg(), reason="ffmpeg not installed")
+def test_a_stream_thumbnail_is_720p_with_logo_and_sticker(tmp_path):
+    import subprocess as _sp
+    clip = tmp_path / "s.mp4"
+    _sp.run(["ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i",
+             "color=c=0x303030:size=1920x1080:rate=2:duration=20",
+             "-pix_fmt", "yuv420p", str(clip)], check=True)
+    logo = tmp_path / "logo.png"
+    _sp.run(["ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i",
+             "color=c=red:size=600x300", "-frames:v", "1", str(logo)],
+            check=True)
+    sticker = tmp_path / "sticker.png"
+    _sp.run(["ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i",
+             "color=c=blue:size=200x400", "-frames:v", "1", str(sticker)],
+            check=True)
+
+    out = make(str(clip), 20.0, str(tmp_path / "t.jpg"), style="stream",
+               ask=lambda p, f: '{"frame": 1, "box": [300,400,700,600]}',
+               logo_path=str(logo), sticker_path=str(sticker))
+
+    assert thumbnail._size(out) == (1280, 720)
+    # Logo: a fifth of the width, top-left - not a speck.
+    r, g, b = _pixel(out, 10, 3)
+    assert r > 150 and g < 80
+    # Sticker: on the right edge, standing on the bottom.
+    r, g, b = _pixel(out, 62, 30)
+    assert b > 150 and r < 80

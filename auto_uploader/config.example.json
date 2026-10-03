@@ -62,6 +62,8 @@
     "channel_url": "https://rumble.com/user/BinScripts"
   },
   "general": {
+    "_thumbnail_comment": "Full-stream thumbnails: a bright frame picked by the model, zoomed onto the main character, graded, 1280x720. thumbnail_logo goes top-left at a fifth of the width (the game's logo). thumbnail_sticker is a cut-out PNG with a transparent background - the streamer's own cartoon head - stood against the right edge, nearly full height. Leave either empty for none.",
+    "thumbnail_sticker": "",
     "_watch_folder_comment": "Relative paths resolve next to this config file, so './watch_folder' = D:/AutoBleepPro-main/auto_uploader/watch_folder and keeps working if you re-extract the ZIP somewhere else. Set an absolute path (e.g. 'D:/videos stizz') to watch a different folder instead.",
     "watch_folder": "./watch_folder",
     "uploaded_folder": "./uploaded",

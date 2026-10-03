@@ -2654,10 +2654,19 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
             os.makedirs(cfg.general.censored_folder, exist_ok=True)
             out_path = os.path.join(
                 cfg.general.censored_folder, f"{basename}_thumbnail.jpg")
+            for what, path in (("thumbnail_logo", cfg.general.thumbnail_logo),
+                               ("thumbnail_sticker",
+                                getattr(cfg.general, "thumbnail_sticker", ""))):
+                if path and not os.path.isfile(path):
+                    print(f"[Thumbnail] {what} is set but there is no file "
+                          f"at {path} - the thumbnail goes without it.")
             try:
                 made = autoreel_thumbnail.make(
                     video_path, duration, out_path=out_path,
-                    logo_path=cfg.general.thumbnail_logo)
+                    logo_path=cfg.general.thumbnail_logo,
+                    style="stream",
+                    sticker_path=getattr(cfg.general, "thumbnail_sticker",
+                                         ""))
             except Exception as exc:
                 print(f"[Thumbnail] Could not generate one: {exc}")
                 made = ""
