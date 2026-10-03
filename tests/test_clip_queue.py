@@ -721,7 +721,7 @@ def test_a_config_that_explicitly_asks_for_whole_sentence_still_gets_it(
 
 
 # ── the same clip posted twice ──────────────────────────────────────────────
-# A real run: Clip 02 went to Instagram and TikTok through postplanify, and
+# A real run: Clip 02 went to Instagram and TikTok through a fan-out route, and
 # 34 seconds later the watcher's drain "posted a queued Reel" - the same
 # clip again. The poster queued the job as pending before uploading, and a
 # pending job is what the drain picks up.
@@ -777,10 +777,8 @@ def test_a_begun_job_is_not_claimable(tmp_path):
 def _fanout_posting(posting):
     posting = dict(posting)
     posting["platforms"] = dict(posting["platforms"])
-    posting["platforms"]["postplanify"] = {
+    posting["platforms"]["postproxy"] = {
         "enabled": True, "daily_cap": 50, "min_minutes_between": 20}
-    posting["platforms"]["upload_post"] = {
-        "enabled": True, "daily_cap": 50, "min_minutes_between": 0}
     return posting
 
 
@@ -802,63 +800,24 @@ def _record_publish(publisher, monkeypatch):
     return calls
 
 
-def test_a_clip_postplanify_is_holding_is_not_posted_directly(
+def test_a_clip_postproxy_is_holding_is_not_posted_directly(
         publisher, posting, clips, monkeypatch):
-    """Clip 01, a real run: postplanify held it for its 20-minute spacing,
-    Instagram posted it directly, then postplanify sent it there too."""
+    """Clip 01, a real run: the fan-out route held it for its spacing,
+    Instagram posted it directly, then the route sent it there too."""
     from publish_guard import PublishGuard
 
     posting = _fanout_posting(posting)
-    publisher._remember_reach(posting, "postplanify", {"instagram", "tiktok"})
+    publisher._remember_reach(posting, "postproxy", {"instagram", "tiktok"})
     PublishGuard(posting, posting["state_path"]).record_result(
-        "postplanify", True)                      # just posted another clip
+        "postproxy", True)                      # just posted another clip
     calls = _record_publish(publisher, monkeypatch)
 
     outcome = publisher.offer(posting, CONFIG, clips[0],
-                              platforms=("postplanify", "instagram"))
+                              platforms=("postproxy", "instagram"))
 
-    assert outcome["postplanify"] == "queued"
-    assert outcome["instagram"].startswith("skipped: sent by postplanify")
+    assert outcome["postproxy"] == "queued"
+    assert outcome["instagram"].startswith("skipped: sent by postproxy")
     assert calls == []
-
-
-def test_a_narrowed_upload_post_retry_keeps_its_narrowed_list(
-        publisher, posting, clips, monkeypatch):
-    from job_queue import JobQueue
-
-    posting = _fanout_posting(posting)
-    queue = JobQueue(path=posting["queue_path"])
-    job_id = queue.begin("upload_post", clips[0],
-                         extra={"target_platforms": ["x"]})
-    queue.fail(job_id, "Invalid platforms")
-    queue.get(job_id).not_before = 0
-    queue._save()
-    calls = _record_publish(publisher, monkeypatch)
-
-    publisher.drain(posting, CONFIG, quiet=True)
-
-    assert calls == [("upload_post", "clip00.mp4", ["x"])]
-
-
-def test_an_old_upload_post_retry_is_dropped_if_postplanify_sent_the_clip(
-        publisher, posting, clips, monkeypatch):
-    """Queued before the narrowed list was stored: draining it would post
-    to its FULL list, including what postplanify already sent."""
-    from job_queue import JobQueue
-
-    posting = _fanout_posting(posting)
-    queue = JobQueue(path=posting["queue_path"])
-    queue.complete(queue.begin("postplanify", clips[0]))
-    queue.fail(queue.enqueue("upload_post", clips[0]), "Invalid platforms")
-    for job in queue.list_jobs():
-        job.not_before = 0
-    queue._save()
-    calls = _record_publish(publisher, monkeypatch)
-
-    publisher.drain(posting, CONFIG, quiet=True)
-
-    assert calls == []
-    assert JobQueue(path=posting["queue_path"]).counts().get("failed") == 1
 
 
 def test_a_post_is_summarised_not_dumped(publisher):
@@ -876,32 +835,145 @@ def test_a_post_is_summarised_not_dumped(publisher):
     assert "@" not in line and "secret" not in line
 
 
-def test_a_clip_that_comes_back_is_not_posted_where_postplanify_sent_it(
+def test_a_clip_that_comes_back_is_not_posted_where_postproxy_sent_it(
         publisher, posting, clips, monkeypatch):
-    """'Halfa Mill' Clip 02, a real run: postplanify sent it to Instagram
-    and TikTok, its Rumble upload failed, so the watcher ran it again - and
-    on that pass Instagram started posting it directly (and asked for a
-    2FA code), while upload_post was queued with its FULL list."""
+    """'Halfa Mill' Clip 02, a real run: the fan-out route sent it to
+    Instagram and TikTok, its Rumble upload failed, so the watcher ran it
+    again - and on that pass Instagram started posting it directly (and
+    asked for a 2FA code)."""
     from job_queue import JobQueue
 
     posting = _fanout_posting(posting)
     posting["platforms"]["instagram"]["min_minutes_between"] = 0
     queue = JobQueue(path=posting["queue_path"])
-    done = queue.begin("postplanify", clips[0])
+    done = queue.begin("postproxy", clips[0])
     queue.complete(done)
     publisher._record_reached(queue, done, {"instagram", "tiktok"})
     calls = _record_publish(publisher, monkeypatch)
 
     outcome = publisher.offer(posting, CONFIG, clips[0],
-                              platforms=("postplanify", "upload_post",
-                                         "instagram"))
+                              platforms=("postproxy", "instagram"))
 
-    assert outcome["postplanify"] == "skipped: already posted"
-    assert outcome["instagram"].startswith("skipped: sent by postplanify")
-    assert all(name != "instagram" for name, _, _ in calls)
-    for name, _, targets in calls:
-        if name == "upload_post":
-            assert "instagram" not in targets and "tiktok" not in targets
+    assert outcome["postproxy"] == "skipped: already posted"
+    assert outcome["instagram"].startswith("skipped: sent by postproxy")
+    assert calls == []
+
+
+def test_what_postproxy_reached_is_not_posted_again_directly(
+        publisher, posting, clips, monkeypatch):
+    """Postproxy got the clip to Instagram: the direct Instagram publisher
+    must not post the same Reel a second time."""
+    posting = _fanout_posting(posting)
+    calls = []
+
+    def publish(platform, path, caption, config, dry_run=False, detail=None):
+        calls.append(platform)
+        if detail is not None and platform == "postproxy":
+            detail["covers"] = {"instagram", "tiktok"}
+        return True
+
+    monkeypatch.setattr(publisher, "publish", publish)
+    monkeypatch.setattr(publisher, "_publisher", lambda p, c: _Ready())
+
+    outcome = publisher.offer(posting, CONFIG, clips[0],
+                              platforms=("postproxy", "instagram"))
+
+    assert outcome["postproxy"] == "posted"
+    assert outcome["instagram"] == "skipped: sent by postproxy"
+    assert calls == ["postproxy"]
+
+
+def test_instagram_still_posts_when_postproxy_did_not_reach_it(
+        publisher, posting, clips, monkeypatch):
+    posting = _fanout_posting(posting)
+    calls = []
+
+    def publish(platform, path, caption, config, dry_run=False, detail=None):
+        calls.append(platform)
+        if detail is not None and platform == "postproxy":
+            detail["covers"] = {"tiktok"}
+        return True
+
+    monkeypatch.setattr(publisher, "publish", publish)
+    monkeypatch.setattr(publisher, "_publisher", lambda p, c: _Ready())
+
+    publisher.offer(posting, CONFIG, clips[0],
+                    platforms=("postproxy", "instagram"))
+
+    assert calls == ["postproxy", "instagram"]
+
+
+def test_the_shorts_route_works_with_no_config_block(
+        publisher, posting, clips, monkeypatch):
+    """config.json is gitignored, so a live config has no block for a
+    route added in code. That must not read as "not configured"."""
+    calls = _record_publish(publisher, monkeypatch)
+
+    outcome = publisher.offer(posting, CONFIG, clips[0],
+                              platforms=("postproxy_youtube",))
+
+    assert outcome["postproxy_youtube"] == "posted"
+    assert [c[0] for c in calls] == ["postproxy_youtube"]
+
+
+def test_shorts_wait_while_youtube_is_blocking_uploads(
+        publisher, posting, clips, monkeypatch, tmp_path):
+    """The stream uploader writes youtube_blocked.json when YouTube
+    refuses uploads (a strike). Putting clips on another channel then is
+    getting around the block, so the Shorts route waits it out."""
+    import json
+
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    (logs / "youtube_blocked.json").write_text(
+        json.dumps({"until": time.time() + 3600}))
+    config = dict(CONFIG, logs_folder=str(logs))
+    calls = _record_publish(publisher, monkeypatch)
+
+    outcome = publisher.offer(posting, config, clips[0],
+                              platforms=("postproxy", "postproxy_youtube"))
+
+    assert outcome["postproxy_youtube"] == "queued"
+    assert outcome["postproxy"] == "posted"
+    assert [c[0] for c in calls] == ["postproxy"]
+
+    # And the queue does not post it either while the block lasts.
+    from job_queue import JobQueue
+
+    queue = JobQueue(path=posting["queue_path"])
+    for job in queue.list_jobs():
+        job.not_before = 0
+    queue._save()
+    publisher.drain(posting, config, quiet=True)
+    assert [c[0] for c in calls] == ["postproxy"]
+
+
+def test_shorts_go_once_the_block_has_passed(publisher, posting, clips,
+                                             monkeypatch, tmp_path):
+    import json
+
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    (logs / "youtube_blocked.json").write_text(
+        json.dumps({"until": time.time() - 60}))
+    config = dict(CONFIG, logs_folder=str(logs))
+    calls = _record_publish(publisher, monkeypatch)
+
+    outcome = publisher.offer(posting, config, clips[0],
+                              platforms=("postproxy_youtube",))
+
+    assert outcome["postproxy_youtube"] == "posted"
+
+
+def test_the_old_routes_are_gone():
+    from utils import clip_queue
+
+    for gone in ("upload_post", "postplanify"):
+        assert gone not in clip_queue.CLIP_PLATFORMS
+        assert gone not in clip_queue.FAN_OUT_ROUTES
+    assert clip_queue.CLIP_PLATFORMS[0] == "postproxy"
+    assert clip_queue.CENSOR_AUDIO_DEFAULTS["postproxy"] == "slurs"
+    assert clip_queue.CENSOR_AUDIO_DEFAULTS["postproxy_youtube"] == "slurs"
 
 
 # ── clips made mostly of slurs stay off the short-form platforms ────────────
@@ -978,3 +1050,25 @@ def test_no_transcript_is_no_judgement(publisher, posting, clips, monkeypatch):
     publisher.offer(posting, CONFIG, clips[0], platforms=("instagram",))
 
     assert [name for name, _, _ in calls] == ["instagram"]
+
+
+def test_a_job_left_over_from_a_retired_route_is_dropped_not_failed(
+        publisher, posting, clips, monkeypatch):
+    """Upload-Post and PostPlanify jobs still in the queue when their
+    subscriptions ended: their code is gone, so a retry could only fail."""
+    from job_queue import JobQueue
+
+    queue = JobQueue(path=posting["queue_path"])
+    for route in ("upload_post", "postplanify"):
+        queue.fail(queue.enqueue(route, clips[0]), "was waiting")
+    for job in queue.list_jobs():
+        job.not_before = 0
+    queue._save()
+    calls = _record_publish(publisher, monkeypatch)
+
+    publisher.drain(posting, CONFIG, quiet=True)
+
+    assert calls == []
+    jobs = JobQueue(path=posting["queue_path"]).list_jobs()
+    assert all(job.state == "failed" and job.attempts == 1 and
+               "no longer used" in job.last_error for job in jobs)

@@ -49,6 +49,8 @@ REQUIRED_ENV = {
     "facebook": ("FB_PAGE_TOKEN", "FB_PAGE_ID"),
     "x": ("TWITTER_API_KEY", "TWITTER_API_SECRET",
           "TWITTER_ACCESS_TOKEN", "TWITTER_ACCESS_SECRET"),
+    "postproxy": ("POSTPROXY_API_KEY",),
+    "postproxy_youtube": ("POSTPROXY_API_KEY",),
     # reddit is resolved per named account, so it is handled separately.
 }
 
@@ -459,68 +461,32 @@ def _check_zernio(platform: str, cfg_dict: Optional[dict] = None) -> Check:
 
 
 
-# Upload-Post's own profile listing. This is the one platform the
-# verifier had nothing to say about - it printed "no credential check
-# written" - and it is now the PRIMARY clip route, so it was the single
-# unverified link in the chain that matters most.
-#
-# /api/uploadposts/users answers with every profile on the key and the
-# social accounts connected to each, which checks three things at once
-# that used to fail separately and silently:
-#
-#   - the key works at all
-#   - UPLOAD_POST_USER names a profile that EXISTS (it is a profile
-#     name from the managed-users page, not an email, and a wrong one
-#     fails at post time with nothing to say why)
-#   - which platforms are actually connected - TikTok comes back empty
-#     on the free plan, so a clip "posted to TikTok" through this route
-#     never was
-_UPLOAD_POST_USERS = "https://api.upload-post.com/api/uploadposts/users"
+def _check_postproxy(platform: str = "postproxy") -> Check:
+    """Which accounts the key reaches on Postproxy, and which of them
+    this route would post to. Read-only: lists profiles, posts nothing."""
+    if not os.environ.get("POSTPROXY_API_KEY", "").strip():
+        return Check(platform, MISSING, "POSTPROXY_API_KEY")
+    from publishers.postproxy import PostproxyPublisher
 
-
-def _check_upload_post() -> Check:
-    key = os.environ.get("UPLOAD_POST_API_KEY", "").strip()
-    user = os.environ.get("UPLOAD_POST_USER", "").strip()
-    missing = [name for name, value in
-               (("UPLOAD_POST_API_KEY", key), ("UPLOAD_POST_USER", user))
-               if not value]
-    if missing:
-        return Check("upload_post", MISSING, ", ".join(missing))
-
-    request = urllib.request.Request(
-        _UPLOAD_POST_USERS,
-        headers={"Authorization": f"Apikey {key}",
-                 "User-Agent": "AutoBleepPro/1.0"})
+    publisher = PostproxyPublisher({}, platform)
     try:
-        with urllib.request.urlopen(request, timeout=30) as response:
-            data = json.loads(response.read().decode("utf-8", "replace"))
+        profiles = publisher.profiles()
     except Exception as exc:
-        return Check("upload_post", FAILED, str(exc)[:200])
-
-    profiles = (data or {}).get("profiles") or []
-    names = [str(p.get("username") or "") for p in profiles]
-    if user not in names:
-        return Check("upload_post", FAILED,
-                     f"UPLOAD_POST_USER is {user!r}, which is not a profile "
-                     f"on this key. It is the profile name from the "
-                     f"managed-users page, not an email. Available: "
-                     f"{', '.join(n for n in names if n) or '(none)'}")
-
-    mine = next(p for p in profiles if p.get("username") == user)
-    accounts = mine.get("social_accounts") or {}
-    connected = sorted(name for name, value in accounts.items() if value)
-    if not connected:
-        return Check("upload_post", FAILED,
-                     f"profile {user!r} exists but has no social accounts "
-                     "connected - a post through it would reach nothing")
-    return Check("upload_post", OK,
-                 f"reaches {', '.join(connected)}",
-                 identity=f"profile {user!r}")
+        return Check(platform, FAILED, str(exc)[:200])
+    if not profiles:
+        what = ("a YouTube channel" if platform == "postproxy_youtube"
+                else "an Instagram or TikTok account")
+        return Check(platform, FAILED,
+                     f"the key works but {what} is not connected and "
+                     "active on Postproxy")
+    return Check(platform, OK, "reaches " + ", ".join(
+        f"{p.get('platform')} ({p.get('name')})" for p in profiles))
 
 
 _CHECKS = {
     "instagram": _check_instagram,
-    "upload_post": _check_upload_post,
+    "postproxy": _check_postproxy,
+    "postproxy_youtube": lambda: _check_postproxy("postproxy_youtube"),
     "facebook": _check_facebook,
     "x": _check_x,
 }

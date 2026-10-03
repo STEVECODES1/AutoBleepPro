@@ -192,7 +192,7 @@
         "min_minutes_between": 180
       },
       "zernio_twitter": {
-        "_comment": "DISABLED: replaced by upload_post (free) and x_webhost (Puter bridge). X's free API tier is read-only; Basic is $200/mo. Connect X at upload-post.com instead.",
+        "_comment": "DISABLED: replaced by x_webhost (Puter bridge). X's free API tier is read-only; Basic is $200/mo.",
         "enabled": false,
         "daily_cap": 12,
         "min_minutes_between": 60
@@ -203,16 +203,16 @@
         "daily_cap": 6,
         "min_minutes_between": 150
       },
-      "postplanify": {
-        "_note": "PostPlanify (postplanify.com): posts each clip to every account connected on its dashboard - Instagram, TikTok, X, Facebook, YouTube. Paid plan, no monthly quota; its own limit is 6 posts/hour and 25/day PER ACCOUNT, so keep daily_cap under 25. Set POSTPLANIFY_API_KEY in .env. Runs before upload_post; upload_post is then only asked for accounts PostPlanify did not reach.",
+      "postproxy": {
+        "_note": "Postproxy (postproxy.dev): posts each clip to every account connected on its dashboard except YouTube - Instagram as a Reel, TikTok. Set POSTPROXY_API_KEY in .env. Runs first; the direct Instagram publisher only posts what Postproxy did not reach. Works without this block (same defaults in code).",
         "enabled": true,
-        "daily_cap": 20,
+        "daily_cap": 15,
         "min_minutes_between": 20
       },
-      "upload_post": {
-        "_note": "Upload-Post: one API call posts to ALL connected platforms (TikTok, Instagram, YouTube, Facebook, X, ...) at once. Set UPLOAD_POST_API_KEY + UPLOAD_POST_USER in .env. See https://upload-post.com. When enabled, the clip pipeline uses it as the PRIMARY path and the per-platform functions become fallbacks.",
+      "postproxy_youtube": {
+        "_note": "Postproxy to YouTube only, as Shorts on the clips channel connected there. Kept apart so YouTube has its own low cap: many near-identical uploads a day is what YouTube's repetitious-content policy describes. Waits while YouTube is refusing uploads on the main channel (logs/youtube_blocked.json). Works without this block.",
         "enabled": true,
-        "daily_cap": 10,
+        "daily_cap": 4,
         "min_minutes_between": 120
       }
     },
@@ -236,13 +236,13 @@
   "facebook": {
     "censor_uploads": true,
     "caption_template": "{title}\n\n{tags}",
-    "_censor_comment": "true = post the censored copy. Facebook is included in upload-post's one-call fan-out and in the clip queue's per-platform path, and both routes read this flag - so the censored/uncensored split is identical no matter which path a Facebook clip takes.",
+    "_censor_comment": "true = post the censored copy. Facebook's direct clip publisher reads this flag. A Facebook account connected on Postproxy gets Postproxy's copy, which mutes slurs.",
     "_link_comment": "Facebook links are clickable from the app and the web. Unlike Instagram, printing the YouTube link here actually works."
   },
   "x": {
     "censor_uploads": true,
     "caption_template": "{title}\n\n{tags}",
-    "_censor_comment": "true = post the censored copy. X is included in upload-post's one-call fan-out. When the free X API tier is restored this block also drives the per-platform x publisher in the clip queue.",
+    "_censor_comment": "true = post the censored copy. When the free X API tier is restored this block drives the per-platform x publisher in the clip queue.",
     "_link_comment": "X links are clickable. Character budget is tight: keep the caption short and put any URL in the description field, not the tweet text."
   },
   "reddit": {
@@ -254,17 +254,11 @@
   "tiktok": {
     "censor_uploads": true,
     "caption_template": "{title}\n\n{tags}",
-    "_censor_comment": "true = post the censored copy. TikTok is reached two ways: through upload-post's one-call fan-out (this block covers that route) and, if you wire it, through the standalone tiktok_free/tiktok_api_client publisher in the clip queue. CENSOR_AUDIO_DEFAULTS now also lists tiktok so the default is 'slurs' whichever path is used - the two must agree, because a clip that goes out to TikTok on one route uncensored and on the other route censored would be a real split.",
+    "_censor_comment": "true = post the censored copy. TikTok clips go out through Postproxy, which mutes slurs (CENSOR_AUDIO_DEFAULTS). This block covers the standalone tiktok_free publisher if you wire it; its default is 'slurs' too, so both routes agree.",
     "_link_comment": "TikTok links are NOT clickable from the app. The caption must tell people where to find the full thing, because they cannot tap their way there from the clip."
   },
-  "upload_post": {
-    "censor_uploads": true,
-    "caption_template": "{title}\n\n{tags}",
-    "_censor_comment": "true = post the censored copy. Upload-Post is a single API call that fans out to TikTok, Instagram, YouTube Shorts, Facebook and X at once, so this one flag decides the audio for every platform in that call. It is also listed in CENSOR_AUDIO_DEFAULTS as 'slurs' so the clip queue's upload_post path and this config block agree. If this is ever set to false, every platform downstream of upload-post would receive the original uncensored audio - which is the one combination that violates the rule.",
-    "_link_comment": "Upload-Post writes one caption across all platforms, so keep it generic enough to fit each one. Per-platform title overrides are supported via the overrides block."
-  },
   "clips": {
-    "_max_slurs_comment": "A clip with this many slurs or more (counted before muting) is held back from every social platform - Instagram, TikTok, Facebook, Shorts, upload-post, postplanify. Rumble still gets it. YouTube's vulgar-language policy age-restricts a clip focused on that language, and its hate speech policy says nothing about muting. 0 turns this off.",
+    "_max_slurs_comment": "A clip with this many slurs or more (counted before muting) is held back from every social platform - Instagram, TikTok, Facebook, Shorts, Postproxy. Rumble still gets it. YouTube's vulgar-language policy age-restricts a clip focused on that language, and its hate speech policy says nothing about muting. 0 turns this off.",
     "max_slurs_for_social": 3,
     "_auto_clip_comment": "Any VOD dropped in auto_clip_folder is turned into clips by `--watch`, one per pass, without a command. The folder is a LIBRARY: nothing in it is moved, renamed or deleted. A .clipped.json beside it remembers what has been done, so nothing is cut twice. Set auto_clip_folder to \"\" to switch this off.",
     "auto_clip_folder": "./downloaded_vods",

@@ -77,6 +77,28 @@ SPLIT_PLATFORM_LIMITS = {
     "zernio_tiktok": {"daily_cap": 6, "min_minutes_between": 150},
 }
 
+# Routes that work with no block in config.json. config.json is
+# gitignored, so a route added in code never appears in a live config -
+# and a missing block reads as "not configured". A block in config.json
+# still wins, so any of these can be turned off or retuned there.
+#
+# postproxy covers Instagram and TikTok in one call. 15 a day stays under
+# TikTok's own daily limit for posts made through its API.
+# postproxy_youtube is the clips channel, kept apart on purpose: lots of
+# near-identical uploads in a day is what YouTube's "repetitious
+# content" policy describes, and a channel is far harder to get back
+# than a post is to delete.
+DEFAULT_PLATFORMS = {
+    "postproxy": {"enabled": True, "daily_cap": 15,
+                  "min_minutes_between": 20},
+    "postproxy_youtube": {"enabled": True, "daily_cap": 4,
+                          "min_minutes_between": 120},
+}
+
+# Services whose subscriptions ended and whose code is gone. A live
+# config.json may still have their blocks; nothing posts to them.
+RETIRED_PLATFORMS = {"upload_post", "postplanify"}
+
 # The cap key. "max_per_day" is here because a platform block was once
 # written with that name, nothing read it, and the guard reported
 # "unlimited" for a platform whose config plainly said 3 - a typo in a
@@ -129,11 +151,13 @@ def platform_names(posting: dict) -> list:
     invisible.
     """
     configured = list((posting.get("platforms") or {}).keys())
-    retired = set(LEGACY_PLATFORM_NAMES.values())
+    retired = set(LEGACY_PLATFORM_NAMES.values()) | RETIRED_PLATFORMS
     names = [n for n in configured if n not in retired]
     for new, old in LEGACY_PLATFORM_NAMES.items():
         if new not in configured and old in configured:
             names.append(new)
+    if configured:
+        names += [n for n in DEFAULT_PLATFORMS if n not in names]
     return names
 
 
@@ -243,7 +267,7 @@ class PublishGuard:
         legacy_name = LEGACY_PLATFORM_NAMES.get(platform)
         legacy = platforms.get(legacy_name) or {} if legacy_name else {}
         if not legacy:
-            return {}
+            return dict(DEFAULT_PLATFORMS.get(platform, {}))
         return {**legacy, **SPLIT_PLATFORM_LIMITS.get(platform, {})}
 
     def is_manual_only(self, platform: str) -> bool:

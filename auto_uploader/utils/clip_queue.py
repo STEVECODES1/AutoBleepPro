@@ -43,45 +43,32 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # volume and repetition, and a channel is far harder to get back than a
 # post is to delete - so it posts only after the others have, and only
 # once its own guard, cap and spacing allow it.
-# upload_post FIRST, then the per-platform publishers.
+# The fan-out route FIRST, then the per-platform publishers.
 #
-# It was missing entirely. The config said "when enabled, the clip
-# pipeline uses it as the primary path and the per-platform functions
-# become fallbacks" - and that was true of the STREAM announcement path
-# in social_promoter, which is a different function. The clips cut out
-# of a VOD come through here, and here upload_post did not exist. A key
-# was set, the guard said ALLOW, --posting-status said OK, and not one
-# clip ever went through it.
+# Order matters: postproxy runs first so that what it reaches can be
+# skipped below rather than posted twice. The direct instagram publisher
+# is then the fallback for a clip Postproxy did not get to Instagram.
 #
-# Order matters: it runs first so that what it covers can be skipped
-# below rather than posted twice.
-#
-# postplanify goes before upload_post. It is the route with no monthly
-# quota (upload_post's free plan is 10 uploads a MONTH, hence its cap of
-# 1/day), so it takes every account it has connected, and upload_post is
-# then only asked for what is left - never the same account twice.
-CLIP_PLATFORMS = ("postplanify", "upload_post", "instagram", "facebook",
+# postproxy_youtube sits with YouTube at the end, for the reason above.
+CLIP_PLATFORMS = ("postproxy", "instagram", "facebook",
                   "tiktok", "zernio_twitter", "zernio_tiktok",
-                  "youtube_shorts")
+                  "postproxy_youtube", "youtube_shorts")
 
 # The routes that reach several platforms in one call. What each one
 # actually reached is read back from its own result (platforms_reached)
 # and skipped for every route and publisher after it.
-FAN_OUT_ROUTES = ("postplanify", "upload_post")
+FAN_OUT_ROUTES = ("postproxy", "postproxy_youtube")
 
-# What one upload_post call already reaches, under this project's names.
-# A clip posted through it and then posted AGAIN by the direct publisher
-# is the same Reel twice on the same account minutes apart, which is
-# precisely the pattern every platform's spam detection keys on.
-UPLOAD_POST_COVERS = ("instagram", "facebook", "tiktok", "x",
-                      "youtube_shorts")
+# Routes that upload to YouTube. They wait while YouTube is refusing
+# uploads on the main channel (see youtube_hold_s).
+YOUTUBE_ROUTES = ("youtube_shorts", "postproxy_youtube")
 
 # Platforms whose CAPTION text goes through the profanity filter. Rumble
 # is deliberately absent - it is the uncensored channel, and the titles
 # there are the line actually spoken, which is the point.
 CLEAN_TEXT_PLATFORMS = ("instagram", "facebook", "tiktok", "x",
                         "youtube_shorts", "zernio_twitter", "zernio_tiktok",
-                        "postplanify")
+                        "postproxy", "postproxy_youtube")
 
 # A blocked clip is worth keeping for about a day. Past that the stream it
 # came from is stale and posting it is worse than not.
@@ -125,7 +112,7 @@ def _reach_path(posting: dict) -> str:
 def remembered_reach(posting: dict, route: str) -> set:
     """Which platforms this fan-out route reached the last time it posted.
 
-    postplanify posts to whatever is connected on its side, which this
+    postproxy posts to whatever is connected on its side, which this
     project's config cannot see - so the only honest answer to "what will
     it cover when its wait is up" is what it covered last time.
     """
@@ -482,18 +469,12 @@ CENSOR_AUDIO_DEFAULTS = {
     "facebook": "slurs",
     "zernio_twitter": "slurs",
     "zernio_tiktok": "slurs",
-    # upload_post is one API call that fans out to TikTok, Instagram,
-    # YouTube Shorts, Facebook and X at once - so it is its own entry in
-    # this table rather than one of the per-platform names above. A clip
-    # that goes through upload_post arrives at every destination it reaches
-    # carrying the SAME audio, so the decision is made once at the bridge
-    # and every platform downstream inherits it.
-    "upload_post": "slurs",
-    # postplanify is the same shape: one upload, reused for every
-    # connected account, so the audio decision is made once here. Missing
-    # from this table it would default to False - the original audio to
-    # Instagram, TikTok and X at once.
-    "postplanify": "slurs",
+    # postproxy is one upload reused for every connected account, so the
+    # audio decision is made once here and every platform it reaches
+    # inherits it. Missing from this table it would default to False -
+    # the original audio to Instagram and TikTok at once.
+    "postproxy": "slurs",
+    "postproxy_youtube": "slurs",
     # tiktok (standalone, via tiktok_free/tiktok_api_client) is not wired
     # through the clip queue today, so this is kept only as the default a
     # caller reaches for by name when wiring it up. "slurs" here matches
@@ -617,12 +598,12 @@ def publish(platform: str, video_path: str, caption: str,
     Raises NotConfigured when the platform refuses for a reason no retry
     can fix - a missing token scope, most often.
 
-    `detail`, when a caller passes a dict, is filled in for upload_post
-    with `detail["covers"]` - the platforms upload-post's OWN, polled
-    status says actually succeeded (see publishers.upload_post.
+    `detail`, when a caller passes a dict, is filled in for a fan-out
+    route with `detail["covers"]` - the platforms Postproxy's OWN, polled
+    status says actually succeeded (see publishers.postproxy.
     platforms_reached), not a guess. offer() reads it to decide which
-    per-platform publishers upload_post already covers; every other
-    caller can safely ignore `detail` and nothing changes for them.
+    per-platform publishers are already covered; every other caller can
+    safely ignore `detail` and nothing changes for them.
     """
     from publishers.errors import NotConfigured, PermanentlyRejected
     if not os.path.isfile(video_path):
@@ -662,20 +643,13 @@ def publish(platform: str, video_path: str, caption: str,
                 except OSError:
                     pass
 
-        # upload_post's ack ("Upload initiated...") used to be treated as
-        # the outcome - every platform in the job marked "posted" the
-        # moment upload-post accepted the file, whether or not any of
-        # them actually went through on upload-post's own side. Real,
-        # polled per-platform results (post_clip() now polls for them -
-        # see _resolve_final_result) change what "posted" means here: at
-        # least one platform genuinely succeeded, not merely accepted.
+        # A fan-out route's ack is not the outcome. Its polled
+        # per-platform results are: "posted" means at least one platform
+        # genuinely succeeded, not merely that the file was accepted.
         reached: set = set()
         if platform in FAN_OUT_ROUTES:
             try:
-                if platform == "postplanify":
-                    from publishers.postplanify import platforms_reached
-                else:
-                    from publishers.upload_post import platforms_reached
+                from publishers.postproxy import platforms_reached
 
                 reached = platforms_reached(posted)
             except Exception:
@@ -848,6 +822,43 @@ def _slur_heavy(video_path: str, config: dict) -> str:
     return f"{len(hits)} slurs{length} (limit {limit})"
 
 
+def youtube_hold_s(config: dict, now: Optional[float] = None) -> float:
+    """Seconds until YouTube may be tried again, 0.0 if it may be now.
+
+    The stream uploader writes logs/youtube_blocked.json when YouTube
+    refuses an upload as forbidden - an upload block on the channel,
+    usually from a strike. Clips wait it out too: putting them on another
+    channel while one is blocked is getting around the block, which
+    YouTube's rules forbid and can cost every linked channel.
+    """
+    import time
+
+    now = time.time() if now is None else now
+    path = os.path.join((config or {}).get("logs_folder") or "logs",
+                        "youtube_blocked.json")
+    try:
+        with open(path, encoding="utf-8") as handle:
+            until = float(json.load(handle).get("until", 0))
+    except (OSError, ValueError, TypeError, AttributeError):
+        return 0.0
+    return max(0.0, until - now)
+
+
+def _youtube_waits(platform: str, config: dict):
+    """A guard-style "not yet" for a YouTube route while YouTube is
+    blocked, or None."""
+    if platform not in YOUTUBE_ROUTES:
+        return None
+    wait = youtube_hold_s(config)
+    if not wait:
+        return None
+    from publish_guard import Decision
+
+    return Decision(False, "YouTube is refusing uploads on the main "
+                    "channel - clips wait until it accepts them again",
+                    retry_after_s=wait)
+
+
 def offer(posting: dict, config: dict, video_path: str,
           fallback_caption: str = "", platforms=CLIP_PLATFORMS,
           dry_run: bool = False) -> dict:
@@ -874,47 +885,18 @@ def offer(posting: dict, config: dict, video_path: str,
     guard = PublishGuard(posting, posting.get("state_path"))
     queue = _queue(posting)
 
-    # Filled in when a fan-out route (postplanify, upload_post) posts this
-    # clip, so nothing after it posts to the same account a second time.
+    # Filled in when a fan-out route (postproxy) posts this clip, so
+    # nothing after it posts to the same account a second time.
     covered: set = set()
     covered_by: dict = {}
 
     for platform in platforms:
         if platform in covered:
-            route = covered_by.get(platform, "upload_post")
+            route = covered_by.get(platform, "postproxy")
             outcome[platform] = f"skipped: sent by {route}"
             print(f"[Clips] {platform}: already sent in the {route} "
                   f"call - not posting it twice.")
             continue
-
-        # upload_post after postplanify: asked only for what postplanify
-        # did not reach, so an account connected on both services does
-        # not get the same Reel twice.
-        call_config = config
-        if platform == "upload_post" and covered:
-            natural = [
-                name for name in UPLOAD_POST_COVERS
-                if (posting.get("platforms", {}).get(name, {}) or {})
-                .get("enabled")
-            ]
-            remaining = [name for name in natural if name not in covered]
-            if not remaining:
-                outcome[platform] = "skipped: sent by postplanify"
-                print(f"[Clips] upload_post: everything it reaches was "
-                      f"already sent by postplanify - not using its quota.")
-                continue
-            if not guard.check(platform):
-                # Not queued: the narrowed target list is not stored with
-                # a job, so a queued call would drain later to its FULL
-                # list and repost what postplanify already sent. Whatever
-                # it would have added still has its direct publisher.
-                outcome[platform] = "skipped: waiting, and the rest went " \
-                                    "via postplanify"
-                print(f"[Clips] upload_post: not free right now - "
-                      f"{', '.join(remaining)} left to the direct "
-                      f"publishers.")
-                continue
-            call_config = dict(config or {}, target_platforms=remaining)
 
         already = _already_posted(queue, platform, video_path)
         if already is not None and already.state == "done":
@@ -923,11 +905,10 @@ def offer(posting: dict, config: dict, video_path: str,
             outcome[platform] = "skipped: already posted"
             if platform in FAN_OUT_ROUTES:
                 # And neither may anything it reached. A clip whose Rumble
-                # upload failed came back through here; postplanify was
-                # skipped as done, but Instagram and TikTok - which it
+                # upload failed came back through here; the fan-out route
+                # was skipped as done, but Instagram and TikTok - which it
                 # HAD sent the clip to - were not marked, so Instagram
-                # posted it directly and upload_post was queued with its
-                # full list.
+                # posted it directly.
                 earlier = set((already.extra or {}).get("reached")
                               or remembered_reach(posting, platform))
                 earlier -= covered
@@ -940,7 +921,9 @@ def offer(posting: dict, config: dict, video_path: str,
             continue
 
         caption = caption_for(platform, video_path, fallback_caption, config)
-        decision = guard.check(platform)
+        decision = _youtube_waits(platform, config)
+        if decision is None:
+            decision = guard.check(platform)
 
         if not decision and decision.retry_after_s is None:
             # Not a timing problem - disabled, manual-only, killed, or
@@ -951,7 +934,7 @@ def offer(posting: dict, config: dict, video_path: str,
             _journal(config, "skip", platform, video_path, decision.reason)
             continue
 
-        publisher = _publisher(platform, call_config)
+        publisher = _publisher(platform, config)
         ready = getattr(publisher, "ready", None) if publisher else None
         if publisher is None or (ready is not None and not ready()):
             outcome[platform] = "skipped: not configured"
@@ -963,14 +946,7 @@ def offer(posting: dict, config: dict, video_path: str,
         # Recorded before the attempt, so the queue is also the ledger of
         # what has been posted - which is what stops a re-run of the same
         # file posting it twice.
-        # A narrowed upload_post call keeps its narrowed list. Stored on
-        # the job, because a retry that drained to the FULL list would
-        # repost everything postplanify had already sent.
-        targets = (call_config.get("target_platforms")
-                   if call_config is not config else None)
-        job_id = queue.begin(platform, video_path, caption,
-                             extra={"target_platforms": list(targets)}
-                             if targets else None)
+        job_id = queue.begin(platform, video_path, caption)
 
         if not decision:
             queue.block(job_id, decision.reason, decision.retry_after_s)
@@ -980,8 +956,8 @@ def offer(posting: dict, config: dict, video_path: str,
             if platform in FAN_OUT_ROUTES:
                 # It WILL post this clip when its wait is up. Posting it
                 # directly as well meant the same Reel twice - Clip 01 went
-                # to Instagram directly while postplanify held it for its
-                # 20-minute spacing, then postplanify sent it there too.
+                # to Instagram directly while the fan-out route held it for
+                # its spacing, then that route sent it there too.
                 later = remembered_reach(posting, platform) - covered
                 for name in later:
                     covered_by.setdefault(name, platform)
@@ -997,7 +973,7 @@ def offer(posting: dict, config: dict, video_path: str,
 
         detail: dict = {}
         try:
-            ok = publish(platform, video_path, caption, call_config, dry_run,
+            ok = publish(platform, video_path, caption, config, dry_run,
                         detail=detail)
         except NotConfigured as exc:
             queue.block(job_id, str(exc), MAX_DEFERRED_AGE_S)
@@ -1031,38 +1007,11 @@ def offer(posting: dict, config: dict, video_path: str,
             queue.complete(job_id)
             outcome[platform] = "posted"
             if platform in FAN_OUT_ROUTES:
-                # What upload-post's OWN polled status says actually
-                # succeeded (see publish()'s `detail` / publishers.
-                # upload_post.platforms_reached) - not a guess from
-                # which platform blocks this project happens to have
-                # `enabled: true`. Those two used to be treated as the
-                # same question and are not: an account can read
-                # "enabled" here and still not be genuinely connected on
-                # upload-post.com, or a real token there can have
-                # expired - either way this project's own config says
-                # nothing about it, and marking that platform "covered"
-                # anyway was silently skipping the per-platform fallback
-                # for a clip that had not actually gone out.
-                #
-                # Falls back to the old config-guess only when there is
-                # truly nothing to read a real answer from (a dry run, or
-                # an old-shaped response with no polled results) - see
-                # publish()'s own fallback for the matching case.
-                #
-                # postplanify reports per account the same way (see
-                # publishers.postplanify.platforms_reached) and gets no
-                # config-guess fallback: it posts to what is CONNECTED
-                # there, which this project's config cannot see.
+                # What Postproxy's OWN polled status says actually
+                # succeeded (see publish()'s `detail`) - never a guess from
+                # this project's config, which cannot see what is
+                # connected there.
                 reached = set(detail.get("covers") or ())
-                if not reached and platform == "upload_post":
-                    reached = {
-                        name for name in UPLOAD_POST_COVERS
-                        if (posting.get("platforms", {}).get(name, {}) or {})
-                        .get("enabled")
-                    }
-                    if call_config is not config:
-                        reached &= set(call_config.get("target_platforms")
-                                       or ())
                 for name in reached:
                     covered_by.setdefault(name, platform)
                 covered |= reached
@@ -1129,15 +1078,6 @@ def recaption(posting: dict, config: dict) -> list:
     return changed
 
 
-def _sent_by_other_route(queue, job) -> bool:
-    wanted = clip_key(job.clip_path)
-    return any(other.platform in FAN_OUT_ROUTES
-               and other.platform != job.platform
-               and other.state == "done"
-               and clip_key(other.clip_path) == wanted
-               for other in queue.list_jobs())
-
-
 def drain(posting: dict, config: dict, limit: int = 0,
           dry_run: bool = False, quiet: bool = False) -> dict:
     """Post whatever the queue is now allowed to post.
@@ -1147,7 +1087,7 @@ def drain(posting: dict, config: dict, limit: int = 0,
 
     Returns {platform: posted_count}.
     """
-    from publish_guard import PublishGuard
+    from publish_guard import RETIRED_PLATFORMS, PublishGuard
     from publishers.errors import NotConfigured, PermanentlyRejected
 
     posted: dict = {}
@@ -1165,6 +1105,14 @@ def drain(posting: dict, config: dict, limit: int = 0,
         if job is None:
             break
 
+        if job.platform in RETIRED_PLATFORMS:
+            # Queued before that service's subscription ended. Its code is
+            # gone, so a retry could only fail - and count against nothing
+            # useful.
+            queue.abandon(job.id, f"{job.platform} is no longer used",
+                          now=now)
+            continue
+
         if now - (job.created_at or now) > MAX_DEFERRED_AGE_S:
             queue.abandon(job.id, "too old to be worth posting", now=now)
             _journal(config, "skip", job.platform, job.clip_path,
@@ -1180,7 +1128,9 @@ def drain(posting: dict, config: dict, limit: int = 0,
                      "the clip file is gone")
             continue
 
-        decision = guard.check(job.platform)
+        decision = _youtube_waits(job.platform, config)
+        if decision is None:
+            decision = guard.check(job.platform)
         if not decision:
             # Still not allowed. Put it back with its new wait rather
             # than burning an attempt on a scheduling fact.
@@ -1204,27 +1154,9 @@ def drain(posting: dict, config: dict, limit: int = 0,
         # by itself, with nothing to re-run.
         caption = _current_caption(job, config)
 
-        job_config = config
-        targets = (job.extra or {}).get("target_platforms")
-        if targets:
-            job_config = dict(config or {}, target_platforms=list(targets))
-        elif job.platform == "upload_post" and _sent_by_other_route(
-                queue, job):
-            # Queued before its narrowed list was stored. Its full list
-            # includes what postplanify already sent this clip to.
-            queue.abandon(job.id, "postplanify already posted this clip; "
-                          "the narrowed target list was not stored", now=now)
-            _journal(config, "skip", job.platform, job.clip_path,
-                     "already sent by postplanify")
-            if not quiet:
-                print(f"[Clips] upload_post: dropped "
-                      f"{os.path.basename(job.clip_path)} - postplanify "
-                      f"already posted it.")
-            continue
-
         detail: dict = {}
         try:
-            ok = publish(job.platform, job.clip_path, caption, job_config,
+            ok = publish(job.platform, job.clip_path, caption, config,
                          dry_run, detail=detail)
         except NotConfigured as exc:
             # Held, not failed: the clip is fine, the token is not. It

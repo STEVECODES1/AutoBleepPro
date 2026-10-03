@@ -831,7 +831,7 @@ def test_a_402_from_x_is_reported_as_not_configured(monkeypatch):
         sp._post_twitter("hello")
 
 
-def test_a_402_names_the_real_cause_and_the_working_alternative(monkeypatch):
+def test_a_402_names_the_real_cause(monkeypatch):
     pytest.importorskip("tweepy")
     from publishers.errors import NotConfigured
 
@@ -840,7 +840,7 @@ def test_a_402_names_the_real_cause_and_the_working_alternative(monkeypatch):
         sp._post_twitter("hello")
     message = str(excinfo.value)
     assert "402" in message
-    assert "upload-post.com" in message
+    assert "paid X API plan" in message
 
 
 def test_some_other_x_error_is_not_swallowed_as_not_configured(monkeypatch):

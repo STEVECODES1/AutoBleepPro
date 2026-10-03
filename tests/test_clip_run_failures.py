@@ -1,5 +1,5 @@
 """
-Three failures from one real clip run, on 2026-09-22.
+Failures from one real clip run, on 2026-09-22.
 
 Every clip in a nine-clip batch hit all three, and each one was quiet
 in a different way.
@@ -12,41 +12,6 @@ _REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 for path in (_REPO, os.path.join(_REPO, "auto_uploader")):
     if path not in sys.path:
         sys.path.insert(0, path)
-
-
-# ── 1. upload_post crashed on its own constant ────────────────────────
-
-def test_the_platform_aliases_are_reachable_from_the_publisher():
-    """PLATFORM_ALIASES is defined at MODULE level and was read as
-    self.PLATFORM_ALIASES. Python resolves an attribute on the instance
-    then the class, never the module, so every call raised
-
-        'UploadPostPublisher' object has no attribute 'PLATFORM_ALIASES'
-
-    The queue counted that as a failed post and after three the breaker
-    opened - so the route that had just been wired into the clip
-    pipeline posted nothing and then switched itself off for an hour.
-    """
-    from publishers import upload_post as up
-
-    assert isinstance(up.PLATFORM_ALIASES, dict)
-    assert up.PLATFORM_ALIASES.get("x") == "x"
-
-    body = open(up.__file__, encoding="utf-8").read()
-    code = "\n".join(line for line in body.splitlines()
-                     if not line.lstrip().startswith("#"))
-    assert "self.PLATFORM_ALIASES" not in code, \
-        "the module constant is still being read off the instance"
-
-
-def test_the_publisher_can_be_built_and_asked_for_targets():
-    """Constructing it and reaching the alias lookup is what actually
-    blew up; asserting the dict exists alone would not have caught it."""
-    from publishers.upload_post import PLATFORM_ALIASES, UploadPostPublisher
-
-    publisher = UploadPostPublisher({})
-    assert isinstance(publisher, UploadPostPublisher)
-    assert PLATFORM_ALIASES["youtube_shorts"] == "youtube"
 
 
 # ── 2. NVIDIA refuses more than 12 images ─────────────────────────────
@@ -140,23 +105,3 @@ def test_a_busy_or_broken_server_is_still_retried():
                     "HTTP 502: bad gateway",
                     "the request timed out"):
         assert _is_transient(problem), problem
-
-
-def test_x_is_sent_to_upload_post_as_x_not_twitter():
-    """A real run, every clip: 'REST upload rejected (HTTP 400):
-    {"success":false,"message":"Invalid platforms: ['twitter']"}' - and a
-    rejected call posts to none of its platforms. Upload-Post's own SDK
-    (2.13) names it "x"."""
-    from publishers import upload_post as up
-
-    assert up.PLATFORM_ALIASES["x"] == "x"
-    assert "twitter" not in up.PLATFORM_ALIASES.values()
-
-
-def test_a_result_that_says_twitter_still_counts_as_x():
-    from publishers import upload_post as up
-
-    reached = up.platforms_reached({"results": [
-        {"platform": "twitter", "success": True},
-        {"platform": "x", "success": True}]})
-    assert reached == {"x"}
