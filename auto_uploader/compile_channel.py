@@ -29,6 +29,19 @@ WHERE THE FOOTAGE COMES FROM
     the next series in rotation (Whiteboy Trolling Clips, Funny Moments,
     Stream Recaps, ...), each with its own running number.
 
+CENSORED, BECAUSE IT IS YOUTUBE
+    YouTube is the clean side; Rumble is where anything goes uncensored.
+    So every video is run through the same censor as the stream VODs
+    before it goes in, with the widest scope by default - every swear,
+    slur and harassment line is muted, not just slurs. The title, the
+    chapter names and the description are filtered too: a source title
+    with a swear in it is starred, one with a slur loses the word.
+
+    If the censor cannot run, the build STOPS. Uploading the uncensored
+    cut to YouTube because a dependency was missing is the one outcome
+    this channel cannot have. compilation.censor in config.json sets the
+    scope: "all" (default), "slurs" for hate speech only, or false.
+
 STORAGE
     Everything is built under compilation.work_folder and deleted once
     the upload is confirmed. Each download is deleted as soon as its
@@ -109,7 +122,23 @@ DEFAULTS = {
     # YouTube's own loudness target, so it does not turn the video down.
     "loudness_lufs": -14,
     "encoder": "auto",
+    # What the censor mutes before anything reaches YouTube. "all" =
+    # every swear, slur and harassment line; "slurs" = hate speech only;
+    # false = off (not recommended - YouTube is the clean channel).
+    "censor": "all",
 }
+
+# The censor's own settings (model, GPU, padding, ...) are the stream
+# uploader's, read from config.json "general", so the compilation is
+# exactly as clean as a VOD and there is one place to tune them.
+CENSOR_KEYS = ("censor_model", "censor_device", "censor_bleep_method",
+               "censor_custom_words", "censor_padding_ms",
+               "censor_mute_whole_segment")
+
+# Matches CENSOR_SCOPES in utils/clip_queue.py. Kept here rather than
+# imported so building a compilation does not pull in the whole clip
+# queue, and so a scope name it does not know fails CLOSED (all).
+SCOPES = {"all": (), "slurs": ("hate_speech",)}
 
 
 def load_settings(config_path: str) -> dict:
@@ -122,7 +151,26 @@ def load_settings(config_path: str) -> dict:
     settings.update({key: value for key, value in
                      (raw.get("compilation") or {}).items()
                      if not key.startswith("_")})
+    general = raw.get("general") or {}
+    settings["_general"] = {key: general[key] for key in CENSOR_KEYS
+                            if key in general}
     return settings
+
+
+def censor_scope(settings: dict):
+    """Categories to mute, () for all of them, or None when it is off.
+
+    True means "all" (the old spelling elsewhere in this project); an
+    unknown name also means all - a typo should over-censor and be
+    noticed, not quietly let a slur through to YouTube.
+    """
+    wanted = settings.get("censor", "all")
+    if wanted is False or wanted is None or str(wanted).strip().lower() in (
+            "false", "off", "none", "no", "0", ""):
+        return None
+    if wanted is True:
+        return ()
+    return SCOPES.get(str(wanted).strip().lower(), ())
 
 
 def _resolve(path: str) -> str:
@@ -482,10 +530,36 @@ def length_label(seconds: float) -> str:
     return "1 Hour" if whole == 1 else f"{whole} Hours"
 
 
+def _text_cleaner():
+    """safe_text.clean - the filter the clip titles already go through.
+
+    Imported here because it lives in the autoreel package one folder up.
+    Raises if it cannot be loaded: an unfiltered title on YouTube is not
+    a fallback worth having.
+    """
+    root = os.path.dirname(HERE)
+    if root not in sys.path:
+        sys.path.insert(0, root)
+    from autoreel.safe_text import clean
+
+    return clean
+
+
+def safe(text: str, settings: dict) -> str:
+    """`text` as YouTube should see it: swears starred, slurs removed."""
+    if censor_scope(settings) is None or not text:
+        return text
+    return _text_cleaner()(text)
+
+
 def make_title(series: str, number: int, seconds: float,
                settings: dict) -> str:
     title = settings["title_format"].format(
-        length=length_label(seconds), series=series, number=number)
+        length=length_label(seconds),
+        # A series name that is nothing but a slur cleans to "" - it is
+        # filed under the catch-all label rather than left as it was.
+        series=safe(series, settings) or settings["mixed_series_label"],
+        number=number)
     return title[:100]
 
 
@@ -496,12 +570,14 @@ def timestamp(seconds: float, long_form: bool) -> str:
     return f"{h}:{m:02d}:{s:02d}" if long_form else f"{m:02d}:{s:02d}"
 
 
-def chapters(videos: List[Video], durations: List[float]) -> str:
+def chapters(videos: List[Video], durations: List[float],
+             settings: Optional[dict] = None) -> str:
     """YouTube chapter lines: the first at zero, one per source video."""
     long_form = sum(durations) >= 3600
     lines, at = [], 0.0
-    for video, length in zip(videos, durations):
-        lines.append(f"{timestamp(at, long_form)} {video.title}")
+    for index, (video, length) in enumerate(zip(videos, durations), 1):
+        name = safe(video.title, settings) if settings else video.title
+        lines.append(f"{timestamp(at, long_form)} {name or f'Part {index}'}")
         at += length
     return "\n".join(lines)
 
@@ -509,6 +585,7 @@ def chapters(videos: List[Video], durations: List[float]) -> str:
 def make_description(series: str, length: str, videos: List[Video],
                      durations: List[float], settings: dict) -> str:
     credit = settings["credit_name"]
+    series = safe(series, settings) or settings["mixed_series_label"]
     parts = [
         f"{length} of {series}, back to back.",
         "",
@@ -516,11 +593,12 @@ def make_description(series: str, length: str, videos: List[Video],
         f"{settings['credit_url']}",
         "",
         "Chapters",
-        chapters(videos, durations),
+        chapters(videos, durations, settings),
         "",
         "Originals",
     ]
-    parts += [f"- {v.title}: https://youtu.be/{v.id}" for v in videos]
+    parts += [f"- {safe(v.title, settings) or 'Original'}: "
+              f"https://youtu.be/{v.id}" for v in videos]
     parts += ["", "#stackswopo #gta #gtarp #fivem"]
     text = "\n".join(parts)
     # YouTube's limit is 5000; the originals list is what gets cut.
@@ -842,20 +920,68 @@ def plan(settings: dict, ledger: Ledger, only_series: str = "") -> tuple:
     return choose(videos, ledger, settings, only_series)
 
 
+def censor(source: str, folder: str, settings: dict) -> str:
+    """The censored copy of `source` (or `source` itself if it is clean).
+
+    Same engine and settings as the stream VODs. Any failure is raised,
+    never swallowed: the caller stops rather than upload this video to
+    YouTube with its audio untouched.
+    """
+    scope = censor_scope(settings)
+    if scope is None:
+        return source
+    general = settings.get("_general") or {}
+    from utils.censor import censor_video
+
+    result = censor_video(
+        source, folder,
+        model_name=general.get("censor_model", "base"),
+        bleep_method=general.get("censor_bleep_method", "silence"),
+        custom_words=tuple(general.get("censor_custom_words", ()) or ()),
+        device=general.get("censor_device") or None,
+        padding_ms=int(general.get("censor_padding_ms", 250)),
+        mute_whole_segment=bool(general.get("censor_mute_whole_segment",
+                                            True)),
+        only_categories=tuple(scope),
+    )
+    path = result.output_path
+    if not path or not os.path.isfile(path):
+        raise RuntimeError(f"the censor produced no file for {source}")
+    if result.was_censored:
+        words = result.censored_words or []
+        _say(f"  Censor: muted {len(words)} word(s).")
+    else:
+        _say("  Censor: nothing to mute.")
+    return path
+
+
 def build(series: str, picks: List[Video], settings: dict,
           ledger: Ledger, work: str) -> dict:
     os.makedirs(work, exist_ok=True)
     encoder = pick_encoder(settings.get("encoder", "auto"))
     _say(f"Encoder: {encoder}")
+    scope = censor_scope(settings)
+    if scope is None:
+        _say("Censor: OFF (compilation.censor is false) - this goes to "
+             "YouTube exactly as downloaded.")
+    else:
+        _say(f"Censor: {'everything' if not scope else 'slurs only'} "
+             f"(compilation.censor)")
+        # Fail before downloading two hours of video, not after.
+        _text_cleaner()
+        from utils.censor import censor_video  # noqa: F401
     segments, durations = [], []
     for index, video in enumerate(picks, 1):
         _say(f"[{index}/{len(picks)}] {video.title} "
              f"({timestamp(video.duration, video.duration >= 3600)})")
         source = download(video, os.path.join(work, "downloads"), settings)
+        cleaned = censor(source, os.path.join(work, "censor"), settings)
         segment = os.path.join(work, f"part{index:02d}.mp4")
-        normalize(source, segment, settings, encoder)
-        # The download is not needed once its normalised copy exists.
+        normalize(cleaned, segment, settings, encoder)
+        # Neither the download nor its censored copy is needed once the
+        # normalised part exists.
         os.remove(source)
+        shutil.rmtree(os.path.join(work, "censor"), ignore_errors=True)
         segments.append(segment)
         durations.append(probe_duration(segment))
 
@@ -879,6 +1005,9 @@ def build(series: str, picks: List[Video], settings: dict,
         "tags": list(settings["tags"]),
         "thumbnail": make_thumbnail(picks, final, total, work),
         "videos": [vars(v) for v in picks],
+        # Recorded so a file built before censoring existed (or with it
+        # off) is never uploaded from pending.json once it is on.
+        "censor": "off" if scope is None else (",".join(scope) or "all"),
     }
     with open(os.path.join(work, PENDING), "w", encoding="utf-8") as handle:
         json.dump(job, handle, indent=2, ensure_ascii=False)
@@ -957,7 +1086,12 @@ def run_once(argv: Optional[list] = None) -> int:
     if os.path.isfile(pending) and not args.plan:
         with open(pending, "r", encoding="utf-8") as handle:
             job = json.load(handle)
-        if os.path.isfile(job.get("final", "")):
+        stale = (censor_scope(settings) is not None
+                 and job.get("censor") in (None, "off"))
+        if stale and os.path.isfile(job.get("final", "")):
+            _say(f"\"{job['title']}\" from last time was built without "
+                 f"the censor - building a clean one instead.")
+        elif os.path.isfile(job.get("final", "")):
             _say(f"Found \"{job['title']}\" from last time, not uploaded yet.")
             if args.no_upload:
                 return 0
