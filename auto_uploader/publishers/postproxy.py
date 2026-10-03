@@ -270,13 +270,15 @@ class PostproxyPublisher:
 
         shorts = YouTubeShortsPublisher(self._cfg)
         title = shorts.title_for(caption, video_path)[:YOUTUBE_TITLE_MAX]
+        # No made_for_kids: a multipart form can only carry text, and
+        # Postproxy answered "false" with HTTP 422 "must be a boolean".
+        # Left out, the upload is not marked made for kids.
         return [
             ("post[body]", fit_caption(shorts.description_for(caption),
                                        CAPTION_LIMITS["youtube"])),
             ("platforms[youtube][title]", title),
             ("platforms[youtube][privacy_status]", self._youtube_privacy),
             ("platforms[youtube][category_id]", self._youtube_category),
-            ("platforms[youtube][made_for_kids]", "false"),
         ]
 
     def _create(self, video_path: str, caption: str,

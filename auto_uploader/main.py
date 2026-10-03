@@ -2687,7 +2687,8 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
             for what, path in (("thumbnail_logo", cfg.general.thumbnail_logo),
                                ("thumbnail_sticker",
                                 getattr(cfg.general, "thumbnail_sticker", ""))):
-                if path and not os.path.isfile(path):
+                # Clips get neither, so saying one is missing is noise.
+                if path and not is_clip and not os.path.isfile(path):
                     print(f"[Thumbnail] {what} is set but there is no file "
                           f"at {path} - the thumbnail goes without it.")
             try:

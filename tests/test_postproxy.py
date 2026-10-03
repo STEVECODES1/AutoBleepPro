@@ -275,3 +275,17 @@ def test_the_publisher_is_what_the_queue_builds():
         assert ROUTE_BASE[route] == ROUTES[route][1]
     for gone in ("upload_post", "postplanify", "postproxy"):
         assert _publisher_for(gone, {}) is None
+
+
+def test_no_text_where_postproxy_wants_a_boolean(pp, monkeypatch):
+    """A real Short failed: HTTP 422 "made_for_kids on youtube must be a
+    boolean (true/false), got string" - a multipart form carries text."""
+    postproxy, clip = pp
+    http = FakeHTTP(created=_created(("youtube", "published", {})))
+    monkeypatch.setattr(postproxy, "requests", http)
+
+    postproxy.PostproxyPublisher({}, "postproxy_youtube").post_clip(clip, "a")
+
+    fields = http.posts[0]["fields"]
+    assert not any(value in ("true", "false") for value in fields.values()
+                   if isinstance(value, str))
