@@ -8,6 +8,7 @@ refresh token in `youtube_token.json` keeps you logged in automatically.
 """
 
 import os
+import time
 from typing import Callable, Optional
 
 from google.auth.transport.requests import Request
@@ -35,6 +36,29 @@ SCOPES = [
     "https://www.googleapis.com/auth/youtube.force-ssl",
 ]
 
+
+
+# A dropped connection is resumed from where YouTube says it got to,
+# not restarted. CHUNK_RETRIES is the client library's own quick retry of
+# one chunk; MAX_RESUMES the longer waits on top for a line that is down
+# for a minute or two (a VPN reconnecting, Wi-Fi dropping).
+CHUNK_RETRIES = 3
+MAX_RESUMES = 8
+RESUME_WAITS = (10, 20, 30, 60, 60, 120, 120, 180)
+def _network_errors() -> tuple:
+    import ssl
+
+    errors = [ConnectionError, TimeoutError, ssl.SSLError]
+    try:
+        import httplib2
+
+        errors.append(httplib2.HttpLib2Error)
+    except ImportError:
+        pass
+    return tuple(errors)
+
+
+RESUMABLE_ERRORS = _network_errors()
 
 def needs_reauth(token_path: str) -> bool:
     """True when the saved token predates a scope this code now needs.
@@ -216,9 +240,28 @@ class YouTubeUploader:
         request = service.videos().insert(part="snippet,status", body=body, media_body=media)
 
         response = None
+        drops = 0
         try:
             while response is None:
-                status, response = request.next_chunk()
+                try:
+                    status, response = request.next_chunk(
+                        num_retries=CHUNK_RETRIES)
+                except RESUMABLE_ERRORS as exc:
+                    # The connection dropped mid-upload ([Errno 10053] at
+                    # 98% of a 5.3 GB stream, in a real run). The same
+                    # request object asks YouTube how much it already has
+                    # and carries on from there. Raising instead sent the
+                    # whole file again from 0% - and left the broken
+                    # upload behind on the channel.
+                    drops += 1
+                    if drops > MAX_RESUMES:
+                        raise
+                    wait = RESUME_WAITS[min(drops, len(RESUME_WAITS)) - 1]
+                    print(f"\n[YouTube] Connection dropped ({exc}). Resuming "
+                          f"where it stopped in {wait}s "
+                          f"({drops}/{MAX_RESUMES})...")
+                    time.sleep(wait)
+                    continue
                 if status and progress_callback:
                     progress_callback(int(status.progress() * 100))
         except HttpError as exc:
