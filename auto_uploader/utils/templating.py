@@ -302,6 +302,12 @@ def build_title(stream_title: str, date_str: str, title_format: str) -> str:
     the end, on a title that was nothing but the raw stream name.
     """
     stream_title = strip_trailing_stamp(stream_title)
+    # The format supplies its own quotes. A name that arrived carrying one
+    # - a stream titled '7 DAYS ON YT"' - came out '"7 DAYS ON YT""'.
+    # Only when the format quotes the name itself; a name whose own quotes
+    # ARE the styling ("'Culture' - ...") keeps them.
+    if re.search(r"""["\u201c]\{title\}["\u201d]""", title_format or ""):
+        stream_title = stream_title.strip().strip('"\u201c\u201d').strip()
     title = _fill(title_format, stream_title, date_str)
     if len(title) <= MAX_TITLE_CHARS:
         return _tidy(title, stream_title, date_str)
@@ -333,3 +339,37 @@ def build_description(template: str, date_str: str, stream_title: str) -> str:
         # YouTube hard-caps descriptions at 5000 characters.
         description = description[:5000]
     return description
+
+
+# Hashtags that describe a full replay - wrong on a clip.
+_REPLAY_TAGS = ("#StreamReplay", "#FullVOD", "#UncutReplay")
+
+
+def build_clip_description(template: str, source_title: str,
+                           source_date: str) -> str:
+    """A clip's description: which stream it came from, then the links.
+
+    The stream template reads "This stream first aired on <date> with the
+    title <title>" and "This is a replay of one of my own past streams",
+    and a clip was filled into it as if it were one - a Rumble clip read
+    'This stream first aired on 10/2/26 with the title "You're the roblox
+    guy, ain't no way"': its own topic line and the day it was posted,
+    not the stream it was cut from. The links and tags are kept; the
+    replay wording is not.
+    """
+    head = (f'Clip from the "{source_title}" stream ({source_date}) '
+            f"on the Stackswopo channel.") if source_title else \
+        "Clip from a Stackswopo stream."
+    links, tags = [], ""
+    for line in (template or "").splitlines():
+        if line.strip().lower().startswith("tags:"):
+            tags = " ".join(w for w in line.split() if w not in _REPLAY_TAGS)
+        elif "http" in line or "@" in line:
+            links.append(line)
+    parts = [head]
+    if links:
+        parts.append("\n".join(links))
+    parts.append("Watch the full stream on the channel.")
+    if tags:
+        parts.append(tags)
+    return "\n\n".join(parts)[:5000]

@@ -978,6 +978,39 @@ def _autoclip_one(cfg) -> int:
     return delivered
 
 
+def _clip_source_path(clip_path: str) -> str:
+    return os.path.splitext(clip_path)[0] + "_source.json"
+
+
+def _write_clip_source(clip_path: str, run, cfg) -> None:
+    """Note, beside a delivered clip, which stream it was cut from."""
+    source = getattr(run, "source_path", "") or ""
+    title = getattr(run, "source_title", "") or ""
+    if not source and not title:
+        return
+    from utils.templating import strip_trailing_stamp
+
+    when = extract_date_from_filename(os.path.basename(source)) if source else None
+    if when is None and source and os.path.exists(source):
+        when = datetime.fromtimestamp(os.path.getmtime(source))
+    try:
+        with open(_clip_source_path(clip_path), "w", encoding="utf-8") as f:
+            json.dump({"stream_title": strip_trailing_stamp(title).strip().strip('"\''),
+                       "stream_date": format_date(when, cfg.general.date_style)
+                       if when else ""}, f)
+    except OSError:
+        pass
+
+
+def _clip_source(clip_path: str) -> dict:
+    try:
+        with open(_clip_source_path(clip_path), encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
 def _deliver_clips(run, cfg) -> int:
     """Move rendered clips into the watch folder. Returns how many.
 
@@ -1007,6 +1040,7 @@ def _deliver_clips(run, cfg) -> int:
                 with open(os.path.splitext(target)[0] + ".txt", "w",
                           encoding="utf-8") as f:
                     f.write(headline + "\n")
+            _write_clip_source(target, run, cfg)
             moved += 1
         except OSError as exc:
             print(f"[Clips] could not deliver {os.path.basename(source)}: {exc}")
@@ -2187,6 +2221,16 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
     yt_description = build_description(cfg.youtube.description_template, date_str, stream_title)
     rb_title = build_title(stream_title, date_str, rb_format)
     rb_description = build_description(cfg.rumble.description_template, date_str, stream_title)
+    if is_clip:
+        from utils.templating import build_clip_description
+
+        origin = _clip_source(video_path)
+        yt_description = build_clip_description(
+            cfg.youtube.description_template,
+            origin.get("stream_title", ""), origin.get("stream_date", ""))
+        rb_description = build_clip_description(
+            cfg.rumble.description_template,
+            origin.get("stream_title", ""), origin.get("stream_date", ""))
 
     print(f"\n{'='*70}\nProcessing: {filename}")
     print(f"YouTube title: {yt_title}")

@@ -40,6 +40,9 @@ class ClipRun:
     caption_paths: list   # the .txt written beside each clip
     output_dir: str
     skipped_reason: str = ""
+    # The stream these were cut from - named in each clip's description.
+    source_path: str = ""
+    source_title: str = ""
 
 
 def _is_placeholder(title: str, default_title: str) -> bool:
@@ -511,7 +514,8 @@ def make_clips(cfg, source_path: str, title: str,
 
     if notify and results:
         _notify(results, output_dir)
-    return ClipRun(results, caption_paths, output_dir)
+    return ClipRun(results, caption_paths, output_dir,
+                   source_path=source_path, source_title=title)
 
 
 def _encoder_for(speed: dict) -> str:
