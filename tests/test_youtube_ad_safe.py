@@ -76,3 +76,12 @@ def test_the_youtube_title_is_cleaned_and_rumbles_is_not_touched():
     assert main.youtube_safe_title("KAI CENAT ALLEGATIONS") == \
         "KAI CENAT ALLEGATIONS"
     assert main.youtube_safe_title("DAMN") == "DAMN"
+
+
+def test_spicy_is_not_a_slur():
+    """A real stream: "spicy x2" under HIGH RISK hate speech, muted."""
+    engine = ComplianceEngine(only_categories=("hate_speech",))
+    for word in ("spicy", "spices", "spiced", "tardy"):
+        assert engine._flag_reason(word) is None, word
+    for word in ("spic", "spics", "tards", "nigga"):
+        assert engine._flag_reason(word) == "hate_speech", word

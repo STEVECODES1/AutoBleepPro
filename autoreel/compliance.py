@@ -89,6 +89,14 @@ MILD_WORDS: tuple = ("hell", "damn", "damned", "dammit", "crap", "god",
                      "stupid", "idiot", "dumb", "shut", "dang", "darn",
                      "shoot", "heck", "gosh")
 
+# Ordinary words a slur pattern catches through an inflection: "spic"+"y"
+# is "spicy", "tard"+"y" is "tardy". A real stream muted "spicy" twice and
+# listed it under HIGH RISK hate speech.
+NOT_SLURS = frozenset({
+    "spicy", "spicier", "spiciest", "spices", "spiced", "spicer",
+    "tardy", "tardies",
+})
+
 # Categories serious enough that muting the single word isn't enough - the
 # sentence around it usually carries the same meaning, so the whole
 # segment goes. YouTube acts on context, not just the audible word.
@@ -244,7 +252,8 @@ class ComplianceEngine:
             # it exists to catch.
             for category in HIGH_SEVERITY_CATEGORIES:
                 pattern = self._patterns.get(category)
-                if pattern and pattern.search(candidate):
+                if (pattern and candidate not in NOT_SLURS
+                        and pattern.search(candidate)):
                     return category
 
             if self._custom and self._custom.search(candidate):
