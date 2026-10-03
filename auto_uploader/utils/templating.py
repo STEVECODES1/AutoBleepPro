@@ -212,7 +212,8 @@ _NAME_NOISE = (
 )
 
 
-def title_from_plain_filename(filename: str) -> Optional[str]:
+def title_from_plain_filename(filename: str,
+                              channel_prefixes=()) -> Optional[str]:
     """The filename itself, when a PERSON clearly typed it.
 
     extract_title_from_filename only answers when it finds a pattern - a
@@ -231,6 +232,17 @@ def title_from_plain_filename(filename: str) -> Optional[str]:
     for pattern in _NAME_NOISE:
         name = pattern.sub(" ", name)
     name = _collapse_spaces(name).strip(" -.")
+    # "I DONT BELONG HERE Stackswopo Stream.mp4" - a file saved under the
+    # published name. The title format adds "Stackswopo Stream" itself,
+    # so leaving it in made '"I DONT BELONG HERE Stackswopo Stream" 10/3/26
+    # Stackswopo Stream'.
+    for prefix in sorted(channel_prefixes or (), key=len, reverse=True):
+        tail = re.compile(rf"\s+{re.escape(prefix)}(?:\s+full)?\s+stream$",
+                          re.I)
+        stripped = tail.sub("", name).strip(" -.")
+        if stripped != name and stripped:
+            name = stripped
+            break
     if not name:
         return None
 

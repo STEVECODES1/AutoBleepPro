@@ -13,6 +13,7 @@ to YouTube and creating a real duplicate video.
 
 import hashlib
 import json
+import re
 import time
 import threading
 import os
@@ -28,6 +29,30 @@ def hash_file(path: str, chunk_size: int = 8 * 1024 * 1024) -> str:
         while chunk := f.read(chunk_size):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+# Words every generated title carries, so they say nothing about WHICH
+# stream it is.
+_TITLE_FILLER = {"stream", "full", "vod", "replay", "stackswopo"}
+_DATE = re.compile(r"\b\d{1,2}[/.-]\d{1,2}[/.-]\d{2,4}\b|\b\d{5,8}\b")
+
+
+def title_core(title: str, filler=()) -> str:
+    """What is left of a generated title once the date, quotes and the
+    channel's own words come out: '"*I DONT BELONG HERE*" 10/2/26
+    Stackswopo Stream' and '"I DONT BELONG HERE Stackswopo Stream"
+    10/3/26 Stackswopo Stream' are both 'i dont belong here'."""
+    text = _DATE.sub(" ", (title or "").lower())
+    drop = _TITLE_FILLER | {f.lower() for f in filler or ()}
+    words = [w for w in re.findall(r"[a-z0-9']+", text)
+             if w.replace("'", "") and w not in drop]
+    return " ".join(w.replace("'", "") for w in words)
+
+
+# A core this short could be anybody's stream ("gta rp", "chill").
+MIN_CORE_WORDS = 3
+# Same core inside this window is the same stream, not a repeat title.
+SAME_STREAM_DAYS = 14
 
 
 def _is_success(result: Optional[str]) -> bool:
@@ -118,6 +143,7 @@ class DuplicateChecker:
         record["results"][platform] = result
         if title:
             record.setdefault("titles", {})[platform] = title
+        record.setdefault("recorded_at", {})[platform] = time.time()
         self._save()
 
     def find_platform_title(self, platform: str, title: str):
@@ -129,6 +155,37 @@ class DuplicateChecker:
                 record.get("results", {}).get(platform)
             ):
                 return record["results"][platform]
+        return None
+
+    def find_platform_title_like(self, platform: str, title: str,
+                                 filler=(), now: Optional[float] = None):
+        """URL of a SUCCESSFUL upload to `platform` whose title is the same
+        stream under different dressing, or None.
+
+        A stream downloaded again from the channel gets a new file (new
+        hash), a new date and a slightly different name - and the exact
+        title match above missed it, so Rumble got the same 3-hour stream
+        twice. Rumble has no feed and refuses a scripted look at the
+        channel page, so this history is all its dedup has.
+
+        Only for a distinctive title (MIN_CORE_WORDS) and, where the
+        record says when it was made, within SAME_STREAM_DAYS.
+        """
+        core = title_core(title, filler)
+        if len(core.split()) < MIN_CORE_WORDS:
+            return None
+        now = time.time() if now is None else now
+        for record in self._seen.values():
+            result = record.get("results", {}).get(platform)
+            if not _is_success(result):
+                continue
+            if title_core(record.get("titles", {}).get(platform, ""),
+                          filler) != core:
+                continue
+            when = (record.get("recorded_at") or {}).get(platform)
+            if when and now - float(when) > SAME_STREAM_DAYS * 86400:
+                continue
+            return result
         return None
 
     def find_hashes_by_filename(self, filename: str) -> list:

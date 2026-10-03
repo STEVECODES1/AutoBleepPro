@@ -2015,7 +2015,8 @@ def get_stream_title(video_path: str, cli_title: str, cfg, allow_prompt: bool = 
     # check above declined it - and the stream went up called "Gaming
     # Stream" while its real title sat in the filename. Asked for
     # directly, and rightly.
-    plain = title_from_plain_filename(os.path.basename(video_path))
+    plain = title_from_plain_filename(os.path.basename(video_path),
+                                      cfg.general.filename_channel_prefixes)
     if plain:
         print(f"[TITLE] Using the filename as the title: {plain}")
         return plain
@@ -2351,6 +2352,12 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
               f"applies.")
     if not existing_rb and cfg.rumble.skip_if_exists and not generic:
         existing_rb = dup_checker.find_platform_title("rumble", rb_title)
+        if not existing_rb:
+            existing_rb = dup_checker.find_platform_title_like(
+                "rumble", rb_title, cfg.general.filename_channel_prefixes)
+            if existing_rb:
+                print(f"[Rumble] Already uploaded under a near-identical "
+                      f"title -> {existing_rb}. Skipping the upload.")
         # Recorded against THIS file below, like the other two matches. It
         # was the one match that was not, so a stream found this way never
         # counted as done: "'halfa mill' ... left in place (not every
