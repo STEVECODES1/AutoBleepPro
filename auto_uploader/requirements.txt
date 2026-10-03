@@ -101,3 +101,7 @@ yt-dlp[default,curl-cffi]
 # (COMPILE.bat's first run got the video and no audio). This is Deno as a
 # pip package, so no separate installer.
 deno
+
+# Claude (ANTHROPIC_API_KEY in .env) - for picking clips and thumbnails
+# when Gemini is overloaded. Optional: without a key it is never used.
+anthropic>=1.0

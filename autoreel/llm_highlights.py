@@ -61,7 +61,10 @@ DEFAULT_MODELS = {
     # PROVIDER_ORDER. Only a fallback; resolve_model still asks.
     GEMINI: "gemini-3.5-flash",
     OPENAI: "gpt-4o-mini",
-    ANTHROPIC: "claude-sonnet-5",
+    # Pinned (see _PINNED_MODEL_PROVIDERS): the catalogue also lists
+    # models priced well above this one, and an auto-pick could land on
+    # one. Pin clips.llm_model to change it.
+    ANTHROPIC: "claude-opus-5-5",
     CEREBRAS: "gpt-oss-120b",
     # The ':free' suffix is part of the id on this gateway, not a flag -
     # dropping it is a 404. This one is pinned rather than auto-picked
@@ -153,7 +156,10 @@ _KEY_NAMES = {
 # OpenRouter is text-only below for exactly the reason above.
 PROVIDER_ORDER = (GEMINI, NVIDIA, XKIRO, DEEPSEEK, OPENROUTER, CEREBRAS,
                   GROQ, OPENAI, ANTHROPIC)
-VISION_PROVIDERS = (GEMINI, NVIDIA, XKIRO)
+# Claude reads frames too, and is the reliable one when Gemini is
+# answering 503 "high demand" - it is paid, so it is tried after the free
+# ones unless clips.llm_provider names it.
+VISION_PROVIDERS = (GEMINI, NVIDIA, XKIRO, ANTHROPIC)
 
 # The OpenAI-shaped providers, and where each one lives. Adding another
 # is a line here rather than a new branch in check().
@@ -562,7 +568,7 @@ def _list_models_openai_style(url: str, key: str) -> list:
 # best-sounding name off that list would 404 on a name the catalogue
 # had just offered. Which models a key can call is a fact about the
 # key, and the list does not carry it.
-_PINNED_MODEL_PROVIDERS = (XKIRO, NVIDIA, OPENROUTER)
+_PINNED_MODEL_PROVIDERS = (XKIRO, NVIDIA, OPENROUTER, ANTHROPIC)
 
 
 def resolve_model(provider: str, key: str, configured: str = "") -> str:
@@ -859,11 +865,9 @@ def check(provider: str = "", model: str = "") -> tuple:
     model = resolve_model(provider, key, model)
 
     if provider == ANTHROPIC:
-        data, error = _post_detailed(
-            "https://api.anthropic.com/v1/messages",
-            {"model": model, "max_tokens": 8,
-             "messages": [{"role": "user", "content": "Reply with: ok"}]},
-            {"x-api-key": key, "anthropic-version": "2023-06-01"})
+        text, why = _claude(key, model, "", "Reply with: ok", max_tokens=1024,
+                            effort="low")
+        data, error = ({"ok": text}, "") if text else (None, why)
     elif provider == GEMINI:
         url = (f"https://generativelanguage.googleapis.com/v1beta/models/"
                f"{model}:generateContent?key={key}")
@@ -1169,24 +1173,84 @@ def _ask_gemini_vision(key: str, model: str, parts: list) -> tuple:
         return "", f"reply had no text: {blocked}"
 
 
+def _claude(key: str, model: str, system: str, content,
+            max_tokens: int = 16000, effort: str = "medium") -> tuple:
+    """(reply_text, why_not) from Claude, through the Anthropic SDK.
+
+    This was a raw HTTP call that could not work on a current model: it
+    sent `temperature`, which current Claude models reject with a 400,
+    and read content[0], which is a thinking block now that thinking is
+    always on. The SDK also retries 429/5xx and dropped connections.
+
+    Server-side fallbacks are on: if Claude declines a request (a frame
+    from a stream can trip a safety classifier), the API re-runs it on a
+    fallback model in the same call instead of returning nothing.
+    """
+    try:
+        import anthropic
+    except ImportError:
+        return "", ("the anthropic package is not installed - run: "
+                    "pip install anthropic")
+    client = anthropic.Anthropic(api_key=key, max_retries=3,
+                                 timeout=_VISION_TIMEOUT)
+    kwargs = {"system": system} if system else {}
+    try:
+        response = client.beta.messages.create(
+            model=model,
+            max_tokens=max_tokens,
+            messages=[{"role": "user", "content": content}],
+            output_config={"effort": effort},
+            betas=["server-side-fallback-2026-07-01"],
+            fallbacks="default",
+            **kwargs)
+    except anthropic.AuthenticationError:
+        return "", "ANTHROPIC_API_KEY was refused - check it in .env"
+    except anthropic.RateLimitError as exc:
+        return "", f"HTTP 429: {exc.message}"[:300]
+    except anthropic.APIStatusError as exc:
+        return "", f"HTTP {exc.status_code}: {exc.message}"[:300]
+    except anthropic.APIConnectionError as exc:
+        return "", f"could not reach Claude ({exc})"[:300]
+    if response.stop_reason == "refusal":
+        details = getattr(response, "stop_details", None)
+        category = getattr(details, "category", None) if details else None
+        return "", f"Claude declined ({category or 'no category'})"
+    text = "".join(block.text for block in response.content
+                   if getattr(block, "type", "") == "text").strip()
+    if not text:
+        return "", f"reply had no text (stop_reason {response.stop_reason})"
+    return text, ""
+
+
+def to_claude_content(parts: list) -> list:
+    """Gemini-style parts (text / inline_data) as Claude content blocks."""
+    blocks = []
+    for part in parts or ():
+        if "inline_data" in part:
+            data = part["inline_data"]
+            blocks.append({"type": "image", "source": {
+                "type": "base64",
+                "media_type": data.get("mime_type", "image/jpeg"),
+                "data": data.get("data", "")}})
+        elif part.get("text"):
+            blocks.append({"type": "text", "text": part["text"]})
+    return blocks
+
+
 def _ask_anthropic(key: str, model: str, prompt: str) -> str:
     """Claude. No JSON mode to ask for - parse_reply already copes with a
     fenced or bare reply, which is what it was written tolerant for."""
-    payload = {
-        "model": model,
-        "max_tokens": 4096,
-        "system": SYSTEM_PROMPT,
-        "messages": [{"role": "user", "content": prompt}],
-        "temperature": 0.4,
-    }
-    data = _post("https://api.anthropic.com/v1/messages", payload,
-                 {"x-api-key": key, "anthropic-version": "2023-06-01"})
-    if not isinstance(data, dict):
-        return ""
-    try:
-        return data["content"][0]["text"]
-    except (KeyError, IndexError, TypeError):
-        return ""
+    text, why = _claude(key, model, SYSTEM_PROMPT, prompt)
+    if why:
+        print(f"[Clips] Claude: {why}")
+    return text
+
+
+def _ask_anthropic_vision(key: str, model: str, parts: list) -> tuple:
+    """(reply_text, why_not): Claude, shown the frames."""
+    parts = thin_images(parts, images_allowed(ANTHROPIC))
+    return _claude(key, model, SYSTEM_PROMPT + VISION_NOTE,
+                   to_claude_content(parts))
 
 
 def asker_for(provider: str):
@@ -1556,7 +1620,8 @@ def vision_asker_for(provider: str):
     words - not that the pass has failed.
     """
     return {GEMINI: _ask_gemini_vision, XKIRO: _ask_xkiro_vision,
-            NVIDIA: _ask_nvidia_vision}.get(provider)
+            NVIDIA: _ask_nvidia_vision,
+            ANTHROPIC: _ask_anthropic_vision}.get(provider)
 
 
 def _ask_openai(key: str, model: str, prompt: str) -> str:

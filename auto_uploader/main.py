@@ -2331,9 +2331,12 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
                   f"that broke off ({existing_yt_match.upload_status}) - "
                   f"uploading again. Delete that one in Studio.")
             existing_yt_match = None
+            broken_attempt = True
+        else:
+            broken_attempt = False
         if existing_yt_match:
             existing_yt = existing_yt_match.url
-        else:
+        elif not broken_attempt:
             # Same date, different stream. Say so rather than skipping: two
             # streams on one day is normal, and a silent skip here means the
             # video simply never gets uploaded.
@@ -2690,7 +2693,9 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
                     logo_path=cfg.general.thumbnail_logo,
                     style="stream",
                     sticker_path=getattr(cfg.general, "thumbnail_sticker",
-                                         ""))
+                                         ""),
+                    provider=str((cfg.clips or {}).get("llm_provider", "")
+                                 or ""))
             except Exception as exc:
                 print(f"[Thumbnail] Could not generate one: {exc}")
                 made = ""

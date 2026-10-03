@@ -103,3 +103,7 @@ tqdm==4.66.4
 #     python -m yt_dlp --list-impersonate-targets
 # and says so if the list is empty or every target reads (unavailable),
 # which is exactly the state that breaks Kick.
+
+# Claude (ANTHROPIC_API_KEY in .env) - for picking clips and thumbnails
+# when Gemini is overloaded. Optional: without a key it is never used.
+anthropic>=1.0

@@ -238,11 +238,9 @@ def zoom_window(box: Optional[tuple], aspect: float = 16 / 9) -> tuple:
 
 
 def _choose(frames: list, ask=None, prompt_template: str = PROMPT,
-            want_box: bool = False):
+            want_box: bool = False, provider: str = ""):
     """Which frame (0-based), from a model. None when nobody answered.
     With `want_box`, (index, box) - box None when it was not given."""
-    from .llm_highlights import (ANTHROPIC, GEMINI, OPENAI, all_available,
-                                 api_key, available, resolve_model)
     from .vision_frames import as_inline_data
 
     if not frames:
@@ -252,17 +250,28 @@ def _choose(frames: list, ask=None, prompt_template: str = PROMPT,
     if ask is not None:
         raw = ask(prompt, frames)
     else:
-        # Gemini only: it is the one provider wired for images here, and
-        # a text-only model cannot answer a question about pictures. No
-        # answer is not a failure - the fallback frame is a fine picture.
-        key = api_key(GEMINI)
-        if not key:
-            return (None, None) if want_box else None
-        from .llm_highlights import _ask_gemini_vision
+        # Every configured model that can read pictures, the preferred
+        # one first - not Gemini alone. Gemini answering 503 "high
+        # demand" run after run meant every thumbnail was a fallback
+        # frame, whatever other keys were in .env.
+        from .llm_highlights import (VISION_PROVIDERS, all_available,
+                                     resolve_model, vision_asker_for)
 
         parts = [{"text": prompt}] + [as_inline_data(f) for f in frames]
-        raw, _why = _ask_gemini_vision(key, resolve_model(GEMINI, key, ""),
-                                       parts)
+        raw = ""
+        for name, key in all_available(provider):
+            asker = vision_asker_for(name) if name in VISION_PROVIDERS \
+                else None
+            if asker is None:
+                continue
+            try:
+                raw, why = asker(key, resolve_model(name, key, ""), parts)
+            except Exception as exc:
+                raw, why = "", str(exc)
+            if raw:
+                break
+            print(f"[Thumbnail] {name} could not pick a frame ({why}) - "
+                  f"trying the next one.")
 
     number = _read_number(raw, len(frames))
     index = None if number is None else number - 1
@@ -376,7 +385,8 @@ def stream_filters(window: tuple, brightness: Optional[float]) -> str:
 
 def make(clip_path: str, duration: float, out_path: str = "",
          ask=None, logo_path: str = "", grade: bool = True,
-         style: str = "clip", sticker_path: str = "") -> str:
+         style: str = "clip", sticker_path: str = "",
+         provider: str = "") -> str:
     """Write a thumbnail for this clip. "" when one cannot be made.
 
     Never raises and never blocks a post: a clip with no thumbnail is a
@@ -390,7 +400,7 @@ def make(clip_path: str, duration: float, out_path: str = "",
     out_path = out_path or os.path.splitext(clip_path)[0] + "_thumb.jpg"
     if style == "stream":
         return _make_stream(clip_path, duration, out_path, ask, logo_path,
-                            sticker_path)
+                            sticker_path, provider)
 
     marks = timestamps(duration)
     workspace = tempfile.mkdtemp(prefix="thumb_")
@@ -412,7 +422,7 @@ def make(clip_path: str, duration: float, out_path: str = "",
 
         picked = None
         try:
-            picked = _choose(frames, ask=ask)
+            picked = _choose(frames, ask=ask, provider=provider)
         except Exception:
             picked = None
 
@@ -431,7 +441,8 @@ def make(clip_path: str, duration: float, out_path: str = "",
 
 
 def _make_stream(source: str, duration: float, out_path: str, ask,
-                 logo_path: str, sticker_path: str) -> str:
+                 logo_path: str, sticker_path: str,
+                 provider: str = "") -> str:
     marks = timestamps(duration, STREAM_SAMPLES)
     workspace = tempfile.mkdtemp(prefix="thumb_")
     try:
@@ -458,7 +469,7 @@ def _make_stream(source: str, duration: float, out_path: str, ask,
         try:
             picked, box = _choose([data for _, data, _ in candidates],
                                   ask=ask, prompt_template=STREAM_PROMPT,
-                                  want_box=True)
+                                  want_box=True, provider=provider)
         except Exception:
             picked, box = None, None
         if picked is None or not 0 <= picked < len(candidates):

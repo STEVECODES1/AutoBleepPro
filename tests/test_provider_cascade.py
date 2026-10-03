@@ -154,26 +154,23 @@ def test_each_provider_has_its_own_caller():
 
 
 def test_anthropic_is_called_the_way_anthropic_expects(monkeypatch):
+    """Through the SDK now - see test_claude_provider.py for the call."""
     sent = {}
 
-    def note(url, payload, headers):
-        sent["url"] = url
-        sent["payload"] = payload
-        sent["headers"] = headers
-        return {"content": [{"text": GOOD}]}
+    def claude(key, model, system, content, **kwargs):
+        sent.update(key=key, model=model, system=system, content=content)
+        return GOOD, ""
 
-    monkeypatch.setattr(llm, "_post", note)
+    monkeypatch.setattr(llm, "_claude", claude)
 
-    assert llm._ask_anthropic("k", "claude-sonnet-5", "prompt") == GOOD
-    assert sent["url"].endswith("/v1/messages")
-    assert sent["headers"]["x-api-key"] == "k"
-    assert sent["headers"]["anthropic-version"]
-    assert sent["payload"]["max_tokens"] > 0
-    assert sent["payload"]["system"] == llm.SYSTEM_PROMPT
+    assert llm._ask_anthropic("k", "claude-opus-5-5", "prompt") == GOOD
+    assert sent["key"] == "k"
+    assert sent["system"] == llm.SYSTEM_PROMPT
+    assert sent["content"] == "prompt"
 
 
-def test_a_junk_response_from_anthropic_is_just_empty(monkeypatch):
-    monkeypatch.setattr(llm, "_post", lambda *a, **k: {"error": "nope"})
+def test_a_failed_anthropic_call_is_just_empty(monkeypatch):
+    monkeypatch.setattr(llm, "_claude", lambda *a, **k: ("", "HTTP 500"))
 
     assert llm._ask_anthropic("k", "m", "p") == ""
 
@@ -406,7 +403,8 @@ def test_only_vision_capable_providers_get_the_frames():
     words - it is not a failure."""
     assert llm.vision_asker_for(GEMINI) is llm._ask_gemini_vision
     assert llm.vision_asker_for(XKIRO) is llm._ask_xkiro_vision
-    for text_only in (CEREBRAS, OPENAI, ANTHROPIC):
+    assert llm.vision_asker_for(ANTHROPIC) is llm._ask_anthropic_vision
+    for text_only in (CEREBRAS, OPENAI):
         assert llm.vision_asker_for(text_only) is None
 
 
