@@ -2530,10 +2530,13 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
         whichever re-frame already exists - would hand Instagram the
         CENSORED copy on any run where another platform asked for one.
         """
-        source = video_path
-        if (cfg.instagram or {}).get("censor_uploads", False):
-            source = upload_path_for(True)
-        return vertical_path(source)
+        # Always the original. Every social route mutes its OWN copy in
+        # utils/clip_queue._censored_clip, by its own config block - so
+        # Instagram gets "slurs" while Shorts get "ad_safe". Handing over
+        # the stream-level censored copy here gave every social platform
+        # YouTube's muting on top of its own: a real Reel went up with
+        # almost no audio while the Rumble copy of it was fine.
+        return vertical_path(video_path)
 
     def upload_path_for(platform_wants_censoring: bool) -> str:
         if not (platform_wants_censoring and cfg.general.censor_before_upload):
@@ -2688,12 +2691,16 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
                     print(f"[Thumbnail] {what} is set but there is no file "
                           f"at {path} - the thumbnail goes without it.")
             try:
+                # A clip is 9:16: the stream style zooms to a 1280x720
+                # landscape picture, which Rumble showed as a band of
+                # video between two black bars in the Shorts grid. A
+                # clip gets a plain, graded, full-height frame instead.
                 made = autoreel_thumbnail.make(
                     video_path, duration, out_path=out_path,
-                    logo_path=cfg.general.thumbnail_logo,
-                    style="stream",
-                    sticker_path=getattr(cfg.general, "thumbnail_sticker",
-                                         ""),
+                    logo_path="" if is_clip else cfg.general.thumbnail_logo,
+                    style="clip" if is_clip else "stream",
+                    sticker_path="" if is_clip else getattr(
+                        cfg.general, "thumbnail_sticker", ""),
                     provider=str((cfg.clips or {}).get("llm_provider", "")
                                  or ""))
             except Exception as exc:

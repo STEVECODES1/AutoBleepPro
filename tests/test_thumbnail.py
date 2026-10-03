@@ -416,3 +416,16 @@ def test_a_rendered_clip_is_graded_too(tmp_path):
                          "fit", watermark=False)
 
     assert _mean_saturation(graded) > _mean_saturation(plain) * 1.15
+
+
+def test_a_clip_thumbnail_stays_vertical():
+    """The stream style is 1280x720. On a 9:16 clip Rumble showed it as a
+    band of video between two black bars in the Shorts grid."""
+    import inspect
+    import sys
+    sys.path.insert(0, os.path.join(_REPO, "auto_uploader"))
+    import main
+
+    body = inspect.getsource(main)
+    call = body[body.index("autoreel_thumbnail.make("):][:600]
+    assert 'style="clip" if is_clip else "stream"' in call

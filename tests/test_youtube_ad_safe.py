@@ -85,3 +85,45 @@ def test_spicy_is_not_a_slur():
         assert engine._flag_reason(word) is None, word
     for word in ("spic", "spics", "tards", "nigga"):
         assert engine._flag_reason(word) == "hate_speech", word
+
+
+def test_a_whole_sentence_mute_cannot_silence_a_whole_clip():
+    """A real Reel went up with almost no audio: Whisper returned 20-30s
+    "segments", and muting the whole segment around two slurs took most
+    of a 40 second clip."""
+    from autoreel.compliance import WHOLE_SEGMENT_REACH_S, Violation
+
+    engine = ComplianceEngine(mute_whole_segment=True, padding_ms=0)
+    slur = Violation(word="nigga", start=15.0, end=15.4,
+                     category="hate_speech",
+                     segment_start=0.0, segment_end=30.0)
+    spans = engine.mute_spans([slur], total_ms=40_000)
+
+    assert len(spans) == 1
+    start_ms, end_ms = spans[0][:2]
+    assert start_ms == int((15.0 - WHOLE_SEGMENT_REACH_S) * 1000)
+    assert end_ms == int((15.4 + WHOLE_SEGMENT_REACH_S) * 1000)
+    assert end_ms - start_ms < 6_000
+
+
+def test_a_short_sentence_is_still_muted_whole():
+    from autoreel.compliance import Violation
+
+    engine = ComplianceEngine(mute_whole_segment=True, padding_ms=0)
+    slur = Violation(word="nigga", start=5.0, end=5.4,
+                     category="hate_speech",
+                     segment_start=4.0, segment_end=7.0)
+    start_ms, end_ms = engine.mute_spans([slur], total_ms=40_000)[0][:2]
+    assert (start_ms, end_ms) == (4000, 7000)
+
+
+def test_instagram_gets_the_original_to_mute_by_its_own_rule():
+    """Not the stream's YouTube-censored copy on top of its own."""
+    import inspect
+    import main
+
+    body = inspect.getsource(main)
+    start = body.index("def instagram_clip_path")
+    func = body[start:body.index("\n    def ", start + 10)]
+    assert "upload_path_for(True)" not in func
+    assert "vertical_path(video_path)" in func

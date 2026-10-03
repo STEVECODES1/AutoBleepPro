@@ -164,12 +164,17 @@ def test_a_changed_setting_forces_a_real_re_render_with_different_audio(
     assert os.path.exists(first.output_path)
     assert os.path.exists(second.output_path)
 
-    # mute_whole_segment=True: the WHOLE 20s segment is silenced, second
-    # 2 included, nowhere near the flagged word at second 10.
-    wide_check = mean_db(first.output_path, 2.0, 3.0)
+    # mute_whole_segment=True: the sentence AROUND the word is silenced -
+    # second 8.5, well outside a word-level mute of the word at second 10 -
+    # but only within WHOLE_SEGMENT_REACH_S of it. A 20s Whisper
+    # "segment" muted whole silenced almost an entire real clip.
+    wide_check = mean_db(first.output_path, 8.0, 9.0)
     assert wide_check < -60, (
-        "mute_whole_segment=True should have silenced the whole segment, "
-        "including a second nowhere near the flagged word")
+        "mute_whole_segment=True should have silenced the speech around "
+        "the flagged word, not just the word")
+    far_check = mean_db(first.output_path, 2.0, 3.0)
+    assert far_check > -60, (
+        "a whole-sentence mute must not reach 8 seconds from the word")
 
     # mute_whole_segment=False: the SAME second is untouched now - this
     # is the actual bug proof. Before this fix, the second run would have

@@ -136,6 +136,10 @@ def _matcher(phrases):
 # slop, small enough that a neighbouring word stays intelligible.
 NEIGHBOUR_BLEED_MS = 120
 
+# How far a whole-sentence mute (mute_whole_segment) may reach either
+# side of the slur. About a short sentence's worth.
+WHOLE_SEGMENT_REACH_S = 2.5
+
 # No single mute may run longer than this.
 #
 # The point of the censor is to take the word and hand the audience the
@@ -376,8 +380,15 @@ class ComplianceEngine:
                              and violation.segment_start is not None
                              and violation.segment_end is not None)
             if whole_segment:
-                start = min(start, violation.segment_start)
-                end = max(end, violation.segment_end)
+                # The sentence around the slur - but never more than
+                # WHOLE_SEGMENT_REACH_S either side of it. A Whisper
+                # "segment" is not a sentence: fast, unpunctuated talk
+                # comes back as 20-30 seconds in one, and two slurs in a
+                # 40 second clip muted almost all of it.
+                start = min(start, max(violation.segment_start,
+                                       start - WHOLE_SEGMENT_REACH_S))
+                end = max(end, min(violation.segment_end,
+                                   end + WHOLE_SEGMENT_REACH_S))
 
             start_ms = int(start * 1000) - self.padding_ms
             end_ms = int(end * 1000) + self.padding_ms
