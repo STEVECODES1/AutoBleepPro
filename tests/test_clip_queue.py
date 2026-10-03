@@ -777,7 +777,7 @@ def test_a_begun_job_is_not_claimable(tmp_path):
 def _fanout_posting(posting):
     posting = dict(posting)
     posting["platforms"] = dict(posting["platforms"])
-    posting["platforms"]["postproxy"] = {
+    posting["platforms"]["postproxy_instagram"] = {
         "enabled": True, "daily_cap": 50, "min_minutes_between": 20}
     return posting
 
@@ -807,15 +807,15 @@ def test_a_clip_postproxy_is_holding_is_not_posted_directly(
     from publish_guard import PublishGuard
 
     posting = _fanout_posting(posting)
-    publisher._remember_reach(posting, "postproxy", {"instagram", "tiktok"})
+    publisher._remember_reach(posting, "postproxy_instagram", {"instagram", "tiktok"})
     PublishGuard(posting, posting["state_path"]).record_result(
-        "postproxy", True)                      # just posted another clip
+        "postproxy_instagram", True)                      # just posted another clip
     calls = _record_publish(publisher, monkeypatch)
 
     outcome = publisher.offer(posting, CONFIG, clips[0],
-                              platforms=("postproxy", "instagram"))
+                              platforms=("postproxy_instagram", "instagram"))
 
-    assert outcome["postproxy"] == "queued"
+    assert outcome["postproxy_instagram"] == "queued"
     assert outcome["instagram"].startswith("skipped: sent by postproxy")
     assert calls == []
 
@@ -846,15 +846,15 @@ def test_a_clip_that_comes_back_is_not_posted_where_postproxy_sent_it(
     posting = _fanout_posting(posting)
     posting["platforms"]["instagram"]["min_minutes_between"] = 0
     queue = JobQueue(path=posting["queue_path"])
-    done = queue.begin("postproxy", clips[0])
+    done = queue.begin("postproxy_instagram", clips[0])
     queue.complete(done)
     publisher._record_reached(queue, done, {"instagram", "tiktok"})
     calls = _record_publish(publisher, monkeypatch)
 
     outcome = publisher.offer(posting, CONFIG, clips[0],
-                              platforms=("postproxy", "instagram"))
+                              platforms=("postproxy_instagram", "instagram"))
 
-    assert outcome["postproxy"] == "skipped: already posted"
+    assert outcome["postproxy_instagram"] == "skipped: already posted"
     assert outcome["instagram"].startswith("skipped: sent by postproxy")
     assert calls == []
 
@@ -868,19 +868,19 @@ def test_what_postproxy_reached_is_not_posted_again_directly(
 
     def publish(platform, path, caption, config, dry_run=False, detail=None):
         calls.append(platform)
-        if detail is not None and platform == "postproxy":
-            detail["covers"] = {"instagram", "tiktok"}
+        if detail is not None and platform == "postproxy_instagram":
+            detail["covers"] = {"instagram"}
         return True
 
     monkeypatch.setattr(publisher, "publish", publish)
     monkeypatch.setattr(publisher, "_publisher", lambda p, c: _Ready())
 
     outcome = publisher.offer(posting, CONFIG, clips[0],
-                              platforms=("postproxy", "instagram"))
+                              platforms=("postproxy_instagram", "instagram"))
 
-    assert outcome["postproxy"] == "posted"
-    assert outcome["instagram"] == "skipped: sent by postproxy"
-    assert calls == ["postproxy"]
+    assert outcome["postproxy_instagram"] == "posted"
+    assert outcome["instagram"] == "skipped: sent by postproxy_instagram"
+    assert calls == ["postproxy_instagram"]
 
 
 def test_instagram_still_posts_when_postproxy_did_not_reach_it(
@@ -890,7 +890,7 @@ def test_instagram_still_posts_when_postproxy_did_not_reach_it(
 
     def publish(platform, path, caption, config, dry_run=False, detail=None):
         calls.append(platform)
-        if detail is not None and platform == "postproxy":
+        if detail is not None and platform == "postproxy_instagram":
             detail["covers"] = {"tiktok"}
         return True
 
@@ -898,9 +898,9 @@ def test_instagram_still_posts_when_postproxy_did_not_reach_it(
     monkeypatch.setattr(publisher, "_publisher", lambda p, c: _Ready())
 
     publisher.offer(posting, CONFIG, clips[0],
-                    platforms=("postproxy", "instagram"))
+                    platforms=("postproxy_instagram", "instagram"))
 
-    assert calls == ["postproxy", "instagram"]
+    assert calls == ["postproxy_instagram", "instagram"]
 
 
 def test_the_shorts_route_works_with_no_config_block(
@@ -931,11 +931,12 @@ def test_shorts_wait_while_youtube_is_blocking_uploads(
     calls = _record_publish(publisher, monkeypatch)
 
     outcome = publisher.offer(posting, config, clips[0],
-                              platforms=("postproxy", "postproxy_youtube"))
+                              platforms=("postproxy_tiktok",
+                                         "postproxy_youtube"))
 
     assert outcome["postproxy_youtube"] == "queued"
-    assert outcome["postproxy"] == "posted"
-    assert [c[0] for c in calls] == ["postproxy"]
+    assert outcome["postproxy_tiktok"] == "posted"
+    assert [c[0] for c in calls] == ["postproxy_tiktok"]
 
     # And the queue does not post it either while the block lasts.
     from job_queue import JobQueue
@@ -945,7 +946,7 @@ def test_shorts_wait_while_youtube_is_blocking_uploads(
         job.not_before = 0
     queue._save()
     publisher.drain(posting, config, quiet=True)
-    assert [c[0] for c in calls] == ["postproxy"]
+    assert [c[0] for c in calls] == ["postproxy_tiktok"]
 
 
 def test_shorts_go_once_the_block_has_passed(publisher, posting, clips,
@@ -968,12 +969,16 @@ def test_shorts_go_once_the_block_has_passed(publisher, posting, clips,
 def test_the_old_routes_are_gone():
     from utils import clip_queue
 
-    for gone in ("upload_post", "postplanify"):
+    for gone in ("upload_post", "postplanify", "postproxy"):
         assert gone not in clip_queue.CLIP_PLATFORMS
         assert gone not in clip_queue.FAN_OUT_ROUTES
-    assert clip_queue.CLIP_PLATFORMS[0] == "postproxy"
-    assert clip_queue.CENSOR_AUDIO_DEFAULTS["postproxy"] == "slurs"
-    assert clip_queue.CENSOR_AUDIO_DEFAULTS["postproxy_youtube"] == "slurs"
+    assert clip_queue.CLIP_PLATFORMS[0] == "postproxy_instagram"
+    # Postproxy routes run before the direct publishers they cover, and
+    # YouTube stays last.
+    order = clip_queue.CLIP_PLATFORMS
+    assert order.index("postproxy_instagram") < order.index("instagram")
+    assert order.index("postproxy_facebook") < order.index("facebook")
+    assert order[-2:] == ("postproxy_youtube", "youtube_shorts")
 
 
 # ── clips made mostly of slurs stay off the short-form platforms ────────────
@@ -1059,7 +1064,7 @@ def test_a_job_left_over_from_a_retired_route_is_dropped_not_failed(
     from job_queue import JobQueue
 
     queue = JobQueue(path=posting["queue_path"])
-    for route in ("upload_post", "postplanify"):
+    for route in ("upload_post", "postplanify", "postproxy"):
         queue.fail(queue.enqueue(route, clips[0]), "was waiting")
     for job in queue.list_jobs():
         job.not_before = 0
@@ -1072,3 +1077,118 @@ def test_a_job_left_over_from_a_retired_route_is_dropped_not_failed(
     jobs = JobQueue(path=posting["queue_path"]).list_jobs()
     assert all(job.state == "failed" and job.attempts == 1 and
                "no longer used" in job.last_error for job in jobs)
+
+
+# ── each platform gets its own caption ─────────────────────────────────────
+
+def test_each_postproxy_route_writes_its_own_platforms_caption(
+        publisher, clips):
+    """Postproxy sends one body to every platform in a post, so one post
+    to all of them gave TikTok the Instagram caption. Each route now
+    writes exactly what its platform's own block says."""
+    config = {"instagram": {"caption_template": "{title} IG {tags}"},
+              "tiktok": {"caption_template": "{title} TT {tags}"},
+              "x": {"caption_template": "{title} X {tags}"},
+              "facebook": {}, "clips": {}, "model_captions": False}
+
+    def cap(route):
+        return publisher.caption_for(route, clips[0], "", config)
+
+    assert cap("postproxy_instagram") == cap("instagram")
+    assert " IG " in cap("postproxy_instagram")
+    assert " TT " in cap("postproxy_tiktok")
+    assert " X " in cap("postproxy_x")
+    # Sized per platform: X rewards two tags, Instagram many more.
+    assert cap("postproxy_x").count("#") < cap("postproxy_instagram").count("#")
+
+
+def test_each_postproxy_route_follows_its_platforms_audio_rule(
+        publisher, tmp_path, monkeypatch):
+    seen = []
+
+    def censor(path, *a, **k):
+        seen.append(k.get("only_categories"))
+        return _Unchanged(path)
+
+    monkeypatch.setattr("utils.censor.censor_video", censor)
+    clip = tmp_path / "c.mp4"
+    clip.write_bytes(b"x")
+    config = {"tiktok": {"censor_uploads": False}}
+
+    assert publisher._censored_clip("postproxy_tiktok", str(clip),
+                                    config) == (str(clip), "")
+    assert seen == []
+    publisher._censored_clip("postproxy_youtube", str(clip), {})
+    assert len(seen) == 1
+
+
+# ── peak hours ─────────────────────────────────────────────────────────────
+
+def test_a_clip_ready_at_night_waits_for_the_morning(
+        publisher, posting, clips, monkeypatch):
+    import publish_guard
+
+    monkeypatch.setattr(publish_guard, "_local_hour", lambda now: 4.0)
+    calls = _record_publish(publisher, monkeypatch)
+
+    outcome = publisher.offer(posting, CONFIG, clips[0],
+                              platforms=("postproxy_tiktok",))
+
+    assert outcome["postproxy_tiktok"] == "queued"
+    assert calls == []
+    from job_queue import JobQueue
+
+    job = JobQueue(path=posting["queue_path"]).list_jobs()[0]
+    # Back at 10:00, six hours on.
+    assert abs(job.not_before - time.time() - 6 * 3600) < 120
+
+
+def test_waiting_for_the_window_does_not_let_instagram_post_it_directly(
+        publisher, posting, clips, monkeypatch):
+    """The first time postproxy_instagram ever waits there is no
+    remembered reach - and the direct Instagram publisher, which has no
+    window, posted the clip at once. Then Postproxy posted it again."""
+    import publish_guard
+
+    posting["platforms"]["instagram"]["min_minutes_between"] = 0
+    monkeypatch.setattr(publish_guard, "_local_hour", lambda now: 4.0)
+    calls = _record_publish(publisher, monkeypatch)
+
+    outcome = publisher.offer(posting, CONFIG, clips[0],
+                              platforms=("postproxy_instagram", "instagram"))
+
+    assert outcome["postproxy_instagram"] == "queued"
+    assert outcome["instagram"] == "skipped: sent by postproxy_instagram"
+    assert calls == []
+
+
+def test_a_config_block_keeps_the_window_unless_it_says_otherwise(posting):
+    import publish_guard
+
+    posting["platforms"]["postproxy_tiktok"] = {"daily_cap": 20}
+    guard = publish_guard.PublishGuard(posting, posting["state_path"])
+    settings = guard._platform_config("postproxy_tiktok")
+    assert settings["daily_cap"] == 20
+    assert settings["post_hours"] == publish_guard.PEAK_HOURS
+    assert settings["enabled"] is True
+
+    posting["platforms"]["postproxy_tiktok"] = {"post_hours": []}
+    assert not publish_guard.PublishGuard(
+        posting, posting["state_path"])._platform_config(
+            "postproxy_tiktok")["post_hours"]
+
+
+@pytest.mark.parametrize("window,hour,expected", [
+    ([10, 23], 12.0, 0.0),
+    ([10, 23], 9.5, 0.5),
+    ([10, 23], 23.0, 11.0),
+    ([18, 2], 1.0, 0.0),        # wraps midnight
+    ([18, 2], 3.0, 15.0),
+    ("nonsense", 3.0, 0.0),     # a typo is no window, not a dead platform
+])
+def test_hours_until_open(monkeypatch, window, hour, expected):
+    import publish_guard
+
+    monkeypatch.setattr(publish_guard, "_local_hour", lambda now: hour)
+    assert publish_guard.hours_until_open(window, 0) == pytest.approx(
+        expected)

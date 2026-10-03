@@ -43,32 +43,52 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # volume and repetition, and a channel is far harder to get back than a
 # post is to delete - so it posts only after the others have, and only
 # once its own guard, cap and spacing allow it.
-# The fan-out route FIRST, then the per-platform publishers.
+# The Postproxy routes FIRST, then the per-platform publishers.
 #
-# Order matters: postproxy runs first so that what it reaches can be
-# skipped below rather than posted twice. The direct instagram publisher
-# is then the fallback for a clip Postproxy did not get to Instagram.
+# Order matters: a Postproxy route runs first so that what it reaches can
+# be skipped below rather than posted twice. The direct instagram and
+# facebook publishers are then the fallback for a clip Postproxy did not
+# get there (that account not connected on Postproxy, or a failure).
 #
 # postproxy_youtube sits with YouTube at the end, for the reason above.
-CLIP_PLATFORMS = ("postproxy", "instagram", "facebook",
+CLIP_PLATFORMS = ("postproxy_instagram", "postproxy_tiktok",
+                  "postproxy_facebook", "postproxy_x",
+                  "instagram", "facebook",
                   "tiktok", "zernio_twitter", "zernio_tiktok",
                   "postproxy_youtube", "youtube_shorts")
 
-# The routes that reach several platforms in one call. What each one
+# Each Postproxy route posts to one platform, under the name the rest of
+# this file uses for it. Its caption, tags, promo line and audio rules
+# are that platform's - config.json's "tiktok" block is what TikTok gets,
+# whichever route carries it.
+ROUTE_BASE = {
+    "postproxy_instagram": "instagram",
+    "postproxy_tiktok": "tiktok",
+    "postproxy_facebook": "facebook",
+    "postproxy_x": "x",
+    "postproxy_youtube": "youtube_shorts",
+}
+
+# Routes whose result says which platforms they reached. What each one
 # actually reached is read back from its own result (platforms_reached)
 # and skipped for every route and publisher after it.
-FAN_OUT_ROUTES = ("postproxy", "postproxy_youtube")
+FAN_OUT_ROUTES = tuple(ROUTE_BASE)
 
 # Routes that upload to YouTube. They wait while YouTube is refusing
 # uploads on the main channel (see youtube_hold_s).
 YOUTUBE_ROUTES = ("youtube_shorts", "postproxy_youtube")
 
+
+def base_platform(platform: str) -> str:
+    """The platform a route posts to: postproxy_tiktok -> tiktok."""
+    return ROUTE_BASE.get(platform, platform)
+
+
 # Platforms whose CAPTION text goes through the profanity filter. Rumble
 # is deliberately absent - it is the uncensored channel, and the titles
 # there are the line actually spoken, which is the point.
 CLEAN_TEXT_PLATFORMS = ("instagram", "facebook", "tiktok", "x",
-                        "youtube_shorts", "zernio_twitter", "zernio_tiktok",
-                        "postproxy", "postproxy_youtube")
+                        "youtube_shorts", "zernio_twitter", "zernio_tiktok")
 
 # A blocked clip is worth keeping for about a day. Past that the stream it
 # came from is stale and posting it is worse than not.
@@ -112,7 +132,7 @@ def _reach_path(posting: dict) -> str:
 def remembered_reach(posting: dict, route: str) -> set:
     """Which platforms this fan-out route reached the last time it posted.
 
-    postproxy posts to whatever is connected on its side, which this
+    a fan-out route posts to whatever is connected on its side, which this
     project's config cannot see - so the only honest answer to "what will
     it cover when its wait is up" is what it covered last time.
     """
@@ -243,6 +263,9 @@ def _model_caption(platform: str, video_path: str, headline: str,
                                            write_captions)
     except Exception:
         return ""
+    # X's brief was written for the old Zernio route; it is X's all the
+    # same.
+    platform = {"x": "zernio_twitter"}.get(platform, platform)
     if platform not in PLATFORM_BRIEFS:
         return ""
 
@@ -348,6 +371,9 @@ def caption_for(platform: str, video_path: str, fallback: str,
     Pages is what looks automated.
     """
     from utils.social_promoter import build_caption, clip_title, hashtags_for
+
+    # A Postproxy route writes exactly what its platform would.
+    platform = base_platform(platform)
 
     # Every zernio_* destination shares one config block: they are one
     # service with several accounts, and a per-destination lookup would
@@ -469,12 +495,9 @@ CENSOR_AUDIO_DEFAULTS = {
     "facebook": "slurs",
     "zernio_twitter": "slurs",
     "zernio_tiktok": "slurs",
-    # postproxy is one upload reused for every connected account, so the
-    # audio decision is made once here and every platform it reaches
-    # inherits it. Missing from this table it would default to False -
-    # the original audio to Instagram and TikTok at once.
-    "postproxy": "slurs",
-    "postproxy_youtube": "slurs",
+    # X through Postproxy (postproxy_x). The Postproxy routes take their
+    # platform's entry here - see base_platform.
+    "x": "slurs",
     # tiktok (standalone, via tiktok_free/tiktok_api_client) is not wired
     # through the clip queue today, so this is kept only as the default a
     # caller reaches for by name when wiring it up. "slurs" here matches
@@ -514,6 +537,7 @@ def _censored_clip(platform: str, video_path: str, config: dict) -> tuple:
     Returns the original and "" whenever censoring is off, unavailable,
     or finds nothing, so this can never be the reason a clip fails.
     """
+    platform = base_platform(platform)
     settings = (config or {}).get(platform, {}) or {}
     wanted = settings.get("censor_uploads")
     if wanted is None:
@@ -885,8 +909,8 @@ def offer(posting: dict, config: dict, video_path: str,
     guard = PublishGuard(posting, posting.get("state_path"))
     queue = _queue(posting)
 
-    # Filled in when a fan-out route (postproxy) posts this clip, so
-    # nothing after it posts to the same account a second time.
+    # Filled in when a Postproxy route posts this clip, so nothing after
+    # it posts to the same account a second time.
     covered: set = set()
     covered_by: dict = {}
 
@@ -958,7 +982,13 @@ def offer(posting: dict, config: dict, video_path: str,
                 # directly as well meant the same Reel twice - Clip 01 went
                 # to Instagram directly while the fan-out route held it for
                 # its spacing, then that route sent it there too.
-                later = remembered_reach(posting, platform) - covered
+                later = remembered_reach(posting, platform)
+                if platform in ROUTE_BASE:
+                    # A Postproxy route reaches exactly its platform, and
+                    # it is connected (ready() said so). Known even the
+                    # first time, when there is no remembered reach yet.
+                    later = later | {ROUTE_BASE[platform]}
+                later -= covered
                 for name in later:
                     covered_by.setdefault(name, platform)
                 covered |= later

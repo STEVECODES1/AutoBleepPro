@@ -377,9 +377,11 @@ def _publisher_for(platform: str, config: dict):
     if platform.startswith("zernio"):
         from publishers.zernio import ZernioPublisher
         return ZernioPublisher(config, platform)
-    if platform in ("postproxy", "postproxy_youtube"):
-        from publishers.postproxy import PostproxyPublisher
-        return PostproxyPublisher(config, platform)
+    if platform.startswith("postproxy_"):
+        from publishers.postproxy import ROUTES, PostproxyPublisher
+        if platform in ROUTES:
+            return PostproxyPublisher(config, platform)
+        return None
     return None
 
 
@@ -1168,9 +1170,6 @@ TAG_LIMITS = {
     "x": 2,
     "zernio_tiktok": 6,
     "zernio_twitter": 2,
-    # One caption for Instagram and TikTok together, so TikTok's count.
-    "postproxy": 6,
-    "postproxy_youtube": 5,
 }
 
 # Always present. The channel's own name is the one tag that is true of
@@ -1185,7 +1184,6 @@ ALWAYS_TAGS = ("stackswopo",)
 # how it ranks it.
 PLATFORM_TAGS = {
     "youtube_shorts": ("Shorts",),
-    "postproxy_youtube": ("Shorts",),
 }
 
 # Matched against the clip's own title, so a Monkey clip is not tagged

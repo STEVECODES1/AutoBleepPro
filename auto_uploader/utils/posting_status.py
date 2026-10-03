@@ -49,7 +49,10 @@ REQUIRED_ENV = {
     "facebook": ("FB_PAGE_TOKEN", "FB_PAGE_ID"),
     "x": ("TWITTER_API_KEY", "TWITTER_API_SECRET",
           "TWITTER_ACCESS_TOKEN", "TWITTER_ACCESS_SECRET"),
-    "postproxy": ("POSTPROXY_API_KEY",),
+    "postproxy_instagram": ("POSTPROXY_API_KEY",),
+    "postproxy_tiktok": ("POSTPROXY_API_KEY",),
+    "postproxy_facebook": ("POSTPROXY_API_KEY",),
+    "postproxy_x": ("POSTPROXY_API_KEY",),
     "postproxy_youtube": ("POSTPROXY_API_KEY",),
     # reddit is resolved per named account, so it is handled separately.
 }
@@ -461,9 +464,9 @@ def _check_zernio(platform: str, cfg_dict: Optional[dict] = None) -> Check:
 
 
 
-def _check_postproxy(platform: str = "postproxy") -> Check:
-    """Which accounts the key reaches on Postproxy, and which of them
-    this route would post to. Read-only: lists profiles, posts nothing."""
+def _check_postproxy(platform: str) -> Check:
+    """Whether this route's account is connected on Postproxy. Read-only:
+    lists profiles, posts nothing."""
     if not os.environ.get("POSTPROXY_API_KEY", "").strip():
         return Check(platform, MISSING, "POSTPROXY_API_KEY")
     from publishers.postproxy import PostproxyPublisher
@@ -474,19 +477,15 @@ def _check_postproxy(platform: str = "postproxy") -> Check:
     except Exception as exc:
         return Check(platform, FAILED, str(exc)[:200])
     if not profiles:
-        what = ("a YouTube channel" if platform == "postproxy_youtube"
-                else "an Instagram or TikTok account")
-        return Check(platform, FAILED,
-                     f"the key works but {what} is not connected and "
-                     "active on Postproxy")
-    return Check(platform, OK, "reaches " + ", ".join(
-        f"{p.get('platform')} ({p.get('name')})" for p in profiles))
+        return Check(platform, SKIPPED,
+                     f"no {publisher.platform} account connected on "
+                     "Postproxy - connect one there to switch this on")
+    return Check(platform, OK, "posts to " + ", ".join(
+        str(p.get("name")) for p in profiles))
 
 
 _CHECKS = {
     "instagram": _check_instagram,
-    "postproxy": _check_postproxy,
-    "postproxy_youtube": lambda: _check_postproxy("postproxy_youtube"),
     "facebook": _check_facebook,
     "x": _check_x,
 }
@@ -504,6 +503,8 @@ def verify(platforms: Optional[list] = None, reddit_account: str = "",
             results.append(_check_youtube_shorts(cfg_dict))
         elif name.startswith("zernio"):
             results.append(_check_zernio(name, cfg_dict))
+        elif name.startswith("postproxy_"):
+            results.append(_check_postproxy(name))
         elif name in _CHECKS:
             results.append(_CHECKS[name]())
         else:

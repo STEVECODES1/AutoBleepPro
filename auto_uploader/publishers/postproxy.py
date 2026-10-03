@@ -7,22 +7,26 @@ WHY THIS EXISTS
     subscriptions ended and their code is gone. Postproxy takes their
     place: one upload, posted to every connected account.
 
-TWO ROUTES, ONE SERVICE
-    postproxy          - Instagram (as a Reel), TikTok, and anything else
-                         connected there except YouTube.
-    postproxy_youtube  - YouTube only, as a Short on the clips channel.
+ONE ROUTE PER PLATFORM
+    postproxy_instagram, postproxy_tiktok, postproxy_facebook, postproxy_x
+    and postproxy_youtube each post the clip to that one platform.
 
-    YouTube is split off so it keeps its own daily cap and spacing in
-    publish_guard. Twenty clips from one stream in an afternoon is what
-    YouTube's "repetitious content" policy describes, so the cap that
-    suits Instagram and TikTok is far too loose for a channel.
+    One post per platform, not one post to all of them, because each
+    platform gets its OWN caption: Postproxy sends one body to every
+    platform in a post. A TikTok caption written for search, an X post
+    under 280 characters and a Short with a real title cannot be the same
+    text. Each route also has its own cap and spacing in publish_guard,
+    because what suits Instagram is far too loose for a YouTube channel.
+
+    A route whose platform is not connected on Postproxy is simply not
+    ready - connecting the account on the dashboard is the switch.
 
 HOW A POST WORKS
     1. GET  /api/profiles  - the connected accounts. Only "active" ones are
                              used, so an expired login is skipped rather
                              than failed.
-    2. POST /api/posts     - the clip itself, multipart, with every profile
-                             in one call. An Idempotency-Key made from the
+    2. POST /api/posts     - the clip itself, multipart, to this route's
+                             profile. An Idempotency-Key made from the
                              clip means a retry after a dropped connection
                              cannot post it twice.
     3. GET  /api/posts/ID  - polled until every platform says published or
@@ -37,9 +41,8 @@ HOW A POST WORKS
 SETUP
     auto_uploader/.env:  POSTPROXY_API_KEY=...   (Postproxy -> API Keys)
     Connect accounts on the Postproxy dashboard. Nothing else to list here.
-    config.json (optional): posting.platforms.postproxy and
-    posting.platforms.postproxy_youtube {enabled, daily_cap,
-    min_minutes_between} override the defaults in publish_guard.
+    config.json (optional): posting.platforms.<route> {enabled, daily_cap,
+    min_minutes_between} overrides the defaults in publish_guard.
 """
 
 from __future__ import annotations
@@ -64,28 +67,27 @@ except ImportError:  # pragma: no cover - requests is a hard dependency
 API_BASE = os.environ.get("POSTPROXY_API_URL",
                           "https://api.postproxy.dev").rstrip("/") + "/api"
 
-# Postproxy's platform names -> this project's.
-PLATFORM_TO_PROJECT = {
-    "instagram": "instagram",
-    "tiktok": "tiktok",
-    "facebook": "facebook",
-    "twitter": "x",
-    "threads": "threads",
-    "youtube": "youtube_shorts",
+# route -> (Postproxy's platform name, this project's platform name).
+ROUTES = {
+    "postproxy_instagram": ("instagram", "instagram"),
+    "postproxy_tiktok": ("tiktok", "tiktok"),
+    "postproxy_facebook": ("facebook", "facebook"),
+    "postproxy_x": ("twitter", "x"),
+    "postproxy_youtube": ("youtube", "youtube_shorts"),
 }
 
-# Which Postproxy platforms each route posts to. None = every connected
-# platform the other route does not take.
-ROUTE_PLATFORMS = {
-    "postproxy": None,
-    "postproxy_youtube": ("youtube",),
-}
+PLATFORM_TO_PROJECT = {pp: project for pp, project in ROUTES.values()}
 
 CAPTION_LIMITS = {"instagram": 2200, "tiktok": 2200, "youtube": 5000,
                   "facebook": 5000, "twitter": 280, "threads": 500}
 
 YOUTUBE_TITLE_MAX = 100
 YOUTUBE_GAMING_CATEGORY = "20"
+
+# The profile listing is asked for by ready() on every clip and route.
+# Five routes a clip would otherwise be five calls for the same answer.
+PROFILES_TTL_S = 600
+_PROFILES_CACHE: Dict[str, tuple] = {}
 
 DEFAULT_POLL_TIMEOUT_S = 300
 POLL_INTERVAL_S = 15
@@ -145,38 +147,34 @@ def idempotency_key(route: str, video_path: str) -> str:
     return hashlib.sha256(f"{route}|{name}|{size}".encode()).hexdigest()[:40]
 
 
-def _enabled(posting: Dict[str, Any], name: str) -> bool:
-    """Off only when this project says so explicitly."""
-    block = ((posting or {}).get("platforms", {}) or {}).get(name)
-    if not isinstance(block, dict):
-        return True
-    return block.get("enabled", True) is not False
-
-
 class PostproxyPublisher:
-    """Posts one clip to the connected Postproxy accounts for one route."""
+    """Posts one clip to one platform's connected Postproxy account."""
 
     supports_link_posts = False
     supports_reels = True
 
-    def __init__(self, cfg: dict, route: str = "postproxy") -> None:
-        if route not in ROUTE_PLATFORMS:
+    def __init__(self, cfg: dict, route: str) -> None:
+        if route not in ROUTES:
             raise ValueError(f"unknown Postproxy route {route!r}")
         self._cfg = cfg or {}
         self.route = route
+        self.platform, self.project_platform = ROUTES[route]
         self._key = os.environ.get("POSTPROXY_API_KEY", "").strip()
         settings = self._cfg.get("postproxy", {}) or {}
         self._poll_timeout_s = int(settings.get("poll_timeout_seconds",
                                                 DEFAULT_POLL_TIMEOUT_S))
         self._tiktok_privacy = settings.get("tiktok_privacy",
                                             "PUBLIC_TO_EVERYONE")
-        self._youtube_privacy = settings.get("youtube_privacy", "public")
+        shorts = self._cfg.get("youtube_shorts", {}) or {}
+        self._youtube_privacy = settings.get(
+            "youtube_privacy", shorts.get("privacy") or "public")
         self._youtube_category = str(settings.get("youtube_category",
                                                   YOUTUBE_GAMING_CATEGORY))
 
     # ── plumbing ────────────────────────────────────────────────────────
 
     def ready(self) -> bool:
+        """Key set AND this route's platform connected on Postproxy."""
         if not _REQUESTS_OK:
             log.error("postproxy: 'requests' not installed")
             return False
@@ -184,7 +182,15 @@ class PostproxyPublisher:
             log.error("postproxy: POSTPROXY_API_KEY is not set in "
                       "auto_uploader/.env (Postproxy -> API Keys).")
             return False
-        return True
+        try:
+            return bool(self.profiles())
+        except NotConfigured as exc:
+            log.error("postproxy: %s", exc)
+            return False
+        except Exception:
+            # Postproxy unreachable for a moment. Not "not configured":
+            # let the post itself fail and be retried.
+            return True
 
     def _headers(self, extra: Optional[dict] = None) -> dict:
         headers = {"Authorization": f"Bearer {self._key}",
@@ -214,24 +220,21 @@ class PostproxyPublisher:
         raise RuntimeError(f"Postproxy {what} failed: HTTP "
                            f"{response.status_code} {message}"[:500])
 
-    def _wanted(self, platform: str) -> bool:
-        only = ROUTE_PLATFORMS[self.route]
-        if only is not None:
-            return platform in only
-        taken = {p for r, ps in ROUTE_PLATFORMS.items()
-                 if r != self.route and ps for p in ps}
-        if platform in taken:
-            return False
-        project = PLATFORM_TO_PROJECT.get(platform)
-        return bool(project) and _enabled(self._cfg.get("posting", {}),
-                                          project)
-
-    def profiles(self) -> List[dict]:
-        """Connected, active accounts this route posts a clip to."""
+    def _listed(self) -> list:
+        cached = _PROFILES_CACHE.get(self._key)
+        if cached and time.time() - cached[0] < PROFILES_TTL_S:
+            return cached[1]
         response = requests.get(f"{API_BASE}/profiles",
                                 headers=self._headers(), timeout=30)
         body = self._check(response, "listing profiles")
         listed = body.get("data") if isinstance(body, dict) else body
+        listed = list(listed or ())
+        _PROFILES_CACHE[self._key] = (time.time(), listed)
+        return listed
+
+    def profiles(self) -> List[dict]:
+        """This route's connected, active account(s)."""
+        listed = self._listed()
         wanted = []
         for profile in listed or ():
             if not isinstance(profile, dict):
@@ -242,38 +245,45 @@ class PostproxyPublisher:
                             "the Postproxy dashboard", platform,
                             profile.get("name"), profile.get("status"))
                 continue
-            if self._wanted(platform):
+            if platform == self.platform:
                 wanted.append(profile)
         return wanted
 
-    def _form(self, platforms: set, caption: str) -> List[tuple]:
+    def _form(self, caption: str, video_path: str) -> List[tuple]:
         """The non-file multipart fields for one post."""
-        body_limit = min((CAPTION_LIMITS.get(p, 2200) for p in platforms),
-                         default=2200)
-        fields: List[tuple] = [("post[body]", fit_caption(caption,
-                                                          body_limit))]
-        if "instagram" in platforms:
-            fields.append(("platforms[instagram][format]", "reel"))
-        if "facebook" in platforms:
-            fields.append(("platforms[facebook][format]", "reel"))
-        if "tiktok" in platforms:
+        if self.platform == "youtube":
+            return self._youtube_form(caption, video_path)
+        fields: List[tuple] = [("post[body]", fit_caption(
+            caption, CAPTION_LIMITS.get(self.platform, 2200)))]
+        if self.platform in ("instagram", "facebook"):
+            fields.append((f"platforms[{self.platform}][format]", "reel"))
+        if self.platform == "tiktok":
             fields.append(("platforms[tiktok][privacy_status]",
                            self._tiktok_privacy))
-        if "youtube" in platforms:
-            fields += [
-                ("platforms[youtube][title]", youtube_title(caption)),
-                ("platforms[youtube][privacy_status]", self._youtube_privacy),
-                ("platforms[youtube][category_id]", self._youtube_category),
-                ("platforms[youtube][made_for_kids]", "false"),
-            ]
         return fields
+
+    def _youtube_form(self, caption: str, video_path: str) -> List[tuple]:
+        """A Short: titled and described the way the direct Shorts
+        publisher does it, from the youtube_shorts block in config.json
+        (description_template, safe_title, max_title_chars)."""
+        from .youtube_shorts import YouTubeShortsPublisher
+
+        shorts = YouTubeShortsPublisher(self._cfg)
+        title = shorts.title_for(caption, video_path)[:YOUTUBE_TITLE_MAX]
+        return [
+            ("post[body]", fit_caption(shorts.description_for(caption),
+                                       CAPTION_LIMITS["youtube"])),
+            ("platforms[youtube][title]", title),
+            ("platforms[youtube][privacy_status]", self._youtube_privacy),
+            ("platforms[youtube][category_id]", self._youtube_category),
+            ("platforms[youtube][made_for_kids]", "false"),
+        ]
 
     def _create(self, video_path: str, caption: str,
                 profiles: List[dict]) -> dict:
-        platforms = {str(p.get("platform")) for p in profiles}
         files: List[tuple] = [(name, (None, value))
-                              for name, value in self._form(platforms,
-                                                            caption)]
+                              for name, value in self._form(caption,
+                                                            video_path)]
         files += [("profiles[]", (None, str(p.get("id"))))
                   for p in profiles]
         with open(video_path, "rb") as handle:
@@ -350,11 +360,8 @@ class PostproxyPublisher:
 
         profiles = self.profiles()
         if not profiles:
-            where = ("YouTube (the clips channel)"
-                     if self.route == "postproxy_youtube"
-                     else "Instagram or TikTok")
-            raise NotConfigured(f"no {where} account is connected and "
-                                f"active on Postproxy")
+            raise NotConfigured(f"no {self.platform} account is connected "
+                                f"and active on Postproxy")
 
         post = self._create(video_path, caption, profiles)
         latest = self._settle(post)

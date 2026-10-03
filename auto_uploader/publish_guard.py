@@ -82,22 +82,71 @@ SPLIT_PLATFORM_LIMITS = {
 # and a missing block reads as "not configured". A block in config.json
 # still wins, so any of these can be turned off or retuned there.
 #
-# postproxy covers Instagram and TikTok in one call. 15 a day stays under
-# TikTok's own daily limit for posts made through its API.
-# postproxy_youtube is the clips channel, kept apart on purpose: lots of
-# near-identical uploads in a day is what YouTube's "repetitious
-# content" policy describes, and a channel is far harder to get back
-# than a post is to delete.
+# Spread out, and inside the hours people are scrolling. Each post gets
+# a test audience before the platform decides how far to push it: four
+# Reels inside half an hour (a real morning on this account) compete with
+# each other for that test, and a clip posted at 4am is tested on
+# whoever is awake at 4am. post_hours is local time on this PC, start
+# inclusive, end exclusive; a clip ready outside it waits for it.
+#
+# Volume is set for a growing clips account - enough posts a day to give
+# each platform plenty to test - and kept under each platform's own
+# limits. YouTube is lower: lots of near-identical uploads in a day is
+# what its "repetitious content" policy describes, and a channel is far
+# harder to get back than a post is to delete.
+PEAK_HOURS = [10, 23]
 DEFAULT_PLATFORMS = {
-    "postproxy": {"enabled": True, "daily_cap": 15,
-                  "min_minutes_between": 20},
-    "postproxy_youtube": {"enabled": True, "daily_cap": 4,
-                          "min_minutes_between": 120},
+    "postproxy_instagram": {"enabled": True, "daily_cap": 10,
+                            "min_minutes_between": 45,
+                            "post_hours": PEAK_HOURS},
+    "postproxy_tiktok": {"enabled": True, "daily_cap": 12,
+                         "min_minutes_between": 45,
+                         "post_hours": PEAK_HOURS},
+    "postproxy_facebook": {"enabled": True, "daily_cap": 8,
+                           "min_minutes_between": 60,
+                           "post_hours": PEAK_HOURS},
+    "postproxy_x": {"enabled": True, "daily_cap": 10,
+                    "min_minutes_between": 45,
+                    "post_hours": PEAK_HOURS},
+    "postproxy_youtube": {"enabled": True, "daily_cap": 6,
+                          "min_minutes_between": 90,
+                          "post_hours": PEAK_HOURS},
 }
+
+
+def _local_hour(now: float) -> float:
+    """Hours since local midnight, as a fraction. Its own function so a
+    test can pin the time of day."""
+    moment = time.localtime(now)
+    return moment.tm_hour + moment.tm_min / 60.0 + moment.tm_sec / 3600.0
+
+
+def hours_until_open(post_hours, now: float) -> float:
+    """0.0 inside the posting window, else hours until it opens.
+
+    [10, 23] is 10:00 to 22:59. A window that wraps midnight - [18, 2] -
+    works too. Anything unreadable is no window at all: a typo must not
+    stop a platform posting for good.
+    """
+    try:
+        start, end = (float(h) % 24 for h in post_hours)
+    except (TypeError, ValueError):
+        return 0.0
+    if start == end:
+        return 0.0
+    hour = _local_hour(now)
+    inside = (start <= hour < end) if start < end else \
+        (hour >= start or hour < end)
+    if inside:
+        return 0.0
+    return (start - hour) % 24
+
 
 # Services whose subscriptions ended and whose code is gone. A live
 # config.json may still have their blocks; nothing posts to them.
-RETIRED_PLATFORMS = {"upload_post", "postplanify"}
+# "postproxy" was one post to Instagram and TikTok together, before each
+# platform got its own route and its own caption.
+RETIRED_PLATFORMS = {"upload_post", "postplanify", "postproxy"}
 
 # The cap key. "max_per_day" is here because a platform block was once
 # written with that name, nothing read it, and the guard reported
@@ -110,7 +159,7 @@ CAP_KEYS = ("daily_cap", "max_per_day")
 # saying so is the only way a silently-ignored limit gets noticed.
 KNOWN_PLATFORM_KEYS = frozenset({
     "enabled", "daily_cap", "max_per_day", "min_minutes_between",
-    "manual_approval_only", "_comment", "_note",
+    "manual_approval_only", "post_hours", "_comment", "_note",
 })
 
 # Used when a platform is switched on but names no cap at all. NOT
@@ -254,7 +303,10 @@ class PublishGuard:
         platforms = (self.config.get("platforms") or {})
         settings = platforms.get(platform) or {}
         if settings:
-            return settings
+            # A block for a code-default route fills in only what it
+            # names: {"daily_cap": 20} keeps the posting window. Set
+            # "post_hours": [] to post at any hour.
+            return {**DEFAULT_PLATFORMS.get(platform, {}), **settings}
 
         # "zernio" was one platform until it was split into a destination
         # each for X and TikTok. config.json is not tracked, so a live
@@ -382,6 +434,18 @@ class PublishGuard:
                     f"--reset-failures {platform}")
             # Half-open: one attempt through. A success clears the
             # breaker; a failure pushes the next trial further out.
+
+        # Waived with the spacing: a person posting one clip by hand
+        # chose the moment.
+        if settings.get("post_hours") and not ignore_spacing:
+            closed_for = hours_until_open(settings["post_hours"], now)
+            if closed_for > 0:
+                start, end = settings["post_hours"]
+                return Decision(
+                    False,
+                    f"{platform} posts between {int(start):02d}:00 and "
+                    f"{int(end):02d}:00 - opens in {closed_for:.1f} h",
+                    retry_after_s=closed_for * 3600)
 
         recent = self._recent_posts(platform, now)
         cap = daily_cap_of(settings)

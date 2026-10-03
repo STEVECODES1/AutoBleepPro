@@ -100,3 +100,18 @@ def _chrome_not_marked_down():
     rumble_uploader._CHROME_DOWN.update(until=0.0, why="")
     yield
     rumble_uploader._CHROME_DOWN.update(until=0.0, why="")
+
+
+@pytest.fixture(autouse=True)
+def _inside_posting_hours(monkeypatch):
+    """publish_guard keeps the Postproxy routes to peak hours, local time.
+    The suite must not pass at 3pm and fail at 3am - pin it to midday. A
+    test about the window patches _local_hour itself."""
+    import sys as _sys
+
+    _sys.path.insert(0, _UPLOADER)
+    try:
+        import publish_guard
+    except Exception:
+        return
+    monkeypatch.setattr(publish_guard, "_local_hour", lambda now: 12.0)

@@ -33,6 +33,7 @@ REPLY = json.dumps({"captions": {
     "instagram": "he really did that 💀",
     "facebook": "Stackswopo gets robbed without a firearm.",
     "youtube_shorts": "Robbed With No Firearm",
+    "tiktok": "he got robbed in GTA RP with no gun",
 }})
 
 
