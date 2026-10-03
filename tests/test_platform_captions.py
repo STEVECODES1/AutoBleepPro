@@ -367,3 +367,28 @@ def test_a_sidecar_from_before_this_existed_is_not_trusted(tmp_path):
 
 def test_a_missing_clip_has_nothing_cached(tmp_path):
     assert cached(str(tmp_path / "gone.mp4")) == {}
+
+
+def test_captions_use_the_channels_chosen_provider(monkeypatch, tmp_path):
+    """clips.llm_provider picked Claude for the clips, and the captions
+    still asked Gemini first."""
+    import sys
+    sys.path.insert(0, _UPLOADER)
+    from utils import clip_queue
+
+    seen = {}
+
+    def write(title, transcript, platforms, provider="", model="", ask=None):
+        seen["provider"] = provider
+        return {}
+
+    monkeypatch.setattr(llm_captions, "write_captions", write)
+    monkeypatch.setattr(llm_captions, "cached", lambda path: {})
+    clip = tmp_path / "c.mp4"
+    clip.write_bytes(b"x")
+
+    clip_queue._model_caption(
+        "instagram", str(clip), "headline",
+        {"clips": {"llm_provider": "anthropic"}})
+
+    assert seen["provider"] == "anthropic"

@@ -299,8 +299,15 @@ def _model_caption(platform: str, video_path: str, headline: str,
     except Exception:
         spoken = ""
 
+    # The same provider choice as the clip picks (clips.llm_provider).
+    # Without it the captions asked Gemini first however the channel was
+    # set up, and sat through its 503 retries on every clip.
+    clips = (config or {}).get("clips", {}) or {}
     written = write_captions(headline, spoken or headline,
-                             sorted(PLATFORM_BRIEFS))
+                             sorted(PLATFORM_BRIEFS),
+                             provider=str(clips.get("llm_provider", "")
+                                          or ""),
+                             model=str(clips.get("llm_model", "") or ""))
     if not written:
         return ""
     have.update(written)
