@@ -184,6 +184,16 @@ class InstagramFreePublisher:
 
     # ── login (lazy, with session persistence) ─────────────────────────
 
+    @staticmethod
+    def _session_still_good(cl: "InstagrapiClient") -> bool:
+        """True when the loaded session is accepted as it is - one light
+        read, no login, so no 2FA."""
+        try:
+            cl.get_timeline_feed()
+            return True
+        except Exception:
+            return False
+
     def _login(self, cl: "InstagrapiClient") -> bool:
         """Log `cl` in, solving a 2FA challenge once if Instagram asks.
 
@@ -213,6 +223,20 @@ class InstagramFreePublisher:
             return True
         except TwoFactorRequired:
             pass
+        # An authenticator-app account can answer for itself: the code is
+        # computed from the app's setup key (INSTA_TOTP_SECRET in .env),
+        # exactly as the app on the phone computes it.
+        secret = os.environ.get("INSTA_TOTP_SECRET", "").replace(" ", "").strip()
+        if secret:
+            try:
+                code = cl.totp_generate_code(secret)
+                cl.login(self._user, self._password, verification_code=code)
+                log.info("Instagram (instagrapi): 2FA answered from "
+                         "INSTA_TOTP_SECRET.")
+                return True
+            except Exception as exc:
+                log.error("Instagram (instagrapi): login with the code from "
+                          "INSTA_TOTP_SECRET failed (%s) - asking instead.", exc)
         code = input("[Instagram] 2FA code requested - check your "
                      "authenticator app, SMS or email and enter it "
                      "here: ").strip()
@@ -240,7 +264,12 @@ class InstagramFreePublisher:
         if os.path.isfile(self._session_file):
             try:
                 cl.load_settings(self._session_file)
-                if not self._login(cl):
+                # USE the saved session; log in only if Instagram rejects
+                # it. This called a full password login straight after
+                # loading it, every run - and a fresh password login is
+                # exactly what makes Instagram ask for a 2FA code. The
+                # session file was saved and never actually relied on.
+                if not self._session_still_good(cl) and not self._login(cl):
                     return None
                 log.info("Instagram (instagrapi): restored session for %s",
                          self._user)
