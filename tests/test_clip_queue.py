@@ -889,8 +889,11 @@ def test_what_postproxy_reached_is_not_posted_again_directly(
     assert calls == ["postproxy_instagram"]
 
 
-def test_instagram_still_posts_when_postproxy_did_not_reach_it(
+def test_instagram_is_left_to_postproxy_even_when_it_missed(
         publisher, posting, clips, monkeypatch):
+    """Owner decision: a connected Postproxy route owns its platform. A
+    miss is retried through the queue, not handed to the direct Instagram
+    login - that one stopped the whole watcher on a 2FA prompt."""
     posting = _fanout_posting(posting)
     calls = []
 
@@ -903,10 +906,47 @@ def test_instagram_still_posts_when_postproxy_did_not_reach_it(
     monkeypatch.setattr(publisher, "publish", publish)
     monkeypatch.setattr(publisher, "_publisher", lambda p, c: _Ready())
 
-    publisher.offer(posting, CONFIG, clips[0],
-                    platforms=("postproxy_instagram", "instagram"))
+    outcome = publisher.offer(posting, CONFIG, clips[0],
+                              platforms=("postproxy_instagram", "instagram"))
 
-    assert calls == ["postproxy_instagram", "instagram"]
+    assert calls == ["postproxy_instagram"]
+    assert outcome["instagram"] == "skipped: handled by postproxy_instagram"
+
+
+def test_a_postproxy_failure_does_not_fall_back_to_direct_tiktok(
+        publisher, posting, clips, monkeypatch):
+    """The log: postproxy_tiktok hit "Connection aborted", then the clip
+    went out on the direct TikTok route as well."""
+    posting = _fanout_posting(posting)
+    posting["platforms"]["postproxy_tiktok"] = {"enabled": True}
+    posting["platforms"]["tiktok"] = {"enabled": True}
+    calls = []
+
+    def publish(platform, path, caption, config, dry_run=False, detail=None):
+        calls.append(platform)
+        return platform != "postproxy_tiktok"
+
+    monkeypatch.setattr(publisher, "publish", publish)
+    monkeypatch.setattr(publisher, "_publisher", lambda p, c: _Ready())
+
+    publisher.offer(posting, CONFIG, clips[0],
+                    platforms=("postproxy_tiktok", "tiktok"))
+
+    assert calls == ["postproxy_tiktok"]
+
+
+def test_a_disabled_postproxy_route_leaves_the_direct_one_working(
+        publisher, posting, clips, monkeypatch):
+    posting = _fanout_posting(posting)
+    posting["platforms"]["postproxy_tiktok"] = {"enabled": False}
+    posting["platforms"]["tiktok"] = {"enabled": True}
+    calls = _record_publish(publisher, monkeypatch)
+    monkeypatch.setattr(publisher, "_publisher", lambda p, c: _Ready())
+
+    publisher.offer(posting, CONFIG, clips[0],
+                    platforms=("postproxy_tiktok", "tiktok"))
+
+    assert [c[0] for c in calls] == ["tiktok"]
 
 
 def test_the_shorts_route_works_with_no_config_block(

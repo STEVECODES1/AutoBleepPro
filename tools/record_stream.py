@@ -971,6 +971,66 @@ def vod_args(url: str, output_path: str, concurrent: int = 8) -> list:
     ]
 
 
+def twitch_channel(url: str) -> str:
+    """'stackswopo' from https://www.twitch.tv/stackswopo (or '')."""
+    match = re.search(r"twitch\.tv/([A-Za-z0-9_]+)", url or "")
+    if not match or match.group(1).lower() in ("videos", "directory"):
+        return ""
+    return match.group(1)
+
+
+def twitch_broadcast_vod(url: str, recorded_s: float,
+                         now: Optional[float] = None) -> str:
+    """The saved VOD of the broadcast just recorded, or ''.
+
+    Twitch keeps the whole broadcast as a "past broadcast" when the
+    channel archives - the one place the minutes before a late start
+    still exist. Only the newest archive is considered, and only if it
+    began before this recording did and on the same broadcast: picking
+    yesterday's five hours over today's three would be worse than
+    keeping what was recorded.
+    """
+    channel = twitch_channel(url)
+    if not channel:
+        return ""
+    now = time.time() if now is None else now
+    try:
+        completed = subprocess.run(
+            YTDLP + ["--no-warnings", "--skip-download",
+                     "--playlist-items", "1",
+                     "--print", "%(webpage_url)s %(timestamp)s",
+                     f"https://www.twitch.tv/{channel}/videos"
+                     f"?filter=archives&sort=time"],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=180)
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return ""
+    lines = completed.stdout.decode(errors="replace").strip().splitlines()
+    return vod_if_same_broadcast(lines[0] if lines else "", recorded_s, now)
+
+
+# Started no later than this after the VOD did (clock and lag slack)...
+SAME_BROADCAST_SLACK_S = 10 * 60
+# ...and no earlier than this before the recording began.
+SAME_BROADCAST_MAX_HEAD_S = 12 * 3600
+
+
+def vod_if_same_broadcast(line: str, recorded_s: float, now: float) -> str:
+    """'<url> <start timestamp>' -> the url if it is this broadcast."""
+    parts = (line or "").split()
+    if len(parts) != 2 or not parts[0].startswith("http"):
+        return ""
+    try:
+        vod_start = float(parts[1])
+    except ValueError:
+        return ""
+    recording_start = now - recorded_s
+    if vod_start > recording_start + SAME_BROADCAST_SLACK_S:
+        return ""
+    if vod_start < recording_start - SAME_BROADCAST_MAX_HEAD_S:
+        return ""
+    return parts[0]
+
+
 def coverage_report(recorded: Optional[float],
                     expected: Optional[float]) -> str:
     """One line on whether the whole stream was captured.
@@ -1717,7 +1777,24 @@ class Recorder:
         # Said out loud because a delay between the voice and the picture
         # is invisible in a duration and obvious to everyone watching.
         self.say(sync_report(destination))
-        if report.startswith("SHORT") and self.fill_gaps:
+        if (self.fill_gaps and self.from_live_edge
+                and platform_of(self.url) == PLATFORM_TWITCH):
+            # Recorded from the live edge, so the start is missing - and
+            # the channel URL has no length to call this SHORT against
+            # once the stream is over. The saved broadcast has it all.
+            vod = twitch_broadcast_vod(self.url,
+                                       probe_duration(destination) or 0)
+            if vod:
+                replaced = self._replace_with_vod(base, destination,
+                                                  vod_url=vod)
+                if replaced:
+                    destination = replaced
+            else:
+                self.say("Twitch has no saved broadcast of this stream, so "
+                         "the part before the recorder joined cannot be "
+                         "fetched. Turn on \"Store past broadcasts\" in "
+                         "Twitch's creator settings to make it recoverable.")
+        elif report.startswith("SHORT") and self.fill_gaps:
             replaced = self._replace_with_vod(base, destination)
             if replaced:
                 destination = replaced
@@ -1741,7 +1818,8 @@ class Recorder:
         self.say("The uploader will pick it up (run: python main.py --watch)")
         return destination
 
-    def _replace_with_vod(self, base: str, current: str) -> Optional[str]:
+    def _replace_with_vod(self, base: str, current: str,
+                          vod_url: str = "") -> Optional[str]:
         """Swap a short recording for the complete published VOD.
 
         Only worth doing when the VOD is genuinely longer - a stream that
@@ -1751,7 +1829,8 @@ class Recorder:
         self.say("Recording is short - trying the published VOD, which has "
                  "the whole stream...")
         candidate = os.path.join(self.staging, f"{base}.vod.mp4")
-        code = self._run(vod_args(self.url, candidate),
+        vod_url = vod_url or self.url
+        code = self._run(vod_args(vod_url, candidate),
                          os.path.join(self.staging, f"{base}.log"))
         if code != 0 or not os.path.exists(candidate):
             self.say("The VOD is not available yet. YouTube can take a while "
@@ -1791,7 +1870,7 @@ class Recorder:
         self.say(f"Replaced with the full VOD "
                  f"({vod_length / 3600:.2f}h, was {have_length / 3600:.2f}h).")
 
-        expected = expected_duration(self.url)
+        expected = expected_duration(vod_url)
         if expected and vod_length >= expected * COVERAGE_OK:
             # The VOD covers the whole stream, so the shorter live copy is
             # genuinely redundant - not merely superseded - and holding

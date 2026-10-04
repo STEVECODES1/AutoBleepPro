@@ -1779,3 +1779,67 @@ def test_the_sidecar_is_what_the_clip_picker_reads(tmp_path):
 
     assert source_beside(str(video)) == \
         "https://www.youtube.com/watch?v=UKAaigyaM2E"
+
+
+# ── Twitch: the minutes before a late start ────────────────────────────────
+
+def test_the_twitch_channel_is_read_from_the_url():
+    from record_stream import twitch_channel
+
+    assert twitch_channel("https://www.twitch.tv/stackswopo") == "stackswopo"
+    assert twitch_channel("https://www.youtube.com/@stackswopo_/live") == ""
+
+
+def test_only_this_broadcasts_vod_replaces_the_recording():
+    """Recorded 2h40m from the live edge; Twitch's newest archive decides."""
+    from record_stream import vod_if_same_broadcast
+
+    now = 1_000_000.0
+    recorded = 160 * 60
+    began = now - recorded
+    url = "https://www.twitch.tv/videos/123"
+
+    # Started 36 minutes before the recorder joined: this stream.
+    assert vod_if_same_broadcast(f"{url} {began - 36 * 60}",
+                                 recorded, now) == url
+    # Yesterday's stream: never.
+    assert vod_if_same_broadcast(f"{url} {began - 26 * 3600}",
+                                 recorded, now) == ""
+    # Began after the recording did: a later broadcast, not this one.
+    assert vod_if_same_broadcast(f"{url} {began + 3600}",
+                                 recorded, now) == ""
+    assert vod_if_same_broadcast("", recorded, now) == ""
+    assert vod_if_same_broadcast(f"{url} NA", recorded, now) == ""
+
+
+def test_a_live_edge_twitch_recording_asks_for_the_saved_broadcast(
+        tmp_path, monkeypatch):
+    import record_stream
+
+    staging = tmp_path / "s"
+    staging.mkdir()
+    (staging / "Stackswopo 2026-10-04 18_50.part1.ts").write_bytes(b"x")
+    monkeypatch.setattr(record_stream, "existing_segments",
+                        lambda folder, base: [str(staging / "a.ts")])
+    monkeypatch.setattr(record_stream.Recorder, "_merge_fragments",
+                        lambda self, base: None)
+    monkeypatch.setattr(record_stream.Recorder, "_remux",
+                        lambda self, src, dst: open(dst, "wb").close() or True)
+    monkeypatch.setattr(record_stream, "probe_duration", lambda p: 100.0)
+    monkeypatch.setattr(record_stream, "expected_duration", lambda u: None)
+    monkeypatch.setattr(record_stream, "channel_is_live", lambda u: False)
+    monkeypatch.setattr(record_stream, "sync_report", lambda p: "")
+    monkeypatch.setattr(record_stream, "remember_source", lambda *a: None)
+    monkeypatch.setattr(record_stream, "twitch_broadcast_vod",
+                        lambda url, secs: "https://www.twitch.tv/videos/9")
+    asked = []
+    monkeypatch.setattr(record_stream.Recorder, "_replace_with_vod",
+                        lambda self, base, cur, vod_url="":
+                        asked.append(vod_url) or cur)
+
+    twitch = Recorder(url="https://www.twitch.tv/stackswopo",
+                      staging=str(staging), watch_folder=str(tmp_path / "w"),
+                      name="Stackswopo")
+    twitch.from_live_edge = True
+    assert twitch.finalise("Stackswopo 2026-10-04 18_50")
+    assert asked == ["https://www.twitch.tv/videos/9"]

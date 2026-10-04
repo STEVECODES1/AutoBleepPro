@@ -4739,6 +4739,11 @@ def main(argv=None) -> int:
     # watch folder); anything else = an explicit folder for this run only.
     # None = flag absent; "" = bare --watch (use config); else an explicit folder.
     watch_folder = cfg.general.watch_folder
+    if args.watch is not None:
+        # Read by anything that would otherwise stop and ask at the
+        # console (Instagram's 2FA): nobody is sitting at a watcher, and
+        # a question it waits on stops every upload behind it.
+        os.environ["AUTOBLEEP_UNATTENDED"] = "1"
     if args.watch is not None and args.watch:
         watch_folder = os.path.abspath(os.path.expanduser(args.watch))
         if not os.path.isdir(watch_folder):

@@ -201,6 +201,24 @@ class _FakeClient:
         return True
 
 
+@pytest.fixture(autouse=True)
+def _attended(monkeypatch):
+    """A --watch test earlier in the run may have set this."""
+    monkeypatch.delenv("AUTOBLEEP_UNATTENDED", raising=False)
+
+
+def test_the_watcher_is_never_stopped_by_a_2fa_prompt(monkeypatch):
+    """A real --watch sat on "enter it here:" with every upload behind it."""
+    monkeypatch.setattr(m, "TwoFactorRequired", ValueError)
+    monkeypatch.delenv("INSTA_TOTP_SECRET", raising=False)
+    monkeypatch.setenv("AUTOBLEEP_UNATTENDED", "1")
+    publisher = _publisher(monkeypatch)
+    monkeypatch.setattr("builtins.input",
+                        lambda prompt: pytest.fail("asked at the console"))
+
+    assert publisher._login(_FakeClient()) is False
+
+
 def test_a_two_factor_challenge_is_solved_with_a_prompted_code(monkeypatch):
     monkeypatch.setattr(m, "TwoFactorRequired", ValueError)
     publisher = _publisher(monkeypatch)

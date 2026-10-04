@@ -84,6 +84,10 @@ def base_platform(platform: str) -> str:
     return ROUTE_BASE.get(platform, platform)
 
 
+# The account each direct (non-Postproxy) publisher posts to.
+DIRECT_BASE = {"zernio_tiktok": "tiktok", "zernio_twitter": "x"}
+
+
 # Platforms whose CAPTION text goes through the profanity filter. Rumble
 # is deliberately absent - it is the uncensored channel, and the titles
 # there are the line actually spoken, which is the point.
@@ -1028,6 +1032,12 @@ def offer(posting: dict, config: dict, video_path: str,
     # it posts to the same account a second time.
     covered: set = set()
     covered_by: dict = {}
+    # Platforms a connected Postproxy route has taken on for this clip -
+    # posted, queued, or failed and queued to retry. The direct publisher
+    # for the same account stays out of it: Postproxy failing TikTok on a
+    # dropped connection sent the clip to the direct TikTok route, and the
+    # direct Instagram route stopped the whole watcher on a 2FA prompt.
+    owned: dict = {}
 
     for platform in platforms:
         if platform in covered:
@@ -1036,8 +1046,15 @@ def offer(posting: dict, config: dict, video_path: str,
             print(f"[Clips] {platform}: already sent in the {route} "
                   f"call - not posting it twice.")
             continue
+        if platform not in ROUTE_BASE:
+            owner = owned.get(DIRECT_BASE.get(platform, platform))
+            if owner:
+                outcome[platform] = f"skipped: handled by {owner}"
+                continue
 
         already = _already_posted(queue, platform, video_path)
+        if already is not None and platform in ROUTE_BASE:
+            owned[ROUTE_BASE[platform]] = platform
         if already is not None and already.state == "done":
             # This clip has been through here before - a re-run of the
             # same file must not post it a second time.
@@ -1081,6 +1098,9 @@ def offer(posting: dict, config: dict, video_path: str,
             _journal(config, "skip", platform, video_path,
                      "credentials not set - see --posting-status")
             continue
+
+        if platform in ROUTE_BASE:
+            owned[ROUTE_BASE[platform]] = platform
 
         # Recorded before the attempt, so the queue is also the ledger of
         # what has been posted - which is what stops a re-run of the same

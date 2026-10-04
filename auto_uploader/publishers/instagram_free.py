@@ -237,6 +237,15 @@ class InstagramFreePublisher:
             except Exception as exc:
                 log.error("Instagram (instagrapi): login with the code from "
                           "INSTA_TOTP_SECRET failed (%s) - asking instead.", exc)
+        if os.environ.get("AUTOBLEEP_UNATTENDED"):
+            # A real watcher sat on this prompt with clips, uploads and
+            # the queue all stuck behind it. Postproxy posts Instagram
+            # without a login at all - this route is the fallback.
+            log.error("Instagram (instagrapi): Instagram wants a 2FA code "
+                      "and --watch cannot ask for one - skipping. Set "
+                      "INSTA_TOTP_SECRET in .env, or post Instagram "
+                      "through Postproxy only.")
+            return False
         code = input("[Instagram] 2FA code requested - check your "
                      "authenticator app, SMS or email and enter it "
                      "here: ").strip()
