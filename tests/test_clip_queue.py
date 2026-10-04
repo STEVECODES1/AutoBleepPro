@@ -158,6 +158,9 @@ def test_a_clip_deleted_before_its_turn_does_not_retry_forever(
     publisher.offer(posting, CONFIG, clips[0], platforms=("instagram",))
     publisher.offer(posting, CONFIG, clips[1], platforms=("instagram",))
     os.remove(clips[1])
+    # The queue's own held copy gone too - truly nowhere left to post from.
+    import shutil
+    shutil.rmtree(publisher._held_dir(posting), ignore_errors=True)
     _rewind(posting, minutes=30)
 
     assert publisher.drain(posting, CONFIG, quiet=True) == {}
@@ -1129,6 +1132,7 @@ def test_a_clip_ready_at_night_waits_for_the_morning(
     import publish_guard
 
     monkeypatch.setattr(publish_guard, "_local_hour", lambda now: 4.0)
+    posting["platforms"]["postproxy_tiktok"] = {"post_hours": [10, 23]}
     calls = _record_publish(publisher, monkeypatch)
 
     outcome = publisher.offer(posting, CONFIG, clips[0],
@@ -1151,6 +1155,7 @@ def test_waiting_for_the_window_does_not_let_instagram_post_it_directly(
     import publish_guard
 
     posting["platforms"]["instagram"]["min_minutes_between"] = 0
+    posting["platforms"]["postproxy_instagram"] = {"post_hours": [10, 23]}
     monkeypatch.setattr(publish_guard, "_local_hour", lambda now: 4.0)
     calls = _record_publish(publisher, monkeypatch)
 
@@ -1162,20 +1167,20 @@ def test_waiting_for_the_window_does_not_let_instagram_post_it_directly(
     assert calls == []
 
 
-def test_a_config_block_keeps_the_window_unless_it_says_otherwise(posting):
+def test_clips_post_as_they_are_ready_by_default(posting):
+    """The owner's call: no time-of-day window, a few minutes apart. A
+    config block still sets either, and fills in only what it names."""
     import publish_guard
 
-    posting["platforms"]["postproxy_tiktok"] = {"daily_cap": 20}
     guard = publish_guard.PublishGuard(posting, posting["state_path"])
     settings = guard._platform_config("postproxy_tiktok")
-    assert settings["daily_cap"] == 20
-    assert settings["post_hours"] == publish_guard.PEAK_HOURS
-    assert settings["enabled"] is True
+    assert not settings.get("post_hours")
+    assert settings["min_minutes_between"] <= 10
 
-    posting["platforms"]["postproxy_tiktok"] = {"post_hours": []}
-    assert not publish_guard.PublishGuard(
-        posting, posting["state_path"])._platform_config(
-            "postproxy_tiktok")["post_hours"]
+    posting["platforms"]["postproxy_tiktok"] = {"daily_cap": 20}
+    settings = publish_guard.PublishGuard(
+        posting, posting["state_path"])._platform_config("postproxy_tiktok")
+    assert settings["daily_cap"] == 20 and settings["enabled"] is True
 
 
 @pytest.mark.parametrize("window,hour,expected", [
@@ -1230,3 +1235,63 @@ def test_a_rendered_clip_does_not_wait_ten_minutes(tmp_path):
     handler = _NewVideoHandler((".mp4",), 600, lambda path: ready.set())
     handler._maybe_watch(str(clip))
     assert ready.wait(timeout=15), "a finished clip waited the full 10 minutes"
+
+
+# ── a queued clip survives cleanup ──────────────────────────────────────────
+
+def test_a_queued_clip_survives_the_watch_folder_being_cleaned(
+        publisher, posting, clips, monkeypatch):
+    """A real night: every stream reached Instagram, TikTok and X with ONE
+    clip. The rest were queued for their 45-minute spacing, cleanup moved
+    the clip out of the watch folder, keep_uploaded_videos deleted it, and
+    the queue dropped each one as "no longer on disk"."""
+    from job_queue import JobQueue
+
+    posting["platforms"]["instagram"]["min_minutes_between"] = 600
+    from publish_guard import PublishGuard
+    PublishGuard(posting, posting["state_path"]).record_result(
+        "instagram", True)                          # just posted another
+    calls = _record_publish(publisher, monkeypatch)
+
+    outcome = publisher.offer(posting, CONFIG, clips[0],
+                              platforms=("instagram",))
+    assert outcome["instagram"] == "queued"
+
+    os.remove(clips[0])                             # cleanup took it
+    queue = JobQueue(path=posting["queue_path"])
+    job = queue.list_jobs()[0]
+    assert os.path.isfile(job.clip_path), "the queue kept no copy"
+
+    job.not_before = 0
+    queue._save()
+    posting["platforms"]["instagram"]["min_minutes_between"] = 0
+    import time as _time
+    monkeypatch.setattr(PublishGuard, "check",
+                        lambda self, p, now=None, ignore_spacing=False:
+                        __import__("publish_guard").Decision(True, "ok"))
+    publisher.drain(posting, CONFIG, quiet=True)
+
+    assert [c[0] for c in calls] == ["instagram"]
+    # Posted, so the held copy is gone again.
+    assert not os.listdir(publisher._held_dir(posting))
+
+
+def test_a_moved_clip_is_found_in_uploaded(publisher, posting, clips,
+                                           monkeypatch, tmp_path):
+    from job_queue import JobQueue
+    import shutil
+
+    queue = JobQueue(path=posting["queue_path"])
+    job_id = queue.enqueue("instagram", clips[1])
+    queue.get(job_id).not_before = 0
+    queue._save()
+    uploaded = tmp_path / "uploaded"
+    uploaded.mkdir()
+    shutil.move(clips[1], uploaded / os.path.basename(clips[1]))
+    calls = _record_publish(publisher, monkeypatch)
+    posting["platforms"]["instagram"]["min_minutes_between"] = 0
+
+    publisher.drain(posting, dict(CONFIG, note_folders=(str(uploaded),)),
+                    quiet=True)
+
+    assert [c[0] for c in calls] == ["instagram"]

@@ -82,35 +82,24 @@ SPLIT_PLATFORM_LIMITS = {
 # and a missing block reads as "not configured". A block in config.json
 # still wins, so any of these can be turned off or retuned there.
 #
-# Spread out, and inside the hours people are scrolling. Each post gets
-# a test audience before the platform decides how far to push it: four
-# Reels inside half an hour (a real morning on this account) compete with
-# each other for that test, and a clip posted at 4am is tested on
-# whoever is awake at 4am. post_hours is local time on this PC, start
-# inclusive, end exclusive; a clip ready outside it waits for it.
-#
-# Volume is set for a growing clips account - enough posts a day to give
-# each platform plenty to test - and kept under each platform's own
-# limits. YouTube is lower: lots of near-identical uploads in a day is
-# what its "repetitious content" policy describes, and a channel is far
-# harder to get back than a post is to delete.
+# Clips go out as they are ready, a few minutes apart - the channel
+# owner's call. A few minutes rather than none so several clips from one
+# stream do not land in the same second. The daily caps stay: past them
+# the platforms refuse posts themselves. Set "post_hours": [10, 23] on a
+# block to keep a route to set hours, and raise min_minutes_between to
+# spread posts out more.
 PEAK_HOURS = [10, 23]
 DEFAULT_PLATFORMS = {
     "postproxy_instagram": {"enabled": True, "daily_cap": 10,
-                            "min_minutes_between": 45,
-                            "post_hours": PEAK_HOURS},
+                            "min_minutes_between": 5},
     "postproxy_tiktok": {"enabled": True, "daily_cap": 12,
-                         "min_minutes_between": 45,
-                         "post_hours": PEAK_HOURS},
+                         "min_minutes_between": 5},
     "postproxy_facebook": {"enabled": True, "daily_cap": 8,
-                           "min_minutes_between": 60,
-                           "post_hours": PEAK_HOURS},
+                           "min_minutes_between": 5},
     "postproxy_x": {"enabled": True, "daily_cap": 10,
-                    "min_minutes_between": 45,
-                    "post_hours": PEAK_HOURS},
+                    "min_minutes_between": 5},
     "postproxy_youtube": {"enabled": True, "daily_cap": 6,
-                          "min_minutes_between": 90,
-                          "post_hours": PEAK_HOURS},
+                          "min_minutes_between": 10},
 }
 
 

@@ -177,6 +177,80 @@ def _remember_reach(posting: dict, route: str, reached: set) -> None:
         pass
 
 
+# Where a clip waiting in the queue is kept. The watch-folder copy does
+# not survive: once Rumble has it, cleanup moves it to uploaded/ and
+# keep_uploaded_videos deletes all but the newest few. A clip queued for
+# Instagram 45 minutes later was then "no longer on disk" and dropped -
+# which is why each stream reached the other platforms with ONE clip.
+HELD_FOLDER = "clip_queue_files"
+
+
+def _held_dir(posting: dict) -> str:
+    queue_path = (posting or {}).get("queue_path") or "./clip_jobs.json"
+    return os.path.join(os.path.dirname(os.path.abspath(queue_path)),
+                        HELD_FOLDER)
+
+
+def _hold(posting: dict, video_path: str) -> str:
+    """A copy of the clip the queue can rely on; the original path if a
+    copy cannot be made."""
+    import shutil
+
+    folder = _held_dir(posting)
+    target = os.path.join(folder, os.path.basename(video_path))
+    if os.path.abspath(video_path) == os.path.abspath(target):
+        return target
+    try:
+        os.makedirs(folder, exist_ok=True)
+        if not (os.path.isfile(target)
+                and os.path.getsize(target) == os.path.getsize(video_path)):
+            shutil.copy2(video_path, target)
+        return target
+    except OSError:
+        return video_path
+
+
+def _hold_for_later(queue, job_id: str, posting: dict,
+                    video_path: str) -> None:
+    """Point a job that will run later at a held copy of its clip."""
+    job = queue.get(job_id)
+    if job is None:
+        return
+    held = _hold(posting, video_path)
+    if held != job.clip_path:
+        job.clip_path = held
+        queue._save()
+
+
+def _release_held(queue, posting: dict) -> None:
+    """Delete held copies no waiting job needs any more."""
+    from job_queue import ACTIVE_STATES
+
+    folder = _held_dir(posting)
+    if not os.path.isdir(folder):
+        return
+    wanted = {os.path.abspath(job.clip_path)
+              for job in queue.list_jobs(ACTIVE_STATES)}
+    for name in os.listdir(folder):
+        path = os.path.abspath(os.path.join(folder, name))
+        if path not in wanted:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+
+
+def _find_moved(job, config: dict) -> str:
+    """Where a queued clip's file went, if it was moved rather than
+    deleted (watch folder -> uploaded/)."""
+    name = os.path.basename(job.clip_path)
+    for folder in (config or {}).get("note_folders", ()) or ():
+        candidate = os.path.join(folder, name) if folder else ""
+        if candidate and os.path.isfile(candidate):
+            return candidate
+    return ""
+
+
 def _publisher(platform: str, config: dict):
     from utils.social_promoter import _publisher_for
 
@@ -1014,6 +1088,7 @@ def offer(posting: dict, config: dict, video_path: str,
         job_id = queue.begin(platform, video_path, caption)
 
         if not decision:
+            _hold_for_later(queue, job_id, posting, video_path)
             queue.block(job_id, decision.reason, decision.retry_after_s)
             outcome[platform] = "queued"
             print(f"[Clips] {platform}: {decision.reason} - queued, back in "
@@ -1097,6 +1172,7 @@ def offer(posting: dict, config: dict, video_path: str,
         else:
             # Worth one more go later; the queue's attempt ceiling stops
             # it becoming a loop.
+            _hold_for_later(queue, job_id, posting, video_path)
             queue.fail(job_id, "first attempt failed")
             outcome[platform] = "queued"
             print(f"[Clips] {platform}: Reel failed - queued to retry.")
@@ -1194,6 +1270,11 @@ def drain(posting: dict, config: dict, limit: int = 0,
             continue
 
         if not os.path.isfile(job.clip_path):
+            moved = _find_moved(job, config)
+            if moved:
+                job.clip_path = _hold(posting, moved)
+                queue._save()
+        if not os.path.isfile(job.clip_path):
             queue.abandon(job.id, "the clip is no longer on disk", now=now)
             _journal(config, "FAIL", job.platform, job.clip_path,
                      "the clip file is gone")
@@ -1272,6 +1353,7 @@ def drain(posting: dict, config: dict, limit: int = 0,
         sent += 1
         if limit and sent >= limit:
             break
+    _release_held(queue, posting)
     return posted
 
 
