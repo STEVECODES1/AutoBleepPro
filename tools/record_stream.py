@@ -1756,8 +1756,9 @@ class Recorder:
         # gone for good.
         report = coverage_report(probe_duration(destination),
                                  expected_duration(self.url))
-        if not report.startswith("SHORT") and channel_is_live(
-                resolved_watch_url(self.url, self.video_id)):
+        still_live = bool(channel_is_live(
+            resolved_watch_url(self.url, self.video_id)))
+        if not report.startswith("SHORT") and still_live:
             # expected_duration() asks yt-dlp the same question that can
             # be wrong for the same reason channel_is_live() exists at
             # all - see that function's own docstring: a --live-from-start
@@ -1777,7 +1778,17 @@ class Recorder:
         # Said out loud because a delay between the voice and the picture
         # is invisible in a duration and obvious to everyone watching.
         self.say(sync_report(destination))
-        if (self.fill_gaps and self.from_live_edge
+        if still_live:
+            # Never fetch "the VOD" of a broadcast that is still going.
+            # From a channel address that is the live stream itself: a
+            # piece left over from a restart was "gap-filled" by
+            # recording the live stream from inside the recovery, for as
+            # long as the stream ran - while this source never got back
+            # to recording it properly, and the leftover piece had
+            # already gone to the uploader as a stream of its own.
+            self.say(f"{self.name} is still live - not fetching a VOD "
+                     f"now. The recorder goes straight back to recording.")
+        elif (self.fill_gaps and self.from_live_edge
                 and platform_of(self.url) == PLATFORM_TWITCH):
             # Recorded from the live edge, so the start is missing - and
             # the channel URL has no length to call this SHORT against

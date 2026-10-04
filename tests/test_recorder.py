@@ -1843,3 +1843,38 @@ def test_a_live_edge_twitch_recording_asks_for_the_saved_broadcast(
     twitch.from_live_edge = True
     assert twitch.finalise("Stackswopo 2026-10-04 18_50")
     assert asked == ["https://www.twitch.tv/videos/9"]
+
+
+def test_a_leftover_piece_is_never_gap_filled_while_the_stream_is_live(
+        tmp_path, monkeypatch):
+    """A real restart: the leftover 36-second piece was "filled" from the
+    channel URL, which recorded the live stream inside the recovery and
+    kept the Twitch source from ever recording properly."""
+    import record_stream
+
+    staging = tmp_path / "s"
+    staging.mkdir()
+    monkeypatch.setattr(record_stream, "existing_segments",
+                        lambda folder, base: [str(staging / "a.ts")])
+    monkeypatch.setattr(record_stream.Recorder, "_merge_fragments",
+                        lambda self, base: None)
+    monkeypatch.setattr(record_stream.Recorder, "_remux",
+                        lambda self, src, dst: open(dst, "wb").close() or True)
+    monkeypatch.setattr(record_stream, "probe_duration", lambda p: 36.0)
+    monkeypatch.setattr(record_stream, "expected_duration", lambda u: None)
+    monkeypatch.setattr(record_stream, "channel_is_live", lambda u: True)
+    monkeypatch.setattr(record_stream, "sync_report", lambda p: "")
+    monkeypatch.setattr(record_stream, "remember_source", lambda *a: None)
+    monkeypatch.setattr(record_stream.Recorder, "_notify_short",
+                        lambda self, r: None)
+    monkeypatch.setattr(record_stream.Recorder, "_replace_with_vod",
+                        lambda *a, **k: pytest.fail("fetched a 'VOD' live"))
+    monkeypatch.setattr(record_stream, "twitch_broadcast_vod",
+                        lambda *a: pytest.fail("fetched a 'VOD' live"))
+
+    for live_edge in (False, True):
+        twitch = Recorder(url="https://www.twitch.tv/stackswopo",
+                          staging=str(staging),
+                          watch_folder=str(tmp_path / "w"), name="Stackswopo")
+        twitch.from_live_edge = live_edge
+        assert twitch.finalise("Stackswopo twitch live 2026-10-04 19_48")
