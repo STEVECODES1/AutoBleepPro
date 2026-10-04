@@ -162,5 +162,5 @@ def test_the_watch_loop_sweeps_the_folder_periodically():
     # Not while dry_run - a dry run must not go on retrying next_autoclip
     # forever, and must never queue a real upload attempt.
     start = body.index("next_retry_sweep = time.time() + RETRY_SWEEP_SECONDS")
-    loop = body[start:start + 1200]
+    loop = body[start:start + 1600]
     assert "not dry_run" in loop

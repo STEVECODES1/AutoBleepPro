@@ -1226,11 +1226,19 @@ def recaption(posting: dict, config: dict) -> list:
 
 
 def drain(posting: dict, config: dict, limit: int = 0,
-          dry_run: bool = False, quiet: bool = False) -> dict:
+          dry_run: bool = False, quiet: bool = False,
+          recheck: bool = False) -> dict:
     """Post whatever the queue is now allowed to post.
 
     Called on every pass of the watcher, so a clip deferred at 14:02 goes
     out the moment its wait is up rather than when someone remembers.
+
+    recheck: forget every stored wait and ask the guard again. A wait is
+    worked out from the settings in force when the clip was blocked, so
+    clips held under a 45-minute gap and a 10:00-23:00 window still sat
+    for hours after both were dropped. The guard still decides - a clip
+    that is genuinely not allowed yet is simply blocked again, with the
+    wait the CURRENT settings give.
 
     Returns {platform: posted_count}.
     """
@@ -1246,6 +1254,8 @@ def drain(posting: dict, config: dict, limit: int = 0,
     import time
 
     now = time.time()
+    if recheck:
+        queue.unblock_all(now=now)
     sent = 0
     while True:
         job = queue.claim()

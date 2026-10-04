@@ -738,11 +738,14 @@ def test_the_drain_cannot_repost_a_clip_that_is_still_uploading(
         FakePublisher.posted.append((os.path.basename(path), caption))
         return True
 
+    original = FakePublisher.post_reel_from_file
     FakePublisher.post_reel_from_file = post_and_drain_meanwhile
     try:
         publisher.offer(posting, CONFIG, clips[0], platforms=("instagram",))
     finally:
-        del FakePublisher.post_reel_from_file
+        # Put back, not deleted: `del` took the method off the class for
+        # every test that ran after this one.
+        FakePublisher.post_reel_from_file = original
 
     assert drained == [{}]
     assert len(FakePublisher.posted) == 1
@@ -1145,6 +1148,39 @@ def test_a_clip_ready_at_night_waits_for_the_morning(
     job = JobQueue(path=posting["queue_path"]).list_jobs()[0]
     # Back at 10:00, six hours on.
     assert abs(job.not_before - time.time() - 6 * 3600) < 120
+
+
+def test_dropping_the_window_releases_clips_already_waiting_for_it(
+        publisher, posting, clips, monkeypatch):
+    """Four clips sat "not due" after post_hours was taken out of the
+    config: their wait had been worked out under the old window, and a
+    stored wait outlives the setting that made it. --post-queue, and the
+    first pass after a restart, ask the guard again."""
+    import publish_guard
+
+    monkeypatch.setattr(publish_guard, "_local_hour", lambda now: 2.5)
+    posting["platforms"]["postproxy_tiktok"] = {"post_hours": [10, 23]}
+    calls = _record_publish(publisher, monkeypatch)
+    publisher.offer(posting, CONFIG, clips[0],
+                    platforms=("postproxy_tiktok",))
+    assert calls == []
+
+    posting["platforms"]["postproxy_tiktok"] = {"min_minutes_between": 5}
+    # A routine pass keeps to the stored wait...
+    assert publisher.drain(posting, CONFIG, quiet=True) == {}
+    # ...a re-check uses the settings as they are now.
+    assert publisher.drain(posting, CONFIG, quiet=True, recheck=True) == \
+        {"postproxy_tiktok": 1}
+
+
+def test_a_recheck_still_keeps_to_the_current_spacing(publisher, posting,
+                                                      clips):
+    """Re-asking is not skipping the guard: inside the gap, it waits."""
+    publisher.offer(posting, CONFIG, clips[0], platforms=("instagram",))
+    publisher.offer(posting, CONFIG, clips[1], platforms=("instagram",))
+
+    assert publisher.drain(posting, CONFIG, quiet=True, recheck=True) == {}
+    assert len(FakePublisher.posted) == 1
 
 
 def test_waiting_for_the_window_does_not_let_instagram_post_it_directly(

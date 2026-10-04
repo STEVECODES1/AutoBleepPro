@@ -4698,7 +4698,8 @@ def main(argv=None) -> int:
 
         print(f"[Clips] {summary(cfg.posting)}")
         posted = drain(cfg.posting, _clip_config(cfg),
-                       dry_run=args.dry_run or cfg.general.dry_run_mode)
+                       dry_run=args.dry_run or cfg.general.dry_run_mode,
+                       recheck=True)
         if not posted:
             print("[Clips] Nothing was due to post right now.")
         else:
@@ -5005,12 +5006,17 @@ def main(argv=None) -> int:
             while True:
                 time.sleep(1)
                 if cfg.posting and time.time() >= next_drain:
+                    # The first pass after a start re-asks the guard about
+                    # every held clip, so a config change takes effect on
+                    # restart instead of after waits set under the old one.
+                    first_drain = next_drain == 0.0
                     next_drain = time.time() + CLIP_DRAIN_SECONDS
                     try:
                         from utils.clip_queue import drain
 
                         drain(cfg.posting, _clip_config(cfg),
-                              dry_run=dry_run, quiet=True)
+                              dry_run=dry_run, quiet=True,
+                              recheck=first_drain)
                     except Exception as exc:
                         print(f"[Clips] WARNING: could not post the queue: {exc}")
 
