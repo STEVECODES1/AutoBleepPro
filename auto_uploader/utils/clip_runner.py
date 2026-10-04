@@ -384,7 +384,12 @@ def make_clips(cfg, source_path: str, title: str,
         # More colour and punch on every clip - see clip_maker.CLIP_GRADE.
         grade=bool(clips_cfg.get("grade", True)),
         caption_uppercase=bool(clips_cfg.get("caption_uppercase", True)),
-        count=int(count or clips_cfg.get("count", 3)),
+        # Default raised from 3 → 10: the LLM rejects candidates it
+        # cannot title well (no punchline, needs context, slur-heavy),
+        # so asking for 3 and getting 2 rejected leaves 1 clip. Asking
+        # for 10 means the LLM can be picky AND you still walk away with
+        # 5+. clips.count in config.json overrides this per install.
+        count=int(count or clips_cfg.get("count", 10)),
         min_seconds=float(clips_cfg.get("min_seconds", 15)),
         max_seconds=float(clips_cfg.get("max_seconds", 60)),
         encoder=_encoder_for(speed),
