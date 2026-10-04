@@ -1008,13 +1008,9 @@ def test_youtube_gets_live_from_start(recorder):
 
 
 def test_twitch_also_gets_live_from_start(tmp_path):
-    """yt-dlp added Twitch support for this after the comment that used
-    to sit here was written - confirmed by reading twitch.py directly:
-    TwitchStreamIE._real_extract looks up the channel's own in-progress
-    VOD first when --live-from-start is set, and only falls back to the
-    live edge (one warning, nothing broken) if no VOD is found. Passing
-    the flag is a strict improvement: best case it recovers the start of
-    the stream, worst case it behaves exactly as it did before."""
+    """yt-dlp records Twitch from the start by downloading the channel's
+    in-progress VOD. When there is none it stops instead of falling back
+    - that case is test_twitch_with_no_vod_records_from_the_live_edge."""
     from record_stream import PLATFORM_TWITCH, platform_of
 
     assert platform_of("https://www.twitch.tv/stackswopo") == PLATFORM_TWITCH
@@ -1026,6 +1022,74 @@ def test_twitch_also_gets_live_from_start(tmp_path):
     # Everything that keeps a long recording alive still applies.
     assert args[args.index("--fragment-retries") + 1] == "infinite"
     assert "--hls-use-mpegts" in args
+
+
+REFUSED = ("ERROR: [twitch:stream] 320657486048: --live-from-start is "
+           "passed, but there are no formats that can be downloaded from "
+           "the start. If you want to download from the current time, use "
+           "--no-live-from-start")
+
+
+def test_twitch_with_no_vod_records_from_the_live_edge(tmp_path,
+                                                       monkeypatch):
+    """A real night: Twitch went live with no VOD of the broadcast, yt-dlp
+    refused --live-from-start, and the recorder printed "Channel is not
+    live" every minute while the stream ran unrecorded."""
+    import record_stream
+
+    monkeypatch.setattr(record_stream.time, "sleep", lambda *_: None)
+    monkeypatch.setattr(record_stream, "channel_is_live", lambda url: False)
+    monkeypatch.setattr(record_stream.Recorder, "finalise",
+                        lambda self, base: "/tmp/delivered.mp4")
+    runs = []
+
+    def fake_run(self, args, log_path="", quiet_wait=True):
+        runs.append(list(args))
+        if "--live-from-start" in args:
+            self.last_refused_from_start = True
+            return 1
+        self.last_refused_from_start = False
+        self.recording_started_at = time.time()
+        return 0
+
+    monkeypatch.setattr(record_stream.Recorder, "_run", fake_run)
+    twitch = Recorder(url="https://www.twitch.tv/stackswopo",
+                      staging=str(tmp_path / "s"),
+                      watch_folder=str(tmp_path / "w"), name="Stackswopo")
+
+    assert twitch.record_one_stream() == "/tmp/delivered.mp4"
+    assert len(runs) == 2
+    assert "--live-from-start" not in runs[1]
+
+
+def test_the_refusal_is_read_from_what_yt_dlp_said():
+    from record_stream import from_start_refused
+
+    assert from_start_refused(["[twitch:stream] Downloading m3u8", REFUSED])
+    assert not from_start_refused(["ERROR: This channel is not live"])
+    assert not from_start_refused([])
+
+
+def test_a_new_stream_tries_from_the_start_again(tmp_path, monkeypatch):
+    import record_stream
+
+    monkeypatch.setattr(record_stream.time, "sleep", lambda *_: None)
+    seen = []
+
+    def fake_run(self, args, log_path="", quiet_wait=True):
+        seen.append("--live-from-start" in args)
+        self.last_refused_from_start = False
+        return 1                                   # not live
+
+    monkeypatch.setattr(record_stream.Recorder, "_run", fake_run)
+    twitch = Recorder(url="https://www.twitch.tv/stackswopo",
+                      staging=str(tmp_path / "s"),
+                      watch_folder=str(tmp_path / "w"), name="Stackswopo")
+    twitch.from_live_edge = True                   # left from last stream
+
+    twitch.record_one_stream()
+
+    assert seen[0] is True
 
 
 def test_a_clips_url_is_recognised():

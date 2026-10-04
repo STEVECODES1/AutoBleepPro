@@ -349,12 +349,13 @@ def platform_of(url: str) -> str:
     manifest history - instead, yt-dlp finds the VOD Twitch is already
     recording of this same broadcast (most channels have this on by
     default) and downloads THAT, seeked to its own start, in place of
-    the live edge. Confirmed by reading yt-dlp's twitch.py directly
-    (TwitchStreamIE._real_extract): with --live-from-start it looks up
-    the channel's in-progress VOD first and only falls back to the
-    ordinary live edge - with one warning, nothing broken - if no VOD
-    is found. Kick has neither mechanism, and passing the flag there
-    produces a warning and no benefit.
+    the live edge. When there is no such VOD, current yt-dlp does NOT
+    fall back to the live edge: it stops with "--live-from-start is
+    passed, but there are no formats that can be downloaded from the
+    start". A whole Twitch stream went unrecorded that way, every minute
+    reading "Channel is not live" while it was - see from_start_refused.
+    Kick has neither mechanism, and passing the flag there produces a
+    warning and no benefit.
     """
     lowered = (url or "").lower()
     if "twitch.tv" in lowered:
@@ -362,6 +363,19 @@ def platform_of(url: str) -> str:
     if "kick.com" in lowered:
         return PLATFORM_KICK
     return PLATFORM_YOUTUBE
+
+
+_FROM_START_REFUSED = "no formats that can be downloaded from the start"
+
+
+def from_start_refused(lines) -> bool:
+    """yt-dlp found the stream but cannot record it from its first second.
+
+    Twitch with no VOD of the broadcast says this and exits. The stream is
+    live and recordable from now - recording from now beats recording
+    nothing, which is what the next attempt with the same flag gets.
+    """
+    return any(_FROM_START_REFUSED in (line or "") for line in lines)
 
 
 def is_clips_url(url: str) -> bool:
@@ -1206,6 +1220,12 @@ class Recorder:
     # from a channel being offline - see _missed_stream.
     last_missed: str = ""
 
+    # Set when yt-dlp refused --live-from-start for THIS stream (Twitch,
+    # no VOD). The next attempt records from the live edge instead.
+    # Cleared for every new stream, which may well have a VOD.
+    from_live_edge: bool = False
+    last_refused_from_start: bool = field(default=False, repr=False)
+
     # How many attempts in a row have been abandoned with every fragment
     # refused and nothing downloaded. Reset by any real progress. See
     # REFUSAL_RESTARTS_BEFORE_UPDATE - two of these is not a stale
@@ -1288,7 +1308,8 @@ class Recorder:
             "--newline",
             "-o", output_path,
         ]
-        if platform_of(self.url) in (PLATFORM_YOUTUBE, PLATFORM_TWITCH):
+        if (platform_of(self.url) in (PLATFORM_YOUTUBE, PLATFORM_TWITCH)
+                and not self.from_live_edge):
             # YouTube walks back through the DASH manifest's sequence
             # numbers. Twitch downloads the channel's own in-progress VOD
             # instead of the live edge - see platform_of()'s docstring.
@@ -1546,6 +1567,7 @@ class Recorder:
             # go and read the log.
             missed = _missed_stream(tail)
             self.last_missed = missed
+            self.last_refused_from_start = from_start_refused(tail)
             if missed:
                 self.say(f"MISSED a stream at "
                          f"{time.strftime('%H:%M:%S')} - {missed}. "
@@ -1932,6 +1954,7 @@ class Recorder:
             self.say(f"WARNING: {warning}")
 
         self.say(f"Waiting for {self.name} to go live...")
+        self.from_live_edge = False
         resumes = 0
         missed_tries = 0
         while True:
@@ -1964,6 +1987,16 @@ class Recorder:
 
             if code in (127, 130):
                 return None
+            if (code != 0 and self.last_refused_from_start
+                    and not self.from_live_edge):
+                # Live, but no VOD to start from. Straight back in from
+                # the live edge - not a resume, not a poll later: every
+                # second spent here is a second of the stream not saved.
+                self.from_live_edge = True
+                self.say(f"{self.name} is live but can't be recorded from "
+                         f"its first second (no VOD of this broadcast yet) "
+                         f"- recording from right now instead.")
+                continue
             if code == 0:
                 # yt-dlp says it is done. Believed on its own once - the
                 # recorder was delivering a stream while it was still
@@ -2124,9 +2157,14 @@ def _source_loop(recorder: "Recorder", once: bool, stop) -> None:
                 # mid-scan, one bad permission check - none of that
                 # should cost every recording after it from one source
                 # that happens to run for days unattended.
-                recorder.say(f"ERROR: {type(exc).__name__}: {exc} - this "
-                             f"source crashed but the window is still "
-                             f"open. Trying again in "
+                import traceback
+
+                frame = traceback.extract_tb(exc.__traceback__)[-1:]
+                where = (f" (at {os.path.basename(frame[0].filename)}:"
+                         f"{frame[0].lineno} {frame[0].name})" if frame else "")
+                recorder.say(f"ERROR: {type(exc).__name__}: {exc}{where} - "
+                             f"{getattr(recorder, 'name', 'this source')} crashed but the window is "
+                             f"still open. Trying again in "
                              f"{recorder.poll_seconds}s.")
             if once:
                 return
