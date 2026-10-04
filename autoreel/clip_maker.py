@@ -695,14 +695,17 @@ def specs_from_segments(segments: Iterable[dict], count: int = DEFAULT_CLIP_COUN
     listed = list(segments)
     span = max(0.0, (listed[-1].get("end", 0.0) if listed else 0.0)
                - (listed[0].get("start", 0.0) if listed else 0.0))
-    effective_gap = spread_gap_for(span, count, min_gap_seconds)
-    if effective_gap > min_gap_seconds:
-        # NOT "to cover the whole N min" any more - that is exactly what
-        # it stopped doing when the gap was capped, and a message that
-        # describes the old behaviour is worse than no message.
-        print(f"[Clips] Keeping chosen clips at least "
-              f"{effective_gap / 60:.0f} min apart so no two are the same "
-              f"moment.")
+    # When the LLM is ranking, trust it to avoid same-scene repetition -
+    # the system prompt already instructs this explicitly. Spreading the
+    # gap before the LLM only hides candidates it should have seen.
+    # Only spread when the scorer is doing the final pick alone (no LLM).
+    if llm_rank:
+        effective_gap = min_gap_seconds
+    else:
+        effective_gap = spread_gap_for(span, count, min_gap_seconds)
+        if effective_gap > min_gap_seconds:
+            print(f"[Clips] Keeping chosen clips at least "
+                  f"{effective_gap / 60:.0f} min apart (no LLM configured).")
 
     pool = count * CANDIDATE_MULTIPLIER if llm_rank else count
     shortlist = scorer.select_clips(listed, count=pool,
