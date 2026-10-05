@@ -409,6 +409,9 @@ def make_clips(cfg, source_path: str, title: str,
         # Frames alongside the transcript. Free on the same Gemini tier
         # the text pass already uses.
         use_vision=bool(clips_cfg.get("use_vision", True)),
+        # An editor model that watches AND listens to every candidate
+        # before it is cut - see autoreel/watch_pass.
+        watch_pass=bool(clips_cfg.get("watch_pass", True)),
         # A model reads the shortlist and says which of them a person
         # would post - the one thing keyword scoring cannot do. Costs
         # nothing without a key: it falls back to the scores silently.

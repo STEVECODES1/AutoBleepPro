@@ -279,9 +279,12 @@ def trim_filter(keeps: Sequence) -> str:
 
 
 def trim_args(source: str, out_path: str, keeps: Sequence,
-              encoder: str = "libx264", preset: str = "veryfast",
+              encoder: str = "auto", preset: str = "veryfast",
               crf: int = 20) -> list:
     """One ffmpeg invocation. One decode, one encode, one output."""
+    if encoder in ("auto", "nvenc", "gpu"):
+        from autoreel.gpu import best_h264_encoder
+        encoder = best_h264_encoder(encoder)
     quality = (["-c:v", "h264_nvenc", "-preset", "p4", "-cq", str(crf)]
                if encoder == "h264_nvenc"
                else ["-c:v", "libx264", "-preset", preset, "-crf", str(crf)])
@@ -298,7 +301,7 @@ def trim_args(source: str, out_path: str, keeps: Sequence,
 
 
 def apply_trim(source: str, out_path: str, cuts: Sequence, duration: float,
-               encoder: str = "libx264", preset: str = "veryfast",
+               encoder: str = "auto", preset: str = "veryfast",
                crf: int = 20) -> str:
     """Write `source` minus `cuts`. Returns the path actually written.
 

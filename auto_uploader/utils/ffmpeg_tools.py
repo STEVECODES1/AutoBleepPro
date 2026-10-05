@@ -69,8 +69,12 @@ def nvenc_works() -> bool:
     """
     if "h264_nvenc" not in available_encoders():
         return False
+    # 320x240, not 128x128: NVENC refuses frames under ~145px wide
+    # ("Frame Dimension less than the minimum supported value"), so the
+    # old 128x128 probe failed on a working RTX 4060 and every color-graded
+    # render silently fell back to CPU libx264 - about 4x slower.
     return _run(["ffmpeg", "-y", "-hide_banner", "-f", "lavfi",
-                 "-i", "color=c=black:s=128x128:d=0.1", "-c:v", "h264_nvenc",
+                 "-i", "color=c=black:s=320x240:d=0.1", "-c:v", "h264_nvenc",
                  "-f", "null", "-"], timeout=60)
 
 
@@ -110,6 +114,7 @@ def mux_audio(
     encode_preset: str = "fast",
     audio_bitrate: str = "192k",
     allow_stream_copy: bool = True,
+    video_filter: str = "",
 ) -> Optional[str]:
     """Put `audio_path` onto `video_path`'s pictures, writing `out_path`.
 
@@ -173,11 +178,20 @@ def mux_audio(
 
     # 2. Re-encode. NVENC when it's real, otherwise libx264.
     encoder = pick_video_encoder(encoder_preference)
-    quality = (["-preset", "p4", "-cq", "23"] if encoder == "h264_nvenc"
-               else ["-preset", encode_preset, "-crf", "20"])
+    # p5 / cq 19 measured against libx264 crf 18 on a color-graded 1080p30
+    # sample: SSIM 0.984, same speed as p4 (the filters, not the encoder,
+    # set the pace), so take the better quality.
+    # Capped at 6 Mbit/s: the stream recordings are only ~4 Mbit/s to begin
+    # with, so spending more adds upload time, not detail. Uncapped, a 2h
+    # VOD came out 7.7 GB and took ~1.5h to upload.
+    quality = (["-preset", "p5", "-rc", "vbr", "-cq", "19", "-b:v", "0",
+                "-maxrate", "6M", "-bufsize", "12M"]
+               if encoder == "h264_nvenc"
+               else ["-preset", encode_preset, "-crf", "18"])
+    vf_args = (["-vf", video_filter] if video_filter else [])
     if _run(["ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
              "-i", video_path, "-i", audio_path,
-             *common, "-c:v", encoder, *quality,
+             *common, "-c:v", encoder, *quality, *vf_args,
              "-pix_fmt", "yuv420p", out_path]):
         if os.path.exists(out_path) and os.path.getsize(out_path) > 0:
             return encoder
@@ -325,3 +339,119 @@ def is_already_vertical(path: str) -> bool:
     if not width or not height:
         return False
     return abs((width / height) - (9 / 16)) <= VERTICAL_TOLERANCE
+
+
+# ---------------------------------------------------------------------------
+# Intro prepend
+#
+# The old prepend was a plain `-f concat -c copy` of intro.mp4 + the VOD.
+# That only works when both files share frame rate, timebase, and audio
+# format. The CapCut intro is 60fps / timebase 1/60 / 44.1kHz stereo; the
+# VOD is 30fps / timebase 1/90000. Stream-copying across that mismatch
+# corrupts the timestamps: a 69 second test came out "103,513 seconds"
+# long, so YouTube rejected the 2h VOD with "Video too long" (>12h).
+#
+# Fix: re-encode the (9 second) intro to match the VOD exactly, then
+# concat. Then VERIFY the result's length before handing it to the
+# uploader. If anything is off, return False and the caller uploads
+# without the intro rather than shipping a broken file.
+# ---------------------------------------------------------------------------
+
+def _probe_json(path: str) -> dict:
+    import json
+    try:
+        r = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries",
+             "format=duration:stream=codec_type,r_frame_rate,time_base,width,height,"
+             "sample_rate,channels",
+             "-of", "json", path],
+            capture_output=True, text=True, timeout=300)
+        return json.loads(r.stdout or "{}")
+    except Exception:
+        return {}
+
+
+def prepend_intro(intro_path: str, main_path: str, out_path: str) -> bool:
+    """Write intro + main to out_path. True only if the result checks out."""
+    import hashlib
+    import tempfile
+
+    if not have_ffmpeg():
+        return False
+    main = _probe_json(main_path)
+    intro = _probe_json(intro_path)
+    try:
+        v = next(s for s in main["streams"] if s["codec_type"] == "video")
+        a = next(s for s in main["streams"] if s["codec_type"] == "audio")
+        main_dur = float(main["format"]["duration"])
+        intro_dur = float(intro["format"]["duration"])
+        fps = v["r_frame_rate"]
+        w, h = int(v["width"]), int(v["height"])
+        timescale = int(v["time_base"].split("/")[1])
+        rate, ch = int(a["sample_rate"]), int(a["channels"])
+    except (KeyError, StopIteration, ValueError, TypeError) as exc:
+        print(f"[Intro] could not read stream info ({exc}) - skipping intro")
+        return False
+
+    # The matched intro is cached per (intro file, target format), so it is
+    # encoded once, not on every upload.
+    st = os.stat(intro_path)
+    key = hashlib.sha1(f"{os.path.abspath(intro_path)}|{st.st_mtime}|{st.st_size}|"
+                       f"{fps}|{w}x{h}|{timescale}|{rate}|{ch}".encode()).hexdigest()[:12]
+    matched = os.path.join(tempfile.gettempdir(), f"autobleep_intro_{key}.mp4")
+    if not (os.path.exists(matched) and os.path.getsize(matched) > 0):
+        partial = matched + ".partial.mp4"
+        ok = _run(["ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+                   "-i", intro_path,
+                   "-vf", (f"scale={w}:{h}:force_original_aspect_ratio=decrease,"
+                           f"pad={w}:{h}:(ow-iw)/2:(oh-ih)/2,fps={fps},format=yuv420p"),
+                   *(["-c:v", "h264_nvenc", "-profile:v", "high", "-preset", "p5",
+                      "-rc", "vbr", "-cq", "19", "-b:v", "0"] if nvenc_works() else
+                     ["-c:v", "libx264", "-profile:v", "high", "-preset", "medium", "-crf", "18"]),
+                   "-video_track_timescale", str(timescale),
+                   "-c:a", "aac", "-ar", str(rate), "-ac", str(ch), "-b:a", "192k",
+                   "-movflags", "+faststart", partial], timeout=600)
+        if not ok:
+            _cleanup_partial(partial)
+            print("[Intro] could not re-encode the intro to match - skipping intro")
+            return False
+        os.replace(partial, matched)
+
+    list_fd, list_path = tempfile.mkstemp(suffix="_concat.txt")
+    try:
+        with os.fdopen(list_fd, "w", encoding="utf-8") as fh:
+            fh.write("file '" + matched.replace(os.sep, "/") + "'\n")
+            fh.write("file '" + os.path.abspath(main_path).replace(os.sep, "/") + "'\n")
+        ok = _run(["ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+                   "-f", "concat", "-safe", "0", "-i", list_path,
+                   "-c", "copy", "-movflags", "+faststart", out_path])
+    finally:
+        try:
+            os.unlink(list_path)
+        except OSError:
+            pass
+    if not ok:
+        _cleanup_partial(out_path)
+        print("[Intro] concat failed - skipping intro")
+        return False
+
+    # Verify before upload. This is the check that would have caught the
+    # 28-hour file.
+    got = _probe_json(out_path).get("format", {}).get("duration")
+    expected = main_dur + intro_dur
+    if got is None or abs(float(got) - expected) > 5:
+        print(f"[Intro] result is {got}s but should be ~{expected:.0f}s - "
+              f"discarding it and uploading without intro")
+        _cleanup_partial(out_path)
+        return False
+    seam = max(0.0, intro_dur - 3)
+    r = subprocess.run(["ffmpeg", "-v", "error", "-ss", f"{seam:.2f}", "-i", out_path,
+                        "-t", "10", "-f", "null", "-"],
+                       capture_output=True, text=True, timeout=300)
+    if r.returncode != 0:
+        print("[Intro] the intro/stream join does not decode cleanly - "
+              "uploading without intro")
+        _cleanup_partial(out_path)
+        return False
+    print(f"[Intro] prepended and verified ({float(got):.0f}s total)")
+    return True

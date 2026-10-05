@@ -73,6 +73,8 @@ class YouTubeConfig:
     # off, which is the shipped default: a comment posted under somebody's
     # own video is theirs to opt into, not to discover afterwards.
     link_comment: str = ""
+    # Optional path to an intro video to prepend before every VOD upload.
+    intro_path: str = ""
 
 
 @dataclass
@@ -395,6 +397,7 @@ def load_config(config_path: str = "config.json", env_path: str = ".env") -> App
         token_path=os.path.join(project_root, "youtube_token.json"),
         censor_uploads=bool(yt.get("censor_uploads", True)),
         upload_chunk_mb=float(yt.get("upload_chunk_mb", 8) or 8),
+        intro_path=str(yt.get("intro_path", "") or ""),
     )
 
     rumble = RumbleConfig(

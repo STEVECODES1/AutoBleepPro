@@ -504,6 +504,9 @@ def build_filter(strategy: str = DEFAULT_CROP_STRATEGY,
 
 
 def _encoder_args(encoder: str, preset: str = "fast", crf: int = 20) -> list:
+    if encoder in ("auto", "nvenc", "gpu"):
+        from autoreel.gpu import best_h264_encoder
+        encoder = best_h264_encoder(encoder)
     if encoder == "h264_nvenc":
         # NVENC spells quality as -cq, not -crf, and ignores libx264's
         # preset names.
@@ -516,7 +519,7 @@ def _encoder_args(encoder: str, preset: str = "fast", crf: int = 20) -> list:
 def render_clip(source_path: str, spec: ClipSpec, output_path: str,
                 strategy: str = DEFAULT_CROP_STRATEGY,
                 caption_path: Optional[str] = None,
-                encoder: str = "libx264",
+                encoder: str = "auto",
                 preset: str = "fast",
                 crf: int = 20,
                 region: Optional[dict] = None,
@@ -667,7 +670,9 @@ def specs_from_segments(segments: Iterable[dict], count: int = DEFAULT_CLIP_COUN
                         llm_provider: str = "",
                         llm_model: str = "",
                         source_path: str = "",
-                        use_vision: bool = True) -> list:
+                        use_vision: bool = True,
+                        tighten_bounds: bool = True,
+                        watch: bool = True) -> list:
     """Pick clip windows from a transcript.
 
     Two stages, and the second is optional. The scorer shortlists on what
@@ -760,6 +765,16 @@ def specs_from_segments(segments: Iterable[dict], count: int = DEFAULT_CLIP_COUN
         # it: "watched 24 candidates" then "read 72".
         print(f"[Clips] The model chose {len(highlights)} clips.")
 
+    # An editor that WATCHES AND LISTENS - see autoreel/watch_pass. The
+    # passes above read words and two still frames; this one hears the
+    # timing, the tone and the room laughing. No key or any failure
+    # leaves the picks exactly as they are.
+    if watch and source_path:
+        from .watch_pass import rerank
+
+        highlights = rerank(highlights, shortlist, count, source_path,
+                            floor=max(1, round(count * UNSURE_SHARE)))
+
     # THE FINAL DEDUPE. Two clips of the same moment reached uploads
     # before this: the shortlist handed to the model (or, with no model
     # opinion, ranked directly) is built by select_clips() above, whose
@@ -788,13 +803,21 @@ def specs_from_segments(segments: Iterable[dict], count: int = DEFAULT_CLIP_COUN
     highlights = sorted(deduped, key=lambda h: h.start)
 
     titled_by = "model" if named_by_model else "scorer"
-    return [
+    specs = [
         ClipSpec(start=h.start, end=h.end, index=i,
                  title=(h.hook or h.text).strip(),
                  score=h.score, transcript=h.text.strip(),
                  titled_by=titled_by)
         for i, h in enumerate(highlights, start=1)
     ]
+    # Start on the line that opens the bit, end after the reaction - see
+    # autoreel/clip_bounds. Needs a model; with none it changes nothing.
+    if tighten_bounds and llm_rank:
+        from .clip_bounds import refine
+
+        specs = refine(specs, listed, min_seconds, max_seconds,
+                       provider=llm_provider, model=llm_model)
+    return specs
 
 
 def _clean_basename(raw: str) -> str:
@@ -847,7 +870,7 @@ class ClipMaker:
     count: int = DEFAULT_CLIP_COUNT
     min_seconds: float = DEFAULT_MIN_SECONDS
     max_seconds: float = DEFAULT_MAX_SECONDS
-    encoder: str = "libx264"
+    encoder: str = "auto"
     preset: str = "fast"
     crf: int = 20
     caption_style: str = "word"
@@ -890,6 +913,9 @@ class ClipMaker:
     # fight starting - and the transcript for those says "...what" or
     # nothing at all.
     use_vision: bool = True
+    # Gemini watches and listens to each candidate before it is cut -
+    # see autoreel/watch_pass. clips.watch_pass false turns it off.
+    watch_pass: bool = True
 
     @property
     def strategy(self) -> str:
@@ -1035,7 +1061,8 @@ class ClipMaker:
                                     llm_provider=self.llm_provider,
                                     llm_model=self.llm_model,
                                     source_path=source_path,
-                                    use_vision=self.use_vision)
+                                    use_vision=self.use_vision,
+                                    watch=self.watch_pass)
         if not specs:
             return []
 
@@ -1057,6 +1084,19 @@ class ClipMaker:
         for spec in specs:
             output_path = os.path.join(self.output_dir, clip_filename(basename, spec))
             caption_path = None
+            if not self.captions and self.burn_hook and spec.title.strip():
+                # The hook rides in the caption file, which used to be
+                # built only when captions were on - so with captions off
+                # (this channel's setting) burn_hook=true did nothing and
+                # every clip went out with no title at the top. A file
+                # with no words in it still carries the hook.
+                caption_path = caption_file_for_clip(
+                    os.path.join(self.output_dir,
+                                 f".{safe_stem(basename)}_clip{spec.index:02d}.ass"),
+                    [], spec.start, spec.end, 0.0,
+                    style=self.caption_style,
+                    uppercase=self.caption_uppercase,
+                    hook=spec.title)
             if self.captions:
                 # Line the words up with the sound before burning them in.
                 #
@@ -1211,7 +1251,7 @@ class ClipMaker:
 
 def make_vertical(source_path: str, output_path: str,
                   strategy: str = DEFAULT_CROP_STRATEGY,
-                  encoder: str = "libx264", preset: str = "fast") -> Optional[str]:
+                  encoder: str = "auto", preset: str = "fast") -> Optional[str]:
     """Re-frame a 16:9 clip as a full-bleed 9:16 video. Path, or None.
 
     Instagram accepts a landscape video and letterboxes it - black bars

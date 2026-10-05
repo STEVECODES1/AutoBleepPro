@@ -98,3 +98,6 @@ auto_uploader/downloaded_vods/
 # of which source videos have been used - per machine, like posting_state.
 auto_uploader/compilations/
 auto_uploader/compilation_ledger.json
+
+# Queued clip videos waiting to post - START.bat's 'git stash -u' must never sweep these away
+/auto_uploader/clip_queue_files/

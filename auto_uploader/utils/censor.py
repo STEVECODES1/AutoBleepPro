@@ -153,6 +153,61 @@ def _extract_audio(source_path: str, raw_audio_path: str) -> None:
         clip.close()
 
 
+def _mute_full_quality(source_path: str, whisper_wav: str, engine, violations,
+                       out_wav: str) -> bool:
+    """Silence the flagged spans on the source's ORIGINAL audio track.
+
+    Same spans the pydub path would mute (engine.mute_spans), applied by
+    ffmpeg to the full-rate, full-channel audio. Audio is cut into 10 ms
+    frames first so each mute lands within 10 ms of where it should.
+    """
+    import subprocess
+    import wave
+
+    if not have_ffmpeg():
+        return False
+    try:
+        with wave.open(whisper_wav, "rb") as wf:
+            total_ms = int(wf.getnframes() * 1000 / wf.getframerate())
+        spans = engine.mute_spans(violations, total_ms)
+    except Exception as exc:
+        print(f"[Censor] full-quality mute unavailable ({exc}) - using 16k path")
+        return False
+    if not spans:
+        return False
+    # ffmpeg's expression parser can't take hundreds of terms in one
+    # expression ("Cannot allocate memory"), so split the spans across a
+    # chain of volume filters, 40 spans each.
+    stages = []
+    for i in range(0, len(spans), 40):
+        expr = "+".join(f"between(t,{s / 1000:.3f},{e / 1000:.3f})"
+                        for s, e in spans[i:i + 40])
+        stages.append(f"volume=volume=0:enable='{expr}'")
+    script = out_wav + ".af.txt"
+    try:
+        with open(script, "w", encoding="utf-8") as fh:
+            fh.write("asetnsamples=n=480:p=0," + ",".join(stages))
+        r = subprocess.run(["ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+                            "-i", source_path, "-vn", "-map", "0:a:0",
+                            "-filter_script:a", script,
+                            "-c:a", "pcm_s16le", out_wav],
+                           capture_output=True, text=True, timeout=60 * 60 * 2)
+        ok = r.returncode == 0 and os.path.exists(out_wav) and os.path.getsize(out_wav) > 0
+        if not ok:
+            print(f"[Censor] full-quality mute failed - using 16k path: {r.stderr[-300:]}")
+        else:
+            print(f"[Censor] muted {len(spans)} span(s) on the full-quality audio track")
+        return ok
+    except Exception as exc:
+        print(f"[Censor] full-quality mute error ({exc}) - using 16k path")
+        return False
+    finally:
+        try:
+            os.remove(script)
+        except OSError:
+            pass
+
+
 def _render(source_path: str, clean_audio_path: str, output_video_path: str,
             speed: dict) -> str:
     """Attach the censored audio to the video. Returns the strategy used."""
@@ -161,6 +216,7 @@ def _render(source_path: str, clean_audio_path: str, output_video_path: str,
         encoder_preference=str(speed.get("hardware_encode", "auto")),
         encode_preset=str(speed.get("encode_preset", "fast")),
         allow_stream_copy=bool(speed.get("stream_copy_video", True)),
+        video_filter=str(speed.get("video_filter", "")),
     )
     if strategy:
         return strategy
@@ -368,7 +424,9 @@ def censor_video(
     # "silence" (nor a "tiny"-model pass reused after switching to "base").
     # Without this, changing the config appears to do nothing on any file
     # that was already processed.
-    cache_key = (f"{bleep_method}-{model_name}-"
+    # "hq": renders from before the full-quality-audio fix carried 16 kHz
+    # mono sound and must not be reused.
+    cache_key = (f"{bleep_method}-{model_name}-hq-"
                 f"{_settings_fingerprint(padding_ms, mute_whole_segment, only_categories, custom_words, allow_words)}")
     output_video_path = os.path.join(work_dir, f"{basename}_CENSORED_{cache_key}.mp4")
 
@@ -462,10 +520,22 @@ def censor_video(
             timer.mark("audio extract")
         _report_risk(violations, mute_whole_segment=mute_whole_segment)
 
-        audio_segment = AudioSegment.from_wav(raw_audio_path)
-        censored_audio = engine.censor_audio(audio_segment, violations, method=bleep_method)
-        censored_audio.export(clean_audio_path, format="wav")
-        timer.mark("censor audio")
+        # The WAV above is 16 kHz mono because that is what Whisper wants.
+        # It used to ALSO be the audio that got muted and put on the
+        # uploaded video - so every censored VOD and clip went out with
+        # phone-call-quality sound. Mute the original full-quality track
+        # with ffmpeg instead; fall back to the old path only if that fails.
+        hq_done = False
+        if bleep_method != "beep" and speed.get("full_quality_audio", True):
+            hq_done = _mute_full_quality(source_path, raw_audio_path, engine,
+                                         violations, clean_audio_path)
+            if hq_done:
+                timer.mark("censor audio [full quality]")
+        if not hq_done:
+            audio_segment = AudioSegment.from_wav(raw_audio_path)
+            censored_audio = engine.censor_audio(audio_segment, violations, method=bleep_method)
+            censored_audio.export(clean_audio_path, format="wav")
+            timer.mark("censor audio [16k fallback]")
 
         # Rendered under a temporary name and renamed only once complete.
         # ffmpeg wrote straight to the final name, and a finished-looking

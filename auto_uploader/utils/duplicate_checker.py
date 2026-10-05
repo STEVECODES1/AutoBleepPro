@@ -114,7 +114,32 @@ class DuplicateChecker:
             try:
                 with open(tmp, "w", encoding="utf-8") as f:
                     json.dump(self._seen, f, indent=2)
-                os.replace(tmp, self.store_path)
+                # Windows refuses the replace while ANY process has the file
+                # open, even just reading it (antivirus, OneDrive, another
+                # tool reading the history). 2.5s of retries was not enough
+                # and lost the record of a finished 2-hour YouTube upload on
+                # 2026-10-05 - so keep trying for about half a minute.
+                for _attempt in range(20):
+                    try:
+                        os.replace(tmp, self.store_path)
+                        break
+                    except PermissionError:
+                        if _attempt == 19:
+                            # Still held. The file can usually be REWRITTEN
+                            # even when it cannot be replaced, and losing the
+                            # record means re-uploading a finished video, so
+                            # write it in place rather than crash.
+                            with open(tmp, encoding="utf-8") as src:
+                                text = src.read()
+                            with open(self.store_path, "r+", encoding="utf-8") as dst:
+                                dst.seek(0)
+                                dst.write(text)
+                                dst.truncate()
+                            os.remove(tmp)
+                            print("[Dedup] Upload history was locked by another "
+                                  "program - saved it in place instead.")
+                            break
+                        import time as _time; _time.sleep(min(0.5 * (_attempt + 1), 3.0))
             except OSError:
                 try:
                     os.remove(tmp)

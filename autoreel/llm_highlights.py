@@ -675,6 +675,10 @@ def build_vision_contents(candidates: list, count: int, source_path: str,
     # whether the frames could be read.
     opening = (f"Pick AT MOST {count} of these {len(candidates)} "
                f"candidates - fewer if fewer are good.\n")
+    from .show_bible import bible_block
+    bible = bible_block()
+    if bible:
+        opening += bible + "\n"
     examples = hits_block()
     if examples:
         opening += examples + "\n"
@@ -769,10 +773,18 @@ def hits_block(path: str = "") -> str:
 
 
 def build_prompt(candidates: list, count: int, lessons: Optional[list] = None,
-                 hits: Optional[str] = None) -> str:
+                 hits: Optional[str] = None, bible: Optional[str] = None) -> str:
     """The candidate list, as the model sees it."""
     lines = [f"Pick AT MOST {count} of these {len(candidates)} candidates - "
              f"fewer if fewer are good.", ""]
+    # Who the streamer is, his characters and running jokes - see
+    # autoreel/show_bible. First, because everything below is read in
+    # its light.
+    if bible is None:
+        from .show_bible import bible_block
+        bible = bible_block()
+    if bible:
+        lines += [bible, ""]
     # Before the candidates, because it changes how they are read.
     examples = hits_block() if hits is None else hits
     if examples:

@@ -126,10 +126,12 @@ def pieces(duration: float, chunk: float = CHUNK_SECONDS) -> List[tuple]:
 def _proxy(source: str, start: float, length: float, out_path: str,
            video_kbps: int = 250) -> bool:
     """A 640x360 copy of one piece, small enough to upload."""
+    from autoreel.gpu import best_h264_encoder
+    enc = best_h264_encoder()
     args = ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
             "-ss", f"{start:.2f}", "-t", f"{length:.2f}", "-i", source,
             "-vf", "scale=-2:360,fps=15",
-            "-c:v", "libx264", "-preset", "veryfast",
+            "-c:v", enc, "-preset", ("p4" if enc == "h264_nvenc" else "veryfast"),
             "-b:v", f"{video_kbps}k", "-maxrate", f"{video_kbps}k",
             "-bufsize", f"{video_kbps * 2}k",
             "-c:a", "aac", "-b:a", "48k", "-ac", "1", out_path]

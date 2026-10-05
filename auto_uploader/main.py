@@ -1598,9 +1598,14 @@ def _preview_post(cfg, wanted: str = "") -> int:
         if not os.path.isfile(clip_path):
             print("     WARNING: that file is not on disk any more.")
 
-        censored = (config.get(platform, {}) or {}).get("censor_uploads")
+        # Postproxy routes post with their base platform's audio rule
+        # (postproxy_tiktok -> the tiktok block) - the posting code does
+        # this already; the preview used to say "as recorded" for them.
+        from utils.clip_queue import base_platform as _base_platform
+        _bp = _base_platform(platform)
+        censored = (config.get(_bp, {}) or {}).get("censor_uploads")
         if censored is None:
-            censored = CENSOR_AUDIO_DEFAULTS.get(platform, False)
+            censored = CENSOR_AUDIO_DEFAULTS.get(_bp, False)
         mode = "all" if censored is True else str(censored or "")
         print(f"     audio: {_AUDIO_NOTE.get(mode, 'as recorded')}")
 
@@ -2821,30 +2826,21 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
             )
             _intro_abs = os.path.abspath(_intro_file) if _intro_file else ""
             if _intro_abs and os.path.isfile(_intro_abs):
-                import subprocess as _sp, tempfile as _tf
-                _list_path = None
+                # Old version stream-copied intro + VOD with mismatched frame
+                # rates/timebases and produced a "28 hour" file YouTube
+                # rejected as "Video too long". prepend_intro() re-encodes the
+                # intro to match and verifies the result before upload.
+                import tempfile as _tf
+                from utils.ffmpeg_tools import prepend_intro as _prepend_intro
+                _intro_tmp = None
                 try:
-                    _tmp_fd, _intro_tmp = _tf.mkstemp(
-                        suffix=os.path.splitext(yt_source)[1] or ".mp4"
-                    )
+                    _tmp_fd, _intro_tmp = _tf.mkstemp(suffix=".mp4")
                     os.close(_tmp_fd)
-                    _list_fd, _list_path = _tf.mkstemp(suffix="_concat.txt")
-                    with os.fdopen(_list_fd, "w", encoding="utf-8") as _fh:
-                        _fh.write("file '" + _intro_abs.replace(os.sep, "/") + "'\n")
-                        _fh.write("file '" + os.path.abspath(yt_source).replace(os.sep, "/") + "'\n")
-                    _r = _sp.run(
-                        ["ffmpeg", "-y", "-f", "concat", "-safe", "0",
-                         "-i", _list_path, "-c", "copy", _intro_tmp],
-                        capture_output=True, text=True,
-                    )
-                    if _r.returncode == 0:
+                    if _prepend_intro(_intro_abs, yt_source, _intro_tmp):
                         print("[YouTube] Intro prepended — uploading with intro")
                         yt_source = _intro_tmp
                     else:
-                        print(
-                            "[YouTube] WARNING: intro concat failed — uploading without it\n"
-                            + _r.stderr[-500:]
-                        )
+                        print("[YouTube] WARNING: intro skipped — uploading without it")
                         try:
                             os.unlink(_intro_tmp)
                         except OSError:
@@ -2858,12 +2854,6 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
                         except OSError:
                             pass
                         _intro_tmp = None
-                finally:
-                    if _list_path:
-                        try:
-                            os.unlink(_list_path)
-                        except OSError:
-                            pass
             elif _intro_abs:
                 print(f"[YouTube] intro.mp4 not found at {_intro_abs!r} — uploading without intro")
 
@@ -4198,6 +4188,21 @@ def main(argv=None) -> int:
             print("[Learn] Nothing remembered yet. Clips cut from now on are "
                   "recorded automatically; this reads that record.")
             return 0
+
+        # Match every posted clip to its live post on Instagram, Facebook,
+        # TikTok, Rumble and YouTube and read its views - see
+        # utils/view_harvest. This is what fills the memory at all.
+        try:
+            from utils.view_harvest import harvest_all
+
+            print("[Learn] Reading views from Instagram, Facebook, TikTok, "
+                  "Rumble and YouTube...")
+            got = harvest_all(say=print)
+            print(f"[Learn] Counted: {got}" if got
+                  else "[Learn] No new view counts found.")
+            ledger = Ledger(path)
+        except Exception as exc:
+            print(f"[Learn] View harvest failed ({exc}) - using what is stored.")
 
         pending = len(ledger.unchecked())
         print(f"[Learn] {total} clip(s) remembered, {pending} not yet counted.")

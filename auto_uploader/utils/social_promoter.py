@@ -350,12 +350,23 @@ def _publisher_for(platform: str, config: dict):
             from publishers.facebook import FacebookPublisher
             return FacebookPublisher(config)
     if platform == "instagram":
+        # Official Graph API first (verified working, @stackswopomanz).
+        # The old order picked instagrapi whenever its MODULE imported -
+        # which it always does, because it swallows the missing-package
+        # error itself - so every clip went to a publisher that could
+        # never post, tripped the circuit breaker, and Graph never ran.
+        from publishers.instagram import InstagramPublisher
+        graph = InstagramPublisher(config)
+        if graph.ready():
+            return graph
         try:
             from publishers.instagram_free import InstagramFreePublisher
-            return InstagramFreePublisher(config)
+            free = InstagramFreePublisher(config)
+            if free.ready():
+                return free
         except ImportError:
-            from publishers.instagram import InstagramPublisher
-            return InstagramPublisher(config)
+            pass
+        return graph
     if platform == "tiktok":
         try:
             from publishers.tiktok_free import TikTokFreePublisher
