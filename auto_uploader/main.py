@@ -2799,6 +2799,7 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
     rumble_upload_started = threading.Event()
 
     def do_youtube(parallel: bool) -> None:
+        _intro_tmp = None  # temp concat file (with intro); cleaned up in finally
         try:
             # Resolved HERE, not before dispatch - this is the slow part
             # (transcription, minutes on a long VOD) and it runs in
@@ -2809,6 +2810,63 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
             # way, so the head-start wait below is usually an instant
             # pass rather than an actual delay.
             yt_source = upload_path_for(cfg.youtube.censor_uploads)
+
+            # --- Prepend intro (YouTube VOD only — never clips, never Rumble) ---
+            # Looks for cfg.youtube.intro_path, then YOUTUBE_INTRO_PATH env var,
+            # then ./intro.mp4 next to main.py.  The intro file is NEVER deleted.
+            _intro_file = (
+                getattr(cfg.youtube, "intro_path", None)
+                or os.environ.get("YOUTUBE_INTRO_PATH", "")
+                or os.path.join(os.path.dirname(os.path.abspath(__file__)), "intro.mp4")
+            )
+            _intro_abs = os.path.abspath(_intro_file) if _intro_file else ""
+            if _intro_abs and os.path.isfile(_intro_abs):
+                import subprocess as _sp, tempfile as _tf
+                _list_path = None
+                try:
+                    _tmp_fd, _intro_tmp = _tf.mkstemp(
+                        suffix=os.path.splitext(yt_source)[1] or ".mp4"
+                    )
+                    os.close(_tmp_fd)
+                    _list_fd, _list_path = _tf.mkstemp(suffix="_concat.txt")
+                    with os.fdopen(_list_fd, "w", encoding="utf-8") as _fh:
+                        _fh.write("file '" + _intro_abs.replace(os.sep, "/") + "'\n")
+                        _fh.write("file '" + os.path.abspath(yt_source).replace(os.sep, "/") + "'\n")
+                    _r = _sp.run(
+                        ["ffmpeg", "-y", "-f", "concat", "-safe", "0",
+                         "-i", _list_path, "-c", "copy", _intro_tmp],
+                        capture_output=True, text=True,
+                    )
+                    if _r.returncode == 0:
+                        print("[YouTube] Intro prepended — uploading with intro")
+                        yt_source = _intro_tmp
+                    else:
+                        print(
+                            "[YouTube] WARNING: intro concat failed — uploading without it\n"
+                            + _r.stderr[-500:]
+                        )
+                        try:
+                            os.unlink(_intro_tmp)
+                        except OSError:
+                            pass
+                        _intro_tmp = None
+                except Exception as _exc:
+                    print(f"[YouTube] WARNING: intro prepend error: {_exc} — uploading without it")
+                    if _intro_tmp:
+                        try:
+                            os.unlink(_intro_tmp)
+                        except OSError:
+                            pass
+                        _intro_tmp = None
+                finally:
+                    if _list_path:
+                        try:
+                            os.unlink(_list_path)
+                        except OSError:
+                            pass
+            elif _intro_abs:
+                print(f"[YouTube] intro.mp4 not found at {_intro_abs!r} — uploading without intro")
+
             if parallel and rumble_will_run:
                 got_going = rumble_upload_started.wait(
                     timeout=RUMBLE_HEAD_START_TIMEOUT)
@@ -2867,6 +2925,11 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
             # immediately, so a Ctrl+C here can't cause a later re-upload -
             # but the interrupt still propagates and actually stops the
             # script, instead of being silently swallowed.
+            if _intro_tmp and os.path.isfile(_intro_tmp):
+                try:
+                    os.unlink(_intro_tmp)
+                except OSError:
+                    pass
             record("youtube", yt_title)
 
     def do_rumble(parallel: bool) -> None:
