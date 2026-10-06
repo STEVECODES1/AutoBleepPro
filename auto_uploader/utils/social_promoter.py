@@ -389,6 +389,10 @@ def _publisher_for(platform: str, config: dict):
     if platform == "youtube_shorts":
         from publishers.youtube_shorts import YouTubeShortsPublisher
         return YouTubeShortsPublisher(config)
+    if platform == "buffer_x":
+        # X video through Buffer's free plan - see publishers/buffer.py.
+        from publishers.buffer import BufferPublisher
+        return BufferPublisher(config, "twitter")
     if platform.startswith("zernio"):
         from publishers.zernio import ZernioPublisher
         return ZernioPublisher(config, platform)

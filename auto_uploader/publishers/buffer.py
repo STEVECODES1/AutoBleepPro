@@ -5,9 +5,12 @@ Why Buffer: X's own API is pay-per-post, and Buffer's free plan includes
 an X channel and API access (1 key, 3,000 requests per 30 days). Each post
 here is two or three requests, so that is a few hundred posts a month.
 
-LINK posts: Buffer only takes media by public URL (it does not accept an
-uploaded file), so a post carries the YouTube / Rumble link and X shows
-the preview card. Nothing needs hosting.
+Two kinds of post:
+  post_link - an announcement: the YouTube / Rumble link, X shows the
+              preview card. Nothing needs hosting.
+  post_clip - the clip itself as an X video (the clip queue's buffer_x).
+              Buffer only takes media by public URL, so the file is put
+              on Cloudinary first - see utils/cloud_host.py.
 
 Setup (once):
   1. buffer.com -> connect the X account as a channel.
@@ -24,6 +27,7 @@ import json
 import os
 import urllib.error
 import urllib.request
+from typing import Optional
 
 from .errors import NotConfigured
 
@@ -144,3 +148,48 @@ class BufferPublisher:
             return True
         print(f"[Buffer] X post refused: {result.get('message') or result}")
         return False
+
+    # ── native video (the clip queue) ────────────────────────────────
+
+    def post_clip(self, video_path: str, caption: str,
+                  dry_run: bool = False) -> Optional[str]:
+        """Post the clip itself as an X video. Buffer only takes media by
+        public URL, so the file goes to Cloudinary first (utils/
+        cloud_host.py) and Buffer fetches it from there."""
+        from utils import cloud_host
+
+        if not self.ready():
+            raise NotConfigured(
+                f"buffer: no API key. python main.py --set-env {KEY_NAME}=...")
+        if not cloud_host.ready():
+            raise NotConfigured(
+                "buffer: X video needs a public link and there is no host "
+                "set up. Free Cloudinary account, then: python main.py "
+                "--set-env CLOUDINARY_URL=cloudinary://...")
+        if not os.path.isfile(video_path):
+            raise NotConfigured(f"buffer: no such file {video_path}")
+        text = caption.strip()
+        if x_length(text) > X_LIMIT:
+            text = text[:X_LIMIT - 1].rstrip() + "…"
+        if dry_run:
+            print(f"[Buffer] DRY RUN - would post "
+                  f"{os.path.basename(video_path)} to X")
+            return "dry-run"
+        try:
+            url = cloud_host.host_video(video_path)
+        except Exception as exc:
+            print(f"[Buffer] Could not host the clip: {exc}")
+            return None
+        data = self._call(_CREATE, {"input": {
+            "channelId": self.channel_id(),
+            "text": text,
+            "schedulingType": "automatic",
+            "mode": "shareNow",
+            "assets": [{"video": {"url": url}}],
+        }})
+        result = data.get("createPost") or {}
+        post_id = (result.get("post") or {}).get("id")
+        if post_id:
+            return f"buffer post {post_id}"
+        print(f"[Buffer] X video refused: {result.get('message') or result}")
+        return None
