@@ -487,10 +487,110 @@ def guard(src: str, out_dir: str = "", say=print, device: str = "",
     """The path to upload: a music-free copy of src, or src itself when
     there is no music, or when anything at all goes wrong."""
     try:
+        why = _not_ready_here()
+        if why and not os.environ.get(_CHILD_FLAG):
+            # The uploader's own Python can be a different one from the
+            # one the GPU libraries are installed in (this machine runs
+            # the uploader on 3.14 with a CPU-only torch, and has a 3.12
+            # with CUDA torch, Demucs and PANNs). Hand the job to that
+            # one instead of skipping it - or of running Demucs over
+            # three hours of audio on the CPU.
+            other = _other_python()
+            if other:
+                say(f"[MusicGuard] This Python can't run it ({why}) - "
+                    f"using {other}.")
+                return _guard_in(other, src, out_dir, say)
+            say(f"[MusicGuard] Skipped - {why}, and no other Python here "
+                f"has the GPU libraries. Install them with: python -m pip "
+                f"install demucs panns_inference (and a CUDA torch).")
+            return src
         return _guard(src, out_dir, say, device, max_share)
     except Exception as exc:
         say(f"[MusicGuard] Skipped - uploading the copy as it was ({exc}).")
         return src
+
+
+_CHILD_FLAG = "AUTOBLEEP_MUSIC_GUARD_CHILD"
+_PROBE = ("import importlib.util as u, torch;"
+          "ok = all(u.find_spec(m) for m in "
+          "('panns_inference', 'demucs', 'torchaudio'));"
+          "print('READY' if ok and torch.cuda.is_available() else 'NO')")
+
+
+def _not_ready_here() -> str:
+    """'' when this interpreter can run the guard on the GPU, else why."""
+    import importlib.util
+
+    for module in ("panns_inference", "demucs", "torchaudio"):
+        if importlib.util.find_spec(module) is None:
+            return f"no {module}"
+    try:
+        import torch
+        if not torch.cuda.is_available():
+            return "its torch has no CUDA"
+    except Exception as exc:
+        return f"torch: {exc}"
+    return ""
+
+
+def _other_python() -> str:
+    """Another Python on this machine that has the GPU libraries, or ""."""
+    import sys
+
+    seen, found = {os.path.normcase(sys.executable)}, []
+    env = os.environ.get("MUSIC_GUARD_PYTHON", "")
+    if env:
+        found.append(env)
+    try:
+        listing = subprocess.run(["py", "-0p"], capture_output=True,
+                                 text=True, timeout=20).stdout
+        for line in listing.splitlines():
+            path = line.split()[-1] if line.strip() else ""
+            if path.lower().endswith("python.exe"):
+                found.append(path)
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    for path in found:
+        key = os.path.normcase(path)
+        if key in seen or not os.path.isfile(path):
+            continue
+        seen.add(key)
+        try:
+            answer = subprocess.run([path, "-c", _PROBE], capture_output=True,
+                                    text=True, timeout=120).stdout
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        if "READY" in answer:
+            return path
+    return ""
+
+
+def _guard_in(python: str, src: str, out_dir: str, say) -> str:
+    """Run the guard in another Python; its log lines come through `say`.
+    The child prints the path to upload as its last line."""
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    env = dict(os.environ, PYTHONIOENCODING="utf-8", PYTHONUNBUFFERED="1")
+    env[_CHILD_FLAG] = "1"
+    cmd = [python, "-m", "autoreel.music_guard", src]
+    if out_dir:
+        cmd += ["--out-dir", out_dir]
+    last = ""
+    proc = subprocess.Popen(cmd, cwd=root, env=env, stdout=subprocess.PIPE,
+                            stderr=subprocess.STDOUT, text=True,
+                            encoding="utf-8", errors="replace")
+    for line in proc.stdout:
+        line = line.rstrip()
+        if not line:
+            continue
+        if line.startswith("[MusicGuard]"):
+            say(line)
+        last = line
+    proc.wait()
+    if proc.returncode == 0 and last and os.path.isfile(last):
+        return last
+    say(f"[MusicGuard] Skipped - the helper Python did not finish "
+        f"(exit {proc.returncode}).")
+    return src
 
 
 def _guard(src, out_dir, say, device, max_share) -> str:
