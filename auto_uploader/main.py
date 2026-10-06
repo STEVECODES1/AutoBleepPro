@@ -4949,9 +4949,15 @@ def main(argv=None) -> int:
             # is meant to be open. Only a genuinely new cause is worth a
             # word, and then only a few.
             raw = " ".join(str(exc).split())
-            expected = ("cloudflare" in raw.lower()
-                        or "econnrefused" in raw.lower()
-                        or "could not reach chrome" in raw.lower())
+            # "HTTP Error 403" is Cloudflare too, by another name, and
+            # "browser fetch returned a non-feed page" is the browser
+            # route meeting the same missing feed - both are this normal
+            # state, and printed "(unexpected: ...)" on every start.
+            low = raw.lower()
+            expected = any(sign in low for sign in (
+                "cloudflare", "econnrefused", "could not reach chrome",
+                "http error 403", "forbidden", "non-feed page",
+                "browser fetch returned"))
             why = "" if expected else raw[:70].rsplit(" ", 1)[0]
             _say_once("rumble-feed",
                       f"[Rumble] No channel feed - Rumble publishes no RSS. "
