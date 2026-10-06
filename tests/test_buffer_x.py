@@ -54,7 +54,7 @@ def test_buffer_posts_a_link_now_to_the_x_channel(monkeypatch):
     _fake_buffer(monkeypatch, calls)
     assert B.BufferPublisher({}).post_link("new clip", "https://r.com/v") is True
     sent = calls[-1][1]["input"]
-    assert sent["channelId"] == "c-x" and sent["mode"] == "shareNow"
+    assert sent["channelId"] == "c-x" and sent["mode"] == "customScheduled"
     assert "https://r.com/v" in sent["text"]
 
 
@@ -73,7 +73,7 @@ def test_a_clip_goes_up_as_a_video_from_its_public_link(monkeypatch, tmp_path):
     sent = calls[-1][1]["input"]
     assert sent["assets"] == [{"video": {
         "url": "https://res.cloudinary.com/x/clip.mp4"}}]
-    assert sent["channelId"] == "c-x" and sent["mode"] == "shareNow"
+    assert sent["channelId"] == "c-x" and sent["mode"] == "customScheduled"
 
 
 def test_no_host_is_a_setup_step_not_a_failure(monkeypatch, tmp_path):
@@ -168,3 +168,113 @@ def test_a_clip_over_the_free_upload_cap_is_refused_before_uploading(
     clip.write_bytes(b"x" * 11)
     with pytest.raises(RuntimeError, match="free plan"):
         cloud_host.host_video(str(clip))
+
+
+
+# ── a lost reply is not a failed post (2026-10-06) ──────────────────
+
+def _clip(tmp_path):
+    clip = tmp_path / "clip.mp4"
+    clip.write_bytes(b"x")
+    return str(clip)
+
+
+def _recent_post(text, minutes_ago=1, status="sent"):
+    import datetime as dt
+
+    made = dt.datetime.now(dt.timezone.utc) - dt.timedelta(minutes=minutes_ago)
+    return {"node": {"id": "p-old", "text": text, "status": status,
+                     "createdAt": made.strftime("%Y-%m-%dT%H:%M:%S.000Z")}}
+
+
+def _buffer_with(monkeypatch, calls, recent, create):
+    def fake_call(self, query, variables=None):
+        calls.append(query)
+        if "organizations" in query:
+            return {"account": {"organizations": [{"id": "o1"}]}}
+        if "channels(" in query:
+            return {"channels": [{"id": "c-x", "service": "twitter"}]}
+        if "posts(" in query:
+            return {"posts": {"edges": recent()}}
+        return create()
+
+    monkeypatch.setattr(B.BufferPublisher, "_call", fake_call)
+    monkeypatch.setattr("time.sleep", lambda s: None)
+
+
+def _hosted(monkeypatch, uploads):
+    from utils import cloud_host
+
+    monkeypatch.setenv("BUFFER_API_KEY", "test")
+    monkeypatch.setattr(cloud_host, "ready", lambda: True)
+    monkeypatch.setattr(cloud_host, "host_video",
+                        lambda path: uploads.append(path) or "https://h/c.mp4")
+
+
+def test_a_dropped_reply_for_a_post_that_went_out_counts_as_posted(
+        monkeypatch, tmp_path):
+    uploads, calls, made = [], [], []
+
+    def create():
+        made.append(1)
+        raise B.BufferDropped("Remote end closed connection without response")
+
+    _hosted(monkeypatch, uploads)
+    _buffer_with(monkeypatch, calls,
+                 lambda: [_recent_post("the caption")] if made else [], create)
+    assert B.BufferPublisher({}).post_clip(_clip(tmp_path), "the caption") \
+        == "buffer post p-old"
+
+
+def test_a_dropped_reply_with_nothing_on_the_channel_is_a_retry(
+        monkeypatch, tmp_path):
+    uploads, calls = [], []
+
+    def create():
+        raise B.BufferDropped("Remote end closed connection without response")
+
+    _hosted(monkeypatch, uploads)
+    _buffer_with(monkeypatch, calls, lambda: [], create)
+    assert B.BufferPublisher({}).post_clip(_clip(tmp_path), "caption") is None
+
+
+def test_a_clip_already_on_the_channel_is_not_uploaded_or_posted_again(
+        monkeypatch, tmp_path):
+    uploads, calls = [], []
+    _hosted(monkeypatch, uploads)
+    _buffer_with(monkeypatch, calls,
+                 lambda: [_recent_post("same caption", minutes_ago=600)],
+                 lambda: pytest.fail("posted a second time"))
+    assert B.BufferPublisher({}).post_clip(_clip(tmp_path), "same caption") \
+        == "buffer post p-old"
+    assert uploads == []
+
+
+def test_a_post_that_errored_at_buffer_does_not_block_the_retry(
+        monkeypatch, tmp_path):
+    uploads, calls = [], []
+    _hosted(monkeypatch, uploads)
+    _buffer_with(monkeypatch, calls,
+                 lambda: [_recent_post("cap", minutes_ago=30, status="error")],
+                 lambda: {"createPost": {"post": {"id": "p-new"}}})
+    assert B.BufferPublisher({}).post_clip(_clip(tmp_path), "cap") \
+        == "buffer post p-new"
+    assert len(uploads) == 1
+
+
+def test_posts_are_scheduled_a_little_ahead_not_shared_now(monkeypatch):
+    sent = []
+
+    def fake_call(self, query, variables=None):
+        if "organizations" in query:
+            return {"account": {"organizations": [{"id": "o1"}]}}
+        if "channels(" in query:
+            return {"channels": [{"id": "c-x", "service": "twitter"}]}
+        sent.append(variables["input"])
+        return {"createPost": {"post": {"id": "p1"}}}
+
+    monkeypatch.setenv("BUFFER_API_KEY", "test")
+    monkeypatch.setattr(B.BufferPublisher, "_call", fake_call)
+    assert B.BufferPublisher({}).post_link("hi https://x.y", "https://x.y")
+    assert sent[0]["mode"] == "customScheduled"
+    assert sent[0]["dueAt"].endswith("Z")
