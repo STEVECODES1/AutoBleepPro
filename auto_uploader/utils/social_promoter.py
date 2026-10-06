@@ -374,6 +374,10 @@ def _publisher_for(platform: str, config: dict):
         except ImportError:
             return None
     if platform == "x":
+        # Buffer's free plan first: X's own API charges per post.
+        if os.environ.get("BUFFER_API_KEY", "").strip():
+            from publishers.buffer import BufferPublisher
+            return BufferPublisher(config, "twitter")
         try:
             from publishers.x_webhost import XWebhostPublisher
             return XWebhostPublisher(config)
@@ -512,7 +516,10 @@ def announce_to_platforms(posting: dict, title: str, new_uploads: dict,
             continue
 
         try:
-            if platform == "x":
+            if platform == "x" and getattr(publisher, "service", "") == "twitter":
+                # Buffer (free) - see publishers/buffer.py.
+                ok = publisher.post_link(message, link)
+            elif platform == "x":
                 _post_twitter(message)
                 ok = True
             else:
