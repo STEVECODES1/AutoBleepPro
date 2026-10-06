@@ -2816,6 +2816,21 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
             # pass rather than an actual delay.
             yt_source = upload_path_for(cfg.youtube.censor_uploads)
 
+            # --- Songs out (YouTube VOD only - never Rumble, never clips) ---
+            # Content ID claims on a stream are almost all background music.
+            # Talking over a song keeps the voice; music-only gets muted.
+            # Any failure hands back yt_source unchanged.
+            _nomusic = None
+            if getattr(cfg.youtube, "music_guard", False) and not is_clip:
+                from autoreel.music_guard import guard as _music_guard
+
+                # Always into censored_folder: written next to an uncensored
+                # source it would land in watch_folder and look like a new
+                # video to the watcher.
+                _guarded = _music_guard(yt_source, cfg.general.censored_folder)
+                if _guarded != yt_source:
+                    _nomusic = yt_source = _guarded
+
             # --- Prepend intro (YouTube VOD only — never clips, never Rumble) ---
             # Looks for cfg.youtube.intro_path, then YOUTUBE_INTRO_PATH env var,
             # then ./intro.mp4 next to main.py.  The intro file is NEVER deleted.
@@ -2895,6 +2910,13 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
             with upload_lock:
                 results["youtube"] = url
                 newly_uploaded["youtube"] = url
+            # The music-free copy is as big as the VOD and only needed until
+            # YouTube has it; a failed upload keeps it so the retry reuses it.
+            if _nomusic and os.path.isfile(_nomusic):
+                try:
+                    os.unlink(_nomusic)
+                except OSError:
+                    pass
         except Exception as exc:
             if not parallel:
                 print()

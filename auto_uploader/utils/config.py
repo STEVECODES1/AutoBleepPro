@@ -75,6 +75,10 @@ class YouTubeConfig:
     link_comment: str = ""
     # Optional path to an intro video to prepend before every VOD upload.
     intro_path: str = ""
+    # Take songs out of the YouTube copy before upload (autoreel/music_guard):
+    # the voice is kept where someone talks over a song, music-only stretches
+    # are muted. Content ID claims are almost all background music.
+    music_guard: bool = True
 
 
 @dataclass
@@ -398,6 +402,7 @@ def load_config(config_path: str = "config.json", env_path: str = ".env") -> App
         censor_uploads=bool(yt.get("censor_uploads", True)),
         upload_chunk_mb=float(yt.get("upload_chunk_mb", 8) or 8),
         intro_path=str(yt.get("intro_path", "") or ""),
+        music_guard=bool(yt.get("music_guard", True)),
     )
 
     rumble = RumbleConfig(

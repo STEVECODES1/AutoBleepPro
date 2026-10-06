@@ -112,3 +112,10 @@ anthropic>=1.0
 # video model that watches the stream and marks moments worth clipping.
 # Optional and off by default.
 twelvelabs>=1.3
+
+# Music guard (youtube.music_guard) - takes songs out of the YouTube copy of
+# a stream so Content ID has nothing to claim. PANNs hears where the music
+# is; Demucs splits the voice from the beat. Both run on the GPU. The
+# tagger's weights (~330 MB) download to ~/panns_data on first use.
+demucs>=4.0
+panns_inference>=0.1
