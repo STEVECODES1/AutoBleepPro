@@ -104,12 +104,18 @@ class KeepAwake:
     ES_CONTINUOUS = 0x80000000
     ES_SYSTEM_REQUIRED = 0x00000001
 
-    def __init__(self) -> None:
+    def __init__(self, start_held: bool = True) -> None:
+        # start_held=False: held only once hold() is called - the moment
+        # the stream actually starts. yt-dlp's --wait-for-video wait runs
+        # INSIDE the same call, and holding the machine awake through it
+        # meant it never slept between streams (2026-10-06).
         self.active = False
+        self.start_held = start_held
 
-    def __enter__(self) -> "KeepAwake":
-        if sys.platform != "win32":
-            return self
+    def hold(self) -> bool:
+        """Keep the machine awake from now on. True if it took."""
+        if self.active or sys.platform != "win32":
+            return self.active
         try:
             import ctypes
 
@@ -118,9 +124,9 @@ class KeepAwake:
             self.active = True
         except Exception:
             pass
-        return self
+        return self.active
 
-    def __exit__(self, *exc) -> None:
+    def release(self) -> None:
         if not self.active:
             return
         try:
@@ -131,6 +137,15 @@ class KeepAwake:
             ctypes.windll.kernel32.SetThreadExecutionState(self.ES_CONTINUOUS)
         except Exception:
             pass
+        self.active = False
+
+    def __enter__(self) -> "KeepAwake":
+        if self.start_held:
+            self.hold()
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self.release()
 
 
 def free_bytes(path: str) -> int:
@@ -1551,6 +1566,11 @@ class Recorder:
                         # eleven hours apart. See recording_started_at.
                         self.recording_started_at = time.time()
                         self.say("Live - recording started.")
+                        awake = getattr(self, "_awake", None)
+                        if awake is not None and awake.hold():
+                            self.say_once_for_everyone(
+                                "keep-awake",
+                                "Holding the machine awake for the recording.")
                         # Asked NOW, while the stream is still live - a
                         # live URL resolves to nothing once it ends.
                         if not self.title:
@@ -2061,14 +2081,15 @@ class Recorder:
             # the recording.
             self.recording_started_at = None
             # Held only while actually downloading, so the machine can
-            # still sleep normally during the wait between streams.
-            with KeepAwake() as awake:
-                if resumes == 0 and awake.active:
-                    self.say_once_for_everyone(
-                        "keep-awake",
-                        "Holding the machine awake for the recording.")
+            # still sleep normally during the wait between streams. The
+            # first attempt WAITS for the stream inside yt-dlp, so there
+            # it is taken when the recording starts (see _run); a resume
+            # is mid-stream already and holds from the start.
+            with KeepAwake(start_held=(resumes > 0)) as awake:
+                self._awake = awake
                 code = self._run(self.download_args(target, wait=(resumes == 0)),
                                  log_path)
+                self._awake = None
             ended = time.time()
             # Fall back to `started` when the download never began -
             # there is no recording to measure, and the wait is then the

@@ -786,12 +786,17 @@ def publish(platform: str, video_path: str, caption: str,
     # is already 1080x1920, which is the only thing YouTube is looking
     # at.
     if hasattr(publisher, "post_clip"):
+        from utils.keep_awake import KeepAwake
+
         upload, temporary = (video_path, "") if dry_run else \
             _censored_clip(platform, video_path, config)
         if not upload:
             return False
         try:
-            posted = publisher.post_clip(upload, caption, dry_run)
+            # Awake for the post itself: an upload cut off by sleep is
+            # a clip half-sent. Not for the queue check around it.
+            with KeepAwake("posting a clip"):
+                posted = publisher.post_clip(upload, caption, dry_run)
         except (NotConfigured, PermanentlyRejected):
             # Both mean "a retry cannot help", for different reasons.
             # Neither may be swallowed by the catch-all below.
@@ -866,10 +871,13 @@ def publish(platform: str, video_path: str, caption: str,
                                        (config or {}).get("clips", {}) or {})
     print(f"[Clips] {platform}: uploading "
           f"{os.path.basename(video_path)} as a Reel...")
+    from utils.keep_awake import KeepAwake
+
     try:
-        ok = bool(publisher.post_reel_from_file(
-            upload_path, caption,
-            share_to_feed=bool(settings.get("share_to_feed", True))))
+        with KeepAwake("posting a Reel"):
+            ok = bool(publisher.post_reel_from_file(
+                upload_path, caption,
+                share_to_feed=bool(settings.get("share_to_feed", True))))
     except (NotConfigured, PermanentlyRejected):
         # Re-raised for the caller to treat as "not set up yet" or "this
         # video will never be accepted" rather than a failed post - see

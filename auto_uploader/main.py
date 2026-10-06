@@ -942,12 +942,16 @@ def _autoclip_one(cfg) -> int:
           "video, so it is the slow part; posting carries on around it.")
 
     from utils.clip_runner import make_clips, print_run
+    from utils.keep_awake import KeepAwake
 
     title = get_stream_title(source, "", cfg, allow_prompt=False)
     try:
-        run = make_clips(cfg, source, title,
-                         count=clips_cfg.get("auto_clip_count") or None,
-                         notify=False, transcribe_if_needed=True)
+        # Only now, with a VOD actually to cut: this check runs every
+        # five minutes and holding awake for each would mean no sleep.
+        with KeepAwake("cutting clips"):
+            run = make_clips(cfg, source, title,
+                             count=clips_cfg.get("auto_clip_count") or None,
+                             notify=False, transcribe_if_needed=True)
     except Exception as exc:
         # Failed, not answered. An HTTP 503 from the model is not a
         # verdict about the video, so this comes round again - bounded,
@@ -5077,12 +5081,17 @@ def main(argv=None) -> int:
 
         def on_ready(path):
             # allow_prompt=False: this runs in the watcher's background
-            # thread with nobody at the keyboard.
+            # thread with nobody at the keyboard. Held awake for the
+            # whole file - censor, upload, clips - so a machine set to
+            # sleep between streams cannot doze off mid-upload.
+            from utils.keep_awake import KeepAwake
+
             try:
-                process_file(path, cfg, None, dup_checker, yt_logger, rb_logger,
-                             dry_run, existing_youtube_videos,
-                             existing_rumble_videos,
-                             allow_prompt=False, only_platform=args.only)
+                with KeepAwake("processing a video"):
+                    process_file(path, cfg, None, dup_checker, yt_logger,
+                                 rb_logger, dry_run, existing_youtube_videos,
+                                 existing_rumble_videos,
+                                 allow_prompt=False, only_platform=args.only)
             finally:
                 # Said after EVERY file, including one that failed. A run
                 # that ends on a stack trace or on a timing table looks
