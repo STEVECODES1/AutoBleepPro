@@ -55,7 +55,7 @@ CLIP_PLATFORMS = ("postproxy_instagram", "postproxy_tiktok",
                   "postproxy_facebook", "postproxy_x",
                   "instagram", "facebook",
                   "tiktok", "zernio_twitter", "zernio_tiktok", "buffer_x",
-                  "postproxy_youtube", "youtube_shorts")
+                  "buffer_tiktok", "postproxy_youtube", "youtube_shorts")
 
 # Each Postproxy route posts to one platform, under the name the rest of
 # this file uses for it. Its caption, tags, promo line and audio rules
@@ -81,7 +81,7 @@ YOUTUBE_ROUTES = ("youtube_shorts", "postproxy_youtube")
 
 # Direct routes that post AS another platform: same caption rules, same
 # audio rules (config.json's "x" block), one account. Not fan-out routes.
-ALIAS_BASE = {"buffer_x": "x"}
+ALIAS_BASE = {"buffer_x": "x", "buffer_tiktok": "tiktok"}
 
 
 def base_platform(platform: str) -> str:
@@ -91,7 +91,7 @@ def base_platform(platform: str) -> str:
 
 # The account each direct (non-Postproxy) publisher posts to.
 DIRECT_BASE = {"zernio_tiktok": "tiktok", "zernio_twitter": "x",
-               "buffer_x": "x"}
+               "buffer_x": "x", "buffer_tiktok": "tiktok"}
 
 
 # Platforms whose CAPTION text goes through the profanity filter. Rumble

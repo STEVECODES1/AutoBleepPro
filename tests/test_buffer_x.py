@@ -41,7 +41,8 @@ def _fake_buffer(monkeypatch, calls):
             return {"account": {"organizations": [{"id": "o1", "name": "me"}]}}
         if "channels" in query:
             return {"channels": [{"id": "c-ig", "service": "instagram"},
-                                 {"id": "c-x", "service": "twitter"}]}
+                                 {"id": "c-x", "service": "twitter"},
+                                 {"id": "c-tt", "service": "tiktok"}]}
         return {"createPost": {"post": {"id": "p1"}}}
 
     monkeypatch.setattr(B.BufferPublisher, "_call", fake_call)
@@ -102,3 +103,38 @@ def test_cloudinary_signature_matches_their_documented_example():
     params = {"eager": "w_400,h_300,c_pad|w_260,h_200,c_crop",
               "public_id": "sample_image", "timestamp": 1315060510}
     assert _sign(params, "abcd") == "bfd09f95f331f558cbd1320e67aa8d488770583e"
+
+
+# ── TikTok through the same Buffer account ──────────────────────────
+
+def test_buffer_tiktok_is_its_own_route_with_the_tiktok_rules(monkeypatch):
+    from utils.clip_queue import CLIP_PLATFORMS, DIRECT_BASE, base_platform
+    from utils.social_promoter import _publisher_for
+
+    assert "buffer_tiktok" in CLIP_PLATFORMS
+    assert base_platform("buffer_tiktok") == "tiktok"
+    assert DIRECT_BASE["buffer_tiktok"] == "tiktok"
+    pub = _publisher_for("buffer_tiktok", {})
+    assert type(pub).__name__ == "BufferPublisher"
+    assert pub.service == "tiktok" and not pub.supports_link_posts
+
+
+def test_a_tiktok_clip_goes_to_the_tiktok_channel_with_its_full_caption(
+        monkeypatch, tmp_path):
+    from utils import cloud_host
+
+    monkeypatch.setenv("BUFFER_API_KEY", "test")
+    monkeypatch.setattr(cloud_host, "ready", lambda: True)
+    monkeypatch.setattr(cloud_host, "host_video",
+                        lambda path: "https://res.cloudinary.com/x/clip.mp4")
+    calls = []
+    _fake_buffer(monkeypatch, calls)
+    clip = tmp_path / "clip.mp4"
+    clip.write_bytes(b"x")
+    caption = "word " * 100  # 500 chars: too long for X, fine for TikTok
+    assert B.BufferPublisher({}, "tiktok").post_clip(str(clip), caption)
+    sent = calls[-1][1]["input"]
+    assert sent["channelId"] == "c-tt"
+    assert sent["text"] == caption.strip()
+    assert sent["assets"] == [{"video": {
+        "url": "https://res.cloudinary.com/x/clip.mp4"}}]

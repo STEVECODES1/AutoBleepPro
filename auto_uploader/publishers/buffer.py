@@ -1,19 +1,26 @@
 """
-publishers/buffer.py - X (Twitter) posts through Buffer's free plan.
+publishers/buffer.py - X (Twitter) and TikTok posts through Buffer's
+free plan.
 
 Why Buffer: X's own API is pay-per-post, and Buffer's free plan includes
 an X channel and API access (1 key, 3,000 requests per 30 days). Each post
 here is two or three requests, so that is a few hundred posts a month.
 
+The free plan takes 3 channels, so one Buffer account carries both X and
+TikTok (the clip queue's buffer_x and buffer_tiktok) - no card needed.
+
 Two kinds of post:
   post_link - an announcement: the YouTube / Rumble link, X shows the
               preview card. Nothing needs hosting.
-  post_clip - the clip itself as an X video (the clip queue's buffer_x).
-              Buffer only takes media by public URL, so the file is put
-              on Cloudinary first - see utils/cloud_host.py.
+  post_clip - the clip itself as a native video (buffer_x on X,
+              buffer_tiktok on TikTok). Buffer only takes media by
+              public URL, so the file is put on Cloudinary first - see
+              utils/cloud_host.py. Buffer fetches it when the post goes
+              out (straight away: shareNow) and X / TikTok keep their own
+              copy, so Cloudinary deleting it a day later changes nothing.
 
 Setup (once):
-  1. buffer.com -> connect the X account as a channel.
+  1. buffer.com -> connect the X (and TikTok) account as channels.
   2. Settings -> API -> create a key.
   3. python main.py --set-env BUFFER_API_KEY=...
 
@@ -36,6 +43,10 @@ KEY_NAME = "BUFFER_API_KEY"
 # X counts every link as 23 characters whatever its length.
 X_LIMIT = 280
 X_LINK_CHARS = 23
+# TikTok's caption cap through the posting API.
+TIKTOK_LIMIT = 2200
+# How each service is named in messages.
+LABELS = {"twitter": "X", "x": "X", "tiktok": "TikTok"}
 _TIMEOUT = 60
 
 _ORGS = "query { account { organizations { id name } } }"
@@ -72,7 +83,8 @@ def fit_for_x(message: str, link: str) -> str:
 
 
 class BufferPublisher:
-    """Posts announcement links to the X channel connected in Buffer."""
+    """Posts to one channel connected in Buffer: X ("twitter", links and
+    videos) or TikTok ("tiktok", videos only)."""
 
     supports_link_posts = True
 
@@ -80,6 +92,9 @@ class BufferPublisher:
         self.config = config or {}
         self.service = service
         self._channel = ""
+        self.label = LABELS.get(service, service)
+        # TikTok has no link posts; announcements stay on X.
+        self.supports_link_posts = service in ("twitter", "x")
 
     def token(self) -> str:
         return os.environ.get(KEY_NAME, "").strip()
@@ -126,8 +141,9 @@ class BufferPublisher:
                     self._channel = channel["id"]
                     return self._channel
         raise NotConfigured(
-            f"buffer: no {self.service} channel is connected. Connect X in "
-            f"Buffer (Channels -> Connect), then this posts on its own.")
+            f"buffer: no {self.label} channel is connected. Connect "
+            f"{self.label} in Buffer (Channels -> Connect), then this posts "
+            f"on its own.")
 
     def post_link(self, message: str, link: str) -> bool:
         if not self.ready():
@@ -153,7 +169,7 @@ class BufferPublisher:
 
     def post_clip(self, video_path: str, caption: str,
                   dry_run: bool = False) -> Optional[str]:
-        """Post the clip itself as an X video. Buffer only takes media by
+        """Post the clip itself as a native video. Buffer only takes media by
         public URL, so the file goes to Cloudinary first (utils/
         cloud_host.py) and Buffer fetches it from there."""
         from utils import cloud_host
@@ -163,17 +179,20 @@ class BufferPublisher:
                 f"buffer: no API key. python main.py --set-env {KEY_NAME}=...")
         if not cloud_host.ready():
             raise NotConfigured(
-                "buffer: X video needs a public link and there is no host "
+                f"buffer: {self.label} video needs a public link and there is no host "
                 "set up. Free Cloudinary account, then: python main.py "
                 "--set-env CLOUDINARY_URL=cloudinary://...")
         if not os.path.isfile(video_path):
             raise NotConfigured(f"buffer: no such file {video_path}")
         text = caption.strip()
-        if x_length(text) > X_LIMIT:
-            text = text[:X_LIMIT - 1].rstrip() + "…"
+        if self.label == "X":
+            if x_length(text) > X_LIMIT:
+                text = text[:X_LIMIT - 1].rstrip() + "…"
+        elif len(text) > TIKTOK_LIMIT:
+            text = text[:TIKTOK_LIMIT - 1].rstrip() + "…"
         if dry_run:
             print(f"[Buffer] DRY RUN - would post "
-                  f"{os.path.basename(video_path)} to X")
+                  f"{os.path.basename(video_path)} to {self.label}")
             return "dry-run"
         try:
             url = cloud_host.host_video(video_path)
@@ -191,5 +210,6 @@ class BufferPublisher:
         post_id = (result.get("post") or {}).get("id")
         if post_id:
             return f"buffer post {post_id}"
-        print(f"[Buffer] X video refused: {result.get('message') or result}")
+        print(f"[Buffer] {self.label} video refused: "
+              f"{result.get('message') or result}")
         return None

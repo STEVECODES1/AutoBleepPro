@@ -393,6 +393,11 @@ def _publisher_for(platform: str, config: dict):
         # X video through Buffer's free plan - see publishers/buffer.py.
         from publishers.buffer import BufferPublisher
         return BufferPublisher(config, "twitter")
+    if platform == "buffer_tiktok":
+        # TikTok video through the same Buffer account (free plan: 3
+        # channels) - no card, unlike Zernio.
+        from publishers.buffer import BufferPublisher
+        return BufferPublisher(config, "tiktok")
     if platform.startswith("zernio"):
         from publishers.zernio import ZernioPublisher
         return ZernioPublisher(config, platform)
