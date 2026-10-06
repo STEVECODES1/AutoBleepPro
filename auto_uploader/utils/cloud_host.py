@@ -11,6 +11,9 @@ storage never fills.
 Setup (once): cloudinary.com -> sign up -> Dashboard -> "API environment
 variable" (cloudinary://KEY:SECRET@CLOUD), then:
     python main.py --set-env CLOUDINARY_URL=cloudinary://...
+or the three apart (Settings -> API Keys):
+    python main.py --set-env CLOUDINARY_CLOUD_NAME=... \
+        CLOUDINARY_API_KEY=... CLOUDINARY_API_SECRET=...
 """
 
 from __future__ import annotations
@@ -23,20 +26,28 @@ from typing import Optional, Tuple
 from urllib.parse import urlparse
 
 KEEP_HOURS = 24
+# The free plan's cap on one video upload (100 MB).
+MAX_BYTES = 100 * 1024 * 1024
 FOLDER = "autobleep"
 _LEDGER = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(
     __file__))), "logs", "cloud_host.json")
 
 
 def credentials() -> Optional[Tuple[str, str, str]]:
-    """(cloud, key, secret) from CLOUDINARY_URL, or None."""
+    """(cloud, key, secret) from CLOUDINARY_URL, or from the three separate
+    CLOUDINARY_CLOUD_NAME / CLOUDINARY_API_KEY / CLOUDINARY_API_SECRET
+    (the console shows them apart, and its copy of the URL has
+    placeholders in it). None when neither is complete."""
     raw = os.environ.get("CLOUDINARY_URL", "").strip()
-    if not raw.startswith("cloudinary://"):
-        return None
-    parsed = urlparse(raw)
-    if not (parsed.hostname and parsed.username and parsed.password):
-        return None
-    return parsed.hostname, parsed.username, parsed.password
+    if raw.startswith("cloudinary://") and "<" not in raw:
+        parsed = urlparse(raw)
+        if parsed.hostname and parsed.username and parsed.password:
+            return parsed.hostname, parsed.username, parsed.password
+    parts = tuple(os.environ.get(f"CLOUDINARY_{name}", "").strip()
+                  for name in ("CLOUD_NAME", "API_KEY", "API_SECRET"))
+    if all(parts) and not any("<" in part for part in parts):
+        return parts
+    return None
 
 
 def ready() -> bool:
@@ -107,6 +118,11 @@ def host_video(path: str) -> str:
         raise RuntimeError("no CLOUDINARY_URL in .env")
     import requests
 
+    size = os.path.getsize(path)
+    if size > MAX_BYTES:
+        raise RuntimeError(f"{os.path.basename(path)} is {size >> 20} MB; "
+                           f"Cloudinary's free plan takes up to "
+                           f"{MAX_BYTES >> 20} MB per video")
     sweep()
     cloud, key, secret = creds
     params = {"folder": FOLDER, "timestamp": int(time.time())}

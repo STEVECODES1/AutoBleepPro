@@ -138,3 +138,33 @@ def test_a_tiktok_clip_goes_to_the_tiktok_channel_with_its_full_caption(
     assert sent["text"] == caption.strip()
     assert sent["assets"] == [{"video": {
         "url": "https://res.cloudinary.com/x/clip.mp4"}}]
+
+
+def test_cloudinary_credentials_from_the_url_or_the_three_parts(monkeypatch):
+    from utils import cloud_host
+
+    for name in ("URL", "CLOUD_NAME", "API_KEY", "API_SECRET"):
+        monkeypatch.delenv(f"CLOUDINARY_{name}", raising=False)
+    assert cloud_host.credentials() is None
+    # The console's copy has placeholders: not credentials.
+    monkeypatch.setenv("CLOUDINARY_URL",
+                       "cloudinary://<your_api_key>:<your_api_secret>@demo")
+    assert cloud_host.credentials() is None
+    monkeypatch.setenv("CLOUDINARY_CLOUD_NAME", "demo")
+    monkeypatch.setenv("CLOUDINARY_API_KEY", "123")
+    monkeypatch.setenv("CLOUDINARY_API_SECRET", "abc")
+    assert cloud_host.credentials() == ("demo", "123", "abc")
+    monkeypatch.setenv("CLOUDINARY_URL", "cloudinary://9:z@other")
+    assert cloud_host.credentials() == ("other", "9", "z")
+
+
+def test_a_clip_over_the_free_upload_cap_is_refused_before_uploading(
+        monkeypatch, tmp_path):
+    from utils import cloud_host
+
+    monkeypatch.setenv("CLOUDINARY_URL", "cloudinary://1:s@demo")
+    monkeypatch.setattr(cloud_host, "MAX_BYTES", 10)
+    clip = tmp_path / "big.mp4"
+    clip.write_bytes(b"x" * 11)
+    with pytest.raises(RuntimeError, match="free plan"):
+        cloud_host.host_video(str(clip))
