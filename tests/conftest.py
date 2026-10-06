@@ -32,6 +32,18 @@ _LLM_KEY_NAMES = (
     "GEMINI_API_KEY", "GOOGLE_API_KEY",
     "OPENAI_API_KEY", "ANTHROPIC_API_KEY",
     "CEREBRAS_API_KEY", "XKIRO_API_KEY", "GROQ_API_KEY",
+    # Added to llm_highlights later and never to this list, so a machine
+    # with any of them in .env failed the provider-order tests.
+    "NVIDIA_API_KEY", "NVIDIA_NIM_API_KEY", "DEEPSEEK_API_KEY",
+    "OPENROUTER_API_KEY",
+)
+
+# Posting services whose key alone decides "ready". A real one in .env
+# made "not ready without a key" fail on the machine that has it. A test
+# that wants one sets it with monkeypatch.
+_SERVICE_KEY_NAMES = (
+    "ZERNIO_API_KEY", "BUFFER_API_KEY", "CLOUDINARY_URL",
+    "CLOUDINARY_CLOUD_NAME", "CLOUDINARY_API_KEY", "CLOUDINARY_API_SECRET",
 )
 
 
@@ -66,7 +78,7 @@ def _no_live_llm_keys(monkeypatch):
     its own key with monkeypatch, which still works - this only removes
     what the environment leaked in.
     """
-    for name in _LLM_KEY_NAMES:
+    for name in _LLM_KEY_NAMES + _SERVICE_KEY_NAMES:
         monkeypatch.delenv(name, raising=False)
 
 
