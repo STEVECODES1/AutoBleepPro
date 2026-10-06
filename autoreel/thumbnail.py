@@ -66,7 +66,7 @@ LIFT_BELOW_YAVG = 95
 # The zoom: the character's box fills this share of the picture's height,
 # never closer than MAX_ZOOM (a 1080p stream upscaled further goes soft).
 SUBJECT_HEIGHT = 0.80
-MAX_ZOOM = 2.2
+MAX_ZOOM = 1.6
 # With no box, a gentle zoom on the middle - it also trims the HUD that
 # sits on the edges (minimap bottom-left, chat top-left).
 DEFAULT_ZOOM = 1.4
@@ -135,7 +135,8 @@ GRADE = ("eq=contrast=1.12:saturation=1.30:brightness=0.02,"
 
 # Streams push further: the winning thumbnails on this footage are
 # visibly brighter and more saturated than a clip needs to be.
-STREAM_GRADE = ("eq=contrast=1.18:saturation=1.45:brightness=0.03,"
+STREAM_GRADE = ("hqdn3d=2:1.5:0:0,"
+                "eq=contrast=1.18:saturation=1.45:brightness=0.03,"
                 "unsharp=5:5:1.0:5:5:0.0")
 
 # The logo's width as a share of the thumbnail's, and its inset.
@@ -151,7 +152,11 @@ def _grab(source: str, at: float, out_path: str, width: int = 0,
     filters = [f for f in (f"scale={width}:-2" if width else "", vf) if f]
     if filters:
         args += ["-vf", ",".join(filters)]
-    args += ["-q:v", "2", out_path]
+    args += ["-q:v", "2"]
+    if not width:
+        # The real picture, not a look: keep full colour resolution.
+        args += ["-pix_fmt", "yuvj444p"]
+    args += [out_path]
     try:
         subprocess.run(args, timeout=120, stdout=subprocess.DEVNULL,
                        stderr=subprocess.DEVNULL)
@@ -500,8 +505,10 @@ def _make_stream(source: str, duration: float, out_path: str, ask,
                          key=lambda i: _appeal(candidates[i][2]))
             box = None
         at, _data, stats = candidates[picked]
+        window = zoom_window(box)
+        at = sharpest_near(source, at, window, workspace)
 
-        vf = stream_filters(zoom_window(box), stats[0] if stats else None)
+        vf = stream_filters(window, stats[0] if stats else None)
         if not _grab(source, at, out_path, vf=vf):
             return ""
         if sticker_path and os.path.isfile(sticker_path):
@@ -517,6 +524,48 @@ def _make_stream(source: str, duration: float, out_path: str, ask,
         return out_path
     finally:
         shutil.rmtree(workspace, ignore_errors=True)
+
+
+# --------------------------------------------------------------------------
+# The sharpest frame
+#
+# A stream is recorded at a few Mbit/s. A frame pulled from mid-motion, or
+# from the far end of a keyframe interval, comes out smeared - and the
+# thumbnail is that one frame, blown up. A fraction of a second either
+# side is the same moment to a viewer, so look at a few and keep the one
+# with the most detail where the character is.
+# --------------------------------------------------------------------------
+
+SHARP_SPAN_S = 0.6
+SHARP_LOOKS = 7
+
+
+def _sharpness(path: str) -> float:
+    try:
+        from PIL import Image, ImageFilter, ImageStat
+        img = Image.open(path).convert("L")
+        edges = img.filter(ImageFilter.FIND_EDGES)
+        return float(ImageStat.Stat(edges).var[0])
+    except Exception:
+        return 0.0
+
+
+def sharpest_near(source: str, at: float, window: tuple,
+                  workspace: str) -> float:
+    """The timestamp within SHARP_SPAN_S of `at` whose crop is sharpest."""
+    x, y, w, h = window
+    crop = f"crop=iw*{w:.4f}:ih*{h:.4f}:iw*{x:.4f}:ih*{y:.4f},scale=640:-2"
+    best, best_score = at, -1.0
+    step = 2 * SHARP_SPAN_S / max(1, SHARP_LOOKS - 1)
+    for i in range(SHARP_LOOKS):
+        when = max(0.0, at - SHARP_SPAN_S + i * step)
+        look = os.path.join(workspace, f"sharp_{i}.jpg")
+        if not _grab(source, when, look, vf=crop):
+            continue
+        score = _sharpness(look)
+        if score > best_score:
+            best, best_score = when, score
+    return best
 
 
 # --------------------------------------------------------------------------
@@ -644,7 +693,7 @@ def stamp_text(picture: str, title: str) -> bool:
                       stroke_width=stroke, stroke_fill=TEXT_STROKE)
             y += int(h * 1.05)
         tmp = picture + ".text.jpg"
-        img.save(tmp, "JPEG", quality=92)
+        img.save(tmp, "JPEG", quality=95, subsampling=0)
         os.replace(tmp, picture)
         return True
     except Exception:
@@ -675,7 +724,7 @@ def stamp_badge(picture: str, label: str) -> bool:
         draw.text((x0 + pad - box[0], y0 + pad - box[1]), label, font=f,
                   fill=(255, 255, 255))
         tmp = picture + ".badge.jpg"
-        img.save(tmp, "JPEG", quality=92)
+        img.save(tmp, "JPEG", quality=95, subsampling=0)
         os.replace(tmp, picture)
         return True
     except Exception:

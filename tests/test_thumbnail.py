@@ -279,8 +279,8 @@ def test_a_missing_logo_file_is_simply_no_logo(tmp_path, monkeypatch):
 def test_the_zoom_puts_the_character_big_and_left_of_centre():
     from autoreel.thumbnail import SUBJECT_X, zoom_window
 
-    x, y, w, h = zoom_window((0.45, 0.30, 0.55, 0.70))
-    assert abs(h - 0.40 / 0.80) < 1e-6          # head-to-waist fills 80%
+    x, y, w, h = zoom_window((0.45, 0.25, 0.55, 0.81))
+    assert abs(h - 0.56 / 0.80) < 1e-6          # head-to-waist fills 80%
     assert w == h                                # stays 16:9
     assert abs((0.50 - x) / w - SUBJECT_X) < 1e-6
     assert 0 <= x <= 1 - w and 0 <= y <= 1 - h
@@ -345,6 +345,9 @@ def _stream_scene(monkeypatch, stats):
     monkeypatch.setattr(thumbnail, "_grab", grab)
     monkeypatch.setattr(thumbnail, "_measure", lambda path: next(order))
     monkeypatch.setattr(thumbnail.shutil, "which", lambda n: "/usr/bin/" + n)
+    # Which moment, not which of its neighbouring frames: tested below.
+    monkeypatch.setattr(thumbnail, "sharpest_near",
+                        lambda source, at, window, workspace: at)
     return grabbed, marks, lookup
 
 
@@ -491,3 +494,34 @@ def test_text_and_badge_go_on_a_real_picture(tmp_path):
     # Yellow letters landed in the bottom band.
     band = img.crop((0, 500, 1280, 720)).getcolors(1 << 20)
     assert any(r > 200 and g > 180 and b < 80 for _n, (r, g, b) in band)
+
+
+def test_a_small_zoom_is_never_blown_up_soft():
+    from autoreel.thumbnail import MAX_ZOOM, zoom_window
+
+    _x, _y, w, _h = zoom_window((0.48, 0.45, 0.52, 0.55))  # a tiny figure
+    assert w >= 1 / MAX_ZOOM - 1e-9
+    assert 1920 * w / 1280 >= 0.9    # the crop is close to native size
+
+
+def test_the_sharpest_neighbouring_frame_wins(tmp_path, monkeypatch):
+    grabbed = []
+
+    def grab(source, at, out_path, width=0, vf=""):
+        grabbed.append(at)
+        with open(out_path, "wb") as handle:
+            handle.write(str(at).encode())
+        return True
+
+    def sharpness(path):
+        with open(path) as handle:
+            at = float(handle.read())
+        return -abs(at - 100.2)          # 100.2s is the crisp one
+
+    monkeypatch.setattr(thumbnail, "_grab", grab)
+    monkeypatch.setattr(thumbnail, "_sharpness", sharpness)
+    best = thumbnail.sharpest_near("s.mp4", 100.0, (0, 0, 0.7, 0.7),
+                                   str(tmp_path))
+    assert abs(best - 100.2) < 1e-6
+    assert all(abs(at - 100.0) <= thumbnail.SHARP_SPAN_S + 1e-9
+               for at in grabbed)
