@@ -157,7 +157,19 @@ def test_local_edits_are_parked_rather_than_blocking_the_pull():
     body = open(os.path.join(_REPO, "START.bat"),
                 encoding="utf-8", errors="replace").read()
 
-    assert "git stash push -u" in body
-    assert body.index("git stash push -u") < body.index("git pull --no-edit")
+    assert 'git stash push -m "START.bat auto-stash"' in body
+    assert body.index("git stash push") < body.index("git pull --no-edit")
     # Parked, not discarded.
     assert "git stash pop" in body, "say how to get them back"
+
+
+def test_the_launcher_does_not_sweep_away_untracked_files():
+    """`git stash push -u` also took every UNTRACKED file on each start:
+    the uploader's logs and backups and whatever was being worked on
+    (2026-10-06). Untracked files cannot make the code stale."""
+    body = open(os.path.join(_REPO, "START.bat"),
+                encoding="utf-8", errors="replace").read()
+    commands = [line for line in body.splitlines()
+                if line.strip().lower().startswith("git stash push")]
+    assert commands and not any(" -u" in c or "--include-untracked" in c
+                                for c in commands)
