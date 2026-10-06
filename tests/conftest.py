@@ -103,6 +103,24 @@ def _chrome_not_marked_down():
 
 
 @pytest.fixture(autouse=True)
+def _rumble_page_not_fetched_for_real(monkeypatch, tmp_path):
+    """The Rumble channel page costs ScrapingBee credits and is cached on
+    disk for hours. No test may spend the credits, and none may read the
+    machine's real cache - a fresh one answered a Firecrawl test with the
+    real channel's 25 videos."""
+    import sys as _sys
+
+    _sys.path.insert(0, _UPLOADER)
+    monkeypatch.delenv("SCRAPINGBEE_API_KEY", raising=False)
+    try:
+        from utils import rumble_checker
+    except Exception:
+        return
+    monkeypatch.setattr(rumble_checker, "_CACHE_PATH",
+                        str(tmp_path / "rumble_channel_cache.json"))
+
+
+@pytest.fixture(autouse=True)
 def _inside_posting_hours(monkeypatch):
     """publish_guard keeps the Postproxy routes to peak hours, local time.
     The suite must not pass at 3pm and fail at 3am - pin it to midday. A

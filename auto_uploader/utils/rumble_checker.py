@@ -18,6 +18,7 @@ the stream date, in every era of title style).
 import json
 import os
 import re
+import urllib.error
 import urllib.request
 import xml.etree.ElementTree as ET
 
@@ -212,6 +213,132 @@ def _fetch_via_firecrawl(channel_url: str, key: str) -> tuple:
     return videos, ""
 
 
+# ── Route four: the channel page through ScrapingBee ─────────────────
+#
+# Measured 2026-10-06 on rumble.com/user/BinScripts: a plain request and
+# ScrapingBee's basic proxy are both refused by Cloudflare, and its
+# premium (residential) proxy gets the page in under 2 s for 10 credits
+# with no JavaScript - the channel's latest videos are already in the
+# page, as a <script type="application/json"> {"items": [...]} block.
+# A markdown conversion throws that block away, which is why a markdown
+# scrape of the same page finds no videos at all.
+#
+# 10 credits a fetch against a free 1,000, and the uploader asks on every
+# start - the keepalive restarts it several times a day - so the list is
+# kept on disk for CACHE_HOURS. A video uploaded since is still caught by
+# the local upload history, which is the primary defence anyway.
+_SCRAPINGBEE_URL = "https://app.scrapingbee.com/api/v1/"
+_SCRAPINGBEE_TIMEOUT = 90
+CACHE_HOURS = 6
+_CACHE_PATH = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "logs", "rumble_channel_cache.json")
+_ITEMS_BLOCK = re.compile(
+    r'<script type="application/json">\s*(\{"items":.*?)</script>', re.S)
+
+
+def scrapingbee_key() -> str:
+    return (os.environ.get("SCRAPINGBEE_API_KEY") or "").strip()
+
+
+def _owner_path(channel_url: str) -> str:
+    """'/user/BinScripts' from 'https://rumble.com/user/BinScripts'."""
+    tail = (channel_url or "").split("rumble.com", 1)[-1]
+    return "/" + tail.strip("/") if tail.strip("/") else ""
+
+
+def _parse_channel_json(html: str, channel_url: str = "") -> list:
+    """ExistingVideo records from the JSON the channel page carries.
+
+    Only this channel's own videos: the same page lists other channels'
+    live streams in its side menu, and a dedup check that matched one of
+    those would skip a real upload.
+    """
+    owner = _owner_path(channel_url).lower()
+    seen = set()
+    videos = []
+    for block in _ITEMS_BLOCK.findall(html or ""):
+        try:
+            data = json.loads(block)
+        except ValueError:
+            continue
+        for item in (data.get("items") or []) if isinstance(data, dict) else []:
+            if not isinstance(item, dict) or item.get("object_type") != "video":
+                continue
+            url = str(item.get("url") or "")
+            by = str((item.get("by") or {}).get("relative_url") or "").lower()
+            title = str(item.get("title") or "").strip()
+            if not url or not title or url in seen:
+                continue
+            if owner and by and by != owner:
+                continue
+            seen.add(url)
+            videos.append(ExistingVideo(
+                title=title,
+                video_id=url.rstrip("/").rsplit("/", 1)[-1],
+                url=url,
+            ))
+    return videos
+
+
+def _fetch_via_scrapingbee(channel_url: str, key: str) -> tuple:
+    """(videos | None, error_description)."""
+    from urllib.parse import urlencode
+
+    query = urlencode({"api_key": key, "url": channel_url,
+                       "render_js": "false", "premium_proxy": "true"})
+    request = urllib.request.Request(f"{_SCRAPINGBEE_URL}?{query}",
+                                     headers={"User-Agent": _UA})
+    try:
+        with urllib.request.urlopen(
+                request, timeout=_SCRAPINGBEE_TIMEOUT) as response:
+            html = response.read().decode("utf-8", "replace")
+    except urllib.error.HTTPError as exc:
+        # The body says why (out of credits, bad key) - never the key.
+        detail = exc.read().decode("utf-8", "replace")[:120]
+        return None, f"HTTP {exc.code}: {' '.join(detail.split())}"
+    except Exception as exc:
+        return None, str(exc)[:160]
+    videos = _parse_channel_json(html, channel_url)
+    if not videos:
+        return None, (f"no videos in {len(html)} chars of page - the "
+                      "channel page layout may have changed")
+    return videos, ""
+
+
+def _read_cache(channel_url: str) -> list:
+    """The channel's videos as last fetched, if that was recent enough."""
+    import time
+
+    try:
+        with open(_CACHE_PATH, encoding="utf-8") as handle:
+            data = json.load(handle)
+    except (OSError, ValueError):
+        return []
+    if not isinstance(data, dict) or data.get("channel") != channel_url:
+        return []
+    if time.time() - float(data.get("fetched_at") or 0) > CACHE_HOURS * 3600:
+        return []
+    return [ExistingVideo(title=str(v.get("title", "")),
+                          video_id=str(v.get("video_id", "")),
+                          url=str(v.get("url", "")))
+            for v in data.get("videos") or [] if isinstance(v, dict)]
+
+
+def _write_cache(channel_url: str, videos: list) -> None:
+    import time
+
+    try:
+        os.makedirs(os.path.dirname(_CACHE_PATH), exist_ok=True)
+        with open(_CACHE_PATH, "w", encoding="utf-8") as handle:
+            json.dump({"channel": channel_url, "fetched_at": time.time(),
+                       "videos": [{"title": v.title, "video_id": v.video_id,
+                                   "url": v.url} for v in videos]},
+                      handle, indent=1, ensure_ascii=False)
+    except OSError:
+        pass
+
+
 def channel_page_for(rss_url: str, channel_url: str = "") -> str:
     """The channel page to scrape, derived from whatever is configured."""
     if channel_url:
@@ -244,10 +371,23 @@ def fetch_rumble_videos(rss_url: str, cdp_url: str = None,
         if not cdp_url:
             attempts.append("browser: no rumble.cdp_url configured")
 
-        # Last route, and the only one that works today: read the page.
+        # Read the page instead - the only routes that work today.
+        page = channel_page_for(rss_url, channel_url)
+        recent = _read_cache(page)
+        if recent:
+            return recent
+        bee = scrapingbee_key()
+        if bee:
+            videos, why = _fetch_via_scrapingbee(page, bee)
+            if videos:
+                print(f"[Rumble] Read the channel page through ScrapingBee "
+                      f"- {len(videos)} video(s) from {page}")
+                _write_cache(page, videos)
+                return videos
+            attempts.append(f"scrapingbee: {why}")
+
         key = firecrawl_key()
         if key:
-            page = channel_page_for(rss_url, channel_url)
             videos, why = _fetch_via_firecrawl(page, key)
             if videos:
                 print(f"[Rumble] No RSS, so read the channel page instead - "
