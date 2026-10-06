@@ -96,10 +96,25 @@ def build_clock(dest: str) -> str:
     with open(listing, "w", encoding="utf-8") as fh:
         for part in parts:
             fh.write(f"file '{part}'\n")
-    clock = os.path.join(dest, "clock.mp4")
+    stitched = os.path.join(dest, "_stitched.mp4")
     subprocess.run(["ffmpeg", "-y", "-v", "error", "-f", "concat", "-safe", "0",
-                    "-i", listing, "-c", "copy", clock], check=True)
-    for part in parts + [listing]:
+                    "-i", listing, "-c", "copy", stitched], check=True)
+
+    # The SOUND is generated in one piece, not stitched. Twenty AAC parts
+    # copied end to end each keep their encoder priming (900 packets for
+    # 20 s instead of 861), so the decoded audio runs ~40 ms per part
+    # behind its timestamps - by second 8 the tone sat 0.35 s late, and
+    # a censor that muted exactly the right samples measured as "only
+    # 3.5 dB quieter". That is the footage, not the pipeline: a real
+    # recording is one continuous track. Same tones, same seconds.
+    clock = os.path.join(dest, "clock.mp4")
+    tones = (f"aevalsrc='0.125*sin(2*PI*(300+50*floor(t))*t)'"
+             f":s=44100:d={SECONDS}")
+    subprocess.run(["ffmpeg", "-y", "-v", "error", "-i", stitched,
+                    "-f", "lavfi", "-i", tones,
+                    "-map", "0:v", "-map", "1:a", "-c:v", "copy",
+                    "-c:a", "aac", "-shortest", clock], check=True)
+    for part in parts + [listing, stitched]:
         os.remove(part)
     return clock
 
