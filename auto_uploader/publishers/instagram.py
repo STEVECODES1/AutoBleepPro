@@ -125,22 +125,22 @@ class InstagramPublisher:
                             share_to_feed: bool = True) -> bool:
         """Publish a local file as a Reel, with no hosting anywhere.
 
-        Try the free instagrapi route (instagram_free.py) first — it logs in
-        with a regular account and uploads directly. Fall back to the Graph
-        API resumable-upload path below when instagrapi is not available.
+        The official Graph API resumable upload when its token is set -
+        verified working. instagrapi (instagram_free.py) only when it is
+        not: it used to go FIRST whenever a username was in .env, and once
+        the account asked for a 2FA code every Reel failed there and never
+        reached the Graph route at all - six in a row tripped the breaker.
         """
-        # instagrapi route (free, unofficial).
-        try:
-            from publishers.instagram_free import InstagramFreePublisher
-            free = InstagramFreePublisher(self._cfg)
-            if free.ready():
-                return free.post_reel_from_file(video_path, caption,
-                                                share_to_feed)
-        except ImportError:
-            pass
-
-        # Graph API route (official, needs Business Account + token).
         if not self._ready():
+            # instagrapi route (free, unofficial) - the fallback.
+            try:
+                from publishers.instagram_free import InstagramFreePublisher
+                free = InstagramFreePublisher(self._cfg)
+                if free.ready():
+                    return free.post_reel_from_file(video_path, caption,
+                                                    share_to_feed)
+            except ImportError:
+                pass
             return False
         if not os.path.isfile(video_path):
             log.error("Instagram: no such file: %s", video_path)

@@ -35,6 +35,9 @@ import time
 from typing import Callable, List, Optional, Tuple
 
 KEY_NAME = "TWELVELABS_API_KEY"
+# The video model. TWELVELABS_MODEL in .env overrides it when Twelve Labs
+# retires this one too (their error message names the replacement).
+PEGASUS_MODEL = os.environ.get("TWELVELABS_MODEL", "") or "pegasus1.5"
 
 # Under Pegasus' one-hour limit, with room for a rounding error.
 CHUNK_SECONDS = 55 * 60
@@ -186,6 +189,9 @@ def _ask_piece(client, path: str, say: Callable) -> str:
             time.sleep(POLL_S)
             waited += POLL_S
         response = client.analyze(
+            # Named, not left to the default: the default (pegasus1.2) was
+            # sunset and every piece came back HTTP 400 parameter_invalid.
+            model_name=PEGASUS_MODEL,
             video=VideoContext_AssetId(asset_id=asset.id),
             prompt=PROMPT,
             response_format=SyncResponseFormat(type="json_schema",

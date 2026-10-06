@@ -390,6 +390,82 @@ def _refuse_empty_transcript(segments, source_path: str) -> None:
             f"try again.")
 
 
+# --------------------------------------------------------------------------
+# Whisper loops
+#
+# On shouted gameplay audio a small model can lock onto one phrase and
+# repeat it for the rest of the window: a real 27-second clip came back as
+# "fuckin' niggah" thirty times in a row, four times a second. Every one of
+# those is a "word" to mute, so the Short went out with most of its sound
+# gone. The hotword list makes it likelier - it biases the decoder towards
+# exactly those words. A loop is not speech: retry once without hotwords on
+# a bigger model, and if that loops too, keep only the first repeats.
+# --------------------------------------------------------------------------
+
+LOOP_REPEATS = 5          # the same 1-3 word phrase this many times running
+
+
+def _norm(word: str) -> str:
+    return "".join(ch for ch in str(word).lower() if ch.isalnum())
+
+
+def _loop_runs(words: list) -> list:
+    """[(start_index, phrase_len, repeats)] for each phrase repeated
+    LOOP_REPEATS+ times back to back."""
+    toks = [_norm(w.get("word", "")) for w in words]
+    runs, i, n = [], 0, len(toks)
+    while i < n:
+        found = None
+        for size in (1, 2, 3):
+            if i + size * LOOP_REPEATS > n:
+                continue
+            phrase = toks[i:i + size]
+            if not all(phrase):
+                continue
+            reps = 1
+            while toks[i + reps * size:i + (reps + 1) * size] == phrase:
+                reps += 1
+            if reps >= LOOP_REPEATS:
+                found = (i, size, reps)
+                break
+        if found:
+            runs.append(found)
+            i += found[1] * found[2]
+        else:
+            i += 1
+    return runs
+
+
+def transcript_loops(segments: list) -> int:
+    """How many looped words the transcript holds (0 = none)."""
+    total = 0
+    for seg in segments or []:
+        for _start, size, reps in _loop_runs(seg.get("words") or []):
+            total += size * (reps - 2)
+    return total
+
+
+def unloop(segments: list) -> list:
+    """The transcript with each loop cut back to its first two repeats."""
+    out = []
+    for seg in segments or []:
+        words = list(seg.get("words") or [])
+        drop = set()
+        for start, size, reps in _loop_runs(words):
+            drop.update(range(start + 2 * size, start + reps * size))
+        if drop:
+            words = [w for k, w in enumerate(words) if k not in drop]
+            seg = dict(seg, words=words,
+                       text="".join(w.get("word", "") for w in words))
+        out.append(seg)
+    return out
+
+
+BIGGER_MODEL = {"tiny": "large-v3-turbo", "tiny.en": "large-v3-turbo",
+                "base": "large-v3-turbo", "base.en": "large-v3-turbo",
+                "small": "large-v3-turbo", "small.en": "large-v3-turbo"}
+
+
 def censor_video(
     source_path: str,
     work_dir: str,
@@ -482,6 +558,31 @@ def censor_video(
                       f"it - this is slightly less accurate, not broken.")
             result = transcriber.transcribe(raw_audio_path)
             timer.mark("transcribe")
+            looped = transcript_loops(result.get("segments"))
+            if looped:
+                retry_model = BIGGER_MODEL.get(model_name, model_name)
+                print(f"[Censor] Whisper looped ({looped} repeated words - "
+                      f"not real speech). Transcribing again with "
+                      f"{retry_model}, no hotwords...")
+                try:
+                    again = _get_transcriber(retry_model, device, reuse=True)
+                    saved_hot = getattr(again, "hotwords", "")
+                    again.hotwords = ""
+                    try:
+                        second = again.transcribe(raw_audio_path)
+                    finally:
+                        again.hotwords = saved_hot
+                    if transcript_loops(second.get("segments")) < looped:
+                        result = second
+                except Exception as exc:
+                    print(f"[Censor] Second pass failed ({exc}).")
+                still = transcript_loops(result.get("segments"))
+                if still:
+                    print(f"[Censor] Still {still} looped words - cutting "
+                          f"each loop back to its first two repeats so the "
+                          f"clip is not muted end to end.")
+                    result = dict(result, segments=unloop(result["segments"]))
+                timer.mark("loop retry")
             try:
                 with open(words_path, "w", encoding="utf-8") as f:
                     json.dump({"segments": result["segments"],

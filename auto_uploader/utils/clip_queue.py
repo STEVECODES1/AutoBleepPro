@@ -673,7 +673,12 @@ def _censored_clip(platform: str, video_path: str, config: dict) -> tuple:
 
         result = censor_video(
             video_path, general.get("censored_folder") or "censored",
-            model_name=general.get("censor_model", "base"),
+            # large-v3-turbo, not base: the posting queue is not always
+            # handed the "general" block, and base on shouted gameplay
+            # made up strings of swears ("fuck fuck fuck ...") that then
+            # got muted - a Short went out with its audio mostly gone.
+            # A clip is under a minute; turbo on the GPU is seconds.
+            model_name=general.get("censor_model") or "large-v3-turbo",
             bleep_method=general.get("censor_bleep_method", "silence"),
             custom_words=tuple(general.get("censor_custom_words", ()) or ()),
             device=general.get("censor_device") or None,
