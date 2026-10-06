@@ -382,7 +382,8 @@ def test_captions_use_the_channels_chosen_provider(monkeypatch, tmp_path):
 
     seen = {}
 
-    def write(title, transcript, platforms, provider="", model="", ask=None):
+    def write(title, transcript, platforms, provider="", model="", ask=None,
+              frames=None):
         seen["provider"] = provider
         return {}
 
@@ -428,7 +429,8 @@ def test_the_model_is_given_what_is_said_in_the_clip(monkeypatch, tmp_path):
 
     seen = {}
 
-    def write(title, transcript, platforms, provider="", model="", ask=None):
+    def write(title, transcript, platforms, provider="", model="", ask=None,
+              frames=None):
         seen.update(title=title, transcript=transcript)
         return {}
 
@@ -453,3 +455,41 @@ def test_the_model_is_given_what_is_said_in_the_clip(monkeypatch, tmp_path):
 
     assert seen["title"] == "Pastor demands 40%"
     assert seen["transcript"] == "We gon' need 40% of what you're making."
+
+
+def test_stills_go_to_a_model_that_can_see_and_words_are_the_fallback(
+        monkeypatch):
+    """Captions written from the video AND the audio: the stills go to a
+    provider that can see; if that gives nothing, the words alone."""
+    seen = []
+    monkeypatch.setattr(llm_captions, "_ask_with_frames",
+                        lambda name, key, model, prompt, frames:
+                        seen.append((name, len(frames), prompt)) or "")
+    import autoreel.llm_highlights as hl
+
+    monkeypatch.setattr(hl, "all_available",
+                        lambda provider="": [("anthropic", "k")])
+    monkeypatch.setattr(hl, "resolve_model", lambda n, k, m="": "m")
+    monkeypatch.setattr(hl, "asker_for", lambda name: (
+        lambda key, model, prompt: '{"captions": {"tiktok": "from the words"}}'))
+
+    got = llm_captions.write_captions("Pastor demands 40%", "we need 40%",
+                                      ["tiktok"], provider="anthropic",
+                                      frames=[b"jpg1", b"jpg2"])
+    assert got == {"tiktok": "from the words"}
+    assert seen and seen[0][1] == 2
+    assert "WHAT IS ON SCREEN" in seen[0][2]
+
+
+def test_without_stills_the_prompt_says_nothing_about_images(monkeypatch):
+    prompts = []
+    import autoreel.llm_highlights as hl
+
+    monkeypatch.setattr(hl, "all_available",
+                        lambda provider="": [("anthropic", "k")])
+    monkeypatch.setattr(hl, "resolve_model", lambda n, k, m="": "m")
+    monkeypatch.setattr(hl, "asker_for", lambda name: (
+        lambda key, model, prompt: prompts.append(prompt)
+        or '{"captions": {"tiktok": "ok"}}'))
+    llm_captions.write_captions("t", "said", ["tiktok"], provider="anthropic")
+    assert prompts and "WHAT IS ON SCREEN" not in prompts[0]

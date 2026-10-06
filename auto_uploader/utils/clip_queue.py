@@ -387,6 +387,9 @@ def _model_caption(platform: str, video_path: str, headline: str,
     # model used to get only the headline - twice - and when the headline
     # was the filename it wrote about the filename.
     said = clip_transcript(video_path, config)
+    # And what is on SCREEN: stills from across the clip, so the caption
+    # is written from the video and the audio together.
+    seen = clip_frames(video_path)
     if not (spoken or said):
         # Nothing about the clip itself to go on. A caption invented from
         # the stream's name is worse than the plain template.
@@ -400,7 +403,8 @@ def _model_caption(platform: str, video_path: str, headline: str,
                              sorted(PLATFORM_BRIEFS),
                              provider=str(clips.get("llm_provider", "")
                                           or ""),
-                             model=str(clips.get("llm_model", "") or ""))
+                             model=str(clips.get("llm_model", "") or ""),
+                             frames=seen)
     if not written:
         return ""
     have.update(written)
@@ -965,6 +969,31 @@ def _clip_segments(video_path: str, config: dict):
         if isinstance(segments, list):
             return segments
     return None
+
+
+def clip_frames(video_path: str, count: int = 4) -> list:
+    """JPEG stills spread across the clip, or [] (no ffmpeg, unreadable
+    file). Two per half: vision_frames samples a window at 25% and 70%."""
+    import subprocess
+
+    try:
+        from autoreel.vision_frames import frames_for
+
+        out = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+             "-of", "csv=p=0", video_path],
+            capture_output=True, text=True, timeout=30).stdout.strip()
+        length = float(out)
+    except Exception:
+        return []
+    if length <= 1:
+        return []
+    halves = max(1, count // 2)
+    step = length / halves
+    stills = []
+    for i in range(halves):
+        stills += frames_for(video_path, i * step, (i + 1) * step)
+    return stills[:count]
 
 
 def clip_transcript(video_path: str, config: dict) -> str:

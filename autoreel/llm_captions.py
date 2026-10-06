@@ -77,10 +77,24 @@ No other text.
 TITLE: %(title)s
 
 WHAT IS SAID: %(transcript)s
-
+%(seen)s
 PLATFORMS:
 %(briefs)s
 """
+
+# Added when stills from the clip go with the words. The transcript is
+# half the clip: a fight, a car flipping, who is standing where - none of
+# it is in the words, and a caption written blind to it guesses.
+FRAMES_NOTE = """
+WHAT IS ON SCREEN: the images attached are stills from this clip, in
+order. Use them with the words to work out what actually happens - where
+it is, who is there, what they do. Say only what the stills and the words
+support; do not describe the images as images.
+"""
+
+# Stills sent with the words. Four across the clip shows the setup, the
+# turn and the payoff; more costs tokens and rarely changes the caption.
+CAPTION_FRAMES = 4
 
 # Enough of the clip for the model to know what happened, and not so much
 # that a two-minute clip costs a page of tokens per platform.
@@ -176,10 +190,31 @@ def _parse(raw: str, platforms) -> dict:
             if k in wanted and isinstance(v, str) and v.strip()}
 
 
+def _ask_with_frames(name: str, key: str, model: str, prompt: str,
+                     frames) -> str:
+    """The prompt plus stills, to a provider that can see. "" if it
+    cannot, so the caller asks again with the words alone."""
+    from .llm_highlights import (ANTHROPIC, _claude, resolve_model,
+                                 to_claude_content)
+    from .vision_frames import as_inline_data
+
+    if name != ANTHROPIC or not frames:
+        return ""
+    parts = [{"text": prompt}] + [as_inline_data(f) for f in frames]
+    reply, _why = _claude(key, resolve_model(name, key, model), "",
+                          to_claude_content(parts), max_tokens=4000,
+                          effort="low")
+    return reply or ""
+
+
 def write_captions(title: str, transcript: str, platforms,
                    provider: str = "", model: str = "",
-                   ask=None) -> dict:
-    """{platform: caption} from a model, or {} if none could be had."""
+                   ask=None, frames=None) -> dict:
+    """{platform: caption} from a model, or {} if none could be had.
+
+    frames: JPEG stills from the clip. Sent to a provider that can see
+    them, so the caption is about what happens on screen as well as what
+    is said; any other provider gets the words alone, as before."""
     from .llm_highlights import (all_available, api_key, asker_for,
                                  available, resolve_model)
 
@@ -193,6 +228,14 @@ def write_captions(title: str, transcript: str, platforms,
         "transcript": (transcript or "").strip()[:MAX_TRANSCRIPT_CHARS]
                       or "(nothing audible)",
         "briefs": briefs,
+        "seen": FRAMES_NOTE if frames else "",
+    }
+    plain_prompt = prompt if not frames else PROMPT % {
+        "title": (title or "").strip() or "(none)",
+        "transcript": (transcript or "").strip()[:MAX_TRANSCRIPT_CHARS]
+                      or "(nothing audible)",
+        "briefs": briefs,
+        "seen": "",
     }
 
     if ask is not None:
@@ -212,9 +255,17 @@ def write_captions(title: str, transcript: str, platforms,
     # is one point of failure, and here the failure is a whole day of
     # posts going out in one voice.
     for name, key in configured:
+        if frames:
+            try:
+                found = _parse(_ask_with_frames(name, key, model, prompt,
+                                                frames), platforms)
+            except Exception:
+                found = {}
+            if found:
+                return found
         try:
             raw = asker_for(name)(key, resolve_model(name, key, model),
-                                  prompt)
+                                  plain_prompt)
         except Exception:
             continue
         found = _parse(raw, platforms)
