@@ -383,11 +383,20 @@ def _model_caption(platform: str, video_path: str, headline: str,
     except Exception:
         spoken = ""
 
+    # What is actually SAID in the clip, from its own transcript. The
+    # model used to get only the headline - twice - and when the headline
+    # was the filename it wrote about the filename.
+    said = clip_transcript(video_path, config)
+    if not (spoken or said):
+        # Nothing about the clip itself to go on. A caption invented from
+        # the stream's name is worse than the plain template.
+        return ""
+
     # The same provider choice as the clip picks (clips.llm_provider).
     # Without it the captions asked Gemini first however the channel was
     # set up, and sat through its 503 retries on every clip.
     clips = (config or {}).get("clips", {}) or {}
-    written = write_captions(headline, spoken or headline,
+    written = write_captions(spoken or "", said or spoken,
                              sorted(PLATFORM_BRIEFS),
                              provider=str(clips.get("llm_provider", "")
                                           or ""),
@@ -937,6 +946,8 @@ def _clip_segments(video_path: str, config: dict):
     folders = [os.path.dirname(os.path.abspath(video_path))]
     folders += list((config or {}).get("note_folders", ()) or ())
     for folder in folders:
+        if not folder or not os.path.isdir(folder):
+            continue
         path = words_cache_path(folder, stem)
         try:
             with open(path, encoding="utf-8") as handle:
@@ -946,6 +957,23 @@ def _clip_segments(video_path: str, config: dict):
         if isinstance(segments, list):
             return segments
     return None
+
+
+def clip_transcript(video_path: str, config: dict) -> str:
+    """The words said in this clip, as one line of text, or ""."""
+    segments = _clip_segments(video_path, config) or []
+    parts = []
+    for segment in segments:
+        if not isinstance(segment, dict):
+            continue
+        text = str(segment.get("text") or "").strip()
+        if not text:
+            words = segment.get("words") or []
+            text = " ".join(str(w.get("word", "")).strip()
+                            for w in words if isinstance(w, dict))
+        if text:
+            parts.append(text)
+    return " ".join(" ".join(parts).split())
 
 
 def _slur_heavy(video_path: str, config: dict) -> str:

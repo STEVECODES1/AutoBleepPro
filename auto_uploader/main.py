@@ -1922,11 +1922,20 @@ def _clip_config(cfg) -> dict:
             # from whatever config object it is handed, and a folder it
             # cannot see must cost a better title rather than the whole
             # post.
+            #
+            # clips/ is where the cutter writes each clip's _line.txt. It
+            # was missing here, so a queued copy in clip_queue_files/ found
+            # no line, the caption model got the bare filename - "Wassssup
+            # 10426 Stackswopo Stream - Clip 07" - and X/TikTok/Instagram
+            # went out about "10,426 streams" instead of the clip.
             "note_folders": tuple(
                 folder for folder in
                 (getattr(cfg.general, "watch_folder", ""),
                  getattr(cfg.general, "uploaded_folder", ""),
-                 getattr(cfg.general, "censored_folder", ""))
+                 getattr(cfg.general, "censored_folder", ""),
+                 os.path.join(getattr(cfg, "project_root", "") or "",
+                              "clips")
+                 if getattr(cfg, "project_root", "") else "")
                 if folder)}
 
 

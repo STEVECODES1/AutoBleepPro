@@ -164,6 +164,10 @@ def test_a_written_caption_is_used_over_the_template(tmp_path, monkeypatch):
 
     clip = tmp_path / "clip.mp4"
     clip.write_bytes(b"x")
+    # Something about the clip itself: with nothing, the model is not
+    # asked at all (see the test below).
+    (tmp_path / "clip_line.txt").write_text("He really did that",
+                                            encoding="utf-8")
     monkeypatch.setattr(llm_captions, "write_captions",
                         lambda *a, **k: {"instagram": "he really did that"})
 
@@ -386,9 +390,66 @@ def test_captions_use_the_channels_chosen_provider(monkeypatch, tmp_path):
     monkeypatch.setattr(llm_captions, "cached", lambda path: {})
     clip = tmp_path / "c.mp4"
     clip.write_bytes(b"x")
+    (tmp_path / "c_line.txt").write_text("a line", encoding="utf-8")
 
     clip_queue._model_caption(
         "instagram", str(clip), "headline",
         {"clips": {"llm_provider": "anthropic"}})
 
     assert seen["provider"] == "anthropic"
+
+
+def test_a_clip_with_no_line_and_no_transcript_is_not_captioned_by_model(
+        monkeypatch, tmp_path):
+    """2026-10-06: with only the filename to go on, the model wrote X and
+    TikTok captions about "10,426 streams" for a clip about a pastor."""
+    import sys
+    sys.path.insert(0, _UPLOADER)
+    from utils import clip_queue
+
+    asked = []
+    monkeypatch.setattr(llm_captions, "write_captions",
+                        lambda *a, **k: asked.append(a) or {"x": "made up"})
+    monkeypatch.setattr(llm_captions, "cached", lambda path: {})
+    clip = tmp_path / "Wassssup 10426 Stackswopo Stream - Clip 07.mp4"
+    clip.write_bytes(b"x")
+
+    assert clip_queue._model_caption("x", str(clip), "Wassssup 10426",
+                                     {}) == ""
+    assert asked == []
+
+
+def test_the_model_is_given_what_is_said_in_the_clip(monkeypatch, tmp_path):
+    import json
+    import sys
+    sys.path.insert(0, _UPLOADER)
+    from utils import clip_queue
+    from utils.censor import words_cache_path
+
+    seen = {}
+
+    def write(title, transcript, platforms, provider="", model="", ask=None):
+        seen.update(title=title, transcript=transcript)
+        return {}
+
+    monkeypatch.setattr(llm_captions, "write_captions", write)
+    monkeypatch.setattr(llm_captions, "cached", lambda path: {})
+    queued = tmp_path / "queue"
+    notes = tmp_path / "clips"
+    censored = tmp_path / "censored"
+    for folder in (queued, notes, censored):
+        folder.mkdir()
+    clip = queued / "Show - Clip 07.mp4"
+    clip.write_bytes(b"x")
+    (notes / "Show - Clip 07_line.txt").write_text(
+        "Pastor demands 40%", encoding="utf-8")
+    with open(words_cache_path(str(censored), "Show - Clip 07"), "w",
+              encoding="utf-8") as handle:
+        json.dump({"segments": [{"text": " We gon' need 40% of what"},
+                                {"text": " you're making."}]}, handle)
+
+    clip_queue._model_caption("instagram", str(clip), "Show - Clip 07",
+                              {"note_folders": (str(notes), str(censored))})
+
+    assert seen["title"] == "Pastor demands 40%"
+    assert seen["transcript"] == "We gon' need 40% of what you're making."

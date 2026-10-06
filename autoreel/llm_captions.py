@@ -58,12 +58,17 @@ PLATFORM_BRIEFS = {
 PROMPT = """\
 You write captions for clips from a live streamer's channel.
 
-The clip's title, and what is said in it, are below. Write ONE caption
-per platform named. Each must be about THIS clip - never generic, never
-"check this out", never describing the video as a video.
+The clip's one-line summary, and what is said in it, are below. Write ONE
+caption per platform named. Each must be about what HAPPENS in THIS clip,
+worked out from what is said - never generic, never "check this out",
+never describing the video as a video.
+
+Do not write about the stream itself, its name, its date or how it
+opened: the clip is a moment from the middle of it. Numbers in a stream
+name (like "10426") are dates, not counts.
 
 Match the streamer's own voice: casual, blunt, funny. Do not clean it up
-into marketing copy, and do not add slurs or insults that are not in the
+into marketing copy. Never put a slur in a caption, even one said in the
 clip.
 
 Answer as JSON: {"captions": {"<platform>": "<caption>", ...}}
