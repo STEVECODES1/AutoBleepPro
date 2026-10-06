@@ -2708,7 +2708,13 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
                     sticker_path="" if is_clip else getattr(
                         cfg.general, "thumbnail_sticker", ""),
                     provider=str((cfg.clips or {}).get("llm_provider", "")
-                                 or ""))
+                                 or ""),
+                    # The stream's hook in big letters ("WASSSSUP"), from
+                    # the YouTube-safe title so a slur never lands on the
+                    # picture - Rumble shares this same file. Clips keep
+                    # no text: their title is already burned on the video.
+                    text="" if is_clip else yt_title,
+                    badge="" if is_clip else "GTA RP")
             except Exception as exc:
                 print(f"[Thumbnail] Could not generate one: {exc}")
                 made = ""

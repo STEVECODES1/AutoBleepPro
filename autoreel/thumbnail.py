@@ -54,7 +54,7 @@ from typing import Optional
 SAMPLE_FRACTIONS = (0.10, 0.22, 0.34, 0.46, 0.58, 0.70, 0.82, 0.92)
 
 # A full stream is hours long; eight looks across it miss most of it.
-STREAM_SAMPLES = 16
+STREAM_SAMPLES = 24
 STREAM_SPAN = (0.05, 0.95)
 
 # signalstats YAVG (16-235). Below this a frame is a dark room or a
@@ -69,7 +69,11 @@ SUBJECT_HEIGHT = 0.80
 MAX_ZOOM = 2.2
 # With no box, a gentle zoom on the middle - it also trims the HUD that
 # sits on the edges (minimap bottom-left, chat top-left).
-DEFAULT_ZOOM = 1.25
+DEFAULT_ZOOM = 1.4
+# Never wider than this: the full frame shows the whole HUD.
+MIN_ZOOM = 1.4
+# The minimap: everything left of HUD_X and below HUD_Y.
+HUD_X, HUD_Y = 0.17, 0.68
 # Where the character sits across the picture. Left of centre, so a
 # sticker on the right does not cover them.
 SUBJECT_X = 0.40
@@ -107,9 +111,13 @@ Pick the ONE that would make somebody scrolling past stop and click.
 Strongly prefer a bright, well-lit frame where ONE character is clearly
 visible, facing the camera or in profile, close enough that their face
 and upper body will still look sharp when zoomed in, against a simple
-background. After that: a face mid-reaction, a fight, a chase, an arrest,
-something plainly odd. Avoid dark frames, loading screens, menus, plain
-scenery, crowded wide shots and motion blur.
+background. Their FACE must be visible. Never pick a frame where the back
+of somebody's head, their hair or their body sits in the middle of the
+picture or blocks the view - that is the most common bad thumbnail. After
+that: a face mid-reaction, a fight, a chase, an arrest, something plainly
+odd. Avoid dark frames, loading screens, menus, plain scenery, crowded
+wide shots and motion blur. Big title text will go across the bottom
+third, so the face should be in the upper two thirds.
 
 Then give the box around that character's head and upper body (head to
 waist), as [ymin, xmin, ymax, xmax] on a 0-1000 scale of the frame.
@@ -220,20 +228,32 @@ def zoom_window(box: Optional[tuple], aspect: float = 16 / 9) -> tuple:
 
     With a box, the character's head-to-waist fills SUBJECT_HEIGHT of the
     picture and sits at SUBJECT_X across it. Without one, DEFAULT_ZOOM on
-    the middle. Always inside the frame, never closer than MAX_ZOOM.
+    the middle. Always inside the frame, between MIN_ZOOM and MAX_ZOOM,
+    and kept off the minimap in the bottom-left corner when it can be -
+    a minimap is what makes a thumbnail read as a paused stream.
     """
     if box is None:
         w = h = 1.0 / DEFAULT_ZOOM
-        return (1 - w) / 2, (1 - h) / 2, w, h
-    x0, y0, x1, y1 = box
-    h = (y1 - y0) / SUBJECT_HEIGHT
-    h = max(1.0 / MAX_ZOOM, min(1.0, h))
-    w = h                       # same zoom both ways keeps 16:9
-    cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
-    x = cx - w * SUBJECT_X
-    y = cy - h * 0.45           # a little headroom above the middle
+        x, y = (1 - w) / 2, (1 - h) / 2
+        x0, y0 = x + w * 0.3, y + h * 0.15
+    else:
+        x0, y0, x1, y1 = box
+        h = (y1 - y0) / SUBJECT_HEIGHT
+        h = max(1.0 / MAX_ZOOM, min(1.0 / MIN_ZOOM, h))
+        w = h                   # same zoom both ways keeps 16:9
+        cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
+        x = cx - w * SUBJECT_X
+        y = cy - h * 0.45       # a little headroom above the middle
     x = max(0.0, min(1.0 - w, x))
     y = max(0.0, min(1.0 - h, y))
+    if x < HUD_X and y + h > HUD_Y:
+        shifted = min(HUD_X, 1.0 - w)
+        if shifted <= x0 + 0.02:
+            # Slide right past the minimap - the character stays in.
+            x = shifted
+        elif h <= HUD_Y and HUD_Y - h <= y0:
+            # Or lift the window above it, keeping the head.
+            y = max(0.0, HUD_Y - h)
     return x, y, w, h
 
 
@@ -386,7 +406,7 @@ def stream_filters(window: tuple, brightness: Optional[float]) -> str:
 def make(clip_path: str, duration: float, out_path: str = "",
          ask=None, logo_path: str = "", grade: bool = True,
          style: str = "clip", sticker_path: str = "",
-         provider: str = "") -> str:
+         provider: str = "", text: str = "", badge: str = "") -> str:
     """Write a thumbnail for this clip. "" when one cannot be made.
 
     Never raises and never blocks a post: a clip with no thumbnail is a
@@ -400,7 +420,7 @@ def make(clip_path: str, duration: float, out_path: str = "",
     out_path = out_path or os.path.splitext(clip_path)[0] + "_thumb.jpg"
     if style == "stream":
         return _make_stream(clip_path, duration, out_path, ask, logo_path,
-                            sticker_path, provider)
+                            sticker_path, provider, text, badge)
 
     marks = timestamps(duration)
     workspace = tempfile.mkdtemp(prefix="thumb_")
@@ -442,7 +462,8 @@ def make(clip_path: str, duration: float, out_path: str = "",
 
 def _make_stream(source: str, duration: float, out_path: str, ask,
                  logo_path: str, sticker_path: str,
-                 provider: str = "") -> str:
+                 provider: str = "", text: str = "",
+                 badge: str = "") -> str:
     marks = timestamps(duration, STREAM_SAMPLES)
     workspace = tempfile.mkdtemp(prefix="thumb_")
     try:
@@ -485,8 +506,177 @@ def _make_stream(source: str, duration: float, out_path: str, ask,
             return ""
         if sticker_path and os.path.isfile(sticker_path):
             _stamp_sticker(out_path, sticker_path)
-        if logo_path and os.path.isfile(logo_path):
+        has_logo = bool(logo_path and os.path.isfile(logo_path))
+        if text:
+            # Words cost the words, never the picture.
+            stamp_text(out_path, text)
+        if has_logo:
             _stamp_logo(out_path, logo_path)
+        elif badge:
+            stamp_badge(out_path, badge)
         return out_path
     finally:
         shutil.rmtree(workspace, ignore_errors=True)
+
+
+# --------------------------------------------------------------------------
+# Words on a stream thumbnail
+#
+# The channels that win on this footage put the hook on the picture in big
+# outlined letters. A bare frame says nothing about what happened, so a
+# viewer has to read the title to find out - and in a feed, most do not.
+# Clips keep the no-text rule above: their title is already burned across
+# the top of the video.
+# --------------------------------------------------------------------------
+
+TEXT_FILL = (255, 226, 0)        # thumbnail yellow
+TEXT_STROKE = (0, 0, 0)
+TEXT_MAX_W = 0.86                # share of the picture's width
+TEXT_MAX_H = 0.24                # share of its height, bottom band
+TEXT_MAX_LINES = 3
+BADGE_FILL = (220, 20, 30)
+_FONTS = (r"C:\Windows\Fonts\impact.ttf", r"C:\Windows\Fonts\ariblk.ttf",
+          "/usr/share/fonts/truetype/msttcorefonts/Impact.ttf",
+          "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf")
+
+
+def _font_path() -> str:
+    for path in _FONTS:
+        if os.path.isfile(path):
+            return path
+    return ""
+
+
+def thumb_words(title: str) -> str:
+    """The words for the picture: the stream's hook, not its date.
+
+    '"WASSSSUP" 10/5/26 Stackswopo Stream' -> 'WASSSSUP'. A title with no
+    quoted hook is used as it is, minus a trailing date.
+    """
+    import re
+
+    title = str(title or "").strip()
+    quoted = re.search(r'["\u201c](.+?)["\u201d]', title)
+    if quoted:
+        title = quoted.group(1)
+    title = re.sub(r"\s*\d{1,2}/\d{1,2}/\d{2,4}.*$", "", title)
+    return " ".join(title.split()).upper()
+
+
+def _wrap(words: list, lines: int) -> list:
+    """Split words into `lines` lines of roughly equal length."""
+    if lines <= 1 or len(words) <= 1:
+        return [" ".join(words)]
+    total = sum(len(w) for w in words) + len(words) - 1
+    target = total / lines
+    out, cur = [], []
+    for w in words:
+        if cur and len(" ".join(cur + [w])) > target and len(out) < lines - 1:
+            out.append(" ".join(cur))
+            cur = [w]
+        else:
+            cur.append(w)
+    out.append(" ".join(cur))
+    return out
+
+
+def layout_text(text: str, width: int, height: int, measure) -> tuple:
+    """(lines, font_size) that fit the bottom band, biggest first.
+    `measure(line, size)` returns (w, h) in pixels."""
+    words = text.split()
+    if not words:
+        return [], 0
+    best = ([text], 12)
+    for lines in range(1, min(TEXT_MAX_LINES, len(words)) + 1):
+        wrapped = _wrap(words, lines)
+        size = int(height * TEXT_MAX_H / lines)
+        while size > 12:
+            sizes = [measure(line, size) for line in wrapped]
+            w = max(s[0] for s in sizes)
+            h = sum(s[1] for s in sizes) * 1.05
+            if w <= width * TEXT_MAX_W and h <= height * TEXT_MAX_H:
+                break
+            size = int(size * 0.92)
+        if size > best[1]:
+            best = (wrapped, size)
+    return best
+
+
+def stamp_text(picture: str, title: str) -> bool:
+    """Big outlined hook text across the bottom of `picture`, in place."""
+    words = thumb_words(title)
+    font_path = _font_path()
+    if not words or not font_path:
+        return False
+    try:
+        from PIL import Image, ImageDraw, ImageFont
+    except ImportError:
+        return False
+    try:
+        img = Image.open(picture).convert("RGB")
+        W, H = img.size
+        draw = ImageDraw.Draw(img)
+
+        def font(size):
+            return ImageFont.truetype(font_path, size)
+
+        def measure(line, size):
+            f = font(size)
+            box = draw.textbbox((0, 0), line, font=f,
+                                stroke_width=max(2, size // 9))
+            return box[2] - box[0], box[3] - box[1]
+
+        lines, size = layout_text(words, W, H, measure)
+        if not lines:
+            return False
+        f = font(size)
+        stroke = max(3, size // 9)
+        heights = [measure(line, size)[1] for line in lines]
+        y = H - int(H * 0.04) - int(sum(heights) * 1.05)
+        for line, h in zip(lines, heights):
+            w = measure(line, size)[0]
+            x = (W - w) // 2
+            # A soft drop shadow first, then the outlined letters.
+            draw.text((x + stroke, y + stroke), line, font=f,
+                      fill=(0, 0, 0), stroke_width=stroke,
+                      stroke_fill=(0, 0, 0))
+            draw.text((x, y), line, font=f, fill=TEXT_FILL,
+                      stroke_width=stroke, stroke_fill=TEXT_STROKE)
+            y += int(h * 1.05)
+        tmp = picture + ".text.jpg"
+        img.save(tmp, "JPEG", quality=92)
+        os.replace(tmp, picture)
+        return True
+    except Exception:
+        return False
+
+
+def stamp_badge(picture: str, label: str) -> bool:
+    """A small solid tag in the top-left corner ("GTA RP"), in place -
+    tells the scroller the game before anything else, without needing
+    anyone's logo file."""
+    font_path = _font_path()
+    if not label or not font_path:
+        return False
+    try:
+        from PIL import Image, ImageDraw, ImageFont
+        img = Image.open(picture).convert("RGB")
+        W, H = img.size
+        draw = ImageDraw.Draw(img)
+        size = max(14, int(H * 0.075))
+        f = ImageFont.truetype(font_path, size)
+        box = draw.textbbox((0, 0), label, font=f)
+        tw, th = box[2] - box[0], box[3] - box[1]
+        pad = int(size * 0.35)
+        x0, y0 = int(W * 0.025), int(H * 0.04)
+        draw.rounded_rectangle(
+            (x0, y0, x0 + tw + 2 * pad, y0 + th + 2 * pad),
+            radius=pad, fill=BADGE_FILL)
+        draw.text((x0 + pad - box[0], y0 + pad - box[1]), label, font=f,
+                  fill=(255, 255, 255))
+        tmp = picture + ".badge.jpg"
+        img.save(tmp, "JPEG", quality=92)
+        os.replace(tmp, picture)
+        return True
+    except Exception:
+        return False

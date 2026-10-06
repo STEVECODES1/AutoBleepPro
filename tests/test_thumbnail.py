@@ -295,11 +295,29 @@ def test_the_zoom_never_goes_past_the_limit_or_off_the_frame():
 
 
 def test_no_box_is_a_gentle_zoom_on_the_middle():
-    from autoreel.thumbnail import DEFAULT_ZOOM, zoom_window
+    from autoreel.thumbnail import DEFAULT_ZOOM, HUD_X, HUD_Y, zoom_window
 
     x, y, w, h = zoom_window(None)
     assert abs(w - 1 / DEFAULT_ZOOM) < 1e-6
-    assert abs(x - (1 - w) / 2) < 1e-6
+    # Near the middle, but slid off the minimap in the bottom-left.
+    assert abs(x - (1 - w) / 2) < 0.05
+    assert x >= HUD_X or y + h <= HUD_Y
+
+
+def test_the_window_keeps_off_the_minimap_without_losing_the_character():
+    from autoreel.thumbnail import HUD_X, HUD_Y, zoom_window
+
+    # A character standing just right of the minimap, full height.
+    x, y, w, h = zoom_window((0.30, 0.20, 0.50, 0.75))
+    assert x >= HUD_X or y + h <= HUD_Y
+    assert x <= 0.30 and x + w >= 0.50
+
+
+def test_never_the_whole_frame():
+    from autoreel.thumbnail import MIN_ZOOM, zoom_window
+
+    _x, _y, w, _h = zoom_window((0.0, 0.0, 1.0, 1.0))
+    assert w <= 1 / MIN_ZOOM + 1e-9
 
 
 def test_the_models_box_is_read():
@@ -331,7 +349,9 @@ def _stream_scene(monkeypatch, stats):
 
 
 def test_dark_frames_never_reach_the_model(tmp_path, monkeypatch):
-    stats = [(30.0, 10.0)] * 15 + [(120.0, 40.0)]
+    from autoreel.thumbnail import STREAM_SAMPLES
+
+    stats = [(30.0, 10.0)] * (STREAM_SAMPLES - 1) + [(120.0, 40.0)]
     grabbed, marks, _ = _stream_scene(monkeypatch, stats)
     seen = []
     clip = tmp_path / "stream.mp4"
@@ -346,7 +366,9 @@ def test_dark_frames_never_reach_the_model(tmp_path, monkeypatch):
 
 def test_with_no_model_the_brightest_most_colourful_look_wins(
         tmp_path, monkeypatch):
-    stats = [(80.0, 10.0)] * 16
+    from autoreel.thumbnail import STREAM_SAMPLES
+
+    stats = [(80.0, 10.0)] * STREAM_SAMPLES
     stats[7] = (140.0, 60.0)
     grabbed, marks, _ = _stream_scene(monkeypatch, stats)
     clip = tmp_path / "stream.mp4"
@@ -429,3 +451,43 @@ def test_a_clip_thumbnail_stays_vertical():
     body = inspect.getsource(main)
     call = body[body.index("autoreel_thumbnail.make("):][:600]
     assert 'style="clip" if is_clip else "stream"' in call
+
+
+def test_the_hook_not_the_date_goes_on_the_picture():
+    from autoreel.thumbnail import thumb_words
+
+    assert thumb_words('"WASSSSUP" 10/5/26 Stackswopo Stream') == "WASSSSUP"
+    assert thumb_words("FINGER") == "FINGER"
+    assert thumb_words("cop exposes the pastor 10/5/26 Stackswopo Stream") \
+        == "COP EXPOSES THE PASTOR"
+    assert thumb_words("") == ""
+
+
+def test_long_hooks_wrap_and_shrink_to_fit():
+    from autoreel.thumbnail import TEXT_MAX_H, TEXT_MAX_W, layout_text
+
+    def measure(line, size):
+        return len(line) * size * 0.5, size
+
+    lines, size = layout_text("THE PASTOR GOT EXPOSED IN FRONT OF EVERYONE",
+                              1280, 720, measure)
+    assert 1 < len(lines) <= 3
+    assert max(measure(l, size)[0] for l in lines) <= 1280 * TEXT_MAX_W
+    assert size * len(lines) * 1.05 <= 720 * TEXT_MAX_H + 1
+
+
+def test_text_and_badge_go_on_a_real_picture(tmp_path):
+    from PIL import Image
+
+    from autoreel.thumbnail import _font_path, stamp_badge, stamp_text
+
+    if not _font_path():
+        return
+    pic = tmp_path / "t.jpg"
+    Image.new("RGB", (1280, 720), (40, 90, 160)).save(pic)
+    assert stamp_text(str(pic), '"FINGER" 10/5/26 Stackswopo Stream')
+    assert stamp_badge(str(pic), "GTA RP")
+    img = Image.open(pic).convert("RGB")
+    # Yellow letters landed in the bottom band.
+    band = img.crop((0, 500, 1280, 720)).getcolors(1 << 20)
+    assert any(r > 200 and g > 180 and b < 80 for _n, (r, g, b) in band)
