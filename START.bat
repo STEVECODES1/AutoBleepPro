@@ -57,7 +57,12 @@ REM  So: park any local edits first. `git stash` KEEPS them - nothing is
 REM  thrown away, and `git stash pop` brings them back - but they stop
 REM  being a reason to run stale code. A clean tree stashes nothing and
 REM  this costs one command.
-git stash push -u -m "START.bat auto-stash" >nul 2>&1
+REM
+REM  Tracked files only - no -u. With -u every start also swept away
+REM  every UNTRACKED file: the uploader's own logs and backups, scripts
+REM  being worked on, and on 2026-10-06 a morning's notes. Untracked
+REM  files cannot make the code stale, so they are left where they are.
+git stash push -m "START.bat auto-stash" >nul 2>&1
 if %ERRORLEVEL% equ 0 (
     set STASHED=1
     echo  Local edits parked in git stash - restore with: git stash pop

@@ -101,3 +101,13 @@ auto_uploader/compilation_ledger.json
 
 # Queued clip videos waiting to post - START.bat's 'git stash -u' must never sweep these away
 /auto_uploader/clip_queue_files/
+
+# Local backups and scratch - never code, and full of secrets (.env
+# copies). Ignored so nothing commits them and START.bat's stash leaves
+# them where they are.
+auto_uploader/_backups/
+auto_uploader/*.bak*
+auto_uploader/*.backup*
+auto_uploader/.env.backup-*
+auto_uploader/upload_log.txt
+.pytest_cache/
