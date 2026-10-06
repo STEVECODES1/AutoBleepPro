@@ -88,7 +88,36 @@ def _fetch_plain(rss_url: str) -> tuple:
     return raw, ""
 
 
+# The longest the attached Chrome may take to answer. Without a bound,
+# a Chrome with a frozen tab held the uploader at start-up indefinitely
+# (2026-10-06): connect_over_cdp attaches to every tab and waited on the
+# one that never answered, so nothing after it - the watcher included -
+# ever ran.
+BROWSER_TIMEOUT_S = 45
+
+
 def _fetch_via_browser(rss_url: str, cdp_url: str) -> tuple:
+    """(raw_bytes | None, error_description), never longer than
+    BROWSER_TIMEOUT_S. The attempt runs on a daemon thread so a hang is
+    abandoned rather than waited on."""
+    import threading
+
+    result = [None, f"Chrome on {cdp_url} did not answer within "
+                    f"{BROWSER_TIMEOUT_S}s"]
+
+    def attempt():
+        result[0], result[1] = _fetch_via_browser_unbounded(rss_url, cdp_url)
+
+    worker = threading.Thread(target=attempt, daemon=True,
+                              name="rumble-feed-browser")
+    worker.start()
+    worker.join(BROWSER_TIMEOUT_S)
+    if worker.is_alive():
+        return None, result[1] if result[0] is None else ""
+    return result[0], result[1]
+
+
+def _fetch_via_browser_unbounded(rss_url: str, cdp_url: str) -> tuple:
     """(raw_bytes | None, error_description). Uses the already-open Chrome."""
     try:
         from playwright.sync_api import sync_playwright
@@ -358,6 +387,12 @@ def fetch_rumble_videos(rss_url: str, cdp_url: str = None,
     """
     attempts = []
 
+    # A channel list read in the last few hours answers before anything
+    # is fetched: no request, no Chrome, no credits.
+    recent = _read_cache(channel_page_for(rss_url, channel_url))
+    if recent:
+        return recent
+
     raw, why = _fetch_plain(rss_url)
     if raw is None:
         attempts.append(f"direct: {why}")
@@ -373,9 +408,6 @@ def fetch_rumble_videos(rss_url: str, cdp_url: str = None,
 
         # Read the page instead - the only routes that work today.
         page = channel_page_for(rss_url, channel_url)
-        recent = _read_cache(page)
-        if recent:
-            return recent
         bee = scrapingbee_key()
         if bee:
             videos, why = _fetch_via_scrapingbee(page, bee)

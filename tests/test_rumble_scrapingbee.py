@@ -89,3 +89,33 @@ def test_without_a_key_the_failure_says_what_was_tried(tmp_path, monkeypatch):
         assert "403" in str(exc)
     else:
         raise AssertionError("expected a RuntimeError")
+
+
+def test_a_chrome_that_never_answers_does_not_hold_the_uploader(monkeypatch):
+    """2026-10-06: a Chrome with a frozen tab kept the uploader at
+    start-up for minutes - nothing after the Rumble check ever ran."""
+    import threading
+
+    release = threading.Event()
+    monkeypatch.setattr(rc, "BROWSER_TIMEOUT_S", 0.2)
+    monkeypatch.setattr(rc, "_fetch_via_browser_unbounded",
+                        lambda url, cdp: (release.wait(5), (b"", ""))[1])
+    started = time.time()
+    raw, why = rc._fetch_via_browser("https://rumble.com/x.xml",
+                                     "http://localhost:9222")
+    release.set()
+    assert raw is None and "did not answer" in why
+    assert time.time() - started < 2
+
+
+def test_a_fresh_cache_answers_before_any_request(tmp_path, monkeypatch):
+    path = tmp_path / "cache.json"
+    path.write_text(json.dumps({
+        "channel": CHANNEL, "fetched_at": time.time(),
+        "videos": [{"title": "t 10/5/26", "video_id": "v1", "url": "u1"}]}))
+    monkeypatch.setattr(rc, "_CACHE_PATH", str(path))
+    monkeypatch.setattr(rc, "_fetch_plain",
+                        lambda url: (_ for _ in ()).throw(AssertionError("fetched")))
+    got = rc.fetch_rumble_videos(CHANNEL + "/index.xml", "http://localhost:9222",
+                                 CHANNEL)
+    assert [v.title for v in got] == ["t 10/5/26"]
