@@ -765,6 +765,36 @@ def _missed_stream(tail) -> str:
     return ""
 
 
+# Stackswopo sets the broadcast to private the moment it ends. After that
+# every fragment is refused and there is no VOD to fetch, so what is on
+# disk is the whole recording - waiting, reconnecting or trying the VOD
+# only delays the upload.
+_PRIVATE_MARKERS = ("private video", "video is private")
+
+
+def says_private(lines) -> bool:
+    """True if yt-dlp reported the video as private."""
+    return any(marker in (line or "").lower()
+               for line in lines for marker in _PRIVATE_MARKERS)
+
+
+def video_is_private(url: str) -> bool:
+    """Whether the platform now reports this video as private.
+
+    False when it could not tell - only a positive answer ends a
+    recording early.
+    """
+    try:
+        completed = subprocess.run(
+            YTDLP + ["--no-warnings", "--skip-download",
+                     "--print", "live_status", url],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60)
+    except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
+        return False
+    text = (completed.stdout + completed.stderr).decode("utf-8", "replace")
+    return says_private(text.splitlines())
+
+
 def bytes_saved(output_path: str) -> int:
     """Everything on disk for this recording so far. yt-dlp writes the
     video and audio tracks to their own "<name>.f299.mp4.part" files,
@@ -839,6 +869,12 @@ _OFFLINE_FIX = (
     "here. Nothing to fix in this project: the recorder keeps retrying and "
     "picks the stream back up on its own when the connection returns.")
 
+_GONE_FIX = (
+    "This channel does not exist - it was renamed, banned or deleted. It "
+    "is not offline: nothing will ever go live at this address, so this "
+    "source can never record. Update the URL in _RUN_RECORDER.bat to the "
+    "channel's new name, or remove it.")
+
 _OFFLINE_MARKERS = (
     "could not resolve host",
     "failed to resolve",
@@ -857,6 +893,8 @@ KNOWN_FIXES = tuple((marker, _OFFLINE_FIX) for marker in _OFFLINE_MARKERS) + (
     ("certificate is not yet valid", _CLOCK_FIX),
     ("certificate has expired", _CLOCK_FIX),
     ("certificate verify failed", _CLOCK_FIX),
+    # Before the Kick rule too: a deleted Kick channel is not Cloudflare.
+    ("does not exist", _GONE_FIX),
     ("kick", _CURL_CFFI_FIX),
     ("HTTP Error 403",
      "A 403 mid-recording usually means the fragment URLs expired. If this "
@@ -1308,6 +1346,10 @@ class Recorder:
     # /live address into one that still resolves after the stream ends,
     # which is what makes chat replay reachable - see resolved_watch_url.
     video_id: str = field(default="", repr=False)
+    # Set when the broadcast went private under the recording - the
+    # stream is over and what is on disk is all there is. See
+    # _PRIVATE_MARKERS.
+    went_private: bool = field(default=False, repr=False)
 
     def say(self, message: str) -> None:
         print(f"[{time.strftime('%H:%M:%S')}] {message}", flush=True)
@@ -1485,6 +1527,16 @@ class Recorder:
                 tail.append(line)
                 del tail[:-40]
 
+                if (not waiting and self.recording_started_at
+                        and not self.went_private and says_private([line])):
+                    self.went_private = True
+                    if log:
+                        log.write(line + "\n")
+                    self.say("The stream was set to private - it is over. "
+                             "Finishing with what was recorded.")
+                    process.terminate()
+                    break
+
                 # Still live and still nameless: ask again. A title that
                 # arrives ten minutes in is worth just as much as one
                 # that arrived at second zero, and the alternative is a
@@ -1501,7 +1553,14 @@ class Recorder:
                 if is_fragment_refusal(line):
                     refusals += 1
                     if refusals >= MAX_FRAGMENT_REFUSALS:
-                        if downloaded_anything:
+                        if downloaded_anything and video_is_private(
+                                resolved_watch_url(self.url, self.video_id)):
+                            self.went_private = True
+                            self.say("The stream's segments are refused "
+                                     "because it was set to private - it is "
+                                     "over. Finishing with what was "
+                                     "recorded.")
+                        elif downloaded_anything:
                             self.say(f"The stream's segments are being "
                                      f"refused ({refusals} in a row) - the "
                                      f"manifest has gone stale. Restarting "
@@ -1625,6 +1684,8 @@ class Recorder:
             # no longer live, and exiting with no data - scrolled past as
             # ordinary polling chatter, and the only way to know was to
             # go and read the log.
+            if self.recording_started_at and says_private(tail):
+                self.went_private = True
             missed = _missed_stream(tail)
             self.last_missed = missed
             self.last_refused_from_start = from_start_refused(tail)
@@ -1756,8 +1817,8 @@ class Recorder:
         # gone for good.
         report = coverage_report(probe_duration(destination),
                                  expected_duration(self.url))
-        still_live = bool(channel_is_live(
-            resolved_watch_url(self.url, self.video_id)))
+        still_live = (False if self.went_private else bool(channel_is_live(
+            resolved_watch_url(self.url, self.video_id))))
         if not report.startswith("SHORT") and still_live:
             # expected_duration() asks yt-dlp the same question that can
             # be wrong for the same reason channel_is_live() exists at
@@ -1805,6 +1866,9 @@ class Recorder:
                          "the part before the recorder joined cannot be "
                          "fetched. Turn on \"Store past broadcasts\" in "
                          "Twitch's creator settings to make it recoverable.")
+        elif report.startswith("SHORT") and self.went_private:
+            self.say("Not trying the VOD - the stream is private, so there "
+                     "is none to fetch. Delivering what was recorded.")
         elif report.startswith("SHORT") and self.fill_gaps:
             replaced = self._replace_with_vod(base, destination)
             if replaced:
@@ -2045,6 +2109,7 @@ class Recorder:
 
         self.say(f"Waiting for {self.name} to go live...")
         self.from_live_edge = False
+        self.went_private = False
         resumes = 0
         missed_tries = 0
         while True:
@@ -2077,6 +2142,12 @@ class Recorder:
 
             if code in (127, 130):
                 return None
+            if self.went_private:
+                # No reconnect, no "still live?" check: a private video
+                # cannot be resumed, and the upload should start now.
+                self.say(f"{self.name} went private - the stream is over. "
+                         f"Delivering the recording now.")
+                break
             if (code != 0 and self.last_refused_from_start
                     and not self.from_live_edge):
                 # Live, but no VOD to start from. Straight back in from

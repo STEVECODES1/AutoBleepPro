@@ -100,10 +100,9 @@ def test_the_urls_come_from_the_recorder_itself():
     which is the point of the test."""
     urls = check_links.watched_urls()
 
-    assert len(urls) == 2
-    for expected in ("youtube.com/@stackswopo_/live",
-                     "twitch.tv/stackswopo"):
-        assert any(expected in url for url in urls), expected
+    assert len(urls) == 1
+    assert "youtube.com/@stackswopo_/live" in urls[0]
+    assert not any("twitch.tv" in url for url in urls)
     assert not any("OnlyThaGuys26" in url for url in urls)
     assert not any("kick.com" in url for url in urls)
     assert not any("/clips" in url for url in urls)

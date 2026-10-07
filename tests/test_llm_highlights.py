@@ -809,7 +809,7 @@ def test_funny_and_makes_sense_are_both_required():
 
     assert "TWO SEPARATE QUESTIONS" in SYSTEM_PROMPT
     assert "FUNNY" in SYSTEM_PROMPT
-    assert "MAKE SENSE" in SYSTEM_PROMPT
+    assert "new\nviewer follow it" in SYSTEM_PROMPT
 
 
 def test_the_transcript_outranks_the_frame():

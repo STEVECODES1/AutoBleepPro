@@ -1878,3 +1878,137 @@ def test_a_leftover_piece_is_never_gap_filled_while_the_stream_is_live(
                           watch_folder=str(tmp_path / "w"), name="Stackswopo")
         twitch.from_live_edge = live_edge
         assert twitch.finalise("Stackswopo twitch live 2026-10-04 19_48")
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# The stream goes private the moment it ends
+# ═════════════════════════════════════════════════════════════════════════════
+
+PRIVATE = ("ERROR: [youtube] gMmWCPMtL5s: Private video. Sign in if you've "
+           "been granted access to this video")
+
+
+def test_private_is_recognised():
+    import record_stream as rs
+
+    assert rs.says_private([PRIVATE])
+    assert rs.says_private(["ERROR: Video unavailable. This video is private"])
+    assert not rs.says_private(["[download] Destination: x.ts",
+                                "ERROR: HTTP Error 403: Forbidden"])
+
+
+def test_going_private_mid_recording_ends_the_run_at_once(recorder, tmp_path):
+    """yt-dlp would otherwise sit retrying fragments that can never come
+    back. The private line ends the attempt, not a timeout."""
+    script = ("import sys, time; "
+              "print('[download] Destination: x.ts', flush=True); "
+              f"print({PRIVATE!r}, flush=True); "
+              "time.sleep(60)")
+    started = time.time()
+    recorder._run([sys.executable, "-c", script],
+                  str(tmp_path / "rec" / "run.log"))
+    assert time.time() - started < 30
+    assert recorder.went_private
+
+
+def test_private_before_recording_started_is_not_the_stream_ending(
+        recorder, tmp_path):
+    """Only a broadcast that was being recorded can 'go private' under the
+    recording. Seen while still waiting, it says nothing about this one."""
+    script = f"print({PRIVATE!r})"
+    recorder._run([sys.executable, "-c", script],
+                  str(tmp_path / "rec" / "run.log"))
+    assert not recorder.went_private
+
+
+def test_a_stream_set_to_private_is_delivered_without_reconnecting(
+        tmp_path, monkeypatch):
+    import record_stream
+
+    monkeypatch.setattr(record_stream.time, "sleep", lambda *_: None)
+    calls = {"run": 0}
+
+    def fake_run(self, args, log_path="", quiet_wait=True):
+        calls["run"] += 1
+        self.recording_started_at = time.time() - 3600
+        self.went_private = True
+        return 1      # terminated, after an hour of recording
+
+    def no_live_check(url):
+        raise AssertionError("a private stream must not be re-checked")
+
+    finalised = []
+    monkeypatch.setattr(record_stream.Recorder, "_run", fake_run)
+    monkeypatch.setattr(record_stream, "channel_is_live", no_live_check)
+    monkeypatch.setattr(record_stream.Recorder, "finalise",
+                        lambda self, base: finalised.append(base) or "/tmp/d.mp4")
+
+    recorder = Recorder(url="https://www.youtube.com/@stackswopo_/live",
+                        staging=str(tmp_path / "recording"),
+                        watch_folder=str(tmp_path / "watch_folder"),
+                        name="Stackswopo")
+    assert recorder.record_one_stream() == "/tmp/d.mp4"
+    assert calls["run"] == 1, "a private stream cannot be resumed"
+    assert finalised
+
+
+def test_the_private_flag_does_not_carry_into_the_next_stream(
+        tmp_path, monkeypatch):
+    import record_stream
+
+    seen = []
+
+    def fake_run(self, args, log_path="", quiet_wait=True):
+        seen.append(self.went_private)
+        return 1
+
+    monkeypatch.setattr(record_stream.Recorder, "_run", fake_run)
+    recorder = Recorder(url="https://www.youtube.com/@stackswopo_/live",
+                        staging=str(tmp_path / "recording"),
+                        watch_folder=str(tmp_path / "watch_folder"),
+                        name="Stackswopo")
+    recorder.went_private = True                     # left from last stream
+    assert recorder.record_one_stream() is None
+    assert seen == [False]
+
+
+def test_a_private_short_recording_skips_the_vod(recorder, tmp_path,
+                                                  monkeypatch):
+    """SHORT against the platform's length would normally fetch the VOD.
+    A private stream has none - deliver straight away."""
+    import record_stream as rs
+
+    staging = tmp_path / "recording"
+    staging.mkdir()
+    segment = staging / "Stackswopo X.part01.ts"
+    segment.write_bytes(b"ts")
+
+    def fake_remux(self, source, target):
+        open(target, "wb").write(b"mp4")
+        return True
+
+    monkeypatch.setattr(rs.Recorder, "_remux", fake_remux)
+    monkeypatch.setattr(rs, "probe_duration", lambda p: 600.0)
+    monkeypatch.setattr(rs, "expected_duration", lambda u: 7200.0)
+    monkeypatch.setattr(rs, "sync_report", lambda p: "in sync")
+    monkeypatch.setattr(rs, "channel_is_live", lambda u: (_ for _ in ()).throw(
+        AssertionError("a private stream must not be re-checked")))
+    monkeypatch.setattr(rs.Recorder, "_replace_with_vod",
+                        lambda *a, **k: pytest.fail("VOD fetched"))
+
+    recorder.went_private = True
+    delivered = recorder.finalise("Stackswopo X")
+    assert delivered and os.path.exists(delivered)
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# A channel that no longer exists is not "offline"
+# ═════════════════════════════════════════════════════════════════════════════
+
+def test_a_deleted_channel_gets_its_own_fix():
+    import record_stream as rs
+
+    for line in ("ERROR: [twitch:stream] stackswopo: stackswopo does not exist",
+                 "ERROR: [youtube:tab] This channel does not exist.",
+                 "ERROR: [kick:live] gone: gone does not exist"):
+        assert rs.known_fix(line) == rs._GONE_FIX, line
