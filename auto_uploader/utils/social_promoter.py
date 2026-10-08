@@ -1194,12 +1194,22 @@ PLATFORM_TAGS = {
 # neutral - it is a demotion. That is why these are matched rather than
 # pasted, and why the list leads with the narrowest tag it can justify.
 CONTENT_TAGS = (
+    # His GTA RP character - the name on his two most-viewed videos ever
+    # (2.4M and 1.5M views), and what people search for.
+    (("johnny cox", "cox"), ("johnnycox", "gtarp")),
+    # The series title on his best-performing uploads ("Whiteboy Trolling
+    # Clips #119/#122/#126" - 250-380k each).
+    (("whiteboy", "white boy"), ("whiteboytrolling", "trolling")),
     (("monkey", "omegle", "troll"),
-     ("monkeyapp", "monkeyapptrolling", "omegle", "monkeyappfunny")),
+     ("monkeyapp", "monkeyapptrolling", "omegle", "trolling")),
     (("nopixel",), ("nopixel", "nopixelrp")),
     (("fivem",), ("fivem", "fivemrp")),
+    # Exactly the set on his own top Shorts (178k, 106k, 94k, 86k views):
+    # #gtarp #fivem #gta #gtaroleplay #gtav. GTA RP is played on FiveM, so
+    # #fivem is a true tag on any RP clip; #gtaonline is a different game
+    # mode and was a mismatch.
     (("gta", "rp", "lifestyle", "roleplay"),
-     ("gtarp", "gta5", "gtaroleplay", "gtaonline")),
+     ("gtarp", "fivem", "gta", "gtaroleplay", "gtav")),
     (("howl", "slot", "gambl", "casino", "stake"),
      ("slots", "gambling", "bigwin")),
     (("react", "watch"), ("reaction", "reacting")),
@@ -1208,7 +1218,9 @@ CONTENT_TAGS = (
 )
 
 # Used to fill up to the platform's limit once the specific ones are in.
-# True of every clip here and searched by real people.
+# True of every clip here and searched by real people - and the generic
+# ones his own most-viewed Shorts carry: #funny #funnymoments #funnyclips
+# #gaming. #twitchclips is gone with the Twitch channel.
 #
 # NOT "viral" or "fyp", which were here and have been taken out. They
 # are reach-bait: they describe nothing about the video, they are the
@@ -1217,8 +1229,8 @@ CONTENT_TAGS = (
 # signal rather than a request. Asking an algorithm to promote a post
 # is not how any of them work; telling it accurately what the post IS,
 # is.
-FILLER_TAGS = ("funnymoments", "streamerclips", "gamingclips",
-               "twitchclips", "clips", "funny", "gaming")
+FILLER_TAGS = ("funnymoments", "funny", "funnyclips", "gaming",
+               "streamerclips", "clips")
 
 
 def hashtags_for(title: str, platform: str = "instagram",
