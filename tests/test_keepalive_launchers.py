@@ -82,7 +82,8 @@ def test_every_watched_channel_survived_the_move():
     """The URLs moved from START.bat into the wrapper - losing one would
     mean a platform silently stops being recorded.
 
-    Down to two sources as of 2026-08-31: @OnlyThaGuys26, Kick and the
+    Down to one source as of 2026-10-07, when twitch.tv/stackswopo
+    stopped existing. As of 2026-08-31: @OnlyThaGuys26, Kick and the
     Twitch clips page were all dropped - four simultaneous sources plus
     a VOD download plus GPU transcription overloaded the drive's write
     throughput on a real night and cost real recording time. If any of
@@ -90,9 +91,9 @@ def test_every_watched_channel_survived_the_move():
     this test lets slide back in."""
     body = _read("_RUN_RECORDER.bat")
 
-    for url in ("youtube.com/@stackswopo_/live",
-                "twitch.tv/stackswopo"):
-        assert url in body, url
+    assert "youtube.com/@stackswopo_/live" in body
+    assert "twitch.tv/stackswopo" not in body, \
+        "the Twitch channel no longer exists - it can never go live"
     assert "youtube.com/@OnlyThaGuys26/live" not in body, \
         "removed deliberately to cut concurrent load on the drive"
     assert "kick.com/stackswopo1k" not in body, \

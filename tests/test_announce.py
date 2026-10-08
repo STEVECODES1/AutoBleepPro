@@ -882,6 +882,7 @@ def test_the_402_does_not_trip_the_circuit_breaker(tmp_path, publishers,
     handled specially there (skipped, not counted) - confirming the 402
     actually reaches that handling rather than falling into the
     generic except-and-fail branch."""
+    pytest.importorskip("tweepy")
     _make_402(monkeypatch)
     posting = make_posting(tmp_path, x={"enabled": True, "daily_cap": 3,
                                         "min_minutes_between": 0})

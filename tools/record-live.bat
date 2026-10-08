@@ -1,14 +1,13 @@
 @echo off
 REM ============================================================================
-REM  record-live.bat - record YouTube AND Twitch into the watch folder.
+REM  record-live.bat - record the YouTube livestream into the watch folder.
 REM
 REM  Double-click this file. It does not matter what folder you are in: the
 REM  cd below jumps to wherever this .bat lives, which is why running
 REM  record_stream.py by hand from C:\Users\<you> fails and this does not.
 REM
-REM  Two sources, one window:
-REM    - the Stackswopo YouTube livestream
-REM    - the Twitch livestream
+REM  One source: the Stackswopo YouTube livestream. The Twitch livestream
+REM  was dropped 2026-10-07 - that Twitch channel no longer exists.
 REM
 REM  The OnlyThaGuys YouTube livestream, the Kick livestream and the
 REM  Twitch clips page all used to be here too. Dropped 2026-08-31: four
@@ -33,9 +32,8 @@ REM ============================================================================
 
 cd /d "%~dp0"
 
-start "Stackswopo (YouTube + Twitch)" python record_stream.py ^
+start "Stackswopo (YouTube)" python record_stream.py ^
     "https://www.youtube.com/@stackswopo_/live" ^
-    "https://www.twitch.tv/stackswopo" ^
     --name "Stackswopo"
 
 REM Every source delivers to the same watch_folder, and the uploader

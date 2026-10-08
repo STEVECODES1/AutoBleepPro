@@ -27,8 +27,13 @@ REM  write throughput on a real night and cost real recording time.
 REM  @OnlyThaGuys26, the Twitch clips page and Kick were all dropped -
 REM  add any back only as a deliberate decision, not by copying this
 REM  file forward unchanged.
+REM
+REM  Down to one as of 2026-10-07: the Stackswopo Twitch channel no longer exists
+REM  (Twitch answers "does not exist", not "offline"), so that thread
+REM  could never record anything. Put it back with the new name if the
+REM  channel returns.
 :loop
-python record_stream.py "https://www.youtube.com/@stackswopo_/live" "https://www.twitch.tv/stackswopo" --name "Stackswopo"
+python record_stream.py "https://www.youtube.com/@stackswopo_/live" --name "Stackswopo"
 
 REM  Grabbed BEFORE anything else runs. ERRORLEVEL is whatever the LAST
 REM  command set, and `set /a` sets it too - so reading it after the
