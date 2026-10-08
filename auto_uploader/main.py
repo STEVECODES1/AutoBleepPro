@@ -5107,6 +5107,22 @@ def main(argv=None) -> int:
         )
         watcher.start()
 
+        # The one part that looks at the whole pipeline rather than one
+        # file: recorder alive, disk space, crash loops - and the only
+        # part that reaches a phone. See utils/brain.py.
+        brain = None
+        if not dry_run:
+            try:
+                from utils.brain import Brain
+
+                brain = Brain(cfg, desktop=cfg.general.enable_desktop_notifications)
+                if brain.enabled:
+                    brain.on_start()
+                    print(brain.describe())
+            except Exception as exc:
+                print(f"[Brain] WARNING: could not start the watchdog: {exc}")
+                brain = None
+
         # Offered to the WATCHER, not run directly, and only once it is
         # running. Calling the processor here skipped the wait for the
         # file to stop growing, so a video still being written - a 7 GB
@@ -5128,6 +5144,7 @@ def main(argv=None) -> int:
             next_drain = 0.0
             next_autoclip = time.time() + 15
             next_retry_sweep = time.time() + RETRY_SWEEP_SECONDS
+            next_brain = time.time() + 30
             while True:
                 time.sleep(1)
                 if cfg.posting and time.time() >= next_drain:
@@ -5176,6 +5193,15 @@ def main(argv=None) -> int:
                     except OSError as exc:
                         print(f"[Watch] WARNING: retry sweep could not read "
                               f"{watch_folder}: {exc}")
+
+                if brain is not None and time.time() >= next_brain:
+                    from utils.brain import TICK_SECONDS
+
+                    next_brain = time.time() + TICK_SECONDS
+                    try:
+                        brain.tick()
+                    except Exception as exc:
+                        print(f"[Brain] WARNING: watchdog check failed: {exc}")
         except KeyboardInterrupt:
             print("\nStopping...")
             watcher.stop()
