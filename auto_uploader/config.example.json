@@ -305,6 +305,8 @@
       "https://www.facebook.com/stackswopo.man/reels/"
     ],
     "auto_from_streams": true,
+    "live_clipping": true,
+    "_live_comment": "live_clipping: while a stream is still being recorded, every 12 minutes of it is clipped (2 clips asked for) and posted - the first clips go out while he is still live. The recording is only read, never changed. The full-stream pass after the stream skips moments already clipped live.",
     "count": 20,
     "min_seconds": 15,
     "_quality_comment": "How the best moments are chosen. skip_intro/outro drop the waiting screen and the goodbyes - both transcribe as talking, both score, neither is a clip. min_gap_seconds is how far apart two clips must start: one good minute produces dozens of overlapping high-scoring windows, and without a gap every clip would come out of it.",
