@@ -1210,6 +1210,57 @@ def abandoned_part_files(staging: str, base: str) -> list:
         and os.path.getsize(os.path.join(staging, name)) > 0)
 
 
+# A --live-from-start download is fetched one fragment per file -
+# "<file>.part-Frag6196" - and yt-dlp only appends them into "<file>.part"
+# as its very last step. A recorder killed, frozen or slept before that
+# step left a whole night's stream as thousands of these, and nothing
+# here recognised them: no ".part" ending, no ".fNNN" ending, so the
+# sweep walked past the recording every restart. A name still ending in
+# ".part" ("...-Frag6197.part") is a fragment that was mid-download.
+_FRAG_FILE = re.compile(r"^(.*)-Frag(\d+)$", re.IGNORECASE)
+
+
+def assemble_fragment_files(staging: str, prefix: str) -> list:
+    """Append leftover "<file>-FragN" pieces into "<file>", in order.
+
+    Byte-for-byte what yt-dlp itself does at the end of a clean download,
+    so the result is exactly the file it would have produced. Appended to
+    whatever "<file>" already holds - yt-dlp may have got partway - and
+    each piece is deleted once it is in, so the disk never needs room for
+    two copies. Returns the files built.
+    """
+    if not os.path.isdir(staging):
+        return []
+    groups: dict = {}
+    for name in os.listdir(staging):
+        if not name.startswith(prefix):
+            continue
+        if _FRAG_FILE.match(name[: -len(".part")]) and name.endswith(".part"):
+            # Cut off mid-download: seconds of video, and appending a
+            # truncated piece would corrupt everything after it.
+            _remove(os.path.join(staging, name))
+            continue
+        match = _FRAG_FILE.match(name)
+        if match:
+            groups.setdefault(match.group(1), []).append(
+                (int(match.group(2)), name))
+    built = []
+    for target, pieces in sorted(groups.items()):
+        out = os.path.join(staging, target)
+        try:
+            with open(out, "ab") as whole:
+                for _number, name in sorted(pieces):
+                    piece = os.path.join(staging, name)
+                    with open(piece, "rb") as part:
+                        shutil.copyfileobj(part, whole, 1 << 20)
+                    whole.flush()
+                    _remove(piece)
+        except OSError:
+            continue
+        built.append(out)
+    return built
+
+
 def recover_abandoned_parts(staging: str, base: str) -> list:
     """Rename yt-dlp's still-.part-suffixed segments back to finished ones.
 
@@ -1255,6 +1306,9 @@ def sweep_abandoned_recordings(staging: str, name: str) -> list:
         if not filename.startswith(prefix):
             continue
         stem = filename
+        pieces = _FRAG_FILE.match(stem)
+        if pieces:
+            stem = pieces.group(1)
         if stem.lower().endswith(".part"):
             stem = stem[: -len(".part")]
         elif not is_format_fragment(stem):
@@ -1754,6 +1808,10 @@ class Recorder:
 
     def finalise(self, base: str) -> Optional[str]:
         """Join the segments and move the result into the watch folder."""
+        pieced = assemble_fragment_files(self.staging, base)
+        if pieced:
+            self.say(f"Put back together {len(pieced)} stream(s) yt-dlp had "
+                     f"saved as separate pieces and never joined.")
         recovered = recover_abandoned_parts(self.staging, base)
         if recovered:
             self.say(f"Recovered {len(recovered)} segment(s) yt-dlp never "

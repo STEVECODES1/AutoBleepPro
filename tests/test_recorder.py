@@ -2012,3 +2012,69 @@ def test_a_deleted_channel_gets_its_own_fix():
                  "ERROR: [youtube:tab] This channel does not exist.",
                  "ERROR: [kick:live] gone: gone does not exist"):
         assert rs.known_fix(line) == rs._GONE_FIX, line
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# A stream left as thousands of "-FragN" pieces is put back together
+# ═════════════════════════════════════════════════════════════════════════════
+
+_PIECE_BASE = "Stackswopo youtube live 2026-10-07 18_40"
+
+
+def _pieces(staging, target, numbers):
+    for n in numbers:
+        with open(os.path.join(staging, f"{target}-Frag{n}"), "wb") as f:
+            f.write(f"<{n}>".encode())
+
+
+def test_pieces_are_joined_in_numeric_order_and_removed(tmp_path):
+    from record_stream import assemble_fragment_files
+
+    target = _PIECE_BASE + ".part01.ts.f299.mp4.part"
+    _pieces(str(tmp_path), target, [10, 2, 1])
+    built = assemble_fragment_files(str(tmp_path), _PIECE_BASE)
+
+    assert built == [str(tmp_path / target)]
+    assert (tmp_path / target).read_bytes() == b"<1><2><10>"
+    assert sorted(os.listdir(tmp_path)) == [target]
+
+
+def test_pieces_are_appended_to_what_yt_dlp_already_joined(tmp_path):
+    from record_stream import assemble_fragment_files
+
+    target = _PIECE_BASE + ".part01.ts.f140.mp4.part"
+    (tmp_path / target).write_bytes(b"<0>")
+    _pieces(str(tmp_path), target, [1])
+    assemble_fragment_files(str(tmp_path), _PIECE_BASE)
+    assert (tmp_path / target).read_bytes() == b"<0><1>"
+
+
+def test_a_piece_cut_off_mid_download_is_dropped(tmp_path):
+    from record_stream import assemble_fragment_files
+
+    target = _PIECE_BASE + ".part01.ts.f299.mp4.part"
+    _pieces(str(tmp_path), target, [1])
+    (tmp_path / f"{target}-Frag2.part").write_bytes(b"half")
+    assemble_fragment_files(str(tmp_path), _PIECE_BASE)
+    assert (tmp_path / target).read_bytes() == b"<1>"
+    assert sorted(os.listdir(tmp_path)) == [target]
+
+
+def test_other_recordings_pieces_are_left_alone(tmp_path):
+    from record_stream import assemble_fragment_files
+
+    other = "Stackswopo youtube live 2026-10-06 22_10.part01.ts.f299.mp4.part"
+    _pieces(str(tmp_path), other, [1])
+    assert assemble_fragment_files(str(tmp_path), _PIECE_BASE) == []
+    assert os.path.exists(tmp_path / f"{other}-Frag1")
+
+
+def test_the_startup_sweep_finds_a_recording_left_only_as_pieces(tmp_path):
+    """Exactly what a real folder held the morning after: nothing but
+    "-FragN" files, and the sweep walked straight past them."""
+    from record_stream import sweep_abandoned_recordings
+
+    _pieces(str(tmp_path), _PIECE_BASE + ".part01.ts.f299.mp4.part", [1, 2])
+    _pieces(str(tmp_path), _PIECE_BASE + ".part01.ts.f140.mp4.part", [1, 2])
+    assert sweep_abandoned_recordings(str(tmp_path), "Stackswopo youtube live") \
+        == [_PIECE_BASE]
