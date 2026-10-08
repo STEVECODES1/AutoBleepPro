@@ -427,6 +427,42 @@ def api_key(provider: str) -> str:
     return ""
 
 
+# Providers whose account is out of money, with when to look again. An
+# empty balance does not refill by itself mid-run: Claude answered "Your
+# credit balance is too low" to every clip, thumbnail and caption on
+# 2026-10-08, six seconds each, before anything else was tried.
+_OUT_OF_CREDIT: dict = {}
+OUT_OF_CREDIT_REST_S = 3 * 3600
+_CREDIT_SIGNS = ("credit balance is too low", "insufficient_quota",
+                 "exceeded your current quota", "billing")
+
+
+def note_out_of_credit(provider: str, why: str) -> bool:
+    """Remember a provider whose account is empty. True if `why` says so."""
+    low = str(why or "").lower()
+    if not any(sign in low for sign in _CREDIT_SIGNS):
+        return False
+    import time as _time
+
+    first = provider not in _OUT_OF_CREDIT
+    _OUT_OF_CREDIT[provider] = _time.time() + OUT_OF_CREDIT_REST_S
+    if first:
+        print(f"[AI] {provider} is out of credit - skipping it for "
+              f"{OUT_OF_CREDIT_REST_S // 3600} h. Top the account up to "
+              f"get it back.")
+    return True
+
+
+def _resting_for_credit(provider: str) -> bool:
+    import time as _time
+
+    until = _OUT_OF_CREDIT.get(provider, 0.0)
+    if until and _time.time() < until:
+        return True
+    _OUT_OF_CREDIT.pop(provider, None)
+    return False
+
+
 def all_available(preferred: str = "") -> list:
     """[(provider, key)] for every one configured, best first.
 
@@ -439,7 +475,11 @@ def all_available(preferred: str = "") -> list:
     order = list(PROVIDER_ORDER)
     if preferred in order:
         order = [preferred] + [p for p in order if p != preferred]
-    return [(p, api_key(p)) for p in order if api_key(p)]
+    found = [(p, api_key(p)) for p in order if api_key(p)]
+    # An empty account goes to the back, not out: if it is the only one
+    # configured it is still tried.
+    resting = [pair for pair in found if _resting_for_credit(pair[0])]
+    return [pair for pair in found if pair not in resting] + resting
 
 
 def available(preferred: str = "") -> tuple:
@@ -1232,7 +1272,9 @@ def _claude(key: str, model: str, system: str, content,
     except anthropic.RateLimitError as exc:
         return "", f"HTTP 429: {exc.message}"[:300]
     except anthropic.APIStatusError as exc:
-        return "", f"HTTP {exc.status_code}: {exc.message}"[:300]
+        why = f"HTTP {exc.status_code}: {exc.message}"[:300]
+        note_out_of_credit(ANTHROPIC, why)
+        return "", why
     except anthropic.APIConnectionError as exc:
         return "", f"could not reach Claude ({exc})"[:300]
     if response.stop_reason == "refusal":

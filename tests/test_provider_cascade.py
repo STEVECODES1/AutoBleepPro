@@ -732,3 +732,26 @@ def test_nvidia_retries_are_short_and_many_not_long_and_few():
 
     assert _NVIDIA_BUSY_TRIES > 2
     assert _NVIDIA_BUSY_WAIT < _BUSY_RETRY_SECONDS
+
+
+def test_an_account_out_of_credit_goes_to_the_back_of_the_line(monkeypatch):
+    """2026-10-08: Claude said "credit balance is too low" to every clip,
+    thumbnail and caption, first in line each time."""
+    from autoreel import llm_highlights as hl
+
+    monkeypatch.setattr(hl, "_OUT_OF_CREDIT", {})
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "a")
+    monkeypatch.setenv("GEMINI_API_KEY", "g")
+    assert hl.all_available("anthropic")[0][0] == "anthropic"
+    assert hl.note_out_of_credit("anthropic",
+                                 "HTTP 400: Your credit balance is too low")
+    order = [name for name, _ in hl.all_available("anthropic")]
+    assert order[0] != "anthropic" and order[-1] == "anthropic"
+
+
+def test_an_ordinary_error_is_not_mistaken_for_an_empty_account(monkeypatch):
+    from autoreel import llm_highlights as hl
+
+    monkeypatch.setattr(hl, "_OUT_OF_CREDIT", {})
+    assert not hl.note_out_of_credit("anthropic", "HTTP 529: overloaded")
+    assert hl._OUT_OF_CREDIT == {}
