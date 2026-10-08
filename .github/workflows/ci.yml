@@ -15,7 +15,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.11"]
+        python-version: ["3.11", "3.14"]
 
     steps:
       - uses: actions/checkout@v4
@@ -41,11 +41,12 @@ jobs:
         #   watchdog    - file_watcher imports it at module level.
         #   dotenv      - utils/config.py reads .env at import time.
         #   google-*    - the YouTube uploader's client libraries.
+        #   tweepy      - test_announce drives the real X error types.
         run: |
           python -m pip install --upgrade pip
           pip install pytest better-profanity pydub watchdog playwright \
                       python-dotenv google-api-python-client \
-                      google-auth-oauthlib google-auth-httplib2
+                      google-auth-oauthlib google-auth-httplib2 tweepy
 
       - name: Show resolved environment
         run: |

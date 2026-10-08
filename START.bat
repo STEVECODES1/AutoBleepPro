@@ -4,8 +4,8 @@ REM  START.bat - the whole system, in one double-click.
 REM
 REM  Opens two windows and leaves them running:
 REM
-REM    1. RECORDER  - waits for YouTube or Twitch to go live, records the
-REM                   full stream, and fetches any new Twitch clips. Everything
+REM    1. RECORDER  - waits for the YouTube channel to go live and records
+REM                   the full stream. Everything
 REM                   it produces lands in auto_uploader\watch_folder.
 REM
 REM    2. UPLOADER  - watches that folder and handles whatever arrives:
@@ -109,7 +109,7 @@ echo ============================================================
 echo  Starting AutoBleepPro
 echo ============================================================
 echo.
-echo  Recorder : Stackswopo on YouTube + Twitch
+echo  Recorder : Stackswopo on YouTube
 echo  Uploader : censor, upload, clip, announce
 echo  Folder   : %~dp0auto_uploader\watch_folder
 echo.
