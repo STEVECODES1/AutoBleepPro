@@ -32,8 +32,8 @@ from __future__ import annotations
 import json
 import os
 import re
-import shutil
 import subprocess
+import tempfile
 import threading
 import time
 from dataclasses import dataclass, field
@@ -273,12 +273,28 @@ def clipped_ranges_for(logs_folder: str, video_path: str, title: str = "",
 
 # ── one window ────────────────────────────────────────────────────────
 
+def _read(path: str) -> bytes:
+    with open(path, "rb") as src:
+        return src.read()
+
+
+# Fragments read at once. Each file costs ~20-60 ms just to OPEN on the
+# USB drive (the antivirus looks at every new file), so a 24-minute
+# window - 2,900 files - took 2.5 minutes read one by one (2026-10-08).
+# In parallel the opens overlap; in batches, so memory stays ~100 MB.
+READ_THREADS = 8
+READ_BATCH = 64
+
+
 def _join(paths: List[str], out_path: str) -> bool:
+    from concurrent.futures import ThreadPoolExecutor
+
     try:
-        with open(out_path, "wb") as dst:
-            for path in paths:
-                with open(path, "rb") as src:
-                    shutil.copyfileobj(src, dst, 4 << 20)
+        with open(out_path, "wb") as dst, \
+                ThreadPoolExecutor(READ_THREADS) as pool:
+            for at in range(0, len(paths), READ_BATCH):
+                for chunk in pool.map(_read, paths[at:at + READ_BATCH]):
+                    dst.write(chunk)
         return os.path.getsize(out_path) > 0
     except OSError:
         return False
@@ -439,6 +455,33 @@ def recording_folder(cfg) -> str:
     return folder
 
 
+def work_folder(cfg) -> str:
+    """Where windows are built: the computer's own drive by default.
+
+    A window is ~900 MB joined, muxed and read back by the clip run. On
+    the USB drive the recording is on, that was a minute of the window's
+    wait, competing with the recorder writing the stream."""
+    clips = getattr(cfg, "clips", {}) or {}
+    return str(clips.get("live_work_folder") or os.path.join(
+        tempfile.gettempdir(), "autobleep_live_windows"))
+
+
+def _sweep(folder: str, older_than_s: float = 3 * 3600) -> None:
+    """Remove windows a crashed pass left behind - ~1 GB each."""
+    try:
+        names = os.listdir(folder)
+    except OSError:
+        return
+    cutoff = time.time() - older_than_s
+    for name in names:
+        path = os.path.join(folder, name)
+        try:
+            if os.path.isfile(path) and os.path.getmtime(path) < cutoff:
+                os.remove(path)
+        except OSError:
+            pass
+
+
 def tick(cfg, deliver: Callable, folder: str = "",
          now: Optional[float] = None,
          make_clips: Optional[Callable] = None) -> int:
@@ -447,7 +490,8 @@ def tick(cfg, deliver: Callable, folder: str = "",
     folder = folder or recording_folder(cfg)
     logs = str(getattr(getattr(cfg, "general", None), "logs_folder", "")
                or "logs")
-    work = os.path.join(getattr(cfg, "project_root", "."), "live_windows")
+    work = work_folder(cfg)
+    _sweep(work)
     total = 0
     for rec in find_live(folder, now):
         seconds = edge_seconds(rec)

@@ -27,8 +27,10 @@ def _fresh_state():
 def _cfg(tmp_path):
     logs = tmp_path / "logs"
     logs.mkdir(exist_ok=True)
-    return SimpleNamespace(project_root=str(tmp_path), clips={"count": 20},
-                           general=SimpleNamespace(logs_folder=str(logs)))
+    return SimpleNamespace(
+        project_root=str(tmp_path),
+        clips={"count": 20, "live_work_folder": str(tmp_path / "live_windows")},
+        general=SimpleNamespace(logs_folder=str(logs)))
 
 
 def _clip(path, start, end):
@@ -181,6 +183,29 @@ def test_an_old_or_different_vod_is_not_matched(tmp_path):
     assert L.clipped_ranges_for(logs, "other.ts", now=now, duration=600) == []
     assert L.clipped_ranges_for(logs, "other.ts", now=now + 86400,
                                 duration=9500) == []
+
+
+def test_windows_are_built_off_the_recording_drive_and_leftovers_swept(tmp_path):
+    cfg = SimpleNamespace(clips={})
+    assert L.work_folder(cfg).startswith(__import__("tempfile").gettempdir())
+    old, fresh = tmp_path / "old LIVE 03.mp4", tmp_path / "now LIVE 04.mp4"
+    old.write_bytes(b"x")
+    fresh.write_bytes(b"x")
+    os.utime(old, (time.time() - 4 * 3600,) * 2)
+    L._sweep(str(tmp_path))
+    assert not old.exists() and fresh.exists()
+
+
+def test_parallel_reads_keep_the_fragment_order(tmp_path):
+    paths = []
+    for n in range(200):
+        path = tmp_path / f"f{n}"
+        path.write_bytes(n.to_bytes(2, "big") * 3)
+        paths.append(str(path))
+    out = tmp_path / "joined"
+    assert L._join(paths, str(out))
+    assert out.read_bytes() == b"".join(n.to_bytes(2, "big") * 3
+                                        for n in range(200))
 
 
 def test_overlap_is_measured_against_the_shorter_clip():
