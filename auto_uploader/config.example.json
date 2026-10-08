@@ -355,6 +355,14 @@
     "job_report": {
       "enabled": true,
       "webhook_url": ""
+    },
+    "_brain_comment": "Watchdog inside --watch. Every minute: is the recorder alive (it writes recording/.heartbeat/), is a live stream being recorded, is the recording file still growing, is the disk filling, is the uploader crash-looping. A new problem sends ONE urgent alert, repeats are muted for mute_hours, and a 'Fixed' message follows when it clears. Alerts go to Discord (set DISCORD_ALERT_USER_ID in .env so it @mentions you) and/or the free ntfy phone app (set NTFY_TOPIC). min_free_gb defaults to self_healing.min_free_gb.",
+    "brain": {
+      "enabled": true,
+      "recorder_stale_minutes": 5,
+      "stall_minutes": 5,
+      "live_check_minutes": 10,
+      "mute_hours": 6
     }
   },
   "youtube_shorts": {

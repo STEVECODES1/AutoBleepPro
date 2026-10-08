@@ -1878,3 +1878,50 @@ def test_a_leftover_piece_is_never_gap_filled_while_the_stream_is_live(
                           watch_folder=str(tmp_path / "w"), name="Stackswopo")
         twitch.from_live_edge = live_edge
         assert twitch.finalise("Stackswopo twitch live 2026-10-04 19_48")
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Heartbeat: how the uploader's brain knows the recorder is alive
+# ═════════════════════════════════════════════════════════════════════════════
+
+def test_heartbeat_says_waiting_then_recording(recorder, tmp_path):
+    import json
+
+    import record_stream as rs
+
+    rs.write_heartbeat(recorder)
+    with open(rs.heartbeat_path(recorder)) as handle:
+        beat = json.load(handle)
+    assert beat["state"] == "waiting" and beat["bytes"] == 0
+    assert beat["url"] == recorder.url
+
+    output = tmp_path / "recording" / "x.mp4"
+    output.write_bytes(b"x" * 500)
+    recorder._active_output = str(output)
+    recorder.recording_started_at = time.time()
+    rs.write_heartbeat(recorder)
+    with open(rs.heartbeat_path(recorder)) as handle:
+        beat = json.load(handle)
+    assert beat["state"] == "recording" and beat["bytes"] >= 500
+
+
+def test_a_finished_run_clears_the_active_output(recorder, tmp_path):
+    recorder._run([sys.executable, "-c", "print('done')", "-o",
+                   str(tmp_path / "x.mp4")], str(tmp_path / "rec" / "run.log"))
+    assert recorder._active_output == ""
+
+
+def test_heartbeat_never_raises(recorder, monkeypatch):
+    import record_stream as rs
+
+    monkeypatch.setattr(rs, "heartbeat_path", lambda r: "/proc/nope/x.json")
+    rs.write_heartbeat(recorder)
+
+
+def test_brain_and_recorder_agree_on_the_folder():
+    import record_stream as rs
+
+    sys.path.insert(0, os.path.join(_REPO, "auto_uploader"))
+    from utils import brain
+
+    assert rs.HEARTBEAT_DIR == brain.HEARTBEAT_DIR

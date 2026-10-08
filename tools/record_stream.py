@@ -39,6 +39,7 @@ sees a complete file or no file - never one still being written.
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
@@ -1308,6 +1309,9 @@ class Recorder:
     # /live address into one that still resolves after the stream ends,
     # which is what makes chat replay reachable - see resolved_watch_url.
     video_id: str = field(default="", repr=False)
+    # The file yt-dlp is writing right now, "" between runs. What the
+    # heartbeat reads to say "recording" and how many bytes so far.
+    _active_output: str = field(default="", repr=False)
 
     def say(self, message: str) -> None:
         print(f"[{time.strftime('%H:%M:%S')}] {message}", flush=True)
@@ -1449,6 +1453,7 @@ class Recorder:
             waiting = quiet_wait
             waiting_since = last_heartbeat = 0.0
             output_path = args[args.index("-o") + 1] if "-o" in args else ""
+            self._active_output = output_path
             clock = threading.Thread(
                 target=self._recording_clock, args=(clock_stop, output_path),
                 daemon=True)
@@ -1613,6 +1618,7 @@ class Recorder:
             self.say("Stopped by Ctrl+C.")
             return 130
         finally:
+            self._active_output = ""
             clock_stop.set()
             if clock:
                 clock.join(timeout=10)
@@ -2231,6 +2237,51 @@ def fetch_clips(url: str, staging: str, watch_folder: str,
     return delivered
 
 
+# The uploader's brain (auto_uploader/utils/brain.py) reads these to tell
+# "the recorder is running" from "the window was closed / froze / the PC
+# slept" - from the outside the two look identical: no new files. Written
+# by a thread of its own, so a recorder stuck inside yt-dlp still beats
+# and a frozen process does not.
+HEARTBEAT_DIR = ".heartbeat"
+HEARTBEAT_EVERY_S = 30
+
+
+def heartbeat_path(recorder: "Recorder") -> str:
+    return os.path.join(recorder.staging, HEARTBEAT_DIR,
+                        safe_name(recorder.name) + ".json")
+
+
+def heartbeat_state(recorder: "Recorder") -> dict:
+    output = recorder._active_output
+    recording = bool(output and recorder.recording_started_at)
+    return {"time": time.time(), "pid": os.getpid(),
+            "name": recorder.name, "url": recorder.url,
+            "state": "recording" if recording else "waiting",
+            "bytes": bytes_saved(output) if recording else 0,
+            "video_id": recorder.video_id}
+
+
+def write_heartbeat(recorder: "Recorder") -> None:
+    """Never raises: a heartbeat must not be what stops a recording."""
+    path = heartbeat_path(recorder)
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        temp = path + ".tmp"
+        with open(temp, "w", encoding="utf-8") as handle:
+            json.dump(heartbeat_state(recorder), handle)
+        os.replace(temp, path)
+    except Exception:
+        pass
+
+
+def _heartbeat_loop(recorders: list, stop) -> None:
+    while True:
+        for recorder in recorders:
+            write_heartbeat(recorder)
+        if stop.wait(HEARTBEAT_EVERY_S):
+            return
+
+
 def _source_loop(recorder: "Recorder", once: bool, stop) -> None:
     """Record one source forever. One of these runs per URL."""
     try:
@@ -2335,16 +2386,21 @@ def main(argv: Optional[list] = None) -> int:
 
     stop = threading.Event()
     threads = []
+    recorders = []
     for url in streams:
         recorder = Recorder(url=url, staging=args.staging,
                             watch_folder=args.watch_folder, name=label(url),
                             poll_seconds=args.poll_seconds,
                             fill_gaps=not args.no_fill_gaps)
+        recorders.append(recorder)
         thread = threading.Thread(target=_source_loop,
                                   args=(recorder, args.once, stop),
                                   name=f"record-{platform_of(url)}", daemon=True)
         thread.start()
         threads.append(thread)
+    if recorders:
+        threading.Thread(target=_heartbeat_loop, args=(recorders, stop),
+                         name="heartbeat", daemon=True).start()
 
     try:
         # Clips are a poll, not a recording: check them on the same
