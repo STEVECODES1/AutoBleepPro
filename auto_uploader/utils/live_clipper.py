@@ -401,8 +401,11 @@ def clip_window(cfg, rec: LiveRecording, entry: dict, start: float,
 
     try:
         with KeepAwake("clipping a live stream"):
+            # A catch-up window twice as long gets twice the clips.
+            count = max(CLIPS_PER_WINDOW,
+                        round(CLIPS_PER_WINDOW * (end - start) / WINDOW_S))
             run = make_clips(_clip_config(cfg, first_window=index == 1),
-                             window, title, count=CLIPS_PER_WINDOW,
+                             window, title, count=count,
                              notify=False, transcribe_if_needed=True)
     except Exception as exc:
         # Moved past, not retried: a window that crashes the clip run
