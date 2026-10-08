@@ -116,15 +116,31 @@ of somebody's head, their hair or their body sits in the middle of the
 picture or blocks the view - that is the most common bad thumbnail. After
 that: a face mid-reaction, a fight, a chase, an arrest, something plainly
 odd. Avoid dark frames, loading screens, menus, plain scenery, crowded
-wide shots and motion blur. Big title text will go across the bottom
-third, so the face should be in the upper two thirds.
+wide shots and motion blur. Never a frame that is mostly a car, a road
+or a building: a thumbnail with no face in it does not get clicked. The
+character must be CLOSE - their face at least a tenth of the frame's
+height - not a figure in the distance.
 
-Then give the box around that character's head and upper body (head to
-waist), as [ymin, xmin, ymax, xmax] on a 0-1000 scale of the frame.
+Give two boxes as [ymin, xmin, ymax, xmax] on a 0-1000 scale of the
+frame: "face" around that character's face (forehead to chin), and
+"box" around their head and upper body (head to waist).
 
-Answer as JSON: {"frame": <number from 1 to %(count)d>, "box": [ymin, xmin, ymax, xmax]}
+Answer as JSON: {"frame": <number from 1 to %(count)d>, "face": [ymin, xmin, ymax, xmax], "box": [ymin, xmin, ymax, xmax]}
 No other text.
 """
+
+# A face smaller than this share of the frame's height is a figure in the
+# distance: zoomed far enough to see it, the picture is mush. Answers
+# below it are passed over for the next model's.
+MIN_FACE_HEIGHT = 0.07
+# Where the face goes in the thumbnail: this share of the picture's
+# height, centred across, its middle a third of the way down - eye line
+# high, the way a person framing a portrait would put it.
+FACE_HEIGHT = 0.30
+FACE_X, FACE_Y = 0.50, 0.36
+# How far a face-led crop may zoom. Further than the body crop's cap: a
+# face is worth a slightly softer picture, a torso is not.
+FACE_MIN_ZOOM, FACE_MAX_ZOOM = 1.25, 2.0
 
 
 # Contrast, saturation, a touch of brightness, then sharpening. Enough to
@@ -228,6 +244,58 @@ def _read_box(raw: str) -> Optional[tuple]:
     return x0, y0, x1, y1
 
 
+def _read_face(raw: str) -> Optional[tuple]:
+    """The model's "face" box as fractions (x0, y0, x1, y1), or None."""
+    import re
+
+    if not raw:
+        return None
+    text = str(raw).strip()
+    fence = re.search(r"```(?:json)?\s*(.+?)```", text, re.S)
+    if fence:
+        text = fence.group(1).strip()
+    try:
+        box = json.loads(text).get("face")
+        ymin, xmin, ymax, xmax = (float(v) / 1000.0 for v in box)
+    except (ValueError, TypeError, AttributeError):
+        return None
+    x0, x1 = sorted((max(0.0, min(1.0, xmin)), max(0.0, min(1.0, xmax))))
+    y0, y1 = sorted((max(0.0, min(1.0, ymin)), max(0.0, min(1.0, ymax))))
+    if (x1 - x0) < 0.02 or (y1 - y0) < 0.02 or (y1 - y0) > 0.9:
+        return None
+    return x0, y0, x1, y1
+
+
+def face_window(face: tuple) -> tuple:
+    """(x, y, w, h): the 16:9 window built around a FACE.
+
+    The body box led the crop before, and a tall box clamped to the zoom
+    limits was centred on the chest - the "torso, no head" thumbnail of
+    2026-10-06. A face-led window cannot lose the face: it is placed
+    first, at FACE_X/FACE_Y, sized to FACE_HEIGHT."""
+    x0, y0, x1, y1 = face
+    h = (y1 - y0) / FACE_HEIGHT
+    h = max(1.0 / FACE_MAX_ZOOM, min(1.0 / FACE_MIN_ZOOM, h))
+    w = h
+    cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
+    x = max(0.0, min(1.0 - w, cx - w * FACE_X))
+    y = max(0.0, min(1.0 - h, cy - h * FACE_Y))
+    if x < HUD_X and y + h > HUD_Y:
+        # Off the minimap if that still keeps the whole face in.
+        shifted = min(HUD_X, 1.0 - w)
+        if shifted <= x0:
+            x = shifted
+        elif HUD_Y - h <= y0 and h <= HUD_Y:
+            y = max(0.0, HUD_Y - h)
+    return x, y, w, h
+
+
+def face_height(raw: str) -> float:
+    """The answer's face height as a share of the frame, 0 if none."""
+    face = _read_face(raw)
+    return (face[3] - face[1]) if face else 0.0
+
+
 def zoom_window(box: Optional[tuple], aspect: float = 16 / 9) -> tuple:
     """(x, y, w, h) as fractions of the frame: the 16:9 window to keep.
 
@@ -249,6 +317,9 @@ def zoom_window(box: Optional[tuple], aspect: float = 16 / 9) -> tuple:
         cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
         x = cx - w * SUBJECT_X
         y = cy - h * 0.45       # a little headroom above the middle
+        # A box taller than the window: keep its TOP (the head), never
+        # its middle (the chest).
+        y = min(y, y0 - h * 0.06)
     x = max(0.0, min(1.0 - w, x))
     y = max(0.0, min(1.0 - h, y))
     if x < HUD_X and y + h > HUD_Y:
@@ -283,7 +354,7 @@ def _choose(frames: list, ask=None, prompt_template: str = PROMPT,
                                      resolve_model, vision_asker_for)
 
         parts = [{"text": prompt}] + [as_inline_data(f) for f in frames]
-        raw = ""
+        raw, best = "", ""
         for name, key in all_available(provider):
             asker = vision_asker_for(name) if name in VISION_PROVIDERS \
                 else None
@@ -293,15 +364,30 @@ def _choose(frames: list, ask=None, prompt_template: str = PROMPT,
                 raw, why = asker(key, resolve_model(name, key, ""), parts)
             except Exception as exc:
                 raw, why = "", str(exc)
-            if raw:
+            if raw and (not want_box or face_height(raw) >= MIN_FACE_HEIGHT):
                 break
+            if raw:
+                # It answered - with a frame whose face is missing or tiny
+                # (a car on a road, a figure in the distance). Kept in
+                # case nobody does better, but the next model is asked.
+                if not best or face_height(raw) > face_height(best):
+                    best = raw
+                why = "no close face in the frame it picked"
+                raw = ""
             print(f"[Thumbnail] {name} could not pick a frame ({why}) - "
                   f"trying the next one.")
+        raw = raw or best
 
     number = _read_number(raw, len(frames))
     index = None if number is None else number - 1
     if want_box:
-        return index, (_read_box(raw) if index is not None else None)
+        if index is None:
+            return index, None
+        # The face, when given, leads the crop; else the body box.
+        face = _read_face(raw)
+        if face and (face[3] - face[1]) >= MIN_FACE_HEIGHT * 0.5:
+            return index, ("face", face)
+        return index, _read_box(raw)
     return index
 
 
@@ -505,7 +591,10 @@ def _make_stream(source: str, duration: float, out_path: str, ask,
                          key=lambda i: _appeal(candidates[i][2]))
             box = None
         at, _data, stats = candidates[picked]
-        window = zoom_window(box)
+        if isinstance(box, tuple) and len(box) == 2 and box[0] == "face":
+            window = face_window(box[1])
+        else:
+            window = zoom_window(box)
         at = sharpest_near(source, at, window, workspace)
 
         vf = stream_filters(window, stats[0] if stats else None)

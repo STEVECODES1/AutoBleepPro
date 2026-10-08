@@ -525,3 +525,57 @@ def test_the_sharpest_neighbouring_frame_wins(tmp_path, monkeypatch):
     assert abs(best - 100.2) < 1e-6
     assert all(abs(at - 100.0) <= thumbnail.SHARP_SPAN_S + 1e-9
                for at in grabbed)
+
+
+# -- face-led crops (2026-10-08: a car on a road, a torso with no head) --
+
+def test_a_face_led_window_always_contains_the_face():
+    from autoreel.thumbnail import face_window
+
+    for face in [(0.45, 0.05, 0.55, 0.20),     # face high up
+                 (0.40, 0.70, 0.50, 0.85),     # face low down
+                 (0.02, 0.30, 0.10, 0.42),     # face at the left edge
+                 (0.88, 0.30, 0.98, 0.45)]:    # face at the right edge
+        x, y, w, h = face_window(face)
+        x0, y0, x1, y1 = face
+        assert x <= x0 and x + w >= x1 and y <= y0 and y + h >= y1, face
+        assert 0 <= x and x + w <= 1.0001 and 0 <= y and y + h <= 1.0001
+
+
+def test_a_tall_body_box_keeps_the_head_not_the_chest():
+    from autoreel.thumbnail import zoom_window
+
+    x, y, w, h = zoom_window((0.35, 0.05, 0.65, 0.95))
+    assert y <= 0.05
+
+
+def test_a_frame_with_no_close_face_goes_to_the_next_model(monkeypatch):
+    import autoreel.llm_highlights as hl
+    from autoreel import thumbnail as T
+
+    answers = {
+        "gemini": '{"frame": 1, "face": [400, 480, 430, 500], "box": [380, 470, 600, 520]}',
+        "xkiro": '{"frame": 2, "face": [100, 400, 300, 520], "box": [80, 350, 700, 600]}',
+    }
+    monkeypatch.setattr(hl, "all_available",
+                        lambda provider="": [("gemini", "k"), ("xkiro", "k")])
+    monkeypatch.setattr(hl, "resolve_model", lambda n, k, m="": "m")
+    monkeypatch.setattr(hl, "vision_asker_for",
+                        lambda name: (lambda key, model, parts: (answers[name], "")))
+    index, box = T._choose([b"a", b"b"], prompt_template=T.STREAM_PROMPT,
+                           want_box=True)
+    assert index == 1 and box[0] == "face"
+
+
+def test_when_nobody_finds_a_close_face_the_best_answer_is_still_used(monkeypatch):
+    import autoreel.llm_highlights as hl
+    from autoreel import thumbnail as T
+
+    monkeypatch.setattr(hl, "all_available",
+                        lambda provider="": [("gemini", "k")])
+    monkeypatch.setattr(hl, "resolve_model", lambda n, k, m="": "m")
+    monkeypatch.setattr(hl, "vision_asker_for", lambda name: (
+        lambda key, model, parts: ('{"frame": 2, "box": [100, 300, 800, 600]}', "")))
+    index, box = T._choose([b"a", b"b"], prompt_template=T.STREAM_PROMPT,
+                           want_box=True)
+    assert index == 1 and box is not None

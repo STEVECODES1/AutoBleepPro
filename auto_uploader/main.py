@@ -5148,6 +5148,14 @@ def main(argv=None) -> int:
             while True:
                 time.sleep(1)
                 if cfg.posting and time.time() >= next_drain:
+                    # Just woken from sleep, the network is not back for a
+                    # few seconds - posting into that failed a clip and
+                    # counted it against the platform. Ask again shortly.
+                    from utils.net import online
+
+                    if not online():
+                        next_drain = time.time() + 10
+                        continue
                     # The first pass after a start re-asks the guard about
                     # every held clip, so a config change takes effect on
                     # restart instead of after waits set under the old one.

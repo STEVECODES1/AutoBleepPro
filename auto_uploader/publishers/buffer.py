@@ -273,11 +273,22 @@ class BufferPublisher:
             print(f"[Buffer] {self.label}: this clip is already on the "
                   f"channel (post {earlier}) - not posting it twice.")
             return f"buffer post {earlier}"
+        from utils.fit_size import fit
+
+        # Cloudinary's free plan takes 100 MB a video; a long clip is
+        # re-encoded under that rather than not posted at all.
+        upload, temporary = fit(video_path, cloud_host.MAX_BYTES - (5 << 20))
         try:
-            url = cloud_host.host_video(video_path)
+            url = cloud_host.host_video(upload)
         except Exception as exc:
             print(f"[Buffer] Could not host the clip: {exc}")
             return None
+        finally:
+            if temporary:
+                try:
+                    os.remove(temporary)
+                except OSError:
+                    pass
         try:
             result = self._create({
                 "channelId": self.channel_id(),

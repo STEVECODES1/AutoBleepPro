@@ -873,6 +873,17 @@ def publish(platform: str, video_path: str, caption: str,
 
     upload_path, temp = _vertical_copy(censored, settings,
                                        (config or {}).get("clips", {}) or {})
+    # Facebook answers HTTP 413 to a Reel over ~100 MB (2026-10-08).
+    from utils.fit_size import fit
+
+    fitted, fit_temp = fit(upload_path)
+    if fit_temp:
+        if temp and temp not in (video_path, censored):
+            try:
+                os.remove(temp)
+            except OSError:
+                pass
+        upload_path, temp = fitted, fit_temp
     print(f"[Clips] {platform}: uploading "
           f"{os.path.basename(video_path)} as a Reel...")
     from utils.keep_awake import KeepAwake
