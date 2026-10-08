@@ -203,6 +203,8 @@ BUILD = _build_string()
 # is fine: the waits themselves are 25 to 80 minutes, so the resolution
 # that matters is "well under the shortest spacing", not "immediate".
 CLIP_DRAIN_SECONDS = 60
+# How often the watcher looks for a live recording with a window to clip.
+LIVE_CLIP_SECONDS = 60
 
 # How often --watch looks for a VOD nobody has clipped yet. Slow on
 # purpose: the answer is almost always "none", and the work it triggers
@@ -879,6 +881,31 @@ def cut_clips_from_stream(cfg, video_path: str, is_clip: bool,
     if run.skipped_reason:
         print(f"[Clips] {run.skipped_reason}")
         return 0
+    # Moments already clipped while the stream was live are not posted
+    # a second time from the VOD - see utils/live_clipper.
+    try:
+        from utils.live_clipper import (clipped_ranges_for,
+                                        is_already_clipped, _remove_clip,
+                                        wait_idle)
+
+        # The last live window may still be running as the stream ends;
+        # its clips belong in the ledger before it is read.
+        wait_idle()
+        live = clipped_ranges_for(archive, source, title)
+        if live:
+            kept = [c for c in run.clips
+                    if not is_already_clipped((c.spec.start, c.spec.end),
+                                              live)]
+            for clip in run.clips:
+                if clip not in kept:
+                    _remove_clip(clip.path)
+            if len(kept) < len(run.clips):
+                print(f"[Clips] {len(run.clips) - len(kept)} of these were "
+                      f"already clipped live - not posting them twice.")
+            run.clips = kept
+    except Exception as exc:
+        print(f"[Clips] could not check the live clips ({exc}) - "
+              f"posting all of these.")
     print_run(run)
     delivered = _deliver_clips(run, cfg)
     remember(archive, source, delivered, content_hash=content_hash)
@@ -5145,8 +5172,23 @@ def main(argv=None) -> int:
             next_autoclip = time.time() + 15
             next_retry_sweep = time.time() + RETRY_SWEEP_SECONDS
             next_brain = time.time() + 30
+            next_live = time.time() + 30
             while True:
                 time.sleep(1)
+                # Clips cut while the stream is still LIVE - see
+                # utils/live_clipper. On its own thread: a window takes
+                # minutes and the queue must keep posting meanwhile.
+                if (not dry_run and time.time() >= next_live
+                        and (cfg.clips or {}).get("live_clipping", False)):
+                    next_live = time.time() + LIVE_CLIP_SECONDS
+                    try:
+                        from utils.live_clipper import start_background
+
+                        start_background(
+                            cfg, lambda run: _deliver_clips(run, cfg))
+                    except Exception as exc:
+                        print(f"[Live] WARNING: live clipping could not "
+                              f"start: {exc}")
                 if cfg.posting and time.time() >= next_drain:
                     # Just woken from sleep, the network is not back for a
                     # few seconds - posting into that failed a clip and

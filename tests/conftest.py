@@ -93,8 +93,12 @@ def _gemini_not_resting():
         yield
         return
     llm_highlights._GEMINI_COOLDOWN.update(until=0.0, why="")
+    llm_highlights._SPENT.clear()
+    llm_highlights._OUT_OF_CREDIT.clear()
     yield
     llm_highlights._GEMINI_COOLDOWN.update(until=0.0, why="")
+    llm_highlights._SPENT.clear()
+    llm_highlights._OUT_OF_CREDIT.clear()
 
 
 @pytest.fixture(autouse=True)

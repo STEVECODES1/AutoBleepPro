@@ -1110,6 +1110,42 @@ def _gemini_resting() -> str:
     return ""
 
 
+# A model whose free daily quota is gone, and when Google says it is back.
+# Asking it anyway cost a refused call - and when that call first came
+# back "busy", a 20 s wait - on every clip before flash-lite was tried.
+_SPENT: dict = {}
+
+
+def _note_spent(model: str, problem: str) -> None:
+    found = re.search(r"retry in (?:(\d+)h)?(?:(\d+)m)?([\d.]+)s",
+                      str(problem or ""))
+    seconds = 3600.0
+    if found:
+        seconds = (int(found.group(1) or 0) * 3600
+                   + int(found.group(2) or 0) * 60 + float(found.group(3)))
+    _SPENT[model] = _clock() + max(60.0, seconds)
+
+
+def _usable_model(key: str, model: str) -> str:
+    """`model`, or its flash-lite sibling while `model`'s quota is gone."""
+    if "lite" not in model.lower() and _clock() < _SPENT.get(model, 0.0):
+        return resolve_lite_model(key, avoid=model) or model
+    return model
+
+
+def _to_lite(key: str, model: str, problem: str) -> str:
+    """The lite model to try after `problem`, or "" if there is none."""
+    if not (problem and is_quota_exhausted(problem)) \
+            or "lite" in model.lower():
+        return ""
+    _note_spent(model, problem)
+    lite = resolve_lite_model(key, avoid=model)
+    if lite:
+        print(f"[Clips] Gemini ({model}) is out of today's free "
+              f"requests - trying {lite} instead...")
+    return lite or ""
+
+
 def _rest_gemini(problem: str) -> None:
     _GEMINI_COOLDOWN["until"] = _clock() + _GEMINI_REST_S
     _GEMINI_COOLDOWN["why"] = problem
@@ -1129,6 +1165,7 @@ def _ask_gemini(key: str, model: str, prompt: str) -> str:
         "generationConfig": {"responseMimeType": "application/json",
                              "temperature": 0.4},
     }
+    model = _usable_model(key, model)
     active_url = _gemini_url(model, key)
     # _post_detailed rather than _post: the text pass used to swallow a
     # busy/overloaded provider the same as a bad key or a bad prompt, so
@@ -1137,22 +1174,24 @@ def _ask_gemini(key: str, model: str, prompt: str) -> str:
     # was briefly down and never asked again". The vision pass already
     # retried a busy model; this path never did.
     data, problem = _post_detailed(active_url, payload, {})
-    if problem and is_quota_exhausted(problem) and "lite" not in model.lower():
-        # The day's ~20 free requests on the strong flash model are
-        # gone; its own flash-lite sibling has roughly 25x the free
-        # allowance and is still Gemini, still multimodal, still this
-        # project's own tuned prompt - see resolve_lite_model().
-        lite = resolve_lite_model(key, avoid=model)
-        if lite:
-            print(f"[Clips] Gemini ({model}) is out of today's free "
-                  f"requests - trying {lite} instead...")
-            active_url = _gemini_url(lite, key)
-            data, problem = _post_detailed(active_url, payload, {})
+    # The day's ~20 free requests on the strong flash model are gone;
+    # its own flash-lite sibling has roughly 25x the free allowance and
+    # is still Gemini, still multimodal, still this project's own tuned
+    # prompt - see resolve_lite_model().
+    lite = _to_lite(key, model, problem)
+    if lite:
+        model, active_url = lite, _gemini_url(lite, key)
+        data, problem = _post_detailed(active_url, payload, {})
     if problem and _is_transient(problem):
         print(f"[Clips] Gemini said {problem} - waiting 20s and trying "
               f"once more...")
         time.sleep(_BUSY_RETRY_SECONDS)
         data, problem = _post_detailed(active_url, payload, {})
+        # Busy first, then out of quota on the retry: lite still applies.
+        lite = _to_lite(key, model, problem)
+        if lite:
+            model, active_url = lite, _gemini_url(lite, key)
+            data, problem = _post_detailed(active_url, payload, {})
         if problem and _is_transient(problem):
             _rest_gemini(problem)
     if not isinstance(data, dict):
@@ -1194,6 +1233,7 @@ def _ask_gemini_vision(key: str, model: str, parts: list) -> tuple:
     resting = _gemini_resting()
     if resting:
         return "", f"Gemini was overloaded a moment ago ({resting})"
+    model = _usable_model(key, model)
     active_url = _gemini_url(model, key)
 
     # 429/5xx here is "this model is busy or briefly down", not "you are
@@ -1204,25 +1244,28 @@ def _ask_gemini_vision(key: str, model: str, parts: list) -> tuple:
     # never retried at all, because "503" matched neither check.
     data, problem = _post_detailed(active_url, payload, {},
                                    timeout=_VISION_TIMEOUT)
-    if problem and is_quota_exhausted(problem) and "lite" not in model.lower():
-        # Same reasoning as _ask_gemini: flash-lite is still fully
-        # multimodal (confirmed - both the 3.1 and 3.5 lite releases
-        # take image input), so a quota-exhausted vision pass has a
-        # same-provider fallback worth trying before losing the frames
-        # entirely to a text-only provider further down the cascade.
-        lite = resolve_lite_model(key, avoid=model)
-        if lite:
-            print(f"[Clips] Gemini ({model}) is out of today's free "
-                  f"requests - trying {lite} instead...")
-            active_url = _gemini_url(lite, key)
-            data, problem = _post_detailed(active_url, payload, {},
-                                           timeout=_VISION_TIMEOUT)
+    # Same reasoning as _ask_gemini: flash-lite is still fully
+    # multimodal (confirmed - both the 3.1 and 3.5 lite releases take
+    # image input), so a quota-exhausted vision pass has a same-provider
+    # fallback worth trying before losing the frames entirely to a
+    # text-only provider further down the cascade.
+    lite = _to_lite(key, model, problem)
+    if lite:
+        model, active_url = lite, _gemini_url(lite, key)
+        data, problem = _post_detailed(active_url, payload, {},
+                                       timeout=_VISION_TIMEOUT)
     if problem and _is_transient(problem):
         print(f"[Clips] Gemini said {problem} - waiting 20s and trying "
               f"once more...")
         time.sleep(_BUSY_RETRY_SECONDS)
         data, problem = _post_detailed(active_url, payload, {},
                                        timeout=_VISION_TIMEOUT)
+        # Busy first, then out of quota on the retry: lite still applies.
+        lite = _to_lite(key, model, problem)
+        if lite:
+            model, active_url = lite, _gemini_url(lite, key)
+            data, problem = _post_detailed(active_url, payload, {},
+                                           timeout=_VISION_TIMEOUT)
         if problem and _is_transient(problem):
             _rest_gemini(problem)
 
@@ -1832,6 +1875,13 @@ def _ask_one_provider(provider, key, model, shortlist, count, source_path,
             # something anyone can act on either.
             print(f"[Clips] The vision pass failed ({why}) - going on the "
                   f"words instead.")
+            # An empty ACCOUNT answers the words the same way - two more
+            # calls, six seconds each, before the next provider is asked.
+            # (Only an empty account: one model's daily quota is not -
+            # Gemini's text pass still has its flash-lite sibling.)
+            if ask is None and "credit balance is too low" in str(why).lower():
+                note_out_of_credit(provider, why)
+                return [], shortlist
 
     if not raw:
         prompt = build_prompt(shortlist, count)

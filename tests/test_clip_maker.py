@@ -438,7 +438,8 @@ def test_fit_still_takes_burned_captions_when_asked():
     chain = build_filter("fit", "/tmp/x.ass")
     # The watermark goes on after the captions, so this is no longer the
     # end of the chain - only that the captions are in it.
-    assert "subtitles='/tmp/x.ass'" in chain
+    # (On Windows the path is made absolute: "D\:/tmp/x.ass".)
+    assert "subtitles='" in chain and "/tmp/x.ass'" in chain
 
 
 # ═════════════════════════════════════════════════════════════════════════════

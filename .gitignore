@@ -111,3 +111,9 @@ auto_uploader/*.backup*
 auto_uploader/.env.backup-*
 auto_uploader/upload_log.txt
 .pytest_cache/
+
+# Live clipping's scratch windows and preview folders.
+auto_uploader/live_windows/
+auto_uploader/_live_preview/
+auto_uploader/_thumb_preview/
+
