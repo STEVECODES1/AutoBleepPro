@@ -147,7 +147,9 @@ def test_a_missing_file_falls_back_to_the_floor():
 def test_a_stalled_upload_does_not_hold_the_run_for_the_whole_ceiling(
         monkeypatch):
     """The ceiling is hours now, so a dead transfer needs its own exit."""
-    monkeypatch.setattr(rumble_uploader, "STALL_SECONDS", 0)
+    # -1, not 0: Windows' clock moves in ~16 ms steps, so with 0 every
+    # poll inside one step read "0 seconds since the last change".
+    monkeypatch.setattr(rumble_uploader, "STALL_SECONDS", -1)
     page = FakePage(["12%"] * 50)
 
     done, _ = _wait(page, timeout_seconds=60 * 60 * 5)
