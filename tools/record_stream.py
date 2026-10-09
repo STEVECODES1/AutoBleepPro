@@ -189,6 +189,31 @@ def probe_duration(path: str) -> Optional[float]:
         return None
 
 
+def probe_picture_duration(path: str) -> Optional[float]:
+    """Seconds of PICTURE in a file: the shorter of the whole file and
+    its video stream.
+
+    The file's own duration is its LONGEST stream. On 10/8 the video
+    stopped at 1:58:03 and the audio ran to 2:16:31, so the recording
+    measured 2:16:31, matched the stream's length, and was called
+    complete - with 18 minutes of it sound only. Falls back to the
+    file's duration when the video stream has none of its own (.ts).
+    """
+    whole = probe_duration(path)
+    video = None
+    try:
+        completed = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "v:0",
+             "-show_entries", "stream=duration", "-of", "csv=p=0", path],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=120)
+        video = float(completed.stdout.decode().strip().splitlines()[0])
+    except (FileNotFoundError, subprocess.TimeoutExpired, ValueError, IndexError):
+        video = None
+    if video and whole:
+        return min(video, whole)
+    return whole if whole else video
+
+
 # How far audio may drift from video before it is worth saying so. One
 # AAC frame is ~23ms and nobody can hear it; a tenth of a second is the
 # point where lips stop matching words.
@@ -1375,7 +1400,13 @@ class Recorder:
     watch_folder: str
     name: str = "stream"
     poll_seconds: int = 60
-    concurrent_fragments: int = 4
+    # 8, up from 4. With 4 the 1080p60 video track kept falling behind
+    # the live edge (the audio, a fraction of the size, never did): on
+    # 10/8 it was 18 minutes behind when the stream ended, and the
+    # streamer's VOD vanished with it, so those minutes were refused
+    # (403) and the recording has no picture for them. More fragments in
+    # flight is what lets it catch up after a slow patch.
+    concurrent_fragments: int = 8
     # When the live recording came up short, download the finished VOD
     # instead. Off for a stream that is not archived afterwards.
     fill_gaps: bool = True
@@ -1899,7 +1930,7 @@ class Recorder:
         # Checked here, while the stream is still in YouTube's DVR window
         # and a missing hour could still be re-fetched. Days later it is
         # gone for good.
-        report = coverage_report(probe_duration(destination),
+        report = coverage_report(probe_picture_duration(destination),
                                  expected_duration(self.url))
         still_live = (False if self.went_private else bool(channel_is_live(
             resolved_watch_url(self.url, self.video_id))))
@@ -1957,7 +1988,7 @@ class Recorder:
             replaced = self._replace_with_vod(base, destination)
             if replaced:
                 destination = replaced
-                report = coverage_report(probe_duration(destination),
+                report = coverage_report(probe_picture_duration(destination),
                                          expected_duration(self.url))
                 self.say(report)
         if report.startswith("SHORT"):
@@ -1998,8 +2029,8 @@ class Recorder:
             _remove(candidate)
             return None
 
-        vod_length = probe_duration(candidate) or 0
-        have_length = probe_duration(current) or 0
+        vod_length = probe_picture_duration(candidate) or 0
+        have_length = probe_picture_duration(current) or 0
         if vod_length <= have_length:
             self.say(f"The VOD is no longer than what was recorded "
                      f"({vod_length / 3600:.2f}h vs {have_length / 3600:.2f}h) "
@@ -2013,16 +2044,20 @@ class Recorder:
         # swap is made reversible and then only finalised below.
         destination = os.path.join(self.watch_folder, os.path.basename(current))
         kept = os.path.join(self.staging, f"{base}.live-recording.mp4")
+        # shutil.move, not os.replace: staging (the recording folder, on
+        # the SSD) and watch_folder can be different drives, and
+        # os.replace cannot cross one. On the same drive it is still a
+        # rename.
         try:
-            os.replace(current, kept)
-            os.replace(candidate, destination)
+            shutil.move(current, kept)
+            shutil.move(candidate, destination)
         except OSError as exc:
             self.say(f"Could not put the VOD in place: {exc}")
             # Undo, so a failure here leaves the live recording delivered
             # exactly as it was rather than nothing at all.
             if not os.path.exists(destination) and os.path.exists(kept):
                 try:
-                    os.replace(kept, destination)
+                    shutil.move(kept, destination)
                 except OSError:
                     self.say(f"The recording is safe at {kept}.")
             return None
@@ -2464,6 +2499,32 @@ def _source_loop(recorder: "Recorder", once: bool, stop) -> None:
         pass
 
 
+def configured_staging(root: str) -> str:
+    """The recording folder named in auto_uploader/config.json
+    (general.recording_folder), so the recorder, the live clipper and the
+    health check all look in one place. auto_uploader/recording when it
+    is not set or the config cannot be read.
+
+    It should be on the internal SSD. It was a USB hard drive on 10/8:
+    thousands of one-second fragments written there while clips were cut
+    and uploaded from the same disk, the video fell 18 minutes behind,
+    and merging the fragments afterwards took an hour.
+    """
+    fallback = os.path.join(root, "auto_uploader", "recording")
+    config_dir = os.path.join(root, "auto_uploader")
+    try:
+        with open(os.path.join(config_dir, "config.json"), encoding="utf-8") as f:
+            folder = str((json.load(f).get("general") or {}).get("recording_folder") or "")
+    except (OSError, ValueError, AttributeError):
+        return fallback
+    if not folder:
+        return fallback
+    folder = os.path.expandvars(os.path.expanduser(folder))
+    if not os.path.isabs(folder):
+        folder = os.path.join(config_dir, folder)
+    return os.path.normpath(folder)
+
+
 def main(argv: Optional[list] = None) -> int:
     import argparse
     import threading
@@ -2495,8 +2556,11 @@ def main(argv: Optional[list] = None) -> int:
     parser.add_argument("--name", default="Stackswopo",
                         help="Used in the filename. With several URLs the "
                              "platform is appended, so files stay distinct.")
-    parser.add_argument("--staging",
-                        default=os.path.join(root, "auto_uploader", "recording"))
+    parser.add_argument("--staging", default=configured_staging(root),
+                        help="Where a stream is written while it records. "
+                             "Default: general.recording_folder in "
+                             "auto_uploader/config.json, else "
+                             "auto_uploader/recording.")
     parser.add_argument("--watch-folder",
                         default=os.path.join(root, "auto_uploader", "watch_folder"))
     parser.add_argument("--poll-seconds", type=int, default=60)

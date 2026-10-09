@@ -403,7 +403,7 @@ def test_facebook_group_is_parked_rather_than_dropped(tmp_path, publishers,
     announce_to_platforms(posting, "DAMN", UPLOADS)
 
     assert queue.exists(), "the group post was dropped instead of queued"
-    parked = queue.read_text()
+    parked = queue.read_text(encoding="utf-8")
     assert "facebook_group" in parked
     # The actual post, ready to paste - not just a note that one was due.
     assert "DAMN" in parked
@@ -415,7 +415,7 @@ def test_the_shipped_config_keeps_x_inside_the_free_tier():
     is what keeps automated posting inside it - 8/day is 240/month."""
     import json
 
-    with open(os.path.join(_UPLOADER, "config.json")) as f:
+    with open(os.path.join(_UPLOADER, "config.json"), encoding="utf-8") as f:
         shipped = json.load(f)
     x = shipped["posting"]["platforms"]["x"]
     assert x["daily_cap"] * 31 < 500, \

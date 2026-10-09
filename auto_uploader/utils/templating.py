@@ -302,7 +302,10 @@ def _fill(title_format: str, stream_title: str, date_str: str) -> str:
     placeholder, and only where a finished title is being returned. The
     length arithmetic in build_title measures this raw form.
     """
+    # {TITLE} is the same name in capitals - "Stackswopo - THOTBREAKER -
+    # 10-08-26 (FULL STREAM)" is how a full stream is named on Rumble.
     return (title_format
+            .replace("{TITLE}", stream_title.upper())
             .replace("{title}", stream_title)
             .replace("{date}", date_str))
 

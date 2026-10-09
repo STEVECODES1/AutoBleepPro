@@ -1,12 +1,12 @@
 {
-  "_comment": "Non-secret settings only. Credentials live in .env (see .env.example) so this file is safe to back up/share. Placeholders in title_format ({title}, {date}) and description_template ([DATE], [STREAM TITLE]) get filled in automatically at upload time.",
+  "_comment": "Non-secret settings only. Credentials live in .env (see .env.example) so this file is safe to back up/share. Placeholders in title_format ({title}, {TITLE} = the name in capitals, {date}) and description_template ([DATE], [STREAM TITLE]) get filled in automatically at upload time.",
   "youtube": {
     "channel": "@StackswopoGames",
     "_privacy_comment": "private = uploads land unlisted-to-the-public so you can review the censor risk report before publishing. Set to \"public\" to publish immediately.",
     "privacy": "private",
     "category_id": "20",
     "made_for_kids": false,
-    "title_format": "\"{title}\" {date} Stackswopo Stream",
+    "title_format": "Stackswopo - {TITLE} - {date} (FULL STREAM)",
     "description_template": "This stream first aired on [DATE] with the title \"[STREAM TITLE]\" on the Stackswopo channel.\n\n\ud83d\udccc Also on Rumble (BinScripts): https://rumble.com/user/BinScripts\n\ud83c\udfae Main channel: https://www.youtube.com/@stackswopo_\n\ud83d\udcfa Twitch: https://www.twitch.tv/stackswopo\n\nThis is a replay of one of my own past streams, archived here so it stays available.\n\nThe stream contains live reactions, jokes, and real-life conversations in my usual unfiltered style.\n\n\ud83d\udd25 Missed the original broadcast? Enjoy the full replay with every moment, from the funny bits to the wild reactions.\n\ud83c\udfa5 Want more? Check the channel for additional past streams, full VODs, and highlights.\n\n\ud83d\udc4d If you enjoy these replays, consider subscribing!\n\nTags: #StacksWopo #StreamReplay #FullVOD #GamingHighlights #FunnyMoments #GTA5 #GTAOnline #Roleplay #StreamerMoments #UncutReplay #Entertainment",
     "tags": [
       "Stackswopo",
@@ -38,7 +38,7 @@
     "_category_comment": "Rumble REQUIRES a primary category - the submit button stays disabled without one. Must match the dropdown label exactly (e.g. Gaming, Entertainment).",
     "primary_category": "Gaming",
     "secondary_category": "Grand Theft Auto V",
-    "title_format": "\"{title}\" {date} Stackswopo Stream",
+    "title_format": "Stackswopo - {TITLE} - {date} (FULL STREAM)",
     "description_template": "My YouTube Channel: https://www.youtube.com/@StackswopoGames\nInstagram: https://www.instagram.com/stackswopomanz/\nMonkeyAPP Content: https://www.youtube.com/@BinScript\nStack's Channel: https://www.youtube.com/@stackswopo_\nStack's Twitch Channel: https://www.twitch.tv/stackswopo\nOnlyThaGuys Channel: https://www.youtube.com/@OnlyThaGuys26\n\nThis stream first aired on [DATE] with the title \"[STREAM TITLE]\" on the Stackswopo channel.\n\nThis is a replay of one of my own past streams, archived here so it stays available.\n\nThe stream contains live reactions, jokes, and real-life conversations in my usual unfiltered style.\n\n\ud83d\udd25 Missed the original broadcast? Enjoy the full replay with every moment, from the funny bits to the wild reactions.\n\ud83c\udfa5 Want more? Check the channel for additional past streams, full VODs, and highlights.\n\n\ud83d\udc4d If you enjoy these replays, consider subscribing!\n\nTags: #StacksWopo #StreamReplay #FullVOD #GamingHighlights #FunnyMoments #GTA5 #GTAOnline #Roleplay #StreamerMoments #UncutReplay #Entertainment",
     "tags": [
       "Stackswopo",
@@ -66,10 +66,12 @@
     "thumbnail_sticker": "",
     "_watch_folder_comment": "Relative paths resolve next to this config file, so './watch_folder' = D:/AutoBleepPro-main/auto_uploader/watch_folder and keeps working if you re-extract the ZIP somewhere else. Set an absolute path (e.g. 'D:/videos stizz') to watch a different folder instead.",
     "watch_folder": "./watch_folder",
+    "recording_folder": "",
+    "_recording_folder_comment": "Where a live stream is written WHILE it records (recorder, live clipper and health check all read this). Keep it on the internal SSD: on a USB hard drive the video fell 18 min behind the live edge on 10/8 and those minutes were lost. '' = ./recording. The finished file still goes to watch_folder.",
     "uploaded_folder": "./uploaded",
     "logs_folder": "./logs",
     "duplicate_store_path": "./uploaded_hashes.json",
-    "date_style": "M/D/YY",
+    "date_style": "%m-%d-%y",
     "max_retries": 3,
     "retry_delays": [
       60,
@@ -393,7 +395,7 @@
     "full_rumble_clean_youtube": {
       "_comment": "Uncensored full VOD -> Rumble. Censored copy -> YouTube. Clips -> YouTube Shorts.",
       "rumble_censor_uploads": false,
-      "rumble_title_format": "\"{title}\" {date} Stackswopo FULL Stream",
+      "rumble_title_format": "Stackswopo - {TITLE} - {date} (FULL STREAM)",
       "youtube_censor_uploads": true,
       "trim_silence": true,
       "clips_to_shorts": true

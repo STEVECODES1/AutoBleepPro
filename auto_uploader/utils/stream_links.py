@@ -33,6 +33,20 @@ def _normal(text: str) -> str:
     return re.sub(r"[^a-z0-9]+", "", (text or "").lower())
 
 
+def _same_day(a, b) -> bool:
+    """One stream date however it was written: "10/8/26" (the old
+    date_style) and "10-08-26" (the current one) are the same day, and
+    clips cut before the change still carry the old form."""
+    a, b = str(a or ""), str(b or "")
+    if a == b:
+        return True
+    da, db = re.findall(r"\d+", a), re.findall(r"\d+", b)
+    if len(da) != 3 or len(db) != 3:
+        return False
+    return ([int(x) for x in da[:2]] + [int(da[2]) % 100]
+            == [int(x) for x in db[:2]] + [int(db[2]) % 100])
+
+
 def _load(store: str) -> list:
     try:
         with open(store, encoding="utf-8") as handle:
@@ -67,9 +81,16 @@ def remember(title: str, date: str, results: dict,
             rumble = ""
     if not (youtube or rumble) or not _normal(title):
         return False
-    entries = [e for e in _load(store)
-               if not (_normal(e.get("title")) == _normal(title)
-                       and e.get("date") == date)]
+    everything = _load(store)
+    same = [e for e in everything
+            if _normal(e.get("title")) == _normal(title)
+            and _same_day(e.get("date"), date)]
+    # A one-platform re-upload (--only rumble) brings one link; the other
+    # one noted earlier for the same stream stays.
+    for earlier in sorted(same, key=lambda e: float(e.get("at", 0))):
+        youtube = youtube or _url(earlier.get("youtube"))
+        rumble = rumble or _url(earlier.get("rumble"))
+    entries = [e for e in everything if e not in same]
     entries.append({"title": title, "date": date, "youtube": youtube,
                     "rumble": rumble, "at": time.time()})
     entries = entries[-200:]
@@ -98,7 +119,7 @@ def link_for(stream_title: str, stream_date: str = "", platform: str = "",
              if _normal(e.get("title")) == wanted
              and now - float(e.get("at", 0)) < MAX_AGE_S
              and (not stream_date or not e.get("date")
-                  or e.get("date") == stream_date)]
+                  or _same_day(e.get("date"), stream_date))]
     if not found:
         return ""
     entry = max(found, key=lambda e: float(e.get("at", 0)))

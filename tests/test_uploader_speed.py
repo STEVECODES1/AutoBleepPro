@@ -320,14 +320,14 @@ def test_stage_timer_summary_with_no_stages():
 # ═════════════════════════════════════════════════════════════════════════════
 
 def test_shipped_chunk_size_is_conservative_and_resumable():
-    with open(os.path.join(_UPLOADER, "config.json")) as f:
+    with open(os.path.join(_UPLOADER, "config.json"), encoding="utf-8") as f:
         shipped = json.load(f)
     chunk = shipped["youtube"]["upload_chunk_mb"]
     assert 1 <= chunk <= 64, "default should stay modest enough to resume cheaply"
 
 
 def test_speed_defaults_are_safe():
-    with open(os.path.join(_UPLOADER, "config.json")) as f:
+    with open(os.path.join(_UPLOADER, "config.json"), encoding="utf-8") as f:
         speed = json.load(f)["general"]["speed"]
     # Stream copy is both faster AND lossless, so it's on; hardware encode
     # only ever applies to the fallback and auto-detects.

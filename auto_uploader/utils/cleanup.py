@@ -479,7 +479,14 @@ def resolve_source_action(cfg) -> str:
     return action if action in (SOURCE_MOVE, SOURCE_DELETE, SOURCE_KEEP) else SOURCE_MOVE
 
 
-def prune_uploaded_folder(cfg, keep_newest: int) -> float:
+# A full stream is gigabytes; a clip is tens of megabytes.
+STREAM_MIN_BYTES = 500 * 1024 * 1024
+# Nothing younger than this is pruned, however many newer files there are.
+PRUNE_MIN_AGE_S = 72 * 3600
+
+
+def prune_uploaded_folder(cfg, keep_newest: int,
+                          now: Optional[float] = None) -> float:
     """Delete all but the `keep_newest` most recent videos in uploaded/.
 
     Opt-in via `cleanup.keep_uploaded_videos`; callers must not invoke this
@@ -487,9 +494,17 @@ def prune_uploaded_folder(cfg, keep_newest: int) -> float:
     video lands after a successful upload, so on a machine that processes
     streams regularly it grows by a full VOD each time and is usually the
     real reason a disk filled up.
+
+    Full streams and clips are counted SEPARATELY, and nothing under
+    three days old goes. Counted together, "keep the 3 newest" meant the
+    10/8 stream was deleted an hour after it landed, because three of its
+    own clips were newer - and that was the night its Rumble upload had
+    silently not happened, so the copy needed to redo it was the one
+    gone. (It survived only because the raw recording was still there.)
     """
     if not keep_newest or keep_newest < 1:
         return 0.0
+    now = time.time() if now is None else now
     folder = cfg.general.uploaded_folder
     if not os.path.isdir(folder):
         return 0.0
@@ -500,10 +515,15 @@ def prune_uploaded_folder(cfg, keep_newest: int) -> float:
     ]
     videos = [v for v in videos if os.path.isfile(v)]
     videos.sort(key=lambda p: (os.path.getmtime(p), p), reverse=True)
+    streams = [v for v in videos if os.path.getsize(v) >= STREAM_MIN_BYTES]
+    clips = [v for v in videos if os.path.getsize(v) < STREAM_MIN_BYTES]
 
     report = CleanupReport()
-    for path in videos[keep_newest:]:
-        _remove(path, report)
+    for group in (streams, clips):
+        for path in group[keep_newest:]:
+            if now - os.path.getmtime(path) < PRUNE_MIN_AGE_S:
+                continue
+            _remove(path, report)
     return report.freed_mb
 
 

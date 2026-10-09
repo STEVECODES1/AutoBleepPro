@@ -174,6 +174,13 @@ class GeneralConfig:
     filename_channel_prefixes: tuple = ()
     cleanup: dict = None
     speed: dict = None
+    # Where the recorder writes a live stream while it is being recorded
+    # (tools/record_stream.py reads the same key). Empty = ./recording.
+    # Point it at the FAST internal drive: on 10/8 it was a USB hard
+    # drive, the video download fell 18 minutes behind the live edge, and
+    # those 18 minutes were refused for good once the stream ended. The
+    # finished file is still moved to watch_folder, wherever that is.
+    recording_folder: str = ""
 
 
 @dataclass
@@ -437,6 +444,8 @@ def load_config(config_path: str = "config.json", env_path: str = ".env") -> App
         filename_channel_prefixes=tuple(gen.get("filename_channel_prefixes", []) or []),
         cleanup=dict(gen.get("cleanup", {}) or {}),
         speed=dict(gen.get("speed", {}) or {}),
+        recording_folder=_resolve_path(project_root, gen.get("recording_folder")
+                                       or "./recording"),
         default_title=gen.get("default_title", "Gaming Stream"),
         supported_formats=tuple(
             e.lower() for e in gen.get("supported_formats", [".mp4", ".mov", ".avi", ".mkv", ".flv", ".wmv", ".ts"])
@@ -510,10 +519,13 @@ def validate_config(cfg: AppConfig) -> list:
         problems.append(
             "Neither rumble.cdp_url (config.json) nor RUMBLE_USERNAME/RUMBLE_PASSWORD (.env) are set."
         )
-    if "{title}" not in cfg.youtube.title_format or "{date}" not in cfg.youtube.title_format:
-        problems.append("youtube.title_format must contain both {title} and {date}")
-    if "{title}" not in cfg.rumble.title_format or "{date}" not in cfg.rumble.title_format:
-        problems.append("rumble.title_format must contain both {title} and {date}")
+    # {TITLE} is the stream name in capitals, and counts as the name.
+    def _names_stream(fmt: str) -> bool:
+        return ("{title}" in fmt or "{TITLE}" in fmt) and "{date}" in fmt
+    if not _names_stream(cfg.youtube.title_format):
+        problems.append("youtube.title_format must contain {title} (or {TITLE}) and {date}")
+    if not _names_stream(cfg.rumble.title_format):
+        problems.append("rumble.title_format must contain {title} (or {TITLE}) and {date}")
 
     for folder in (cfg.general.watch_folder, cfg.general.uploaded_folder, cfg.general.logs_folder):
         os.makedirs(folder, exist_ok=True)

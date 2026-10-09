@@ -251,3 +251,43 @@ def test_the_wait_still_ignores_a_stray_link(uploader, monkeypatch):
     monkeypatch.setattr(type(uploader), "PUBLISH_WAIT_SECONDS", 0.2)
     monkeypatch.setattr(type(uploader), "PUBLISH_POLL_SECONDS", 0.05)
     assert uploader._await_published(page, REAL_TITLE) is None
+
+
+
+# ── the same stream, posted by someone else first ────────────────────
+
+FULL_TITLE = "Stackswopo - THOTBREAKER - 10-08-26 (FULL STREAM)"
+# 2026-10-09: another channel had this stream up on Rumble under this
+# exact name before ours went up - the slug check alone accepts it.
+SOMEONE_ELSES = ("https://rumble.com/v7glnje-stackswopo-thotbreaker-10-08-26-"
+                 "full-stream.html?e9s=src_v1_sa%2Csrc_v1_upp_a")
+OURS = "https://rumble.com/v7gm1ab-stackswopo-thotbreaker-10-08-26-full-stream.html"
+
+
+class _SameNamePage(_SubmitPage):
+    def evaluate(self, script):
+        links = [SOMEONE_ELSES] + ([OURS] if self.clicks >= 2 else [])
+        if "a[href]" in script:
+            return links
+        if "input,textarea" in script:
+            return []
+        return ""
+
+
+def test_a_same_named_video_already_on_the_page_is_not_ours(uploader, monkeypatch):
+    assert slug_matches_title(SOMEONE_ELSES, FULL_TITLE) is True  # why it matters
+    page = _SameNamePage()
+    uploader._accept_terms = lambda *a, **k: None
+    uploader._select_categories = lambda *a, **k: None
+    monkeypatch.setattr(type(uploader), "PUBLISH_WAIT_SECONDS", 0.1)
+    monkeypatch.setattr(type(uploader), "PUBLISH_POLL_SECONDS", 0.02)
+
+    assert uploader._submit(page, FULL_TITLE) == OURS
+    assert page.clicks >= 2, "stopped on the other channel's video after step 1"
+
+
+def test_a_link_from_before_submit_is_excluded_with_or_without_its_query(uploader):
+    page = _FakePage(anchors=[SOMEONE_ELSES])
+    bare = SOMEONE_ELSES.split("?")[0].lower()
+    assert uploader._find_video_url(page, FULL_TITLE) == SOMEONE_ELSES
+    assert uploader._find_video_url(page, FULL_TITLE, frozenset({bare})) is None

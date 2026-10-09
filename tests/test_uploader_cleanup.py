@@ -80,7 +80,7 @@ def env(tmp_path):
     for d in (censored, logs, uploaded):
         d.mkdir()
 
-    with open(os.path.join(_UPLOADER, "config.json")) as f:
+    with open(os.path.join(_UPLOADER, "config.json"), encoding="utf-8") as f:
         raw = json.load(f)
     raw["general"].update(
         censored_folder=str(censored), logs_folder=str(logs),
@@ -527,7 +527,7 @@ def test_shipped_config_never_deletes_an_unuploaded_source():
     setting, not a data-loss one. What must not change is source_video:
     anything but "move" would remove the file the retries depend on.
     """
-    with open(os.path.join(_UPLOADER, "config.json")) as f:
+    with open(os.path.join(_UPLOADER, "config.json"), encoding="utf-8") as f:
         shipped = json.load(f)
     cleanup = shipped["general"]["cleanup"]
     assert cleanup["source_video"] == SOURCE_MOVE

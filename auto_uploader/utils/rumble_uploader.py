@@ -117,6 +117,12 @@ def _is_video_url(candidate: str) -> bool:
     return bool(_VIDEO_URL.match(candidate.strip()))
 
 
+def _bare(url: str) -> str:
+    """A video link without its tracking query - the same video whether
+    the page wrote ?e9s=src_v1_cllr after it or not."""
+    return url.split("?", 1)[0].split("#", 1)[0].rstrip("/").lower()
+
+
 # How long to let Rumble's transfer run before giving up on the wait.
 #
 # This used to be a flat 90 minutes, which is fine for a 40-second clip
@@ -552,6 +558,19 @@ class RumbleUploader:
             .or_(page.locator("input[type='submit']"))
         )
 
+        # Every video link on the page BEFORE the first click belongs to
+        # some other video - this one has no address until it is
+        # submitted. The title check alone cannot tell them apart when
+        # another channel has posted the same stream under the same name
+        # ("Stackswopo - THOTBREAKER - 10-08-26 (FULL STREAM)" was up on
+        # Rumble from someone else before ours), so those are ruled out
+        # by address as well.
+        try:
+            already_there = frozenset(_bare(c) for c in self._video_links(page))
+        except Exception:
+            already_there = frozenset()
+        self._links_before_submit = already_there
+
         clicked_any = False
         for step in range(3):  # details form, rights/terms form, +1 retry slot
             candidates = [c for c in submit_locator.all() if self._is_clickable(c)]
@@ -570,7 +589,7 @@ class RumbleUploader:
             # multi-GB upload. When it did not, the loop pressed submit a
             # SECOND time on a form that had already gone through - the
             # way one clip becomes two videos on the channel.
-            published = self._await_published(page, title)
+            published = self._await_published(page, title, already_there)
             if published:
                 print(f"[Rumble] Published: {published}")
                 return published
@@ -592,7 +611,7 @@ class RumbleUploader:
 
         if not clicked_any:
             raise RuntimeError("No enabled submit/publish button found on the page.")
-        return self._find_video_url(page, title)
+        return self._find_video_url(page, title, already_there)
 
     # How long to let Rumble finish publishing before concluding the
     # submit did not take. Generous on purpose: the cost of waiting too
@@ -601,11 +620,11 @@ class RumbleUploader:
     PUBLISH_WAIT_SECONDS = 25
     PUBLISH_POLL_SECONDS = 1.5
 
-    def _await_published(self, page, title: str):
+    def _await_published(self, page, title: str, exclude=frozenset()):
         """Poll for the published link instead of glancing once."""
         deadline = time.time() + self.PUBLISH_WAIT_SECONDS
         while True:
-            found = self._find_video_url(page, title)
+            found = self._find_video_url(page, title, exclude)
             if found:
                 return found
             if time.time() >= deadline:
@@ -1264,7 +1283,8 @@ class RumbleUploader:
             direct_url = submitted_url
             deadline = time.time() + 45
             while time.time() < deadline and not direct_url:
-                direct_url = self._find_video_url(page, title)
+                direct_url = self._find_video_url(
+                    page, title, getattr(self, "_links_before_submit", frozenset()))
                 if not direct_url:
                     page.wait_for_timeout(2000)
 
@@ -1297,7 +1317,7 @@ class RumbleUploader:
                     pass
 
 
-    def _find_video_url(self, page, title: str = ""):
+    def _find_video_url(self, page, title: str = "", exclude=frozenset()):
         """The published video's URL from the success page.
 
         Tried in order: the Direct Link input/textarea value, any anchor
@@ -1313,7 +1333,34 @@ class RumbleUploader:
         filled, and the video stayed a draft that never appeared on the
         channel. The log said "uploaded successfully" with a link to
         somebody else's video.
+
+        `exclude` holds the links that were on the page before submit
+        (see _submit) - none of those can be this upload's.
         """
+        usable = [c for c in self._video_links(page) if _bare(c) not in exclude]
+        if not usable:
+            return None
+
+        try:
+            from .channel_vods import slug_matches_title
+        except ImportError:
+            from channel_vods import slug_matches_title
+
+        matched = [c for c in usable if slug_matches_title(c, title) is True]
+        if matched:
+            return matched[0]
+
+        # None judgeable means the title had too few distinctive words to
+        # tell a real link from a sidebar one. Falling back to the first
+        # link keeps the old behaviour for those, which is the best that
+        # can be done without something to compare against.
+        if title and slug_matches_title(usable[0], title) is not None:
+            return None
+        return usable[0]
+
+    def _video_links(self, page) -> list:
+        """Every rumble.com/v... video link on the page, in the order
+        _find_video_url trusts them."""
         candidates: list[str] = []
 
         try:
@@ -1353,23 +1400,4 @@ class RumbleUploader:
             pass
 
         usable = [c.rstrip('\'"') for c in candidates]
-        usable = [c for c in usable if _is_video_url(c)]
-        if not usable:
-            return None
-
-        try:
-            from .channel_vods import slug_matches_title
-        except ImportError:
-            from channel_vods import slug_matches_title
-
-        matched = [c for c in usable if slug_matches_title(c, title) is True]
-        if matched:
-            return matched[0]
-
-        # None judgeable means the title had too few distinctive words to
-        # tell a real link from a sidebar one. Falling back to the first
-        # link keeps the old behaviour for those, which is the best that
-        # can be done without something to compare against.
-        if title and slug_matches_title(usable[0], title) is not None:
-            return None
-        return usable[0]
+        return [c for c in usable if _is_video_url(c)]

@@ -67,7 +67,7 @@ def test_manual_queue_is_anchored_to_the_config(tmp_path, monkeypatch):
     import json
     from utils.config import load_config
 
-    src = json.load(open(os.path.join(CONFIG_DIR, "config.json")))
+    src = json.load(open(os.path.join(CONFIG_DIR, "config.json"), encoding="utf-8"))
     (tmp_path / "config.json").write_text(json.dumps(src))
     monkeypatch.chdir(os.path.dirname(str(tmp_path)))
     cfg = load_config(str(tmp_path / "config.json"), str(tmp_path / ".env"))

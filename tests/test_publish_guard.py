@@ -290,7 +290,7 @@ def test_a_typo_is_still_a_typo(tmp_path):
 
 
 def _shipped_posting():
-    with open(os.path.join(_UPLOADER, "config.json")) as f:
+    with open(os.path.join(_UPLOADER, "config.json"), encoding="utf-8") as f:
         shipped = json.load(f)
     posting = shipped.get("posting")
     assert posting is not None, "posting block missing from config"
@@ -364,7 +364,7 @@ def test_shipped_config_spaces_reddit_posts_out():
     """Reddit is automated now, so the cap and the gap between posts are
     the only things standing between this and a burst of self-promotion
     from one account - which is what gets a domain shadowbanned."""
-    with open(os.path.join(_UPLOADER, "config.json")) as f:
+    with open(os.path.join(_UPLOADER, "config.json"), encoding="utf-8") as f:
         shipped = json.load(f)
     reddit = shipped["posting"]["platforms"]["reddit"]
     assert reddit["daily_cap"] <= 10

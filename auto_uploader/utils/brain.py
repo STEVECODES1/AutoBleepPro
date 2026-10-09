@@ -187,7 +187,11 @@ class Brain:
                                        heal.get("min_free_gb", 10)))
 
         root = cfg.project_root
-        staging = s.get("recorder_staging") or "./recording"
+        # The same folder the recorder writes to (general.recording_folder,
+        # which tools/record_stream.py also reads), unless overridden here.
+        staging = (s.get("recorder_staging")
+                   or getattr(getattr(cfg, "general", None), "recording_folder", "")
+                   or "./recording")
         staging = staging if os.path.isabs(staging) \
             else os.path.join(root, staging)
         self.heartbeat_dir = os.path.join(staging, HEARTBEAT_DIR)

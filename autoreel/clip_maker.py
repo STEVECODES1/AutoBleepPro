@@ -204,6 +204,52 @@ class ClipError(RuntimeError):
     """Rendering failed in a way the caller should hear about."""
 
 
+def video_end_seconds(source_path: str) -> float:
+    """Where the PICTURE stops, in seconds - 0.0 when it cannot be told.
+
+    A recording can carry more sound than picture. On 10/8 the recorder's
+    video stopped at 1:58:03 (the stream ended while the video download
+    was behind, and the rest was refused) while the audio ran on to
+    2:16:31. Two clips were cut from that stretch and came out as sound
+    with no picture at all - and were queued for every platform.
+    """
+    import json
+
+    try:
+        probe = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "v:0",
+             "-show_entries", "stream=start_time,duration", "-of", "json",
+             source_path],
+            capture_output=True, text=True, timeout=60)
+        streams = json.loads(probe.stdout or "{}").get("streams") or []
+        if not streams:
+            return 0.0
+        duration = float(streams[0].get("duration") or 0)
+        start = float(streams[0].get("start_time") or 0)
+        return start + duration if duration > 0 else 0.0
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return 0.0
+
+
+def keep_within_picture(specs: list, picture_ends: float,
+                        min_seconds: float) -> list:
+    """Drop clips that start where there is no video; shorten ones that
+    run past it. Nothing changes when `picture_ends` is unknown (0)."""
+    if picture_ends <= 0:
+        return list(specs)
+    kept = []
+    for spec in specs:
+        if spec.start >= picture_ends - max(1.0, min_seconds):
+            print(f"[Clips] Skipping the clip at {spec.start / 60:.1f} min - "
+                  f"the video stops at {picture_ends / 60:.1f} min and this "
+                  f"would be sound with no picture.")
+            continue
+        if spec.end > picture_ends:
+            spec.end = picture_ends
+        kept.append(spec)
+    return kept
+
+
 @dataclass
 class ClipSpec:
     """One clip to render."""
@@ -1038,6 +1084,24 @@ class ClipMaker:
         failure is raised only if every clip failed.
         """
         segments = list(segments or ())
+        # Candidates only from where there is a picture - see
+        # video_end_seconds. Filtered here as well as after scoring, so
+        # the clip count is spent on clips that can actually be posted.
+        picture_ends = video_end_seconds(source_path)
+        if picture_ends > 0:
+            before = len(segments)
+            def _start(seg) -> float:
+                value = (seg.get("start") if isinstance(seg, dict)
+                         else getattr(seg, "start", 0))
+                try:
+                    return float(value or 0)
+                except (TypeError, ValueError):
+                    return 0.0
+            segments = [s for s in segments if _start(s) < picture_ends]
+            if len(segments) < before:
+                print(f"[Clips] The video stops at {picture_ends / 60:.1f} min "
+                      f"but the sound runs on - only the part with a picture "
+                      f"is clipped.")
         energy = []
         if self.use_audio_energy:
             from .audio_energy import measure
@@ -1078,6 +1142,7 @@ class ClipMaker:
                                     source_path=source_path,
                                     use_vision=self.use_vision,
                                     watch=self.watch_pass)
+        specs = keep_within_picture(specs, picture_ends, self.min_seconds)
         if not specs:
             return []
 

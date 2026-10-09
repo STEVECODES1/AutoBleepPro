@@ -261,7 +261,7 @@ def test_shipped_config_never_turns_face_tracking_on():
     _crop_comment beside it.
     """
     import json
-    with open(os.path.join(_UPLOADER, "config.json")) as f:
+    with open(os.path.join(_UPLOADER, "config.json"), encoding="utf-8") as f:
         shipped = json.load(f)
     from autoreel.crop_strategy import CROP_FACE, resolve_crop_strategy
     assert resolve_crop_strategy(shipped) != CROP_FACE
@@ -466,7 +466,7 @@ def test_the_caption_follows_the_account_s_own_format():
     sys.path.insert(0, os.path.join(_REPO, "auto_uploader"))
     from utils.social_promoter import build_caption
 
-    with open(os.path.join(_REPO, "auto_uploader", "config.json")) as f:
+    with open(os.path.join(_REPO, "auto_uploader", "config.json"), encoding="utf-8") as f:
         template = json.load(f)["instagram"]["caption_template"]
 
     caption = build_caption(template, "Stackswopo twitch clips ban that....mp4",

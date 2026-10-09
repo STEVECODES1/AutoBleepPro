@@ -213,7 +213,7 @@ def test_instagram_posts_a_clip_every_25_minutes():
     is what the account owner asked for."""
     import json
 
-    with open(os.path.join(_UPLOADER, "config.json")) as f:
+    with open(os.path.join(_UPLOADER, "config.json"), encoding="utf-8") as f:
         instagram = json.load(f)["posting"]["platforms"]["instagram"]
     assert instagram["min_minutes_between"] == 25
     assert instagram["enabled"] is True
@@ -225,7 +225,7 @@ def test_the_instagram_cap_matches_instagram_s_own_limit():
     and count toward the circuit breaker."""
     import json
 
-    with open(os.path.join(_UPLOADER, "config.json")) as f:
+    with open(os.path.join(_UPLOADER, "config.json"), encoding="utf-8") as f:
         instagram = json.load(f)["posting"]["platforms"]["instagram"]
     assert instagram["daily_cap"] == 50
 
@@ -246,7 +246,7 @@ def test_clip_length_and_clip_routing_are_separate_settings():
     silently made every rendered clip 3 minutes long."""
     import json
 
-    with open(os.path.join(_UPLOADER, "config.json")) as f:
+    with open(os.path.join(_UPLOADER, "config.json"), encoding="utf-8") as f:
         clips = json.load(f)["clips"]
     assert clips["treat_as_clip_under_seconds"] > clips["max_seconds"]
     assert clips["max_seconds"] <= 90, "Reels and Shorts want short clips"
@@ -255,7 +255,7 @@ def test_clip_length_and_clip_routing_are_separate_settings():
 def test_streams_are_cut_into_clips_automatically():
     import json
 
-    with open(os.path.join(_UPLOADER, "config.json")) as f:
+    with open(os.path.join(_UPLOADER, "config.json"), encoding="utf-8") as f:
         clips = json.load(f)["clips"]
     assert clips["auto_from_streams"] is True
     assert clips["count"] >= 1
@@ -273,7 +273,7 @@ def test_every_platform_except_rumble_gets_the_censored_copy() -> None:
     """
     import json
 
-    with open(os.path.join(_UPLOADER, "config.json")) as f:
+    with open(os.path.join(_UPLOADER, "config.json"), encoding="utf-8") as f:
         config = json.load(f)
 
     # Rumble is the single exception.
