@@ -407,6 +407,13 @@ def scan(folder: str, drafts: str = DRAFTS, say=print) -> List[dict]:
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
+    # File names like '5⧸1⧸26' (yt-dlp's stand-in for a slash) cannot be
+    # printed to a Windows console or log in its old code page.
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass
     ap = argparse.ArgumentParser(description="Rough cuts of Monkey App streams for "
                                  "BinScripts. Uploads nothing.")
     ap.add_argument("videos", nargs="*", help="stream files to prepare")
