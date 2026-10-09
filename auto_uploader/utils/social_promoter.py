@@ -1194,9 +1194,9 @@ TAG_LIMITS = {
     "facebook": 8,
     "youtube_shorts": 5,
     "tiktok": 6,
-    "x": 2,
+    "x": 3,
     "zernio_tiktok": 6,
-    "zernio_twitter": 2,
+    "zernio_twitter": 3,
 }
 
 # Always present. The channel's own name is the one tag that is true of

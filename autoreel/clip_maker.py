@@ -231,6 +231,66 @@ def video_end_seconds(source_path: str) -> float:
         return 0.0
 
 
+def clip_words(segments, start: float, end: float) -> list:
+    """Word timings inside [start, end], moved so the clip starts at 0."""
+    words = []
+    for seg in segments or ():
+        if not isinstance(seg, dict):
+            continue
+        for w in seg.get("words") or ():
+            try:
+                ws, we = float(w.get("start")), float(w.get("end"))
+            except (TypeError, ValueError, AttributeError):
+                continue
+            if we > start and ws < end:
+                words.append({"start": max(0.0, ws - start),
+                              "end": min(end, we) - start,
+                              "word": w.get("word", "")})
+    return words
+
+
+def jump_cut(output_path: str, segments, spec, min_silence_s: float = 0.9,
+             min_seconds: float = 15.0) -> float:
+    """Cut the pauses out of a rendered clip, in place. Seconds removed.
+
+    Same rule as the VOD's dead-air trim (autoreel/silence_trim.py): a
+    stretch goes only when it has no words AND is quiet for this clip,
+    so a laugh, a scream or a car crash stays. Leaves the clip alone when
+    there is too little to gain, when it would end up shorter than
+    `min_seconds`, or on any failure.
+    """
+    try:
+        from autoreel import silence_trim
+        from autoreel.audio_energy import measure
+
+        duration = max(0.0, float(spec.end) - float(spec.start))
+        words = clip_words(segments, spec.start, spec.end)
+        if duration <= 0 or len(words) < 4:
+            return 0.0
+        cuts = silence_trim.find_dead_air(words, duration,
+                                          levels=measure(output_path),
+                                          min_silence_s=min_silence_s,
+                                          pad_s=0.15)
+        removed = silence_trim.removed_seconds(cuts)
+        if removed < 1.5 or duration - removed < min_seconds:
+            return 0.0
+        tight = output_path[:-len(".mp4")] + ".tight.mp4"
+        written = silence_trim.apply_trim(output_path, tight, cuts, duration)
+        if written != tight or not os.path.exists(tight) or os.path.getsize(tight) == 0:
+            return 0.0
+        os.replace(tight, output_path)
+        print(f"[Clips] Clip {spec.index:02d}: {len(cuts)} jump cut(s), "
+              f"{removed:.1f}s of pauses out.")
+        return removed
+    except Exception as exc:
+        print(f"[Clips] Clip {getattr(spec, 'index', 0):02d}: no jump cuts ({exc}).")
+        try:
+            os.remove(output_path[:-len(".mp4")] + ".tight.mp4")
+        except OSError:
+            pass
+        return 0.0
+
+
 def keep_within_picture(specs: list, picture_ends: float,
                         min_seconds: float) -> list:
     """Drop clips that start where there is no video; shorten ones that
@@ -948,6 +1008,12 @@ class ClipMaker:
     # Listen for laughter (autoreel/laughter) - the AudioSet tagger the
     # music guard already uses, a minute of GPU per stream.
     use_laughter: bool = True
+    # Jump cuts: the pauses inside a clip (no words AND quiet) are cut
+    # out after it renders, so it plays like a person edited it - the
+    # style of the clip accounts that win (Wopo Guy on X). Laughter and
+    # shouting are never cut: they are loud, so they are not "quiet".
+    jump_cuts: bool = True
+    jump_cut_silence_s: float = 0.9
     skip_intro_seconds: float = DEFAULT_SKIP_INTRO
     skip_outro_seconds: float = DEFAULT_SKIP_OUTRO
     min_gap_seconds: float = DEFAULT_MIN_GAP
@@ -1300,6 +1366,10 @@ class ClipMaker:
                 failures.append(str(exc))
                 continue
             else:
+                if self.jump_cuts:
+                    jump_cut(output_path, segments, spec,
+                             min_silence_s=self.jump_cut_silence_s,
+                             min_seconds=self.min_seconds)
                 if self.pick_thumbnails:
                     # After the clip exists, from the CLIP - not from the
                     # source at the same timestamp. The clip is what gets

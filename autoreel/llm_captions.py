@@ -30,11 +30,18 @@ from typing import Optional
 # so. Telling the model "no hashtags" for a platform the code then adds
 # tags to is a contradiction the model cannot see and the reader can.
 PLATFORM_BRIEFS = {
+    # Modelled on Wopo Guy (@s_strawhat, 33.6K followers), the Stackswopo
+    # clip account that wins on X: one short line in a FAN's voice
+    # reacting to the moment ("That was some pat bev level defense",
+    # "Big girls are his favorite on monkey"), ending in crying-laughing
+    # emoji - posts like that pull 70K-394K views.
     "zernio_twitter": (
-        "X: under 200 characters so nothing is cut off, because two "
-        "hashtags are appended afterwards and they need the room. Blunt "
-        "and funny; no emoji strings, no 'link in bio'. Do not write any "
-        "hashtags yourself."),
+        "X: one short line, under 120 characters, written like a fan "
+        "reacting to the moment while sharing it with friends - say what "
+        "happens or roast it, casual slang is fine, lowercase is fine. "
+        "End with one to three crying/laughing emoji (😭 or 🤣). Never a "
+        "headline, never 'Stackswopo does X' newsreader style, no 'link "
+        "in bio'. Do not write any hashtags yourself."),
     "instagram": (
         "Instagram: one or two short lines, conversational, an emoji or "
         "two is fine. Hashtags are appended afterwards - do not write "
