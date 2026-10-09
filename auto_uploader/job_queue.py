@@ -254,7 +254,11 @@ class JobQueue:
 
     def ready(self, platform: Optional[str] = None,
               now: Optional[float] = None) -> list:
-        """Jobs eligible to run right now, oldest first.
+        """Jobs eligible to run right now: the clipper's best first, then
+        oldest first. Every platform has a daily cap, and on 10/8 all of
+        them were spent by the first clips of the night while better ones
+        waited until the next day - the order clips were CUT is not the
+        order worth posting them in.
 
         needs_approval is absent on purpose: a manual-only job is never
         eligible until a human approves it.
@@ -267,7 +271,12 @@ class JobQueue:
             and job.not_before <= now
             and (platform is None or job.platform == platform)
         ]
-        return sorted(out, key=lambda j: j.created_at)
+        def score(job) -> float:
+            try:
+                return float((job.extra or {}).get("score") or 0.0)
+            except (TypeError, ValueError):
+                return 0.0
+        return sorted(out, key=lambda j: (-score(j), j.created_at))
 
     def claim(self, platform: Optional[str] = None,
               now: Optional[float] = None) -> Optional[Job]:

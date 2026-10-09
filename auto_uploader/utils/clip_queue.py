@@ -928,6 +928,16 @@ def publish(platform: str, video_path: str, caption: str,
     return ok
 
 
+def _clip_score(video_path: str) -> float:
+    """How highly the clipper rated this clip (from its _source.json
+    note), so a capped platform posts the best clips first. 0 if unknown."""
+    try:
+        from utils.stream_links import source_of
+        return float((source_of(video_path) or {}).get("score") or 0.0)
+    except Exception:
+        return 0.0
+
+
 def clip_key(video_path: str) -> str:
     """What makes two paths the SAME clip.
 
@@ -1206,7 +1216,8 @@ def offer(posting: dict, config: dict, video_path: str,
         # Recorded before the attempt, so the queue is also the ledger of
         # what has been posted - which is what stops a re-run of the same
         # file posting it twice.
-        job_id = queue.begin(platform, video_path, caption)
+        job_id = queue.begin(platform, video_path, caption,
+                             extra={"score": _clip_score(video_path)})
 
         if not decision:
             _hold_for_later(queue, job_id, posting, video_path)

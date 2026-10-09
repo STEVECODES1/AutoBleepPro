@@ -1013,8 +1013,9 @@ def _clip_source_path(clip_path: str) -> str:
     return os.path.splitext(clip_path)[0] + "_source.json"
 
 
-def _write_clip_source(clip_path: str, run, cfg) -> None:
-    """Note, beside a delivered clip, which stream it was cut from."""
+def _write_clip_source(clip_path: str, run, cfg, score: float = 0.0) -> None:
+    """Note, beside a delivered clip, which stream it was cut from - and
+    how highly it scored, which is the order the queue posts in."""
     source = getattr(run, "source_path", "") or ""
     title = getattr(run, "source_title", "") or ""
     if not source and not title:
@@ -1028,7 +1029,8 @@ def _write_clip_source(clip_path: str, run, cfg) -> None:
         with open(_clip_source_path(clip_path), "w", encoding="utf-8") as f:
             json.dump({"stream_title": strip_trailing_stamp(title).strip().strip('"\''),
                        "stream_date": format_date(when, cfg.general.date_style)
-                       if when else ""}, f)
+                       if when else "",
+                       "score": round(float(score or 0.0), 4)}, f)
     except OSError:
         pass
 
@@ -1071,7 +1073,9 @@ def _deliver_clips(run, cfg) -> int:
                 with open(os.path.splitext(target)[0] + ".txt", "w",
                           encoding="utf-8") as f:
                     f.write(headline + "\n")
-            _write_clip_source(target, run, cfg)
+            _write_clip_source(target, run, cfg,
+                               score=getattr(getattr(clip, "spec", None),
+                                             "score", 0.0))
             moved += 1
         except OSError as exc:
             print(f"[Clips] could not deliver {os.path.basename(source)}: {exc}")
