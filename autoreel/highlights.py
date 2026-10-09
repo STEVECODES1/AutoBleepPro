@@ -115,6 +115,9 @@ class Highlight:
     # `text` because a caption wants the whole window and a title wants a
     # sentence - the same string cannot be both.
     hook: str = ""
+    # The loudest laugh heard in it, 0..1 (autoreel/laughter). 0 when
+    # nobody laughed or nothing listened.
+    laugh: float = 0.0
 
 
 def _clean(text: str) -> str:
@@ -162,6 +165,9 @@ class HighlightScorer:
     # Twelve Labs' video model's picks, one value per second (0..1), from
     # twelvelabs_moments.seen_curve(). Empty means no opinion.
     seen: list = field(default_factory=list)
+    # Laughter heard, 0..1 per second, from laughter.measure(). Empty
+    # means no opinion.
+    laughs: list = field(default_factory=list)
 
     # ── Segment scoring ──────────────────────────────────────────────────
 
@@ -342,15 +348,28 @@ class HighlightScorer:
 
             watched = seen_bonus(self.seen, start, end)
 
+        # Somebody laughed - see autoreel/laughter. The widest cap of the
+        # audio signals (a laugh says FUNNY, loud only says something
+        # happened), and still only a lift on what the words liked.
+        laughed, laugh = 1.0, 0.0
+        if self.laughs:
+            # (Not imported as `peak`: that name is this function's index
+            # of the strongest segment, used for the hook below.)
+            from .laughter import laugh_bonus, peak as laugh_peak
+
+            laugh = laugh_peak(self.laughs, start, end)[0]
+            laughed = laugh_bonus(self.laughs, start, end)
+
         intensity = base / (duration ** 0.5)
         score = (intensity * placement * boundary * conversation * density
                  * (0.6 + 0.4 * speech_ratio) * loud * reaction * replayed
-                 * watched)
+                 * watched * laughed)
 
         text = _clean(" ".join(t for t in (s.get("text", "") for s in segments) if t))
         hook = self.best_line([ordered[peak].get("text", "")]) \
             or self.best_line(t for t in (s.get("text", "") for s in segments))
-        return Highlight(start=start, end=end, score=score, text=text, hook=hook)
+        return Highlight(start=start, end=end, score=score, text=text, hook=hook,
+                         laugh=laugh)
 
     def _sweep(self, ordered: list, scores: list, floor: float,
                ceiling: float) -> list[Highlight]:

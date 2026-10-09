@@ -354,6 +354,12 @@ that is a clip no matter what the frame shows. If you cannot say in one
 sentence what is funny or what happens, using only what was said, reject
 it.
 
+LAUGHTER: a candidate marked "(laughter heard in it)" had real laughing
+in its audio - the streamer or the people with him cracking up, which
+the transcript never shows. It is the best hint in this list that a
+moment LANDED. Weigh it - and still check that the words say what was
+funny; somebody laughing at nothing is not a clip.
+
 TWO SEPARATE QUESTIONS, both required: is it FUNNY or a GENUINE MOMENT
 (argument, someone caught out, chaotic GTA scene landing), AND can a new
 viewer follow it without needing help. A clip can fail either one, but
@@ -832,11 +838,18 @@ def build_prompt(candidates: list, count: int, lessons: Optional[list] = None,
     lessons = learned_lines() if lessons is None else lessons
     if lessons:
         lines += lessons + [""]
+    from .laughter import SHOWN as laugh_shown
+
     for number, highlight in enumerate(candidates, start=1):
         text = for_the_model(highlight.text)[:_MAX_TEXT_CHARS]
+        # Heard, not read: the transcript drops laughter - see
+        # autoreel/laughter and the LAUGHTER note in SYSTEM_PROMPT.
+        heard = ("  (laughter heard in it)"
+                 if float(getattr(highlight, "laugh", 0.0) or 0.0)
+                 >= laugh_shown else "")
         lines.append(
             f"[{number}] at {_timestamp(highlight.start)}, "
-            f"{highlight.end - highlight.start:.0f}s\n{text}\n")
+            f"{highlight.end - highlight.start:.0f}s{heard}\n{text}\n")
     return "\n".join(lines)
 
 

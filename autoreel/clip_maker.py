@@ -666,6 +666,7 @@ def specs_from_segments(segments: Iterable[dict], count: int = DEFAULT_CLIP_COUN
                         chat: Optional[list] = None,
                         heat: Optional[list] = None,
                         seen: Optional[list] = None,
+                        laughs: Optional[list] = None,
                         llm_rank: bool = True,
                         llm_provider: str = "",
                         llm_model: str = "",
@@ -690,7 +691,8 @@ def specs_from_segments(segments: Iterable[dict], count: int = DEFAULT_CLIP_COUN
                              energy=list(energy or []),
                              chat=list(chat or []),
                              heat=list(heat or []),
-                             seen=list(seen or []))
+                             seen=list(seen or []),
+                             laughs=list(laughs or []))
     # Spread them out. A fixed 90s gap sounds generous until you ask for
     # twenty clips: on a stream where one guest is on camera for twenty
     # minutes, six clips 90 seconds apart are six versions of the same
@@ -897,6 +899,9 @@ class ClipMaker:
     # find it. clips.burn_hook turns it on.
     burn_hook: bool = False
     use_audio_energy: bool = True
+    # Listen for laughter (autoreel/laughter) - the AudioSet tagger the
+    # music guard already uses, a minute of GPU per stream.
+    use_laughter: bool = True
     skip_intro_seconds: float = DEFAULT_SKIP_INTRO
     skip_outro_seconds: float = DEFAULT_SKIP_OUTRO
     min_gap_seconds: float = DEFAULT_MIN_GAP
@@ -1043,6 +1048,15 @@ class ClipMaker:
                   if energy else
                   "[Clips] Could not measure the audio - going on the words "
                   "alone.")
+        laughs = []
+        if self.use_laughter:
+            from .laughter import SHOWN, measure as hear_laughter
+
+            print("[Clips] Listening for laughter...")
+            laughs = hear_laughter(source_path)
+            if laughs:
+                heard = sum(1 for value in laughs if value >= SHOWN)
+                print(f"[Clips] Laughter in {heard}s of {len(laughs)}s.")
 
         specs = specs_from_segments(segments, self.count,
                                     self.min_seconds, self.max_seconds,
@@ -1057,6 +1071,7 @@ class ClipMaker:
                                     # crash - it is wrong clips.
                                     heat=heat,
                                     seen=seen,
+                                    laughs=laughs,
                                     llm_rank=self.llm_rank,
                                     llm_provider=self.llm_provider,
                                     llm_model=self.llm_model,

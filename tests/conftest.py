@@ -83,6 +83,18 @@ def _no_live_llm_keys(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _laughter_not_listened_for(monkeypatch):
+    """No test runs the real laughter detector: it loads a 330 MB model,
+    probes every Python on the machine, and tags audio on the GPU. A
+    test that wants a laughter curve passes one in, or patches this."""
+    try:
+        from autoreel import laughter
+    except Exception:
+        return
+    monkeypatch.setattr(laughter, "measure", lambda source, say=print: [])
+
+
+@pytest.fixture(autouse=True)
 def _gemini_not_resting():
     """autoreel.llm_highlights leaves Gemini alone for 10 minutes after an
     overload - module state that must not leak from one test into the

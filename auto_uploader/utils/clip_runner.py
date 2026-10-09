@@ -418,6 +418,7 @@ def make_clips(cfg, source_path: str, title: str,
         # Laughter and shouting are invisible in a transcript; this is
         # the signal that catches them.
         use_audio_energy=bool(clips_cfg.get("use_audio_energy", True)),
+        use_laughter=bool(clips_cfg.get("use_laughter", True)),
         llm_rank=bool(clips_cfg.get("llm_rank", True)),
         llm_provider=str(clips_cfg.get("llm_provider", "")),
         llm_model=str(clips_cfg.get("llm_model", "")),
