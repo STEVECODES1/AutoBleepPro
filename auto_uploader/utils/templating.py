@@ -392,7 +392,7 @@ _REPLAY_TAGS = ("#StreamReplay", "#FullVOD", "#UncutReplay")
 
 
 def build_clip_description(template: str, source_title: str,
-                           source_date: str) -> str:
+                           source_date: str, full_stream: str = "") -> str:
     """A clip's description: which stream it came from, then the links.
 
     The stream template reads "This stream first aired on <date> with the
@@ -413,9 +413,14 @@ def build_clip_description(template: str, source_title: str,
         elif "http" in line or "@" in line:
             links.append(line)
     parts = [head]
+    if full_stream:
+        # The stream this was cut from, first - one tap from the clip to
+        # the three hours around it (utils/stream_links).
+        parts.append(f"▶ Watch the full stream: {full_stream}")
     if links:
         parts.append("\n".join(links))
-    parts.append("Watch the full stream on the channel.")
+    if not full_stream:
+        parts.append("Watch the full stream on the channel.")
     if tags:
         parts.append(tags)
     return "\n\n".join(parts)[:5000]

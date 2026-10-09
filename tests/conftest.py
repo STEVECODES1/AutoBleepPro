@@ -83,6 +83,54 @@ def _no_live_llm_keys(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_local_gpu_model(monkeypatch):
+    """No test talks to the Ollama on this machine, and the paid
+    providers stay usable so the tests that set their keys measure what
+    they are named for. Tests of the GPU provider and of the paid guard
+    set these themselves."""
+    monkeypatch.setenv("ALLOW_PAID_AI", "1")
+    try:
+        from autoreel import local_llm
+    except Exception:
+        return
+    monkeypatch.setattr(local_llm, "ready", lambda model="": False)
+
+
+@pytest.fixture(autouse=True)
+def _no_real_file_host(monkeypatch):
+    """The free fallback host (Litterbox) is a real upload: no test makes
+    one. A test of the fallback patches _litterbox itself."""
+    import sys as _sys
+
+    _sys.path.insert(0, _UPLOADER)
+    try:
+        from utils import cloud_host
+    except Exception:
+        return
+
+    def offline(path):
+        raise RuntimeError("no uploads from the test suite")
+
+    monkeypatch.setattr(cloud_host, "_litterbox", offline)
+    cloud_host._RESTING.update(until=0.0, why="")
+
+
+@pytest.fixture(autouse=True)
+def _own_stream_links(monkeypatch, tmp_path):
+    """The real logs/stream_links.json is the machine's - a test that
+    posted a clip must not find tonight's stream in it."""
+    import sys as _sys
+
+    _sys.path.insert(0, _UPLOADER)
+    try:
+        from utils import stream_links
+    except Exception:
+        return
+    monkeypatch.setattr(stream_links, "DEFAULT_STORE",
+                        str(tmp_path / "stream_links.json"))
+
+
+@pytest.fixture(autouse=True)
 def _laughter_not_listened_for(monkeypatch):
     """No test runs the real laughter detector: it loads a 330 MB model,
     probes every Python on the machine, and tags audio on the GPU. A

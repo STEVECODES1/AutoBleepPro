@@ -194,13 +194,23 @@ def _ask_with_frames(name: str, key: str, model: str, prompt: str,
                      frames) -> str:
     """The prompt plus stills, to a provider that can see. "" if it
     cannot, so the caller asks again with the words alone."""
-    from .llm_highlights import (ANTHROPIC, _claude, resolve_model,
+    from .llm_highlights import (ANTHROPIC, LOCAL, _claude, resolve_model,
                                  to_claude_content)
     from .vision_frames import as_inline_data
 
-    if name != ANTHROPIC or not frames:
+    if name not in (ANTHROPIC, LOCAL) or not frames:
         return ""
     parts = [{"text": prompt}] + [as_inline_data(f) for f in frames]
+    if name == LOCAL:
+        # The GPU here sees the clip too - free, so every caption can be
+        # about what is on screen and not only what is said.
+        from .local_llm import chat, parts_to_chat
+
+        text, images = parts_to_chat(parts)
+        reply, _why = chat("You write short social media captions for "
+                           "gaming clips. Reply with JSON only.", text,
+                           resolve_model(name, key, model), images=images)
+        return reply or ""
     reply, _why = _claude(key, resolve_model(name, key, model), "",
                           to_claude_content(parts), max_tokens=4000,
                           effort="low")
@@ -250,6 +260,14 @@ def write_captions(title: str, transcript: str, platforms,
     if not configured:
         one, key = available(provider)
         configured = [(one, key)] if one else []
+    if frames and not provider:
+        # The GPU here first when there are frames: it SEES the clip,
+        # costs nothing, and has no daily cap - the free cloud models'
+        # allowance is better spent picking the clips.
+        from .llm_highlights import LOCAL
+
+        configured = ([c for c in configured if c[0] == LOCAL]
+                      + [c for c in configured if c[0] != LOCAL])
 
     # Every configured provider, same as the clip ranking: one provider
     # is one point of failure, and here the failure is a whole day of

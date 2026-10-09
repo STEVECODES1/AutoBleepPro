@@ -50,8 +50,48 @@ def credentials() -> Optional[Tuple[str, str, str]]:
     return None
 
 
+def fallback_on() -> bool:
+    """Litterbox when Cloudinary cannot (CLOUD_HOST_FALLBACK=0 turns it
+    off)."""
+    return os.environ.get("CLOUD_HOST_FALLBACK", "1").strip() not in (
+        "0", "false", "no", "off")
+
+
 def ready() -> bool:
-    return credentials() is not None
+    return credentials() is not None or fallback_on()
+
+
+# ── the free fallback ─────────────────────────────────────────────────
+#
+# Cloudinary's free plan is 25 GB of delivery a month. Buffer fetches
+# each clip once - about 60 MB - and with clips cut live as well as from
+# the VOD that is ~25 GB a month: the allowance runs out, it does not
+# bill, and every X and TikTok post after that fails. Litterbox (the
+# temporary side of catbox.moe) takes a file up to 1 GB with no account
+# and no key, keeps it 24 hours - Buffer fetches within minutes - and
+# costs nothing.
+LITTERBOX_URL = "https://litterbox.catbox.moe/resources/internals/api.php"
+LITTERBOX_MAX_BYTES = 1000 * 1024 * 1024
+# Cloudinary said it is over its limit: not asked again until then.
+_RESTING = {"until": 0.0, "why": ""}
+_OVER_LIMIT = ("limit", "exceeded", "quota", "usage", "420")
+
+
+def _litterbox(path: str) -> str:
+    import requests
+
+    if os.path.getsize(path) > LITTERBOX_MAX_BYTES:
+        raise RuntimeError(f"{os.path.basename(path)} is over 1 GB")
+    with open(path, "rb") as handle:
+        r = requests.post(LITTERBOX_URL,
+                          data={"reqtype": "fileupload", "time": "24h"},
+                          files={"fileToUpload": (os.path.basename(path),
+                                                  handle, "video/mp4")},
+                          timeout=600)
+    url = (r.text or "").strip()
+    if not r.ok or not url.startswith("https://"):
+        raise RuntimeError(f"Litterbox HTTP {r.status_code}: {url[:200]}")
+    return url
 
 
 def _sign(params: dict, secret: str) -> str:
@@ -112,7 +152,34 @@ def sweep(now: float = 0.0) -> int:
 
 
 def host_video(path: str) -> str:
-    """Upload `path`; return its public https URL. Raises on failure."""
+    """Upload `path`; return its public https URL. Raises on failure.
+
+    Cloudinary first (it is the steadier host); Litterbox when Cloudinary
+    is not set up, refuses, or is over its month."""
+    problem = ""
+    if credentials() and time.time() >= _RESTING["until"]:
+        try:
+            return _cloudinary(path)
+        except Exception as exc:
+            problem = str(exc)
+            if any(sign in problem.lower() for sign in _OVER_LIMIT):
+                _RESTING.update(until=time.time() + 6 * 3600, why=problem)
+    elif credentials():
+        problem = f"Cloudinary is over its limit ({_RESTING['why'][:80]})"
+    else:
+        problem = "no CLOUDINARY_URL in .env"
+    if not fallback_on():
+        raise RuntimeError(problem)
+    try:
+        url = _litterbox(path)
+    except Exception as exc:
+        raise RuntimeError(f"{problem}; and the free fallback failed too: "
+                           f"{exc}") from exc
+    print(f"[Clips] Hosted on Litterbox (free) - {problem[:100]}")
+    return url
+
+
+def _cloudinary(path: str) -> str:
     creds = credentials()
     if not creds:
         raise RuntimeError("no CLOUDINARY_URL in .env")

@@ -556,6 +556,20 @@ def caption_for(platform: str, video_path: str, fallback: str,
         caption = clean_lines(caption, _slurs_only_checker()
                               if platform in SWEARING_OK else None)
 
+    # Facebook makes a link in a caption clickable: the full stream this
+    # clip was cut from, when it is up, in place of the channel pointer
+    # (utils/stream_links). Instagram, TikTok and X do not, or demote a
+    # post that has one, so they keep their own line.
+    if platform == "facebook":
+        try:
+            from utils.stream_links import link_for_clip
+
+            full = link_for_clip(video_path, "facebook", folders)
+        except Exception:
+            full = ""
+        if full:
+            return f"{caption.rstrip()}\n\n▶ Full stream: {full}"
+
     # Last, so the pointer survives the cleaner and the tag builder and
     # is measured against what actually gets posted.
     return with_promo(caption, platform, config,

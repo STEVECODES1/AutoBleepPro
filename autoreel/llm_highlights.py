@@ -51,6 +51,20 @@ GROQ = "groq"
 NVIDIA = "nvidia"
 DEEPSEEK = "deepseek"
 OPENROUTER = "openrouter"
+# A model on this machine's own GPU, through Ollama - free, no quota, no
+# account, and it reads frames. See _ask_local.
+LOCAL = "local"
+
+# Providers that bill. Never used unless ALLOW_PAID_AI=1 is in .env: the
+# free ones (and the GPU here) do this job, and an account with credit
+# on it was quietly picking every clip - clips.llm_provider was set to
+# anthropic, so Claude was asked first on every pass.
+PAID_PROVIDERS = (OPENAI, ANTHROPIC, DEEPSEEK)
+
+
+def paid_allowed() -> bool:
+    return os.environ.get("ALLOW_PAID_AI", "").strip().lower() in (
+        "1", "true", "yes", "on")
 
 # Last resort only. Model names are retired faster than a pinned default
 # can be maintained - the first key tried against this hit "gemini-2.5-flash
@@ -93,6 +107,9 @@ DEFAULT_MODELS = {
     # frames in 5.8s and returns EMPTY content at 48, which is the
     # number this actually sends.
     OPENROUTER: "nex-agi/nex-n2.5-pro:free",
+    # Qwen3-VL 4B: reads frames and writes JSON, 3.3 GB - it fits on an
+    # 8 GB card next to Whisper. OLLAMA_MODEL in .env picks another.
+    LOCAL: "qwen3-vl:4b",
 }
 
 # Model families that cannot do this job, whatever they are called.
@@ -120,6 +137,8 @@ _KEY_NAMES = {
     NVIDIA: ("NVIDIA_API_KEY", "NVIDIA_NIM_API_KEY"),
     DEEPSEEK: ("DEEPSEEK_API_KEY",),
     OPENROUTER: ("OPENROUTER_API_KEY",),
+    # No key - Ollama running here is the "key" (see api_key).
+    LOCAL: (),
 }
 
 # Tried in this order.
@@ -154,12 +173,17 @@ _KEY_NAMES = {
 # So Gemini first on merit, not habit: four times faster than anything
 # else here and the only one that answered 48 frames every time.
 # OpenRouter is text-only below for exactly the reason above.
-PROVIDER_ORDER = (GEMINI, NVIDIA, XKIRO, DEEPSEEK, OPENROUTER, CEREBRAS,
-                  GROQ, OPENAI, ANTHROPIC)
+#
+# LOCAL (this machine's GPU) second: when Gemini's free day runs out or
+# it answers 503 "high demand", the next answer comes from the card in
+# this PC - seconds away, no quota, no bill - instead of from NVIDIA's
+# shared pool, which answers about half the time.
+PROVIDER_ORDER = (GEMINI, LOCAL, NVIDIA, XKIRO, DEEPSEEK, OPENROUTER,
+                  CEREBRAS, GROQ, OPENAI, ANTHROPIC)
 # Claude reads frames too, and is the reliable one when Gemini is
 # answering 503 "high demand" - it is paid, so it is tried after the free
-# ones unless clips.llm_provider names it.
-VISION_PROVIDERS = (GEMINI, NVIDIA, XKIRO, ANTHROPIC)
+# ones, and only with ALLOW_PAID_AI=1.
+VISION_PROVIDERS = (GEMINI, LOCAL, NVIDIA, XKIRO, ANTHROPIC)
 
 # The OpenAI-shaped providers, and where each one lives. Adding another
 # is a line here rather than a new branch in check().
@@ -275,7 +299,11 @@ VISION_MAX_IMAGES = 48
 # every single time, then burned four retries on it, because the retry
 # rule only knows "500 is transient" and a request that is too big is
 # not going to get smaller by waiting. Gemini and xKiro take all 48.
-PROVIDER_MAX_IMAGES = {}
+PROVIDER_MAX_IMAGES = {
+    # A 4B model on an 8 GB card: 16 frames keeps the request inside the
+    # context it is given (see _LOCAL_CONTEXT) with Whisper loaded too.
+    LOCAL: 16,
+}
 
 
 def images_allowed(provider: str) -> int:
@@ -426,6 +454,12 @@ the score for each clip you pick and nothing else:
 
 
 def api_key(provider: str) -> str:
+    if provider == LOCAL:
+        # No key: "configured" means Ollama is running here with the
+        # model pulled. The token is never sent anywhere.
+        from .local_llm import ready
+
+        return "local" if ready() else ""
     for name in _KEY_NAMES.get(provider, ()):
         value = os.environ.get(name, "").strip()
         if value:
@@ -479,9 +513,12 @@ def all_available(preferred: str = "") -> list:
     slightly slower one.
     """
     order = list(PROVIDER_ORDER)
+    if not paid_allowed():
+        # A key in .env is not permission to spend: see PAID_PROVIDERS.
+        order = [p for p in order if p not in PAID_PROVIDERS]
     if preferred in order:
         order = [preferred] + [p for p in order if p != preferred]
-    found = [(p, api_key(p)) for p in order if api_key(p)]
+    found = [(p, key) for p, key in ((p, api_key(p)) for p in order) if key]
     # An empty account goes to the back, not out: if it is the only one
     # configured it is still tried.
     resting = [pair for pair in found if _resting_for_credit(pair[0])]
@@ -640,6 +677,12 @@ def resolve_model(provider: str, key: str, configured: str = "") -> str:
     The exception is _PINNED_MODEL_PROVIDERS, where the catalogue is
     actively misleading - see the comment above it.
     """
+    if provider == LOCAL:
+        # Its own setting (OLLAMA_MODEL): clips.llm_model names a cloud
+        # model, and a cloud model's name is a 404 to Ollama.
+        from .local_llm import model_name
+
+        return model_name()
     if configured:
         return configured
     if provider in _PINNED_MODEL_PROVIDERS:
@@ -941,6 +984,13 @@ def check(provider: str = "", model: str = "") -> tuple:
         return False, f"no {_all_key_names()} in .env"
     model = resolve_model(provider, key, model)
 
+    if provider == LOCAL:
+        from .local_llm import chat
+
+        text, why = chat("Reply with JSON.", 'Reply with {"ok": true}', model)
+        if text:
+            return True, f"local GPU ({model}) answered - free, no key"
+        return False, f"local GPU ({model}) did not answer - {why}"
     if provider == ANTHROPIC:
         text, why = _claude(key, model, "", "Reply with: ok", max_tokens=1024,
                             effort="low")
@@ -1382,7 +1432,27 @@ def asker_for(provider: str):
             NVIDIA: _ask_nvidia, DEEPSEEK: _ask_deepseek,
             OPENROUTER: _ask_openrouter,
             OPENAI: _ask_openai,
-            ANTHROPIC: _ask_anthropic}.get(provider, _ask_gemini)
+            ANTHROPIC: _ask_anthropic,
+            LOCAL: _ask_local}.get(provider, _ask_gemini)
+
+
+def _ask_local(key: str, model: str, prompt: str) -> str:
+    """The words, to the model on this PC's GPU (autoreel/local_llm)."""
+    from .local_llm import chat
+
+    text, why = chat(SYSTEM_PROMPT, prompt, model)
+    if why:
+        _LAST_OUTAGE["why"] = why
+        print(f"[Clips] The local model (GPU) did not answer: {why}")
+    return text
+
+
+def _ask_local_vision(key: str, model: str, parts: list) -> tuple:
+    """(reply, why_not): the frames too, to the model on this GPU."""
+    from .local_llm import chat, parts_to_chat
+
+    text, images = parts_to_chat(thin_images(parts, images_allowed(LOCAL)))
+    return chat(SYSTEM_PROMPT + VISION_NOTE, text, model, images=images)
 
 
 # Cerebras is OpenAI-shaped, with one thing that has to be handled
@@ -1742,7 +1812,7 @@ def vision_asker_for(provider: str):
     words - not that the pass has failed.
     """
     return {GEMINI: _ask_gemini_vision, XKIRO: _ask_xkiro_vision,
-            NVIDIA: _ask_nvidia_vision,
+            NVIDIA: _ask_nvidia_vision, LOCAL: _ask_local_vision,
             ANTHROPIC: _ask_anthropic_vision}.get(provider)
 
 

@@ -2331,12 +2331,18 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
         from utils.templating import build_clip_description
 
         origin = _clip_source(video_path)
+        from utils.stream_links import link_for
+
         yt_description = build_clip_description(
             cfg.youtube.description_template,
-            origin.get("stream_title", ""), origin.get("stream_date", ""))
+            origin.get("stream_title", ""), origin.get("stream_date", ""),
+            full_stream=link_for(origin.get("stream_title", ""),
+                                 origin.get("stream_date", ""), "youtube"))
         rb_description = build_clip_description(
             cfg.rumble.description_template,
-            origin.get("stream_title", ""), origin.get("stream_date", ""))
+            origin.get("stream_title", ""), origin.get("stream_date", ""),
+            full_stream=link_for(origin.get("stream_title", ""),
+                                 origin.get("stream_date", ""), "rumble"))
 
     print(f"\n{'='*70}\nProcessing: {filename}")
     print(f"YouTube title: {yt_title}")
@@ -3334,6 +3340,18 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
     #
     # Before retire_source(), which with cleanup.source_video set to
     # 'delete' is the moment the VOD stops existing.
+    if not dry_run and not is_clip:
+        # Where this stream's full upload lives, so every clip cut from
+        # it - now, and the live ones still waiting to post - links to
+        # it (utils/stream_links).
+        try:
+            from utils.stream_links import remember as remember_links
+
+            if remember_links(stream_title, date_str, results or {}):
+                print(f"[Clips] Clips of \"{stream_title}\" will link to its "
+                      f"full stream.")
+        except Exception as exc:
+            print(f"[Clips] could not note the stream's links: {exc}")
     if not dry_run:
         clips_delivered = cut_clips_from_stream(
             cfg, video_path, is_clip, title=stream_title,

@@ -152,12 +152,24 @@ class YouTubeShortsPublisher:
 
     # ── posting ──────────────────────────────────────────────────────
 
-    def description_for(self, caption: str) -> str:
+    def description_for(self, caption: str, video_path: str = "") -> str:
         from autoreel.safe_text import clean_lines
 
         caption = clean_lines(caption)
         template = str(self.settings.get("description_template", "")).strip()
         body = template.replace("[CAPTION]", caption) if template else caption
+        # The full stream this was cut from, right under the caption, when
+        # it is up - see utils/stream_links.
+        try:
+            from utils.stream_links import link_for_clip
+
+            full = link_for_clip(video_path, "youtube") if video_path else ""
+        except Exception:
+            full = ""
+        if full and full not in body:
+            head, sep, rest = body.partition("\n\n")
+            body = f"{head}\n\n▶ Full stream: {full}" + (
+                f"\n\n{rest}" if sep else "")
         if SHORTS_TAG.lower() not in body.lower():
             body = f"{body}\n\n{SHORTS_TAG}".strip()
         return body
@@ -212,7 +224,7 @@ class YouTubeShortsPublisher:
         return uploader.upload(
             video_path,
             title=self.title_for(caption, video_path),
-            description=self.description_for(caption),
+            description=self.description_for(caption, video_path),
             tags=list(self.settings.get("tags", []) or []),
             # Private by default. A channel is much harder to get back
             # than a post is to delete, so the first batch is reviewed
