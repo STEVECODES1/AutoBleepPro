@@ -51,6 +51,18 @@ def test_no_title_at_all_says_so():
     assert slug_matches_title(STRAY, "") is None
 
 
+def test_a_one_word_stream_title_is_still_judged():
+    """2026-10-08: '"thotbreaker" 10/8/26 Stackswopo Stream' was "too
+    few words", so a sidebar link went down as the publish result."""
+    title = '"thotbreaker" 10/8/26 Stackswopo Stream'
+    stray = "https://rumble.com/v7glom0-monkey-trolling-on-omegle.html"
+    real = "https://rumble.com/v7glom1-thotbreaker-10826-stackswopo-stream.html"
+    assert slug_matches_title(stray, title) is False
+    assert slug_matches_title(real, title) is True
+    # A short one-word title still is not enough to judge by.
+    assert slug_matches_title(stray, '"WTW" 10/8/26 Stackswopo Stream') is None
+
+
 # ── _find_video_url against a page that has both links ───────────────
 
 class _FakePage:

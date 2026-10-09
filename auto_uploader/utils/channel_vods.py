@@ -548,7 +548,13 @@ def slug_matches_title(url: str, title: str, minimum_words: int = 3):
     video is invisible in a log.
     """
     wanted = _slug_words(title)
-    if len(wanted) < minimum_words:
+    # One LONG word is enough to judge by. Most stream titles are one
+    # word plus the date - '"thotbreaker" 10/8/26 Stackswopo Stream' - and
+    # "too few words to judge" let a sidebar link (v7glom0-monkey-
+    # trolling-on-omegle) through as the publish result on 2026-10-08,
+    # the exact failure the check exists for. "thotbreaker" not in that
+    # slug says plenty.
+    if len(wanted) < minimum_words and not any(len(w) >= 6 for w in wanted):
         return None
     slug = str(url or "").rsplit("/", 1)[-1].lower()
     if not slug:
