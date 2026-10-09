@@ -52,3 +52,19 @@ def test_the_review_page_says_nothing_was_uploaded():
     page = mp.review_page("x.ts", [], [], [{"where": "0:01:00", "reason": "age - check how "
                                                       "old they are", "text": "how old"}])
     assert "Nothing has been uploaded" in page and "mention age" in page
+
+
+def test_who_said_it_changes_only_insults_aimed_at_him():
+    segs = [dict(seg(10, 12, "you ugly fat boy"), speaker="other person"),
+            dict(seg(40, 42, "you ugly fat boy"), speaker="Stackswopo"),
+            dict(seg(400, 402, "i'm 15"), speaker="other person")]
+    flags = mp.flags_for(segs)
+    assert flags[0]["reason"] == mp.LOOKS_FROM_THEM and not mp.is_cut(flags[0])
+    assert flags[1]["reason"].startswith("looks") and mp.is_cut(flags[1])
+    assert flags[2]["who"] == "other person" and mp.is_cut(flags[2])   # age: always cut
+
+
+def test_what_was_said_shows_whose_line_it_is():
+    segs = [dict(seg(0, 2, "yo what's good"), speaker="Stackswopo"),
+            dict(seg(2, 4, "nothing much"), speaker="other person")]
+    assert mp._said(segs, 0, 4) == "STACKS: yo what's good THEM: nothing much"

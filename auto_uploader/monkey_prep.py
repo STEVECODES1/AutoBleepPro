@@ -83,7 +83,9 @@ SEXUAL_WORDS = "sexual comment"
 # Flirting both ways is the show; a sexual line aimed at somebody is a
 # judgement call. Those stay in the cut and are listed with where they
 # are, so you can trim them. Everything else is left out.
-CHECK_ONLY = {SEXUAL_WORDS}
+LOOKS_FROM_THEM = "insult from them, at him"
+CHECK_ONLY = {SEXUAL_WORDS, LOOKS_FROM_THEM}
+OTHER = "other person"          # autoreel.speaker_id.OTHER
 
 
 def is_cut(flag: dict) -> bool:
@@ -92,22 +94,37 @@ def is_cut(flag: dict) -> bool:
 
 def flags_for(segments: Sequence[dict], hate_spans: Sequence[Tuple[float, float]] = (),
               sexual_spans: Sequence[Tuple[float, float]] = ()) -> List[dict]:
-    """Every moment that must not go out: [{start, end, reason, text}]."""
+    """Every moment that must not go out: [{start, end, reason, text, who}].
+
+    `who` comes from autoreel.speaker_id when the segments were labelled
+    ("Stackswopo", "other person", "both", "" for not sure). It never
+    clears a flag; the one thing it changes is an insult that came FROM
+    the other person AT him - that is listed for you, not cut."""
     out = []
     for seg in segments:
         text = str(seg.get("text") or "").strip()
         low = text.lower()
         s, e = float(seg.get("start", 0)), float(seg.get("end", 0))
+        who = str(seg.get("speaker") or "")
         for reason, pad, rule in RULES:
             if rule.search(low):
+                if reason.startswith("looks") and who == OTHER:
+                    reason = LOOKS_FROM_THEM
                 out.append({"start": max(0.0, s - pad), "end": e + pad,
-                            "reason": reason, "text": text})
-    for (s, e) in hate_spans:
-        out.append({"start": max(0.0, s - 5), "end": e + 5, "reason": HATE, "text": ""})
-    for (s, e) in sexual_spans:
-        out.append({"start": max(0.0, s - 12), "end": e + 12, "reason": SEXUAL_WORDS,
-                    "text": ""})
+                            "reason": reason, "text": text, "who": who})
+    for spans, pad, reason in ((hate_spans, 5, HATE), (sexual_spans, 12, SEXUAL_WORDS)):
+        for (s, e) in spans:
+            out.append({"start": max(0.0, s - pad), "end": e + pad, "reason": reason,
+                        "text": "", "who": _speaker_at(segments, s, e)})
     return sorted(out, key=lambda f: f["start"])
+
+
+def _speaker_at(segments: Sequence[dict], s: float, e: float) -> str:
+    for seg in segments:
+        for w in seg.get("words") or []:
+            if float(w.get("start", 0)) < e and float(w.get("end", 0)) > s:
+                return str(w.get("speaker") or seg.get("speaker") or "")
+    return ""
 
 
 def _peaks(curve: Sequence[float], floor: float = 0.3, reach: int = 20) -> List[Tuple[int, float]]:
@@ -240,8 +257,10 @@ def _clock(seconds: float) -> str:
 
 
 def _said(segments: Sequence[dict], start: float, end: float, limit: int = 420) -> str:
-    text = " ".join(str(s.get("text", "")).strip() for s in segments
-                    if float(s["start"]) < end and float(s["end"]) > start)
+    from autoreel.speaker_id import tagged
+
+    text = tagged([s for s in segments
+                   if float(s["start"]) < end and float(s["end"]) > start])
     return text if len(text) <= limit else text[:limit] + " ..."
 
 
@@ -258,11 +277,14 @@ def review_page(title: str, chosen: Sequence[dict], left_out: Sequence[dict],
                          lambda m: e(m["said"])])
     out = rows(left_out, [lambda m: e(m["where"]), lambda m: e(", ".join(m["reasons"])),
                           lambda m: e(m["said"])])
-    allf = rows(flags, [lambda f: e(f["where"]), lambda f: e(f["reason"]),
-                        lambda f: e(f.get("text", ""))])
-    ages = sum(1 for f in flags if f["reason"].startswith("age"))
-    warn = (f"<p class=warn>{ages} moment(s) mention age or school. Watch those calls "
-            "before you publish anything from that part of the stream.</p>" if ages else "")
+    allf = rows(flags, [lambda f: e(f["where"]), lambda f: e(f.get("who") or "not sure"),
+                        lambda f: e(f["reason"]), lambda f: e(f.get("text", ""))])
+    ages = [f for f in flags if f["reason"].startswith("age")]
+    theirs = sum(1 for f in ages if f.get("who") in (OTHER, "both"))
+    warn = (f"<p class=warn>{len(ages)} moment(s) mention age or school"
+            + (f" - {theirs} of them said by the other person" if theirs else "")
+            + ". Watch those calls before you publish anything from that part of the "
+              "stream.</p>" if ages else "")
     return f"""<!doctype html><meta charset=utf-8><title>{e(title)} - review</title>
 <style>body{{font:15px system-ui;margin:24px;max-width:1100px}}td,th{{border-bottom:1px solid #ddd;
 padding:6px;vertical-align:top;text-align:left}}table{{border-collapse:collapse;width:100%}}
@@ -275,8 +297,10 @@ anything with a slur cut out. Watch it, finish the edit, and publish it yourself
 <th>Length</th><th>Check</th><th>What was said</th></tr>{kept}</table>
 <h2>Left out ({len(left_out)} good moments that were flagged)</h2><table><tr><th>From the stream</th>
 <th>Why</th><th>What was said</th></tr>{out}</table>
-<h2>Every flag in the Monkey part ({len(flags)})</h2><table><tr><th>From the stream</th><th>Why</th>
-<th>Line</th></tr>{allf}</table>"""
+<h2>Every flag in the Monkey part ({len(flags)})</h2><table><tr><th>From the stream</th><th>Who</th>
+<th>Why</th><th>Line</th></tr>{allf}</table>
+<p>Who said it is worked out from the voices (STACKS / THEM). It is right most of the
+time, not always - when two people talk at once it says "not sure".</p>"""
 
 
 def _folder_name(source: str) -> str:
@@ -307,6 +331,15 @@ def prepare(source: str, drafts: str = DRAFTS, target_s: float = TARGET_S, say=p
                 continue
             say(f"[Monkey] Part {k + 1}: transcribing and bleeping every swear...")
             censored, segments = censor_all(piece, work)
+            try:
+                from autoreel.speaker_id import label as label_voices
+
+                voices = label_voices(piece, segments, say=say)
+                say(f"[Monkey] Part {k + 1}: Stackswopo is "
+                    f"{voices.get('streamer_share', 0):.0%} of the talking.")
+            except Exception as exc:
+                say(f"[Monkey] Could not tell the voices apart ({exc}) - "
+                    "the flags will not say who.")
             flags = flags_for(segments, _spans(segments, "hate_speech"),
                               _spans(segments, "sexual_content"))
             say(f"[Monkey] Part {k + 1}: {len(flags)} flagged moment(s); listening for laughs...")

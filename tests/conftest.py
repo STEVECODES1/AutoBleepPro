@@ -209,3 +209,21 @@ def _inside_posting_hours(monkeypatch):
     except Exception:
         return
     monkeypatch.setattr(publish_guard, "_local_hour", lambda now: 12.0)
+
+
+@pytest.fixture(autouse=True)
+def _no_voice_model(monkeypatch):
+    """No test loads the voice model or decodes a stream's audio for it -
+    a clip test would otherwise spend its time (or a download) telling
+    voices apart in a fake file. Tests of the parts underneath call those
+    directly."""
+    import sys
+
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if root not in sys.path:
+        sys.path.insert(0, root)
+    try:
+        import autoreel.speaker_id as voices
+    except Exception:
+        return
+    monkeypatch.setattr(voices, "label", lambda *a, **k: {"windows": 0})

@@ -1008,6 +1008,10 @@ class ClipMaker:
     # Listen for laughter (autoreel/laughter) - the AudioSet tagger the
     # music guard already uses, a minute of GPU per stream.
     use_laughter: bool = True
+    # Tell Stackswopo's voice from everyone else's (autoreel/speaker_id),
+    # so the clip picker knows whose line is whose. A few minutes of CPU
+    # per stream; nothing changes if it cannot run.
+    use_voices: bool = True
     # Jump cuts: the pauses inside a clip (no words AND quiet) are cut
     # out after it renders, so it plays like a person edited it - the
     # style of the clip accounts that win (Wopo Guy on X). Laughter and
@@ -1187,6 +1191,17 @@ class ClipMaker:
             if laughs:
                 heard = sum(1 for value in laughs if value >= SHOWN)
                 print(f"[Clips] Laughter in {heard}s of {len(laughs)}s.")
+        if self.use_voices and segments:
+            try:
+                from .speaker_id import label as label_voices
+
+                print("[Clips] Telling Stackswopo's voice from everyone else's...")
+                voices = label_voices(source_path, segments)
+                if voices.get("windows"):
+                    print(f"[Clips] Stackswopo is {voices.get('streamer_share', 0):.0%} "
+                          "of the talking.")
+            except Exception as exc:               # a hint must never cost a clip
+                print(f"[Clips] Could not tell the voices apart ({exc}) - going on without.")
 
         specs = specs_from_segments(segments, self.count,
                                     self.min_seconds, self.max_seconds,

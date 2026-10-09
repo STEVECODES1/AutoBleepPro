@@ -118,6 +118,10 @@ class Highlight:
     # The loudest laugh heard in it, 0..1 (autoreel/laughter). 0 when
     # nobody laughed or nothing listened.
     laugh: float = 0.0
+    # The same lines marked with who said them - "STACKS: ... THEM: ..." -
+    # when the voices were told apart (autoreel/speaker_id). For the model
+    # that picks clips only; captions and titles keep using `text`.
+    said_by: str = ""
 
 
 def _clean(text: str) -> str:
@@ -368,8 +372,13 @@ class HighlightScorer:
         text = _clean(" ".join(t for t in (s.get("text", "") for s in segments) if t))
         hook = self.best_line([ordered[peak].get("text", "")]) \
             or self.best_line(t for t in (s.get("text", "") for s in segments))
+        said_by = ""
+        if any(s.get("speaker") for s in segments):
+            from .speaker_id import tagged
+
+            said_by = tagged(segments)
         return Highlight(start=start, end=end, score=score, text=text, hook=hook,
-                         laugh=laugh)
+                         laugh=laugh, said_by=said_by)
 
     def _sweep(self, ordered: list, scores: list, floor: float,
                ceiling: float) -> list[Highlight]:

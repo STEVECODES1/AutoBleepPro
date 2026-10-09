@@ -419,6 +419,7 @@ def make_clips(cfg, source_path: str, title: str,
         # the signal that catches them.
         use_audio_energy=bool(clips_cfg.get("use_audio_energy", True)),
         use_laughter=bool(clips_cfg.get("use_laughter", True)),
+        use_voices=bool(clips_cfg.get("use_voices", True)),
         jump_cuts=bool(clips_cfg.get("jump_cuts", True)),
         jump_cut_silence_s=float(clips_cfg.get("jump_cut_silence_seconds", 0.9)),
         llm_rank=bool(clips_cfg.get("llm_rank", True)),

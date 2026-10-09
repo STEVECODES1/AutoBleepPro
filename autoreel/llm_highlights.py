@@ -883,8 +883,14 @@ def build_prompt(candidates: list, count: int, lessons: Optional[list] = None,
         lines += lessons + [""]
     from .laughter import SHOWN as laugh_shown
 
+    # Who said what, when the voices were told apart (autoreel/speaker_id).
+    if any(getattr(h, "said_by", "") for h in candidates):
+        lines += ["Lines are marked by voice: STACKS: is Stackswopo, THEM: is anyone "
+                  "else (another player, someone on a call, a text-to-speech donation), "
+                  "BOTH: is both at once, ?: could not be told. Prefer moments where "
+                  "Stackswopo is the one being funny.", ""]
     for number, highlight in enumerate(candidates, start=1):
-        text = for_the_model(highlight.text)[:_MAX_TEXT_CHARS]
+        text = for_the_model(getattr(highlight, "said_by", "") or highlight.text)[:_MAX_TEXT_CHARS]
         # Heard, not read: the transcript drops laughter - see
         # autoreel/laughter and the LAUGHTER note in SYSTEM_PROMPT.
         heard = ("  (laughter heard in it)"
