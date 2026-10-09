@@ -1227,16 +1227,21 @@ CONTENT_TAGS = (
     # The series title on his best-performing uploads ("Whiteboy Trolling
     # Clips #119/#122/#126" - 250-380k each).
     (("whiteboy", "white boy"), ("whiteboytrolling", "trolling")),
-    (("monkey", "omegle", "troll"),
+    # Not "troll": the Whiteboy Trolling series is not on Monkey App, and
+    # every one of those titles has the word in it.
+    (("monkey", "omegle"),
      ("monkeyapp", "monkeyapptrolling", "omegle", "trolling")),
+    (("troll",), ("trolling",)),
     (("nopixel",), ("nopixel", "nopixelrp")),
     (("fivem",), ("fivem", "fivemrp")),
     # Exactly the set on his own top Shorts (178k, 106k, 94k, 86k views):
     # #gtarp #fivem #gta #gtaroleplay #gtav. GTA RP is played on FiveM, so
-    # #fivem is a true tag on any RP clip; #gtaonline is a different game
-    # mode and was a mismatch.
-    (("gta", "rp", "lifestyle", "roleplay"),
+    # #fivem is true of an RP clip - but not of GTA Online, a different
+    # game mode, or of a title that only says "GTA".
+    (("gta online", "gtaonline"), ("gtaonline", "gta", "gtav")),
+    (("rp", "roleplay", "lifestyle"),
      ("gtarp", "fivem", "gta", "gtaroleplay", "gtav")),
+    (("gta",), ("gta", "gtav")),
     (("howl", "slot", "gambl", "casino", "stake"),
      ("slots", "gambling", "bigwin")),
     (("react", "watch"), ("reaction", "reacting")),
@@ -1287,7 +1292,10 @@ def hashtags_for(title: str, platform: str = "instagram",
     for tag in PLATFORM_TAGS.get(platform, ()):
         add(tag)
     for needles, tags in CONTENT_TAGS:
-        if any(needle in text for needle in needles):
+        # From the start of a word, so "rp" is not found in "sharp" or
+        # "stake" in "mistake", while "gambl" still finds "gambling".
+        if any(re.search(r"\b" + re.escape(needle), text)
+               for needle in needles):
             for tag in tags:
                 add(tag)
     for tag in FILLER_TAGS:

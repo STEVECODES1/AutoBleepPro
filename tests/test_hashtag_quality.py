@@ -118,3 +118,29 @@ def test_the_channel_name_leads_everywhere():
     people already looking for him."""
     for platform in TAG_LIMITS:
         assert _tags("anything", platform)[0] == "#stackswopo", platform
+
+
+# ── review fixes: no tag from a word that only looks related ─────────
+
+def test_whiteboy_trolling_is_not_tagged_monkey_app():
+    tags = _tags("Whiteboy Trolling Clips #127")
+    assert "#whiteboytrolling" in tags and "#trolling" in tags
+    assert "#monkeyapp" not in tags and "#monkeyapptrolling" not in tags
+
+
+def test_gta_online_is_not_tagged_fivem_or_rp():
+    tags = _tags("Stackswopo GTA Online heist")
+    assert "#gtaonline" in tags and "#gta" in tags
+    assert "#fivem" not in tags and "#gtarp" not in tags
+
+
+def test_a_title_that_only_says_gta_is_not_tagged_fivem():
+    tags = _tags("Stackswopo plays GTA")
+    assert "#gta" in tags
+    assert "#fivem" not in tags
+
+
+def test_rp_is_matched_as_a_word_not_inside_one():
+    assert "#gtarp" not in _tags("that was sharp")
+    assert "#gtarp" in _tags("stackswopo RP")
+    assert "#gambling" in _tags("gambling stream")
