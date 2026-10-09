@@ -1,0 +1,394 @@
+"""
+monkey_prep.py - rough cuts of Monkey App streams for BinScripts, for a
+person to finish and publish. NOTHING HERE UPLOADS ANYTHING.
+
+WHY IT STOPS SHORT OF UPLOADING
+    BinScripts is the channel about to earn, and the Monkey channels before
+    it were removed for harassment, hate speech and bad language. A bot
+    cannot see a stranger's age, or tell a roast the other person laughs at
+    from one that hurts them. So this does the slow part and a person makes
+    the call: find the Monkey part of a stream, the calls worth keeping,
+    and the moments that must not go out.
+
+    python monkey_prep.py "D:\\videos stizz\\'!howl' 5-14-26 Stackswopo Stream.ts"
+    python monkey_prep.py --scan "D:\\videos stizz"     which files have Monkey parts
+
+WHAT YOU GET (D:\\BinScripts drafts\\<stream>\\)
+    rough_cut.mp4   ~16 min of the best moments, in order. Every swear is
+                    bleeped and anything with a slur is cut out.
+    review.html     every moment in the cut with what was said, then every
+                    moment LEFT OUT and why - age, "stop recording", looks,
+                    sexual, names/socials, slurs - so you can check them.
+
+WHAT IT LEAVES OUT
+    hate speech       cut - a bleep still shows what was said
+    age               "how old", "I'm 15", school, grade ... 90 s either side
+    asked to stop     "stop recording", "delete that", "I'll report" ...
+    looks / identity  insults about how somebody looks or what they are
+    personal info     names, @s, "my snap", where they live or go to school
+  and LISTS, but keeps in the cut (flirting both ways is the show):
+    sexual            sexual lines - each one's place in the cut is listed
+"""
+from __future__ import annotations
+
+import argparse
+import html
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+from typing import Dict, List, Optional, Sequence, Tuple
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(HERE)
+for p in (HERE, ROOT):
+    if p not in sys.path:
+        sys.path.insert(0, p)
+
+DRAFTS = r"D:\BinScripts drafts"
+TARGET_S = 16 * 60
+VIDEO_EXT = (".mp4", ".ts", ".mkv", ".mov", ".flv")
+
+_N = r"(?:1[0-7]|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen)"
+# (reason, seconds dropped either side, pattern). Hate speech and sexual
+# words also come from the censor's own lists (see flags_for).
+RULES: List[Tuple[str, float, re.Pattern]] = [
+    ("age - check how old they are", 90.0, re.compile(
+        r"\b(how old|years? old|i'?m (only )?" + _N + r"\b|i just turned " + _N +
+        r"|middle school|high school|junior high|elementary|[5-9]th grade|1[0-2]th grade"
+        r"|what grade|freshman|sophomore|my (mom|mama|mother|dad|daddy) (is|gonna|said|be)"
+        r"|after school|school tomorrow|i'?m a minor|underage)\b")),
+    ("asked to stop / upset", 30.0, re.compile(
+        r"(stop recording|don'?t record|stop filming|turn (it|that|the camera) off"
+        r"|delete (it|that|this)|take (it|that) down|i didn'?t agree|not on (camera|stream)"
+        r"|leave me alone|i'?m (gonna |going to )?report|reporting you|why are you (recording|streaming)"
+        r"|that'?s not funny|that'?s (racist|disrespectful|messed up)|you'?re being (racist|weird)"
+        r"|stop it|please stop|i'?m crying)")),
+    ("looks / identity insult", 12.0, re.compile(
+        r"\b(ugly|fat (ass|bitch|boy|girl)|fatass|fatty|bald (head|headed)|big forehead|your teeth"
+        r"|big nose|you look like (a|an|some)|nasty|crusty|dusty|built like|no edges|unibrow"
+        r"|ain'?t nobody (want|like)|you('?re| are) (dumb|stupid|retarded)|go kill)\b")),
+    ("sexual comment", 12.0, re.compile(
+        r"\b(show me (your|ya|them)|take (it|that|your \w+) off|sit on (my|it)|suck|nudes?"
+        r"|titties|boobs|booty|naked|send pics|wanna (smash|fuck)|smash or pass|your body)\b")),
+    ("personal info - name / socials / where they live", 15.0, re.compile(
+        r"(my name is|my name'?s|what'?s your (name|snap|insta|ig|number|@)"
+        r"|my (snap|snapchat|insta|instagram|ig|tiktok|number|@) (is|be)|follow me|add me on"
+        r"|i live (in|on|at|by)|what school|where (do )?you live|@\w{3,})")),
+]
+HATE = "hate speech (slur)"
+SEXUAL_WORDS = "sexual comment"
+# Flirting both ways is the show; a sexual line aimed at somebody is a
+# judgement call. Those stay in the cut and are listed with where they
+# are, so you can trim them. Everything else is left out.
+CHECK_ONLY = {SEXUAL_WORDS}
+
+
+def is_cut(flag: dict) -> bool:
+    return flag["reason"] not in CHECK_ONLY
+
+
+def flags_for(segments: Sequence[dict], hate_spans: Sequence[Tuple[float, float]] = (),
+              sexual_spans: Sequence[Tuple[float, float]] = ()) -> List[dict]:
+    """Every moment that must not go out: [{start, end, reason, text}]."""
+    out = []
+    for seg in segments:
+        text = str(seg.get("text") or "").strip()
+        low = text.lower()
+        s, e = float(seg.get("start", 0)), float(seg.get("end", 0))
+        for reason, pad, rule in RULES:
+            if rule.search(low):
+                out.append({"start": max(0.0, s - pad), "end": e + pad,
+                            "reason": reason, "text": text})
+    for (s, e) in hate_spans:
+        out.append({"start": max(0.0, s - 5), "end": e + 5, "reason": HATE, "text": ""})
+    for (s, e) in sexual_spans:
+        out.append({"start": max(0.0, s - 12), "end": e + 12, "reason": SEXUAL_WORDS,
+                    "text": ""})
+    return sorted(out, key=lambda f: f["start"])
+
+
+def _peaks(curve: Sequence[float], floor: float = 0.3, reach: int = 20) -> List[Tuple[int, float]]:
+    out = []
+    for t, v in enumerate(curve):
+        if v < floor:
+            continue
+        around = curve[max(0, t - reach):t + reach + 1]
+        if v >= max(around) and not (out and t - out[-1][0] <= reach):
+            out.append((t, float(v)))
+    return out
+
+
+def _snap(segments: Sequence[dict], start: float, end: float) -> Tuple[float, float]:
+    """Widen to whole sentences so nobody is cut off mid-word."""
+    for seg in segments:
+        if float(seg["start"]) <= start < float(seg["end"]):
+            start = float(seg["start"])
+            break
+    for seg in segments:
+        if float(seg["start"]) < end <= float(seg["end"]):
+            end = float(seg["end"])
+            break
+    return start, end
+
+
+def _overlaps(a: dict, b: dict) -> bool:
+    return a["start"] < b["end"] and a["end"] > b["start"]
+
+
+def pick(curve: Sequence[float], segments: Sequence[dict], flags: Sequence[dict],
+         target_s: float = TARGET_S, before: float = 35.0, after: float = 12.0):
+    """(moments for the cut, moments left out). Moments are built around
+    laughter peaks - with no laughter reading, around the busiest talk."""
+    peaks = _peaks(curve)
+    if not peaks and segments:
+        span = float(segments[-1]["end"])
+        talk = [0] * (int(span // 45) + 1)
+        for seg in segments:
+            talk[int(float(seg["start"]) // 45)] += len(str(seg.get("text", "")).split())
+        peaks = [(int(i * 45 + 33), n / 100.0) for i, n in enumerate(talk) if n >= 40]
+    found: List[dict] = []
+    for t, score in peaks:
+        s, e = _snap(segments, max(0.0, t - before), t + after)
+        if found and s <= found[-1]["end"] + 2:
+            found[-1]["end"] = max(found[-1]["end"], e)
+            found[-1]["score"] = max(found[-1]["score"], score)
+        else:
+            found.append({"start": s, "end": e, "score": score})
+    keep, left_out = [], []
+    for m in found:
+        hits = [f for f in flags if _overlaps(m, f)]
+        m["checks"] = sorted({f["reason"] for f in hits if not is_cut(f)})
+        reasons = sorted({f["reason"] for f in hits if is_cut(f)})
+        if reasons:
+            left_out.append({**m, "reasons": reasons})
+        else:
+            keep.append(m)
+    chosen, total = [], 0.0
+    for m in sorted(keep, key=lambda m: -m["score"]):
+        if total + (m["end"] - m["start"]) <= target_s:
+            chosen.append(m)
+            total += m["end"] - m["start"]
+    return sorted(chosen, key=lambda m: m["start"]), left_out
+
+
+def monkey_runs(source: str, min_seconds: float = 3 * 60) -> List[Tuple[float, float]]:
+    """Where the stream is on Monkey App, by looking at it once a minute."""
+    from autoreel.vod_segments import segments_for
+
+    return [(s.start, s.end) for s in segments_for(source, min_seconds=min_seconds)
+            if s.kind == "monkey"]
+
+
+def _general() -> dict:
+    try:
+        with open(os.path.join(HERE, "config.json"), encoding="utf-8") as f:
+            return json.load(f).get("general") or {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _cut_copy(source: str, start: float, end: float, out: str) -> bool:
+    done = subprocess.run(["ffmpeg", "-y", "-v", "error", "-ss", f"{start:.2f}", "-to",
+                           f"{end:.2f}", "-i", source, "-map", "0:v:0", "-map", "0:a:0",
+                           "-c", "copy", out], capture_output=True, text=True)
+    return done.returncode == 0 and os.path.exists(out) and os.path.getsize(out) > 0
+
+
+def _words(work_dir: str, video: str) -> List[dict]:
+    from utils.censor import words_cache_path
+
+    path = words_cache_path(work_dir, os.path.splitext(os.path.basename(video))[0])
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+        return list(data.get("segments") or []) if isinstance(data, dict) else list(data)
+    except (OSError, ValueError):
+        return []
+
+
+def _spans(segments: Sequence[dict], category: str) -> List[Tuple[float, float]]:
+    from autoreel.compliance import ComplianceEngine
+
+    engine = ComplianceEngine(only_categories=(category,))
+    return [(v.start, v.end) for v in engine.scan_segments(segments)]
+
+
+def censor_all(video: str, work_dir: str):
+    """Every swear bleeped (scope "all"). (censored path, transcript)."""
+    from utils.censor import censor_video
+    from utils.clip_queue import scope_categories
+
+    g = _general()
+    result = censor_video(video, work_dir,
+                          model_name=g.get("censor_model", "base"),
+                          bleep_method=g.get("censor_bleep_method", "beep"),
+                          custom_words=tuple(g.get("censor_custom_words", ()) or ()),
+                          device=g.get("censor_device") or None,
+                          speed={"stream_copy_video": True},
+                          padding_ms=int(g.get("censor_padding_ms", 250)),
+                          mute_whole_segment=False,
+                          only_categories=scope_categories("all"))
+    return result.output_path, _words(work_dir, video)
+
+
+def _clock(seconds: float) -> str:
+    s = int(max(0, seconds))
+    return f"{s // 3600}:{s % 3600 // 60:02d}:{s % 60:02d}"
+
+
+def _said(segments: Sequence[dict], start: float, end: float, limit: int = 420) -> str:
+    text = " ".join(str(s.get("text", "")).strip() for s in segments
+                    if float(s["start"]) < end and float(s["end"]) > start)
+    return text if len(text) <= limit else text[:limit] + " ..."
+
+
+def review_page(title: str, chosen: Sequence[dict], left_out: Sequence[dict],
+                flags: Sequence[dict]) -> str:
+    """The checklist that goes with the rough cut."""
+    def rows(items, cols):
+        return "".join("<tr>" + "".join(f"<td>{c(i)}</td>" for c in cols) + "</tr>"
+                       for i in items)
+    e = html.escape
+    kept = rows(chosen, [lambda m: _clock(m["at_cut"]), lambda m: e(m["where"]),
+                         lambda m: f"{m['end'] - m['start']:.0f}s",
+                         lambda m: e(", ".join(m["checks"])) or "-",
+                         lambda m: e(m["said"])])
+    out = rows(left_out, [lambda m: e(m["where"]), lambda m: e(", ".join(m["reasons"])),
+                          lambda m: e(m["said"])])
+    allf = rows(flags, [lambda f: e(f["where"]), lambda f: e(f["reason"]),
+                        lambda f: e(f.get("text", ""))])
+    ages = sum(1 for f in flags if f["reason"].startswith("age"))
+    warn = (f"<p class=warn>{ages} moment(s) mention age or school. Watch those calls "
+            "before you publish anything from that part of the stream.</p>" if ages else "")
+    return f"""<!doctype html><meta charset=utf-8><title>{e(title)} - review</title>
+<style>body{{font:15px system-ui;margin:24px;max-width:1100px}}td,th{{border-bottom:1px solid #ddd;
+padding:6px;vertical-align:top;text-align:left}}table{{border-collapse:collapse;width:100%}}
+.warn{{background:#fee;padding:10px;border-left:4px solid #c00}}h2{{margin-top:32px}}</style>
+<h1>{e(title)}</h1>
+<p><b>Nothing has been uploaded.</b> rough_cut.mp4 is in this folder: every swear bleeped,
+anything with a slur cut out. Watch it, finish the edit, and publish it yourself.</p>{warn}
+<p>Check every face in the cut. Nothing here can tell how old someone is.</p>
+<h2>In the cut ({len(chosen)} moments)</h2><table><tr><th>At</th><th>From the stream</th>
+<th>Length</th><th>Check</th><th>What was said</th></tr>{kept}</table>
+<h2>Left out ({len(left_out)} good moments that were flagged)</h2><table><tr><th>From the stream</th>
+<th>Why</th><th>What was said</th></tr>{out}</table>
+<h2>Every flag in the Monkey part ({len(flags)})</h2><table><tr><th>From the stream</th><th>Why</th>
+<th>Line</th></tr>{allf}</table>"""
+
+
+def _folder_name(source: str) -> str:
+    stem = os.path.splitext(os.path.basename(source))[0]
+    return re.sub(r"[^\w\- ]+", "", stem).strip()[:80] or "stream"
+
+
+def prepare(source: str, drafts: str = DRAFTS, target_s: float = TARGET_S, say=print) -> str:
+    """Rough cut + review page for one stream. The draft folder, or ""."""
+    from autoreel.laughter import listen
+    from utils.recap import build_from
+
+    runs = monkey_runs(source)
+    if not runs:
+        say(f"[Monkey] No Monkey App part found in {os.path.basename(source)}.")
+        return ""
+    out_dir = os.path.join(drafts, _folder_name(source))
+    work = os.path.join(out_dir, "_work")
+    os.makedirs(work, exist_ok=True)
+    say(f"[Monkey] {os.path.basename(source)}: {len(runs)} Monkey part(s), "
+        f"{sum(e - s for s, e in runs) / 60:.0f} min.")
+    pool, left_all, flags_all = [], [], []
+    try:
+        for k, (run_s, run_e) in enumerate(runs):
+            piece = os.path.join(work, f"monkey_{k}.mp4")
+            if not _cut_copy(source, run_s, run_e, piece):
+                say(f"[Monkey] Could not copy part {k + 1}; skipping it.")
+                continue
+            say(f"[Monkey] Part {k + 1}: transcribing and bleeping every swear...")
+            censored, segments = censor_all(piece, work)
+            flags = flags_for(segments, _spans(segments, "hate_speech"),
+                              _spans(segments, "sexual_content"))
+            say(f"[Monkey] Part {k + 1}: {len(flags)} flagged moment(s); listening for laughs...")
+            chosen, left = pick(listen(piece, say=say), segments, flags, target_s)
+            for m in chosen + left:
+                m["where"] = _clock(run_s + m["start"])
+                m["said"] = _said(segments, m["start"], m["end"])
+            for f in flags:
+                f["where"] = _clock(run_s + f["start"])
+            pool += [{**m, "_src": censored, "_k": k} for m in chosen]
+            left_all += left
+            flags_all += flags
+        picked, total = [], 0.0
+        for m in sorted(pool, key=lambda m: -m["score"]):
+            if total + (m["end"] - m["start"]) <= target_s:
+                picked.append(m)
+                total += m["end"] - m["start"]
+        picked.sort(key=lambda m: (m["_k"], m["start"]))
+        if not picked:
+            say("[Monkey] Nothing safe and funny enough to cut - see review.html.")
+        cut = os.path.join(out_dir, "rough_cut.mp4")
+        placed = build_from([(m["_src"], m["start"], m["end"]) for m in picked], cut) if picked else []
+        kept = []
+        for at, _end, i in placed:
+            kept.append({**picked[i], "at_cut": at})
+        with open(os.path.join(out_dir, "review.html"), "w", encoding="utf-8") as f:
+            f.write(review_page(os.path.basename(source), kept, left_all, flags_all))
+        say(f"[Monkey] Done: {len(kept)} moments, {total / 60:.1f} min -> {out_dir}")
+        return out_dir
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
+
+def scan(folder: str, drafts: str = DRAFTS, say=print) -> List[dict]:
+    """Which videos in `folder` have a Monkey part, and how long. Saved to
+    <drafts>\\scan.json so a second look is free."""
+    path = os.path.join(drafts, "scan.json")
+    try:
+        with open(path, encoding="utf-8") as f:
+            seen = {r["file"]: r for r in json.load(f)}
+    except (OSError, ValueError):
+        seen = {}
+    found = []
+    for name in sorted(os.listdir(folder)):
+        full = os.path.join(folder, name)
+        if not name.lower().endswith(VIDEO_EXT) or ".temp." in name.lower():
+            continue
+        size = os.path.getsize(full)
+        row = seen.get(full)
+        if not row or row.get("bytes") != size:
+            try:
+                runs = monkey_runs(full)
+            except Exception as exc:
+                say(f"[Monkey] Could not read {name} ({exc}).")
+                continue
+            row = {"file": full, "bytes": size, "runs": runs,
+                   "monkey_min": round(sum(e - s for s, e in runs) / 60, 1)}
+            seen[full] = row
+            os.makedirs(drafts, exist_ok=True)
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(list(seen.values()), f, indent=1)
+        say(f"  {row['monkey_min']:6.1f} min Monkey   {name}")
+        found.append(row)
+    return found
+
+
+def main(argv: Optional[Sequence[str]] = None) -> int:
+    ap = argparse.ArgumentParser(description="Rough cuts of Monkey App streams for "
+                                 "BinScripts. Uploads nothing.")
+    ap.add_argument("videos", nargs="*", help="stream files to prepare")
+    ap.add_argument("--scan", metavar="FOLDER", help="list which videos have a Monkey part")
+    ap.add_argument("--out", default=DRAFTS, help=f"where drafts go (default {DRAFTS})")
+    ap.add_argument("--minutes", type=float, default=TARGET_S / 60, help="rough cut length")
+    args = ap.parse_args(argv)
+    if args.scan:
+        scan(args.scan, args.out)
+    for video in args.videos:
+        prepare(video, args.out, args.minutes * 60)
+    if not args.scan and not args.videos:
+        ap.print_help()
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
