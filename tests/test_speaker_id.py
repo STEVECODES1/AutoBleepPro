@@ -55,8 +55,17 @@ def test_a_sentence_takes_the_voice_with_most_of_its_time():
 def test_sentences_are_cut_into_short_windows():
     wins = sp.windows([{"start": 0, "end": 4.0}, {"start": 5, "end": 5.5},
                        {"start": 6, "end": 8.0}])
-    assert wins == [(0, 1.5), (1.5, 3.0), (3.0, 4.0),     # the 0.5 s one is too short,
-                    (6, 8.0)]                             # a short tail joins the last
+    # All 1.5 s (so they batch); the last one ends at the sentence's end,
+    # overlapping the one before. The 0.5 s sentence is too short to judge.
+    assert wins == [(0, 1.5), (1.5, 3.0), (2.5, 4.0), (6, 7.5), (6.5, 8.0)]
+
+
+def test_who_said_finds_the_same_answer_through_the_index():
+    spans = sorted((i * 1.5, i * 1.5 + 1.5, sp.STREAMER if i % 3 else sp.OTHER)
+                   for i in range(200))
+    starts = [s for s, _, _ in spans]
+    for a in (0.2, 30.0, 151.1, 298.0):
+        assert sp.who_said(spans, a, a + 2.0) == sp.who_said(spans, a, a + 2.0, starts=starts)
 
 
 def test_a_different_voice_never_overwrites_his_print(tmp_path, monkeypatch):

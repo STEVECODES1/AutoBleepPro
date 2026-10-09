@@ -32,6 +32,7 @@ not clear a flag.
 """
 from __future__ import annotations
 
+import bisect
 import json
 import os
 import subprocess
@@ -74,16 +75,20 @@ def ensure_model(say=print) -> str:
 class Embedder:
     """1.5 s of 16 kHz int16 audio -> a unit-length 256-number voiceprint."""
 
-    def __init__(self, path: str = "", threads: int = 2):
+    def __init__(self, path: str = "", threads: int = 4):
         import onnxruntime as ort
 
         opts = ort.SessionOptions()
-        opts.intra_op_num_threads = threads      # leave the CPU to the stream
+        # ~45 ms a piece at 4 threads on this PC (i5-13400F, 16 threads):
+        # a 2-hour stream in about 3 minutes, a 12-minute live window in
+        # about 20 s, and most of the CPU left to the recording.
+        opts.intra_op_num_threads = threads
         opts.inter_op_num_threads = 1
         self.session = ort.InferenceSession(path or ensure_model(), opts,
                                             providers=["CPUExecutionProvider"])
 
-    def __call__(self, pcm: np.ndarray) -> np.ndarray:
+    @staticmethod
+    def features(pcm: np.ndarray) -> np.ndarray:
         import torch
         import torchaudio.compliance.kaldi as kaldi
 
@@ -91,9 +96,26 @@ class Embedder:
         feats = kaldi.fbank(wave, num_mel_bins=80, frame_length=25, frame_shift=10,
                             dither=0.0, sample_frequency=RATE, window_type="hamming",
                             use_energy=False)
-        feats = (feats - feats.mean(dim=0)).numpy()[None].astype(np.float32)
-        emb = self.session.run(None, {"feats": feats})[0][0]
-        return emb / (np.linalg.norm(emb) or 1.0)
+        return (feats - feats.mean(dim=0)).numpy().astype(np.float32)
+
+    def __call__(self, pcm: np.ndarray) -> np.ndarray:
+        return self.many([pcm])[0]
+
+    def many(self, chunks: Sequence[np.ndarray], batch: int = 32) -> np.ndarray:
+        """Voiceprints for many pieces at once. Same-length pieces run
+        together - most are exactly WIN_S - which is several times faster
+        than one at a time on a CPU."""
+        feats = [self.features(c) for c in chunks]
+        out = np.zeros((len(feats), 256), dtype=np.float32)
+        by_len: Dict[int, List[int]] = {}
+        for i, f in enumerate(feats):
+            by_len.setdefault(f.shape[0], []).append(i)
+        for idx in by_len.values():
+            for k in range(0, len(idx), batch):
+                part = idx[k:k + batch]
+                embs = self.session.run(None, {"feats": np.stack([feats[i] for i in part])})[0]
+                out[part] = embs / np.maximum(np.linalg.norm(embs, axis=1, keepdims=True), 1e-9)
+        return out
 
 
 def read_pcm(source: str, raw_path: str) -> np.ndarray:
@@ -105,17 +127,24 @@ def read_pcm(source: str, raw_path: str) -> np.ndarray:
 
 
 def windows(segments: Sequence[dict], win: float = WIN_S) -> List[Tuple[float, float]]:
-    """1.5 s pieces of every transcript sentence (the tail joins the last)."""
+    """1.5 s pieces of every transcript sentence. All the same length where
+    the sentence allows (so they run in batches): the last piece ends at
+    the sentence's end and overlaps the one before. A sentence under
+    1.5 s is one piece; under MIN_WIN_S is too short to judge."""
     out = []
     for seg in segments:
         s, e = float(seg.get("start", 0)), float(seg.get("end", 0))
         if e - s < MIN_WIN_S:
             continue
+        if e - s <= win:
+            out.append((s, e))
+            continue
         at = s
-        while e - at >= win + MIN_WIN_S:
-            out.append((at, at + win))
+        while at + win <= e + 1e-6:
+            out.append((round(at, 3), round(at + win, 3)))
             at += win
-        out.append((at, e))
+        if e - at >= MIN_WIN_S / 2:
+            out.append((round(e - win, 3), round(e, 3)))
     return out
 
 
@@ -170,10 +199,16 @@ def label_windows(sims: np.ndarray, threshold: float, rms: np.ndarray,
 
 
 def who_said(spans: Sequence[Tuple[float, float, str]], start: float, end: float,
-             share: float = 0.65) -> str:
+             share: float = 0.65, starts: Optional[Sequence[float]] = None) -> str:
     """The speaker of start..end from labelled windows: one name if it has
     most of the sure time, "both" if two do, UNSURE otherwise."""
     time: Dict[str, float] = {}
+    if starts is not None:
+        # spans sorted by start and none longer than WIN_S + MIN_WIN_S:
+        # only the ones starting just before `start` can reach it.
+        lo = bisect.bisect_left(starts, start - WIN_S - MIN_WIN_S)
+        hi = bisect.bisect_left(starts, end)
+        spans = spans[lo:hi]
     for s, e, who in spans:
         overlap = min(e, end) - max(s, start)
         if overlap > 0 and who:
@@ -221,17 +256,28 @@ def label(source: str, segments: List[dict], learn: bool = False, say=print) -> 
     raw = os.path.join(work, "audio.s16")
     try:
         pcm = read_pcm(source, raw)
-        embs, rms = [], []
-        for s, e in wins:
-            # A copy, not a view: a view keeps the file open and Windows
-            # then refuses to delete it.
-            chunk = np.array(pcm[int(s * RATE):int(e * RATE)])
-            if chunk.size < MIN_WIN_S * RATE * 0.9:      # past the end of the audio
-                rms.append(0.0)
-                embs.append(np.zeros(256, dtype=np.float32))
+        X = np.zeros((len(wins), 256), dtype=np.float32)
+        rms = np.zeros(len(wins))
+        chunks: List[np.ndarray] = []
+        where: List[int] = []
+        for j, (s, e) in enumerate(wins):
+            # Length from the duration, not from two rounded ends, so every
+            # 1.5 s piece has exactly the same number of samples and they
+            # batch. A copy, not a view: a view keeps the file open and
+            # Windows then refuses to delete it.
+            n = int(round((e - s) * RATE))
+            first = int(round(s * RATE))
+            chunk = np.array(pcm[first:first + n])
+            if chunk.size < n:                       # past the end of the audio
                 continue
-            rms.append(float(np.sqrt(np.mean(chunk.astype(np.float64) ** 2))))
-            embs.append(embedder(chunk))
+            rms[j] = float(np.sqrt(np.mean(chunk.astype(np.float64) ** 2)))
+            chunks.append(chunk)
+            where.append(j)
+            if len(chunks) >= 512:
+                X[where] = embedder.many(chunks)
+                chunks, where = [], []
+        if chunks:
+            X[where] = embedder.many(chunks)
         del pcm
     finally:
         try:
@@ -239,8 +285,7 @@ def label(source: str, segments: List[dict], learn: bool = False, say=print) -> 
             os.rmdir(work)
         except OSError:
             pass
-    X = np.asarray(embs)
-    loud = np.asarray(rms) >= QUIET_RMS
+    loud = rms >= QUIET_RMS
     judged = X[loud] if loud.sum() >= 10 else X
     prior = load_print()
     centre, threshold = find_streamer(judged, prior)
@@ -251,12 +296,15 @@ def label(source: str, segments: List[dict], learn: bool = False, say=print) -> 
         centre = prior
         threshold = float(np.clip(otsu(judged @ prior), 0.25, 0.6))
     sims = X @ centre
-    labels = label_windows(sims, threshold, np.asarray(rms))
-    spans = [(s, e, who) for (s, e), who in zip(wins, labels)]
+    labels = label_windows(sims, threshold, rms)
+    spans = sorted((s, e, who) for (s, e), who in zip(wins, labels))
+    starts = [s for s, _, _ in spans]
     for seg in segments:
-        seg["speaker"] = who_said(spans, float(seg["start"]), float(seg["end"]))
+        seg["speaker"] = who_said(spans, float(seg["start"]), float(seg["end"]),
+                                  starts=starts)
         for w in seg.get("words") or []:
-            w["speaker"] = who_said(spans, float(w["start"]), float(w["end"]), share=0.5)
+            w["speaker"] = who_said(spans, float(w["start"]), float(w["end"]), share=0.5,
+                                    starts=starts)
     sure = [l for l in labels if l]
     share = (sum(1 for l in sure if l == STREAMER) / len(sure)) if sure else 0.0
     summary = {"windows": len(wins), "threshold": round(threshold, 3),
