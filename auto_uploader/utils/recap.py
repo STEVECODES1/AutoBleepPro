@@ -42,11 +42,14 @@ def settings(cfg) -> dict:
     return {"enabled": bool(raw.get("enabled", True)),
             "token_path": token,
             "max_s": float(raw.get("max_minutes", RECAP_MAX_S / 60)) * 60,
-            "privacy": str(raw.get("privacy", "public"))}
+            "privacy": str(raw.get("privacy", "public")),
+            # Both channels this feeds already carry a strike: every swear is
+            # bleeped, not only the ad-unsafe ones the VOD scope covers.
+            "censor": str(raw.get("censor", "all"))}
 
 
 def pick_moments(ranges: Sequence[Tuple[float, float, float]], duration: float,
-                 max_s: float = RECAP_MAX_S) -> List[Tuple[float, float]]:
+                 max_s: float = RECAP_MAX_S, scored: bool = False) -> list:
     """(start, end, score) ranges -> the recap's segments, in stream order.
 
     Widened for context, merged where they touch, then the best-scoring
@@ -69,15 +72,65 @@ def pick_moments(ranges: Sequence[Tuple[float, float, float]], duration: float,
     for s, e, sc in sorted(merged, key=lambda m: -m[2]):
         if total + (e - s) > max_s:
             continue
-        chosen.append((s, e))
+        chosen.append((s, e, sc))
         total += e - s
-    return sorted(chosen)
+    return sorted(chosen) if scored else sorted((s, e) for s, e, _ in chosen)
+
+
+def stranger_spans(source: str, look=None) -> List[Tuple[float, float]]:
+    """Where the stream is on Monkey App / random video chat, by looking at
+    it once a minute. Every single reading counts, with a minute either
+    side - over-cutting a recap is fine, a stranger on a struck channel is
+    not."""
+    try:
+        from autoreel.vod_segments import SAMPLE_EVERY, _seconds_long, read_kinds
+
+        span = _seconds_long(source)
+        marks = read_kinds(source, span, SAMPLE_EVERY, look)
+    except Exception as exc:
+        print(f"[Recap] Could not check for Monkey App parts ({exc}).")
+        return []
+    spans: List[Tuple[float, float]] = []
+    for at, kind in marks:
+        if kind != "monkey":
+            continue
+        s, e = max(0.0, at - SAMPLE_EVERY), at + 2 * SAMPLE_EVERY
+        if spans and s <= spans[-1][1]:
+            spans[-1] = (spans[-1][0], e)
+        else:
+            spans.append((s, e))
+    return spans
+
+
+def without(ranges, spans) -> list:
+    """`ranges` minus any that touch one of `spans`."""
+    return [r for r in ranges
+            if not any(r[0] < e and r[1] > s for s, e in spans)]
 
 
 def build(source: str, segments: Sequence[Tuple[float, float]], out_path: str,
-          video_filter: str = "") -> bool:
+          video_filter: str = "") -> list:
     """Cut `segments` out of `source` and join them into `out_path`.
-    Every piece is encoded with the same settings, so the join is a copy."""
+    Returns where each piece landed in the result ([] on failure)."""
+    return build_from([(source, s, e) for s, e in segments], out_path, video_filter)
+
+
+def _duration(path: str) -> float:
+    try:
+        out = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration",
+                              "-of", "csv=p=0", path], capture_output=True, text=True,
+                             timeout=60).stdout
+        return float(out.strip())
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return 0.0
+
+
+def build_from(items: Sequence[Tuple[str, float, float]], out_path: str,
+               video_filter: str = "") -> list:
+    """Cut (source, start, end) pieces - from one file or several - and join
+    them into `out_path`. Every piece is encoded with the same settings, so
+    the join is a copy. Returns (start, end, item index) for each piece in
+    the result - a piece that failed to cut is left out - or [] on failure."""
     from utils.ffmpeg_tools import pick_video_encoder
 
     encoder = pick_video_encoder("auto")
@@ -88,8 +141,10 @@ def build(source: str, segments: Sequence[Tuple[float, float]], out_path: str,
                                "pad=1920:1080:(ow-iw)/2:(oh-ih)/2", "fps=60", "format=yuv420p") if f)
     work = tempfile.mkdtemp(prefix="recap_", dir=os.path.dirname(out_path))
     parts = []
+    placed = []
+    at = 0.0
     try:
-        for i, (s, e) in enumerate(segments):
+        for i, (source, s, e) in enumerate(items):
             part = os.path.join(work, f"part{i:03d}.ts")
             done = subprocess.run(
                 ["ffmpeg", "-y", "-v", "error", "-ss", f"{s:.3f}", "-i", source,
@@ -100,8 +155,11 @@ def build(source: str, segments: Sequence[Tuple[float, float]], out_path: str,
                 capture_output=True, text=True, timeout=1800)
             if done.returncode == 0 and os.path.getsize(part) > 0:
                 parts.append(part)
+                length = _duration(part) or (e - s)
+                placed.append((round(at, 3), round(at + length, 3), i))
+                at += length
         if not parts:
-            return False
+            return []
         listing = os.path.join(work, "list.txt")
         with open(listing, "w", encoding="utf-8") as f:
             for p in parts:
@@ -109,7 +167,8 @@ def build(source: str, segments: Sequence[Tuple[float, float]], out_path: str,
         done = subprocess.run(["ffmpeg", "-y", "-v", "error", "-f", "concat", "-safe", "0",
                                "-i", listing, "-c", "copy", "-movflags", "+faststart", out_path],
                               capture_output=True, text=True, timeout=1800)
-        return done.returncode == 0 and os.path.exists(out_path) and os.path.getsize(out_path) > 0
+        ok = done.returncode == 0 and os.path.exists(out_path) and os.path.getsize(out_path) > 0
+        return placed if ok else []
     finally:
         for p in os.listdir(work):
             try:
@@ -136,7 +195,8 @@ def _youtube(token_path: str):
 
 
 def upload(token_path: str, path: str, title: str, description: str,
-           tags: Sequence[str], privacy: str, full_stream: str) -> str:
+           tags: Sequence[str], privacy: str, full_stream: str,
+           comment: str = "") -> str:
     """Upload to the recap channel; the full stream's link also goes in a
     comment. Returns the watch URL."""
     from googleapiclient.http import MediaFileUpload
@@ -156,7 +216,8 @@ def upload(token_path: str, path: str, title: str, description: str,
         try:
             yt.commentThreads().insert(part="snippet", body={"snippet": {
                 "videoId": video_id, "topLevelComment": {"snippet": {
-                    "textOriginal": f"Full stream, every minute of it: {full_stream}"}}}}).execute()
+                    "textOriginal": comment or f"Full stream, every minute of it: {full_stream}"
+                }}}}).execute()
         except Exception as exc:
             print(f"[Recap] Uploaded, but the comment did not post ({exc}).")
     return f"https://www.youtube.com/watch?v={video_id}"
@@ -203,8 +264,15 @@ def make(cfg, source: str, stream_title: str, stream_date: str,
     from utils.ffmpeg_tools import media_duration
 
     duration = media_duration(source) or 0.0
-    segments = pick_moments(ranges, duration, s["max_s"])
-    total = sum(e - st for st, e in segments)
+    strangers = stranger_spans(source)
+    if strangers:
+        kept = without(ranges, strangers)
+        print(f"[Recap] Left out {len(ranges) - len(kept)} moments from the Monkey App "
+              f"part of the stream ({sum(e - b for b, e in strangers) / 60:.0f} min) - "
+              "strangers on camera stay off the strike channels.")
+        ranges = kept
+    segments = pick_moments(ranges, duration, s["max_s"], scored=True)
+    total = sum(e - st for st, e, _ in segments)
     if total < RECAP_MIN_S:
         print(f"[Recap] Only {total / 60:.1f} min of moments - not enough for a recap.")
         return ""
@@ -212,7 +280,9 @@ def make(cfg, source: str, stream_title: str, stream_date: str,
     raw = os.path.join(cfg.general.censored_folder, f"{base}_RECAP.mp4")
     speed = dict(cfg.general.speed or {})
     print(f"[Recap] Cutting {len(segments)} moments ({total / 60:.1f} min) into a recap...")
-    if not build(source, segments, raw, str(speed.get("video_filter", "") or "")):
+    placed = build(source, [(st, e) for st, e, _ in segments], raw,
+                   str(speed.get("video_filter", "") or ""))
+    if not placed:
         print("[Recap] Could not build the recap.")
         return ""
     cleanup = [raw]
@@ -220,7 +290,7 @@ def make(cfg, source: str, stream_title: str, stream_date: str,
         from utils.censor import censor_video
         from utils.clip_queue import scope_allow, scope_categories
 
-        scope = cfg.general.censor_categories
+        scope = s["censor"]
         result = censor_video(raw, cfg.general.censored_folder,
                               model_name=cfg.general.censor_model,
                               bleep_method=cfg.general.censor_bleep_method,
@@ -253,14 +323,35 @@ def make(cfg, source: str, stream_title: str, stream_date: str,
               f"https://www.youtube.com/@wopovod\n\n"
             + _links_block(cfg)
             + "\n\n#Stackswopo #GTARP #FunnyMoments")
+        from utils.weekly import risky
+
+        privacy = s["privacy"]
+        if risky(stream_title):
+            # Strangers on camera: a person checks it before it goes public.
+            privacy = "private"
+            print("[Recap] Strangers-on-camera stream - uploading PRIVATE for you to check.")
         url = upload(s["token_path"], final, title, description,
                      ["Stackswopo", "GTA RP", "Stackswopo stream", "best moments",
-                      "funny moments", "GTA 5"], s["privacy"], full)
-        print(f"[Recap] Uploaded to STACKSWOPO GAMES: {url}")
+                      "funny moments", "GTA 5"], privacy, full)
+        print(f"[Recap] Uploaded to STACKSWOPO GAMES ({privacy}): {url}")
         done = _done(cfg)
         done[key] = url
         with open(_ledger(cfg), "w", encoding="utf-8") as f:
             json.dump(done, f, indent=1)
+        # Kept (censored, music-checked) for the weekly best-of.
+        try:
+            from utils import weekly
+            # Only the pieces that were actually cut, with their scores.
+            weekly.keep(cfg, final, stream_title, stream_date, url, full,
+                        [(a, b, segments[i][2]) for a, b, i in placed])
+            cleanup.remove(final)
+        except Exception as exc:
+            print(f"[Recap] Could not keep the recap for the weekly ({exc}).")
+        try:
+            from utils import weekly
+            weekly.maybe_make(cfg)
+        except Exception as exc:
+            print(f"[Weekly] Failed: {exc}")
         return url
     except Exception as exc:
         print(f"[Recap] Failed: {exc}")

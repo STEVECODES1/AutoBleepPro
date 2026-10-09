@@ -39,3 +39,16 @@ def test_segments_are_joined_into_one_video(tmp_path):
     dur = float(subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration",
                                 "-of", "csv=p=0", out], capture_output=True, text=True).stdout)
     assert 6.5 < dur < 7.6
+
+
+def test_monkey_app_parts_are_kept_off_the_strike_channels(monkeypatch):
+    import autoreel.vod_segments as vs
+    from utils.recap import stranger_spans, without
+
+    monkeypatch.setattr(vs, "_seconds_long", lambda src: 600)
+    kinds = {0: "gta", 60: "gta", 120: "monkey", 180: "monkey", 240: "gta",
+             300: "gta", 360: "gta", 420: "", 480: "gta", 540: "gta"}
+    spans = stranger_spans("x.mp4", look=lambda src, start: kinds[int(start)])
+    assert spans == [(60.0, 300.0)]
+    ranges = [(10, 40, 1), (200, 230, 1), (290, 310, 1), (400, 430, 1)]
+    assert without(ranges, spans) == [(10, 40, 1), (400, 430, 1)]
