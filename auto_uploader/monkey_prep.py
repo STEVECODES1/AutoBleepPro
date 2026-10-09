@@ -373,6 +373,25 @@ def prepare(source: str, drafts: str = DRAFTS, target_s: float = TARGET_S, say=p
         shutil.rmtree(work, ignore_errors=True)
 
 
+SCAN_EVERY_S = 300.0
+
+
+def rough_monkey_minutes(source: str, every: float = SCAN_EVERY_S) -> float:
+    """About how much of a video is Monkey App, from one look every 5
+    minutes - twelve looks an hour instead of sixty. Enough to choose
+    which streams to prepare; prepare() looks properly at the ones chosen."""
+    from autoreel.vod_segments import _seconds_long, read_kinds
+
+    marks = read_kinds(source, _seconds_long(source), every)
+    return round(sum(1 for _, kind in marks if kind == "monkey") * every / 60, 1)
+
+
+def _likely_first(names: Sequence[str]) -> List[str]:
+    """Titles that say Monkey/howl first - they are the likeliest."""
+    hint = re.compile(r"monkey|howl|omegle|ome\.?tv", re.I)
+    return sorted(names, key=lambda n: (not hint.search(n), n.lower()))
+
+
 def scan(folder: str, drafts: str = DRAFTS, say=print) -> List[dict]:
     """Which videos in `folder` have a Monkey part, and how long. Saved to
     <drafts>\\scan.json so a second look is free."""
@@ -383,7 +402,7 @@ def scan(folder: str, drafts: str = DRAFTS, say=print) -> List[dict]:
     except (OSError, ValueError):
         seen = {}
     found = []
-    for name in sorted(os.listdir(folder)):
+    for name in _likely_first(os.listdir(folder)):
         full = os.path.join(folder, name)
         if not name.lower().endswith(VIDEO_EXT) or ".temp." in name.lower():
             continue
@@ -391,12 +410,11 @@ def scan(folder: str, drafts: str = DRAFTS, say=print) -> List[dict]:
         row = seen.get(full)
         if not row or row.get("bytes") != size:
             try:
-                runs = monkey_runs(full)
+                minutes = rough_monkey_minutes(full)
             except Exception as exc:
                 say(f"[Monkey] Could not read {name} ({exc}).")
                 continue
-            row = {"file": full, "bytes": size, "runs": runs,
-                   "monkey_min": round(sum(e - s for s, e in runs) / 60, 1)}
+            row = {"file": full, "bytes": size, "monkey_min": minutes}
             seen[full] = row
             os.makedirs(drafts, exist_ok=True)
             with open(path, "w", encoding="utf-8") as f:
