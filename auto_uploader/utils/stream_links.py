@@ -53,6 +53,18 @@ def remember(title: str, date: str, results: dict,
     store = store or DEFAULT_STORE
     youtube = _url((results or {}).get("youtube"))
     rumble = _url((results or {}).get("rumble"))
+    if rumble:
+        # Rumble's upload page carries links to other videos, and one has
+        # gone down as a VOD's result before (v7glom0-monkey-trolling-
+        # on-omegle for "thotbreaker"). Every clip of the stream would
+        # have linked to it.
+        try:
+            from utils.channel_vods import slug_matches_title
+        except ImportError:
+            slug_matches_title = None
+        if slug_matches_title and slug_matches_title(
+                rumble, f"{title} {date}") is False:
+            rumble = ""
     if not (youtube or rumble) or not _normal(title):
         return False
     entries = [e for e in _load(store)

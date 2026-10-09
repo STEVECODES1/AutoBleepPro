@@ -32,6 +32,14 @@ def test_failed_uploads_are_not_links(tmp_path):
     assert S.link_for("y", "1/1/26", "youtube", store=store) == RB
 
 
+def test_a_stray_rumble_link_is_not_kept(tmp_path):
+    store = str(tmp_path / "links.json")
+    stray = "https://rumble.com/v7glom0-monkey-trolling-on-omegle.html"
+    assert S.remember("thotbreaker", "10/8/26", {"youtube": YT, "rumble": stray},
+                      store=store)
+    assert S.link_for("thotbreaker", "10/8/26", "rumble", store=store) == YT
+
+
 def test_a_different_day_or_an_old_stream_is_not_matched(tmp_path):
     store = str(tmp_path / "links.json")
     S.remember("thotbreaker", "10/8/26", {"youtube": YT}, store=store)
