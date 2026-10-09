@@ -73,7 +73,7 @@ def test_the_model_is_told_what_each_platform_wants():
     ask = _ask()
     write_captions("Robbed", "words", ["zernio_twitter", "facebook"], ask=ask)
 
-    assert "200 characters" in ask.prompt, "X's length limit was not sent"
+    assert "120 characters" in ask.prompt, "X's length limit was not sent"
     assert "no emoji" in ask.prompt.lower(), "Facebook's rule was not sent"
     # Every brief tells it the tags are not its job.
     assert ask.prompt.lower().count("do not write any") >= 2

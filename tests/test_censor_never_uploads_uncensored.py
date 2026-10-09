@@ -88,7 +88,7 @@ def test_a_render_cut_short_leaves_nothing_under_the_final_name(tmp_path,
              "words": [{"word": "zzbadword", "start": 1.0, "end": 1.5}]}]
     written = []
 
-    def interrupted(source, audio, out, speed):
+    def interrupted(source, audio, out, speed, prerender=None):
         written.append(out)
         with open(out, "wb") as handle:
             handle.write(b"half a video")

@@ -98,9 +98,9 @@ def test_no_other_platform_gets_the_shorts_tag():
 
 
 def test_x_gets_barely_any():
-    """More than about two is demoted there and they eat the 280
-    characters the caption needs."""
-    assert len(_tags("stackswopo gta rp", "zernio_twitter")) <= 2
+    """The clip accounts that do well there use two or three; more is
+    demoted and eats the 280 characters the caption needs."""
+    assert len(_tags("stackswopo gta rp", "zernio_twitter")) <= 3
 
 
 def test_instagram_gets_a_full_set():
