@@ -5131,6 +5131,21 @@ def main(argv=None) -> int:
             # sleep between streams cannot doze off mid-upload.
             from utils.keep_awake import KeepAwake
 
+            # Uploading while the live recording has fallen behind is how
+            # 18 minutes of the 10/8 stream lost their picture - wait for
+            # it to catch up (see live_clipper.uploads_on_hold). Capped,
+            # so a recording that never recovers cannot stall the queue.
+            try:
+                from utils.live_clipper import uploads_on_hold
+
+                waited = 0
+                while (not dry_run and waited < 1800
+                       and uploads_on_hold(cfg)):
+                    time.sleep(30)
+                    waited += 30
+            except Exception:
+                pass
+
             try:
                 with KeepAwake("processing a video"):
                     process_file(path, cfg, None, dup_checker, yt_logger,
@@ -5216,6 +5231,15 @@ def main(argv=None) -> int:
                     if not online():
                         next_drain = time.time() + 10
                         continue
+                    # Posts wait while the live recording catches up.
+                    try:
+                        from utils.live_clipper import uploads_on_hold
+
+                        if not dry_run and uploads_on_hold(cfg):
+                            next_drain = time.time() + 60
+                            continue
+                    except Exception:
+                        pass
                     # The first pass after a start re-asks the guard about
                     # every held clip, so a config change takes effect on
                     # restart instead of after waits set under the old one.

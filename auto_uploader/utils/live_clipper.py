@@ -149,6 +149,47 @@ def find_live(folder: str, now: Optional[float] = None) -> List[LiveRecording]:
             if rec.video and now - rec.newest <= ACTIVE_S]
 
 
+# Uploads wait while the recording's picture is this far behind its sound,
+# and start again once it has caught up to within LAG_RESUME_S.
+#
+# 10/8: the 1080p60 picture fell 18 minutes behind while clips were being
+# uploaded from the same machine during the stream; when the stream ended
+# its fragments were refused and those 18 minutes have no picture. Sound
+# and picture fragments share one numbering (one per second), so the gap
+# between the newest of each is the lag, in seconds.
+LAG_HOLD_S = 90
+LAG_RESUME_S = 30
+_HOLDING = {"on": False}
+
+
+def recording_lag(cfg) -> float:
+    """Seconds the live recording's picture is behind its sound; 0 when
+    nothing is recording."""
+    try:
+        recordings = find_live(recording_folder(cfg))
+    except Exception:
+        return 0.0
+    lag = 0.0
+    for rec in recordings:
+        if rec.video and rec.audio:
+            lag = max(lag, float(max(rec.audio) - max(rec.video)))
+    return lag
+
+
+def uploads_on_hold(cfg) -> bool:
+    """True while uploads should wait for the recording to catch up."""
+    lag = recording_lag(cfg)
+    if _HOLDING["on"] and lag <= LAG_RESUME_S:
+        _HOLDING["on"] = False
+        print(f"[Live] The recording has caught up ({lag:.0f}s behind) - "
+              f"uploads and posts resume.")
+    elif not _HOLDING["on"] and lag >= LAG_HOLD_S:
+        _HOLDING["on"] = True
+        print(f"[Live] The recording's picture is {lag:.0f}s behind its "
+              f"sound - holding uploads and posts so it can catch up.")
+    return _HOLDING["on"]
+
+
 def edge_seconds(rec: LiveRecording) -> float:
     """How far into the stream the recording safely reaches."""
     numbers = sorted(rec.video)

@@ -208,9 +208,83 @@ def _mute_full_quality(source_path: str, whisper_wav: str, engine, violations,
             pass
 
 
+# Below this the grade is quick anyway, and a clip is not worth a second
+# ffmpeg running alongside Whisper.
+PRERENDER_MIN_SECONDS = 600
+
+
+def _start_prerender(source_path: str, output_video_path: str, speed: dict):
+    """Begin grading the picture now, while Whisper listens - see
+    utils.ffmpeg_tools.start_video_render. None when there is nothing to
+    gain: no grade to apply, stream copy allowed, a short file, or
+    speed.prerender_video set false."""
+    video_filter = str(speed.get("video_filter", "") or "")
+    if (not video_filter or speed.get("stream_copy_video", True)
+            or not speed.get("prerender_video", True)):
+        return None
+    try:
+        from utils.ffmpeg_tools import media_duration, start_video_render
+        if (media_duration(source_path) or 0) < PRERENDER_MIN_SECONDS:
+            return None
+        path = output_video_path[:-len(".mp4")] + ".picture.partial.mp4"
+        started = start_video_render(
+            source_path, path,
+            encoder_preference=str(speed.get("hardware_encode", "auto")),
+            encode_preset=str(speed.get("encode_preset", "fast")),
+            video_filter=video_filter)
+    except Exception:
+        return None
+    if not started:
+        return None
+    print("[Censor] Grading the picture now, while the words are transcribed.")
+    return {"proc": started[0], "encoder": started[1], "path": path}
+
+
+def _finish_prerender(prerender, clean_audio_path: str,
+                      output_video_path: str) -> Optional[str]:
+    """Lay the censored sound over the picture graded in the background.
+    The strategy name, or None to fall back to rendering it all now."""
+    if not prerender:
+        return None
+    proc = prerender["proc"]
+    try:
+        code = proc.wait()
+    except Exception:
+        return None
+    path = prerender["path"]
+    if code != 0 or not os.path.exists(path) or os.path.getsize(path) == 0:
+        print("[Censor] The early picture render did not finish - rendering now.")
+        return None
+    strategy = mux_audio(path, clean_audio_path, output_video_path,
+                         allow_stream_copy=True, video_filter="")
+    if strategy == "copy":
+        return f"{prerender['encoder']}, graded while transcribing"
+    return None
+
+
+def _drop_prerender(prerender) -> None:
+    """Stop a background picture render nobody will use, and remove it."""
+    if not prerender:
+        return
+    try:
+        if prerender["proc"].poll() is None:
+            prerender["proc"].kill()
+            prerender["proc"].wait(timeout=30)
+    except Exception:
+        pass
+    try:
+        if os.path.exists(prerender["path"]):
+            os.remove(prerender["path"])
+    except OSError:
+        pass
+
+
 def _render(source_path: str, clean_audio_path: str, output_video_path: str,
-            speed: dict) -> str:
+            speed: dict, prerender=None) -> str:
     """Attach the censored audio to the video. Returns the strategy used."""
+    done = _finish_prerender(prerender, clean_audio_path, output_video_path)
+    if done:
+        return done
     strategy = mux_audio(
         source_path, clean_audio_path, output_video_path,
         encoder_preference=str(speed.get("hardware_encode", "auto")),
@@ -517,6 +591,7 @@ def censor_video(
         return CensorResult(output_path=output_video_path, was_censored=True,
                             violation_count=-1, censored_words=[])
 
+    prerender = _start_prerender(source_path, output_video_path, speed)
     try:
         words_path = words_cache_path(work_dir, basename)
         cached = (_load_cached_words(words_path, source_path)
@@ -647,7 +722,8 @@ def censor_video(
         partial = output_video_path[:-len(".mp4")] + ".partial.mp4"
         if os.path.exists(partial):
             os.remove(partial)
-        strategy = _render(source_path, clean_audio_path, partial, speed)
+        strategy = _render(source_path, clean_audio_path, partial, speed,
+                           prerender)
         os.replace(partial, output_video_path)
         timer.mark(f"render [{strategy}]")
         _verify_sync(output_video_path)
@@ -675,6 +751,9 @@ def censor_video(
             censored_words=[v.word for v in violations],
         )
     finally:
+        # Used (copied into the censored file) or not needed (nothing to
+        # censor, or the pass failed) - either way it is scratch now.
+        _drop_prerender(prerender)
         for temp_path in (raw_audio_path, clean_audio_path):
             if os.path.exists(temp_path):
                 os.remove(temp_path)

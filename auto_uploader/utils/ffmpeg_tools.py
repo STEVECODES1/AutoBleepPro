@@ -210,6 +210,42 @@ def mux_audio(
     return None
 
 
+def start_video_render(video_path: str, out_path: str,
+                       encoder_preference: str = "auto",
+                       encode_preset: str = "fast",
+                       video_filter: str = ""):
+    """Start rendering the PICTURE ONLY of `video_path` (graded with
+    `video_filter`) into `out_path`, in the background. Returns
+    (process, encoder), or None if it cannot start.
+
+    The censor pass used to grade the picture only after Whisper had
+    finished listening, though the picture never depends on what was
+    heard - on 10/8 that was 15 minutes of transcription and then 50 of
+    rendering, one after the other. Started first, the grade runs on
+    the processor and the encoder while Whisper uses the GPU, and the
+    censored sound is laid over it with a stream copy at the end.
+    Same encoder settings as mux_audio, so the picture is identical.
+    """
+    if not have_ffmpeg():
+        return None
+    encoder = pick_video_encoder(encoder_preference)
+    quality = (["-preset", "p5", "-rc", "vbr", "-cq", "19", "-b:v", "0",
+                "-maxrate", "6M", "-bufsize", "12M"]
+               if encoder == "h264_nvenc"
+               else ["-preset", encode_preset, "-crf", "18"])
+    vf_args = (["-vf", video_filter] if video_filter else [])
+    try:
+        proc = subprocess.Popen(
+            ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+             "-i", video_path, "-map", "0:v:0", "-an",
+             "-c:v", encoder, *quality, *vf_args, "-pix_fmt", "yuv420p",
+             out_path],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except OSError:
+        return None
+    return proc, encoder
+
+
 def _cleanup_partial(path: str) -> None:
     try:
         if os.path.exists(path):
