@@ -1,0 +1,273 @@
+"""A 10-15 minute "best moments" recap of each stream, for the second
+channel (STACKSWOPO GAMES), pointing its traffic at the full stream on
+@wopovod.
+
+That channel has a strike and cannot earn, but it has viewers. A full
+stream there would compete with wopovod for the same people and carry the
+most risk of a second strike; a short, censored, music-checked recap whose
+first line is the full stream's link turns its traffic into wopovod views.
+
+The moments are the ones already chosen for clips - live and from the VOD -
+widened a little for context, merged, put in stream order and capped at
+RECAP_MAX_S. Cut from the original 16:9 recording, graded like the VOD,
+then censored and music-checked exactly like the YouTube copy.
+
+Settings (config.json "recap"): enabled, token_path, max_minutes, privacy.
+"""
+from __future__ import annotations
+
+import json
+import os
+import subprocess
+import tempfile
+from typing import List, Optional, Sequence, Tuple
+
+RECAP_MAX_S = 15 * 60
+RECAP_MIN_S = 4 * 60
+CONTEXT_BEFORE_S = 6.0
+CONTEXT_AFTER_S = 3.0
+DEFAULT_TOKEN = "youtube_games_token.json"
+
+
+def settings(cfg) -> dict:
+    raw = {}
+    try:
+        with open(os.path.join(cfg.project_root, "config.json"), encoding="utf-8") as f:
+            raw = json.load(f).get("recap") or {}
+    except (OSError, ValueError, AttributeError):
+        raw = {}
+    token = raw.get("token_path") or DEFAULT_TOKEN
+    if not os.path.isabs(token):
+        token = os.path.join(getattr(cfg, "project_root", "."), token)
+    return {"enabled": bool(raw.get("enabled", True)),
+            "token_path": token,
+            "max_s": float(raw.get("max_minutes", RECAP_MAX_S / 60)) * 60,
+            "privacy": str(raw.get("privacy", "public"))}
+
+
+def pick_moments(ranges: Sequence[Tuple[float, float, float]], duration: float,
+                 max_s: float = RECAP_MAX_S) -> List[Tuple[float, float]]:
+    """(start, end, score) ranges -> the recap's segments, in stream order.
+
+    Widened for context, merged where they touch, then the best-scoring
+    ones kept until max_s is reached."""
+    widened = []
+    for start, end, score in ranges:
+        s = max(0.0, float(start) - CONTEXT_BEFORE_S)
+        e = min(duration or float(end) + CONTEXT_AFTER_S, float(end) + CONTEXT_AFTER_S)
+        if e - s >= 5:
+            widened.append([s, e, float(score or 0.0)])
+    widened.sort()
+    merged: list = []
+    for s, e, sc in widened:
+        if merged and s <= merged[-1][1] + 2:
+            merged[-1][1] = max(merged[-1][1], e)
+            merged[-1][2] = max(merged[-1][2], sc)
+        else:
+            merged.append([s, e, sc])
+    chosen, total = [], 0.0
+    for s, e, sc in sorted(merged, key=lambda m: -m[2]):
+        if total + (e - s) > max_s:
+            continue
+        chosen.append((s, e))
+        total += e - s
+    return sorted(chosen)
+
+
+def build(source: str, segments: Sequence[Tuple[float, float]], out_path: str,
+          video_filter: str = "") -> bool:
+    """Cut `segments` out of `source` and join them into `out_path`.
+    Every piece is encoded with the same settings, so the join is a copy."""
+    from utils.ffmpeg_tools import pick_video_encoder
+
+    encoder = pick_video_encoder("auto")
+    quality = (["-preset", "p5", "-rc", "vbr", "-cq", "21", "-b:v", "0",
+                "-maxrate", "6M", "-bufsize", "12M"] if encoder == "h264_nvenc"
+               else ["-preset", "veryfast", "-crf", "20"])
+    vf = ",".join(f for f in (video_filter, "scale=1920:1080:force_original_aspect_ratio=decrease",
+                               "pad=1920:1080:(ow-iw)/2:(oh-ih)/2", "fps=60", "format=yuv420p") if f)
+    work = tempfile.mkdtemp(prefix="recap_", dir=os.path.dirname(out_path))
+    parts = []
+    try:
+        for i, (s, e) in enumerate(segments):
+            part = os.path.join(work, f"part{i:03d}.ts")
+            done = subprocess.run(
+                ["ffmpeg", "-y", "-v", "error", "-ss", f"{s:.3f}", "-i", source,
+                 "-t", f"{e - s:.3f}", "-map", "0:v:0", "-map", "0:a:0",
+                 "-vf", vf, "-c:v", encoder, *quality,
+                 "-af", "aresample=48000,afade=t=in:d=0.15", "-c:a", "aac", "-b:a", "192k",
+                 "-ar", "48000", "-ac", "2", "-f", "mpegts", part],
+                capture_output=True, text=True, timeout=1800)
+            if done.returncode == 0 and os.path.getsize(part) > 0:
+                parts.append(part)
+        if not parts:
+            return False
+        listing = os.path.join(work, "list.txt")
+        with open(listing, "w", encoding="utf-8") as f:
+            for p in parts:
+                f.write("file '%s'\n" % p.replace("\\", "/"))
+        done = subprocess.run(["ffmpeg", "-y", "-v", "error", "-f", "concat", "-safe", "0",
+                               "-i", listing, "-c", "copy", "-movflags", "+faststart", out_path],
+                              capture_output=True, text=True, timeout=1800)
+        return done.returncode == 0 and os.path.exists(out_path) and os.path.getsize(out_path) > 0
+    finally:
+        for p in os.listdir(work):
+            try:
+                os.remove(os.path.join(work, p))
+            except OSError:
+                pass
+        try:
+            os.rmdir(work)
+        except OSError:
+            pass
+
+
+def _youtube(token_path: str):
+    from google.auth.transport.requests import Request
+    from google.oauth2.credentials import Credentials
+    from googleapiclient.discovery import build as gbuild
+
+    creds = Credentials.from_authorized_user_file(token_path)
+    if not creds.valid:
+        creds.refresh(Request())
+        with open(token_path, "w", encoding="utf-8") as f:
+            f.write(creds.to_json())
+    return gbuild("youtube", "v3", credentials=creds, cache_discovery=False)
+
+
+def upload(token_path: str, path: str, title: str, description: str,
+           tags: Sequence[str], privacy: str, full_stream: str) -> str:
+    """Upload to the recap channel; the full stream's link also goes in a
+    comment. Returns the watch URL."""
+    from googleapiclient.http import MediaFileUpload
+
+    yt = _youtube(token_path)
+    body = {"snippet": {"title": title[:100], "description": description[:4900],
+                        "tags": list(tags)[:15], "categoryId": "20"},
+            "status": {"privacyStatus": privacy, "selfDeclaredMadeForKids": False}}
+    request = yt.videos().insert(part="snippet,status", body=body,
+                                 media_body=MediaFileUpload(path, chunksize=8 * 1024 * 1024,
+                                                            resumable=True))
+    response = None
+    while response is None:
+        _, response = request.next_chunk()
+    video_id = response["id"]
+    if full_stream:
+        try:
+            yt.commentThreads().insert(part="snippet", body={"snippet": {
+                "videoId": video_id, "topLevelComment": {"snippet": {
+                    "textOriginal": f"Full stream, every minute of it: {full_stream}"}}}}).execute()
+        except Exception as exc:
+            print(f"[Recap] Uploaded, but the comment did not post ({exc}).")
+    return f"https://www.youtube.com/watch?v={video_id}"
+
+
+def _ledger(cfg) -> str:
+    return os.path.join(cfg.general.logs_folder, "recaps.json")
+
+
+def _done(cfg) -> dict:
+    try:
+        with open(_ledger(cfg), encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
+def _links_block(cfg) -> str:
+    lines = str(cfg.youtube.description_template or "").splitlines()
+    if "ALL LINKS" not in lines:
+        return ""
+    start = lines.index("ALL LINKS")
+    block = []
+    for line in lines[start:]:
+        if not line.strip():
+            break
+        block.append(line)
+    return "\n".join(block)
+
+
+def make(cfg, source: str, stream_title: str, stream_date: str,
+         ranges: Sequence[Tuple[float, float, float]]) -> str:
+    """Build, censor and upload this stream's recap. The URL, or ""."""
+    s = settings(cfg)
+    if not s["enabled"]:
+        return ""
+    if not os.path.exists(s["token_path"]):
+        print("[Recap] Not signed in to the recap channel yet - run "
+              "setup_games_channel.py once. Skipping.")
+        return ""
+    key = os.path.basename(source)
+    if key in _done(cfg):
+        return _done(cfg)[key]
+    from utils.ffmpeg_tools import media_duration
+
+    duration = media_duration(source) or 0.0
+    segments = pick_moments(ranges, duration, s["max_s"])
+    total = sum(e - st for st, e in segments)
+    if total < RECAP_MIN_S:
+        print(f"[Recap] Only {total / 60:.1f} min of moments - not enough for a recap.")
+        return ""
+    base = os.path.splitext(key)[0]
+    raw = os.path.join(cfg.general.censored_folder, f"{base}_RECAP.mp4")
+    speed = dict(cfg.general.speed or {})
+    print(f"[Recap] Cutting {len(segments)} moments ({total / 60:.1f} min) into a recap...")
+    if not build(source, segments, raw, str(speed.get("video_filter", "") or "")):
+        print("[Recap] Could not build the recap.")
+        return ""
+    cleanup = [raw]
+    try:
+        from utils.censor import censor_video
+        from utils.clip_queue import scope_allow, scope_categories
+
+        scope = cfg.general.censor_categories
+        result = censor_video(raw, cfg.general.censored_folder,
+                              model_name=cfg.general.censor_model,
+                              bleep_method=cfg.general.censor_bleep_method,
+                              custom_words=cfg.general.censor_custom_words,
+                              device=cfg.general.censor_device,
+                              speed={**speed, "stream_copy_video": True, "video_filter": ""},
+                              padding_ms=cfg.general.censor_padding_ms,
+                              mute_whole_segment=cfg.general.censor_mute_whole_segment,
+                              only_categories=scope_categories(scope),
+                              allow_words=scope_allow(scope))
+        final = result.output_path
+        if final != raw:
+            cleanup.append(final)
+        if getattr(cfg.youtube, "music_guard", False):
+            from autoreel.music_guard import guard
+            guarded = guard(final, cfg.general.censored_folder)
+            if guarded != final:
+                cleanup.append(guarded)
+                final = guarded
+        from utils.stream_links import link_for
+        from utils.templating import build_title
+
+        full = link_for(stream_title, stream_date, "youtube")
+        title = build_title(stream_title, stream_date,
+                            "Stackswopo - {TITLE} - {date} (BEST MOMENTS)")
+        description = (
+            (f"▶ Full stream: {full}\n\n" if full else "")
+            + f"The best moments from Stackswopo's \"{stream_title}\" stream "
+              f"({stream_date}). Every minute of it is on STACKSWOPO VODS: "
+              f"https://www.youtube.com/@wopovod\n\n"
+            + _links_block(cfg)
+            + "\n\n#Stackswopo #GTARP #FunnyMoments")
+        url = upload(s["token_path"], final, title, description,
+                     ["Stackswopo", "GTA RP", "Stackswopo stream", "best moments",
+                      "funny moments", "GTA 5"], s["privacy"], full)
+        print(f"[Recap] Uploaded to STACKSWOPO GAMES: {url}")
+        done = _done(cfg)
+        done[key] = url
+        with open(_ledger(cfg), "w", encoding="utf-8") as f:
+            json.dump(done, f, indent=1)
+        return url
+    except Exception as exc:
+        print(f"[Recap] Failed: {exc}")
+        return ""
+    finally:
+        for p in cleanup:
+            try:
+                os.remove(p)
+            except OSError:
+                pass

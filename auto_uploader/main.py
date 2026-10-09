@@ -892,6 +892,7 @@ def cut_clips_from_stream(cfg, video_path: str, is_clip: bool,
         # its clips belong in the ledger before it is read.
         wait_idle()
         live = clipped_ranges_for(archive, source, title)
+        live_ranges = list(live or [])
         if live:
             kept = [c for c in run.clips
                     if not is_already_clipped((c.spec.start, c.spec.end),
@@ -907,12 +908,26 @@ def cut_clips_from_stream(cfg, video_path: str, is_clip: bool,
         print(f"[Clips] could not check the live clips ({exc}) - "
               f"posting all of these.")
     print_run(run)
+    moments = [(c.spec.start, c.spec.end, c.spec.score) for c in run.clips]
     delivered = _deliver_clips(run, cfg)
     remember(archive, source, delivered, content_hash=content_hash)
     if delivered:
         print(f"[Clips] {delivered} clip(s) moved into "
               f"{cfg.general.watch_folder} - they will be posted one at a "
               "time, on the spacing set for each platform.")
+    # The same moments - live and from the VOD - as a 10-15 minute recap
+    # on the second channel, pointing at the full stream. See utils/recap.
+    try:
+        from utils.recap import make as make_recap
+
+        for r in (locals().get("live_ranges") or []):
+            moments.append((float(r[0]), float(r[1]), 0.5))
+        when = extract_date_from_filename(os.path.basename(source))
+        make_recap(cfg, source, title,
+                   format_date(when, cfg.general.date_style) if when else "",
+                   moments)
+    except Exception as exc:
+        print(f"[Recap] Skipped: {exc}")
     return delivered
 
 
