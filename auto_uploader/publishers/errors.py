@@ -67,6 +67,17 @@ class PermanentlyRejected(Exception):
     that already answered.
     """
 
+    # What the clip journal says about it.
+    journal_note = "the platform will not process this video"
+
+
+class HeldBack(PermanentlyRejected):
+    """WE decided this clip does not go to this platform - a slur in it -
+    not the platform. Handled like a rejection (dropped, never retried),
+    but it says why."""
+
+    journal_note = "held back - slur in the clip; post it by hand if you judge it fine"
+
 
 # Error types Meta marks `retriable: False` and then serves again fine.
 #

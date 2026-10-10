@@ -676,6 +676,18 @@ def scope_categories(mode: str) -> tuple:
     return CENSOR_SCOPES.get(str(mode or "").strip().lower(), ())
 
 
+def _hold_if_slurs(platform: str, video_path: str, config: dict) -> None:
+    """Raise HeldBack when this clip must not go to a social platform."""
+    held = _slur_heavy(video_path, config)
+    if not held:
+        return
+    from publishers.errors import HeldBack
+
+    print(f"[Clips] {platform}: held back - {held}. Rumble still gets it; "
+          f"post it by hand if you judge it fine.")
+    raise HeldBack(f"held: {held}")
+
+
 def _censored_clip(platform: str, video_path: str, config: dict) -> tuple:
     """(path to post, temp path to delete) for this platform's rules.
 
@@ -688,6 +700,13 @@ def _censored_clip(platform: str, video_path: str, config: dict) -> tuple:
     or finds nothing, so this can never be the reason a clip fails.
     """
     platform = base_platform(platform)
+    # Checked HERE, right before each post, and not only when the clip
+    # is first offered: a fresh clip has no transcript of its own until
+    # its censor pass below writes one, so the check at offer time saw
+    # nothing and passed it - and the queue's later post never looked.
+    # That is how "18 48 Live 02 - Clip 01" (a hard-R and an f-slur,
+    # muted) reached Shorts, Instagram, Facebook, X and TikTok on 10-09.
+    _hold_if_slurs(platform, video_path, config)
     settings = (config or {}).get(platform, {}) or {}
     wanted = settings.get("censor_uploads")
     if wanted is None:
@@ -741,6 +760,17 @@ def _censored_clip(platform: str, video_path: str, config: dict) -> tuple:
               f"not posting it there.")
         return "", ""
 
+    # The censor pass has just written the clip's transcript.
+    try:
+        _hold_if_slurs(platform, video_path, config)
+    except Exception:
+        made = getattr(result, "output_path", "") or ""
+        if made and made != video_path:
+            try:
+                os.remove(made)
+            except OSError:
+                pass
+        raise
     made = getattr(result, "output_path", "") or video_path
     if made != video_path:
         count = getattr(result, "violation_count", 0)
@@ -960,15 +990,19 @@ def clip_key(video_path: str) -> str:
 
 
 def _already_posted(queue, platform: str, video_path: str):
-    """This clip's job on this platform, whichever path it was queued as."""
+    """This clip's job on this platform, whichever path it was queued as.
+    A job that has POSTED it wins over any other, so "already posted" is
+    never hidden behind a second job still waiting for the same clip."""
     wanted = clip_key(video_path)
+    same = [job for job in queue.list_jobs()
+            if job.platform == platform and clip_key(job.clip_path) == wanted]
+    for job in same:
+        if job.state == "done":
+            return job
     exact = queue.find(platform, video_path)
     if exact is not None:
         return exact
-    for job in queue.list_jobs():
-        if job.platform == platform and clip_key(job.clip_path) == wanted:
-            return job
-    return None
+    return same[0] if same else None
 
 
 # YouTube's vulgar-language policy names "a clip taken out of context"
@@ -978,6 +1012,18 @@ def _already_posted(queue, platform: str, video_path: str):
 # is exactly that clip. At this many, it does not go to the short-form
 # platforms at all. Set clips.max_slurs_for_social to 0 to turn it off.
 DEFAULT_MAX_SLURS_FOR_SOCIAL = 3
+
+# Held at ONE, whatever the count (see _slur_heavy).
+SEVERE_SLURS = frozenset({
+    "nigger", "niggers", "faggot", "faggots", "fag", "fags", "faggy",
+    "tranny", "trannies", "shemale", "kike", "kikes", "spic", "spics",
+    "wetback", "wetbacks", "chink", "chinks", "gook", "gooks", "coon", "coons",
+    "beaner", "beaners", "raghead", "ragheads", "towelhead", "dyke", "dykes",
+})
+
+
+def _plain_word(word: str) -> str:
+    return re.sub(r"[^a-z]", "", str(word or "").lower())
 
 
 def _clip_segments(video_path: str, config: dict):
@@ -1068,6 +1114,14 @@ def _slur_heavy(video_path: str, config: dict) -> str:
 
     hits = ComplianceEngine(only_categories=("hate_speech",)).scan_segments(
         segments)
+    # One is enough for these. Earlier Monkey channels were removed for
+    # hate speech and an Instagram Reel came down for hateful conduct; a
+    # muted hard-R or f-slur is still a slur in YouTube's reading. The
+    # everyday "nigga" stays on the count below - muted, and held only
+    # when a clip is full of it.
+    severe = sorted({_plain_word(h.word) for h in hits} & SEVERE_SLURS)
+    if severe:
+        return "a severe slur (" + ", ".join(w[0] + "*" * (len(w) - 1) for w in severe) + ")"
     if len(hits) < limit:
         return ""
     seconds = max((float(seg.get("end", 0) or 0) for seg in segments),
@@ -1274,7 +1328,8 @@ def offer(posting: dict, config: dict, video_path: str,
             print(f"[Clips] {platform}: will not accept "
                   f"{os.path.basename(video_path)} - {exc}")
             _journal(config, "FAIL", platform, video_path,
-                     "the platform will not process this video")
+                     getattr(exc, "journal_note",
+                             "the platform will not process this video"))
             continue
         if dry_run:
             queue.block(job_id, "dry run", 300)
@@ -1464,7 +1519,8 @@ def drain(posting: dict, config: dict, limit: int = 0,
             # against an explicit "do not retry" is not persistence.
             queue.abandon(job.id, str(exc), now=now)
             _journal(config, "FAIL", job.platform, job.clip_path,
-                     "the platform will not process this video")
+                     getattr(exc, "journal_note",
+                             "the platform will not process this video"))
             print(f"[Clips] {job.platform}: giving up on "
                   f"{os.path.basename(job.clip_path)} - {exc}")
             continue

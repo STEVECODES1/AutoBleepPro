@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import threading
 import time
 import uuid
@@ -67,6 +68,20 @@ DEFAULT_BLOCK_RETRY_SECONDS = 600
 # tests that import them keep working.
 MAX_ATTEMPTS = DEFAULT_MAX_ATTEMPTS
 LEASE_SECONDS = DEFAULT_LEASE_SECONDS
+
+
+def clip_key(path: str) -> str:
+    """What makes two paths the same clip: its name, without the folder,
+    the re-frame prefix or the censored suffix (utils.clip_queue.clip_key
+    says why)."""
+    stem, ext = os.path.splitext(os.path.basename(str(path or "").replace("\\", "/")))
+    try:
+        from utils.social_promoter import plain_clip_name
+
+        stem = plain_clip_name(stem)
+    except Exception:
+        stem = re.sub(r"_CENSORED_.*$", "", re.sub(r"^_vertical_", "", stem))
+    return (stem + ext).lower()
 
 
 @dataclass
@@ -157,7 +172,19 @@ class JobQueue:
             if before.get(job_id) != json.loads(json.dumps(job.to_dict())):
                 changed[job_id] = job
         self._load()
-        self._jobs.update(changed)
+        for job_id, job in changed.items():
+            # A job somebody else FINISHED since we read the file stays
+            # finished. Our copy was changed from a state that no longer
+            # exists - a cap check re-blocking a clip the poster had just
+            # posted - and writing it back is how one Reel went up four
+            # times on 10-09 (Instagram, "18 48 Live 04 - Clip 01").
+            # A change we made to a job we already knew was finished (a
+            # deliberate retry) still goes through.
+            disk = self._jobs.get(job_id)
+            if (disk is not None and disk.is_terminal and not job.is_terminal
+                    and before.get(job_id) != json.loads(json.dumps(disk.to_dict()))):
+                continue
+            self._jobs[job_id] = job
         for job_id in self._deleted:
             self._jobs.pop(job_id, None)
 
@@ -228,9 +255,34 @@ class JobQueue:
                         extra=extra, needs_approval=needs_approval).id
 
     def find(self, platform: str, clip_path: str) -> Optional[Job]:
+        """This clip's job on this platform, whatever path it is under.
+
+        One clip has several paths - watch_folder/X.mp4 when it is
+        offered, clip_queue_files/X.mp4 once it is parked for later,
+        censored/_vertical_X.mp4 after a re-frame - and matching only
+        the exact string gave a clip that was re-offered after a failed
+        Rumble upload a fresh job every time: six jobs per platform for
+        "18 48 - Clip 08" on 10-09, each one a post waiting to happen.
+        A live job wins over a finished one."""
         for job in self._jobs.values():
             if job.platform == platform and job.clip_path == clip_path:
                 return job
+        key = clip_key(clip_path)
+        same = [j for j in self._jobs.values()
+                if j.platform == platform and clip_key(j.clip_path) == key]
+        if not same:
+            return None
+        return sorted(same, key=lambda j: (j.is_terminal, j.created_at))[0]
+
+    def twin(self, job: Job) -> Optional[Job]:
+        """Another job for the same clip on the same platform that has
+        already been posted, or is being posted right now."""
+        key = clip_key(job.clip_path)
+        for other in self._jobs.values():
+            if (other.id != job.id and other.platform == job.platform
+                    and other.state in (DONE, IN_PROGRESS)
+                    and clip_key(other.clip_path) == key):
+                return other
         return None
 
     def get(self, job_id: str) -> Optional[Job]:
@@ -287,9 +339,29 @@ class JobQueue:
             # was opened - the clip poster may have started it since.
             self._merge_from_disk()
             candidates = self.ready(platform, now)
-            if not candidates:
+            job = None
+            dropped = False
+            for candidate in candidates:
+                # extra.repost: somebody asked for this clip to go up
+                # again on purpose (a new caption) - the one exception.
+                other = None if (candidate.extra or {}).get("repost") \
+                    else self.twin(candidate)
+                if other is None:
+                    job = candidate
+                    break
+                # The same clip is already up (or going up) on this
+                # platform under another job: posting this one is a
+                # duplicate, never a retry.
+                candidate.state = FAILED
+                candidate.last_error = (f"duplicate of job {other.id} "
+                                        f"({other.state}) - not posted again")
+                candidate.claimed_at = 0.0
+                candidate.updated_at = now
+                dropped = True
+            if job is None:
+                if dropped:
+                    self._write()
                 return None
-            job = candidates[0]
             job.state = IN_PROGRESS
             job.claimed_at = now
             job.updated_at = now

@@ -1037,7 +1037,10 @@ def _transcript(folder, clip_name, slurs, seconds=16.0):
 
     from autoreel.compliance import DEFAULT_CATEGORIES
 
-    term = DEFAULT_CATEGORIES["hate_speech"][0]
+    # The everyday one, which is held by COUNT. The severe ones are held
+    # at one - tests/test_slur_hold.py.
+    term = "nigga"
+    assert term in DEFAULT_CATEGORIES["hate_speech"]
     words = [{"word": term, "start": n + 0.2, "end": n + 0.6}
              for n in range(slurs)]
     words.append({"word": "bro", "start": seconds - 1, "end": seconds - 0.5})
