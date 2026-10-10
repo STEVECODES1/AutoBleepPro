@@ -122,12 +122,20 @@ def live_title(video_id):
     return full[:100]
 
 
+# YouTube lives now come as SEPARATE video-only and audio-only HLS feeds -
+# the old muxed formats (91-96, 300, 301) are gone, and asking only for
+# those found nothing (caught by the 2026-10-10 test against a real live).
+# So: best H.264 video up to 1080p plus the best audio, as two inputs; the
+# old muxed formats stay as the fallback in case they come back.
+FEED_FORMAT = "bv*[height<=1080][vcodec^=avc1]+ba/bv*[height<=1080]+ba/301/96/300/95/b"
+
+
 def hls_url(video_id):
-    r = subprocess.run([PY, "-m", "yt_dlp", "-g", "--no-warnings", "-f", "301/96/300/95/b",
+    """[video_url, audio_url] (or [muxed_url]), or [] when there is no feed."""
+    r = subprocess.run([PY, "-m", "yt_dlp", "-g", "--no-warnings", "-f", FEED_FORMAT,
                         f"https://www.youtube.com/watch?v={video_id}"],
                        capture_output=True, text=True, timeout=90)
-    urls = [u for u in r.stdout.split() if u.startswith("http")]
-    return urls[0] if urls else ""
+    return [u for u in r.stdout.split() if u.startswith("http")][:2]
 
 
 class Push:
@@ -135,9 +143,21 @@ class Push:
 
     def __init__(self, src, target, key):
         self.key = key
+        sources = [src] if isinstance(src, str) else list(src)
+        inputs = []
+        for url in sources:
+            # Start at the newest segment: from the default three back,
+            # ffmpeg races through the backlog and Rumble saw a 5.8 Mbps,
+            # 38 fps burst on the first test - over the 4.5 Mbps cap.
+            inputs += ["-live_start_index", "-1",
+                       "-reconnect", "1", "-reconnect_streamed", "1",
+                       "-reconnect_delay_max", "5", "-i", url]
+        # Separate video and audio feeds: map one of each. One muxed feed:
+        # take its video and its audio.
+        maps = (["-map", "0:v:0", "-map", "1:a:0"] if len(sources) > 1
+                else ["-map", "0:v:0", "-map", "0:a:0"])
         cmd = ["ffmpeg", "-hide_banner", "-loglevel", "warning", "-nostdin",
-               "-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "5",
-               "-i", src,
+               *inputs, *maps,
                "-c:v", "h264_nvenc", "-preset", "p4", "-tune", "ll", "-rc", "cbr",
                "-b:v", BITRATE, "-maxrate", BITRATE, "-bufsize", BITRATE,
                "-profile:v", "high", "-pix_fmt", "yuv420p",
