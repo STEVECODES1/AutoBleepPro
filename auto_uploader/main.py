@@ -1403,6 +1403,35 @@ def _already_on_rumble(title: str, cfg) -> str:
         return ""
 
 
+def _rumble_live_covered(video_path: str, cfg, min_share: float = 0.95) -> str:
+    """The Rumble link when tools/rumble_live.py relayed this whole stream
+    live and the live is on the channel, else "". Never raises."""
+    try:
+        import json as _json
+        import re as _re
+        import subprocess as _sp
+
+        sidecar = os.path.splitext(video_path)[0] + ".source.txt"
+        with open(sidecar, encoding="utf-8") as fh:
+            m = _re.search(r"[?&]v=([\w-]{11})", fh.read())
+        if not m:
+            return ""
+        with open(os.path.join(cfg.general.logs_folder, "rumble_live.json"), encoding="utf-8") as fh:
+            entry = _json.load(fh).get(m.group(1)) or {}
+        if not entry.get("ok"):
+            return ""
+        length = float(_sp.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", video_path],
+            capture_output=True, text=True, timeout=120).stdout.strip() or 0)
+        if not length or float(entry.get("pushed_s", 0)) < min_share * length:
+            print(f"[Rumble] The live relay covered {entry.get('pushed_s', 0):.0f}s of "
+                  f"{length:.0f}s - uploading the full file as well.")
+            return ""
+        return _already_on_rumble(entry.get("title", ""), cfg)
+    except Exception:
+        return ""
+
+
 def _confirm_on_rumble(url: str, title: str, cfg) -> str:
     """Turn an unconfirmed Rumble upload into a verified answer.
 
@@ -2488,6 +2517,15 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
                 # it always has.
                 print(f"[Rumble] Could not check the channel before "
                       f"uploading ({exc}). Uploading normally.")
+    if not existing_rb and not is_clip:
+        # tools/rumble_live.py relays the stream to Rumble live, so the
+        # whole stream may be on the channel already. Only skipped when the
+        # live covered (nearly) the whole file AND is found on the channel.
+        live_url = _rumble_live_covered(video_path, cfg)
+        if live_url:
+            existing_rb = existing_rb_match_url = live_url
+            print(f"[Rumble] Already on Rumble from the live relay -> "
+                  f"{live_url}. Skipping the upload.")
     if existing_rb:
         note = " (would skip on a real run)" if dry_run else ""
         print(f"[Rumble] Video already exists on Rumble -> {existing_rb}{note}")
