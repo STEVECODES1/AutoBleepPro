@@ -71,8 +71,11 @@ def _start_server() -> None:
         os.environ.get("LOCALAPPDATA", ""), "Programs", "Ollama", "ollama.exe")
     if not exe or not os.path.isfile(exe):
         return
-    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) | getattr(
-        subprocess, "DETACHED_PROCESS", 0)
+    # CREATE_NO_WINDOW only - NOT DETACHED_PROCESS. A detached server has no
+    # console at all, so every model runner it starts got a console window
+    # of its own: two blank "ollama.EXE" windows popped up on the desktop on
+    # 2026-10-10. With a hidden console the runners inherit it, unseen.
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
     try:
         subprocess.Popen([exe, "serve"], stdout=subprocess.DEVNULL,
                          stderr=subprocess.DEVNULL, creationflags=flags)
