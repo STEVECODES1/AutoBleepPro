@@ -688,6 +688,72 @@ def _hold_if_slurs(platform: str, video_path: str, config: dict) -> None:
     raise HeldBack(f"held: {held}")
 
 
+_GAMBLING_SEEN: dict = {}
+
+
+def _gambling_verdict(video_path: str, config: dict) -> str:
+    """What gambling the clip shows ("" for none / could not tell).
+
+    Asked once per clip - three frames to the local vision model - and
+    remembered in logs/gambling_check.json, so the six platforms a clip
+    goes to do not ask six times and a restart does not ask again."""
+    key = os.path.basename(video_path or "")
+    if not key:
+        return ""
+    if key in _GAMBLING_SEEN:
+        return _GAMBLING_SEEN[key]
+    logs = ((config or {}).get("general", {}) or {}).get("logs_folder") or "logs"
+    cache_path = os.path.join(logs, "gambling_check.json")
+    try:
+        with open(cache_path, encoding="utf-8") as fh:
+            cache = json.load(fh)
+    except (OSError, ValueError):
+        cache = {}
+    if key in cache:
+        _GAMBLING_SEEN[key] = cache[key]
+        return cache[key]
+    seen = ""
+    try:
+        import subprocess as _sp
+
+        from autoreel.gambling_check import gambling_on_screen, sample_times
+
+        length = float(_sp.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+             "-of", "csv=p=0", video_path],
+            capture_output=True, text=True, timeout=60).stdout.strip() or 0)
+        verdict, hits = gambling_on_screen(video_path, sample_times(0.0, length, 3))
+        if verdict:
+            seen = hits[0][1] or "a casino site"
+        if verdict is not None:
+            cache[key] = seen
+            os.makedirs(logs, exist_ok=True)
+            with open(cache_path, "w", encoding="utf-8") as fh:
+                json.dump(cache, fh, indent=1)
+    except Exception as exc:
+        print(f"[Clips] Could not check {key} for gambling on screen ({exc}).")
+    _GAMBLING_SEEN[key] = seen
+    return seen
+
+
+def _hold_if_gambling(platform: str, video_path: str, config: dict) -> None:
+    """Raise HeldBack when a casino / betting site is on screen.
+
+    YouTube removes videos that point viewers to gambling sites Google has
+    not approved - the site, its logo or a promo code on screen counts -
+    and Instagram, Facebook and TikTok restrict the same. Rumble still
+    gets the clip."""
+    if base_platform(platform) == "rumble":
+        return
+    seen = _gambling_verdict(video_path, config)
+    if not seen:
+        return
+    from publishers.errors import HeldBack
+
+    print(f"[Clips] {platform}: held back - online gambling on screen ({seen}).")
+    raise HeldBack(f"held: online gambling on screen ({seen})")
+
+
 def _censored_clip(platform: str, video_path: str, config: dict) -> tuple:
     """(path to post, temp path to delete) for this platform's rules.
 
@@ -707,6 +773,7 @@ def _censored_clip(platform: str, video_path: str, config: dict) -> tuple:
     # That is how "18 48 Live 02 - Clip 01" (a hard-R and an f-slur,
     # muted) reached Shorts, Instagram, Facebook, X and TikTok on 10-09.
     _hold_if_slurs(platform, video_path, config)
+    _hold_if_gambling(platform, video_path, config)
     settings = (config or {}).get(platform, {}) or {}
     wanted = settings.get("censor_uploads")
     if wanted is None:

@@ -78,6 +78,18 @@ def pick_moments(ranges: Sequence[Tuple[float, float, float]], duration: float,
     return sorted(chosen) if scored else sorted((s, e) for s, e, _ in chosen)
 
 
+def _shows_gambling(source: str, start: float, end: float) -> bool:
+    """A casino / betting site on screen in this moment (2 frames looked at).
+    False when it cannot be told - no model is not a reason to lose a recap."""
+    try:
+        from autoreel.gambling_check import gambling_on_screen, sample_times
+
+        verdict, _hits = gambling_on_screen(source, sample_times(start, end, 2))
+        return bool(verdict)
+    except Exception:
+        return False
+
+
 def stranger_spans(source: str, look=None) -> List[Tuple[float, float]]:
     """Where the stream is on Monkey App / random video chat, by looking at
     it once a minute. Every single reading counts, with a minute either
@@ -417,6 +429,23 @@ def make(cfg, source: str, stream_title: str, stream_date: str,
               "strangers on camera stay off the strike channels.")
         ranges = kept
     segments = pick_moments(ranges, duration, s["max_s"], scored=True)
+    # No casino on screen in a recap - YouTube removes videos that show a
+    # gambling site Google has not approved (logo or promo code included).
+    # Each picked moment gets two frames looked at; a moment that shows
+    # one is taken out of the running and the pick is made again.
+    checked: dict = {}
+    for _round in range(3):
+        bad = []
+        for st, e, _score in segments:
+            if (st, e) not in checked:
+                checked[(st, e)] = _shows_gambling(source, st, e)
+            if checked[(st, e)]:
+                bad.append((st, e))
+        if not bad:
+            break
+        print(f"[Recap] Left out {len(bad)} moment(s) with a gambling site on screen.")
+        ranges = without(ranges, bad)
+        segments = pick_moments(ranges, duration, s["max_s"], scored=True)
     total = sum(e - st for st, e, _ in segments)
     if total < RECAP_MIN_S:
         print(f"[Recap] Only {total / 60:.1f} min of moments - not enough for a recap.")

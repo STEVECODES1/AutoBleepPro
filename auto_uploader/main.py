@@ -1403,6 +1403,30 @@ def _already_on_rumble(title: str, cfg) -> str:
         return ""
 
 
+def _vod_gambling(video_path: str, samples: int = 12, need: int = 2) -> str:
+    """What gambling a full stream shows ("" for none / could not tell).
+
+    `samples` frames spread across the stream go to the local vision
+    model; `need` of them must show a casino, so one stray frame of an ad
+    does not make a whole stream private. Never raises."""
+    try:
+        import subprocess as _sp
+
+        from autoreel.gambling_check import gambling_on_screen, sample_times
+
+        length = float(_sp.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+             "-of", "csv=p=0", video_path],
+            capture_output=True, text=True, timeout=120).stdout.strip() or 0)
+        if length <= 0:
+            return ""
+        verdict, hits = gambling_on_screen(video_path, sample_times(0.0, length, samples),
+                                           need=need)
+        return (hits[0][1] or "a casino site") if verdict else ""
+    except Exception:
+        return ""
+
+
 def _rumble_live_covered(video_path: str, cfg, min_share: float = 0.95) -> str:
     """The Rumble link when tools/rumble_live.py relayed this whole stream
     live and the live is on the channel, else "". Never raises."""
@@ -2988,6 +3012,18 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
                     print(f"[YouTube] Rumble still hasn't started sending "
                           f"the file after {RUMBLE_HEAD_START_TIMEOUT}s - "
                           f"starting anyway rather than waiting forever.")
+            # A casino on screen (Howl.gg slots, a promo-code banner) breaks
+            # YouTube's gambling rules - the whole channel is at risk, not
+            # just the video - so such a stream goes up PRIVATE and is said
+            # out loud, for a person to decide. Rumble is not affected.
+            yt_privacy = cfg.youtube.privacy
+            if not is_clip and str(yt_privacy).lower() != "private":
+                casino = _vod_gambling(video_path)
+                if casino:
+                    yt_privacy = "private"
+                    print(f"[YouTube] A gambling site is on screen in this stream "
+                          f"({casino}) - uploading it PRIVATE so the channel is "
+                          f"not put at risk. Check it in YouTube Studio.")
             yt = YouTubeUploader(cfg.youtube.client_secrets_path, cfg.youtube.token_path)
 
             def yt_on_retry(attempt, delay, exc):
@@ -2997,7 +3033,7 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
                 lambda: yt.upload(
                     yt_source, yt_title, yt_description, cfg.youtube.tags,
                     chunk_mb=float(getattr(cfg.youtube, 'upload_chunk_mb', 8) or 8),
-                    privacy=cfg.youtube.privacy, category_id=cfg.youtube.category_id,
+                    privacy=yt_privacy, category_id=cfg.youtube.category_id,
                     made_for_kids=cfg.youtube.made_for_kids,
                     thumbnail_path=lambda: thumbnail_path_for(
                         cfg.youtube.thumbnail_path) or None,

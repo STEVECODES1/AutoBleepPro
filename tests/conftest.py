@@ -227,3 +227,18 @@ def _no_voice_model(monkeypatch):
     except Exception:
         return
     monkeypatch.setattr(voices, "label", lambda *a, **k: {"windows": 0})
+
+
+@pytest.fixture(autouse=True)
+def _no_gambling_model(monkeypatch, request):
+    """No test asks the local vision model about gambling - that is a real
+    Ollama call per frame. Tests of autoreel.gambling_check pass their own
+    `ask` and are left alone."""
+    if "gambling" in request.node.nodeid:
+        return
+    try:
+        import autoreel.gambling_check as gc
+    except Exception:
+        return
+    monkeypatch.setattr(gc, "frame_has_gambling", lambda *a, **k: None)
+    monkeypatch.setattr(gc, "gambling_on_screen", lambda *a, **k: (None, []))

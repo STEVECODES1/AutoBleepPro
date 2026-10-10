@@ -330,6 +330,29 @@ def hate_split(segments: Sequence[dict]):
     return cut, muted
 
 
+GAMBLING = "gambling site on screen"
+GAMBLING_EVERY_S = 30.0
+
+
+def gambling_flags(video: str, span: float, every: float = GAMBLING_EVERY_S,
+                   ask=None) -> List[dict]:
+    """A cut flag around every looked-at spot that shows a casino.
+
+    YouTube removes videos that show a gambling site Google has not
+    approved - the site, its logo or a promo code - so on BinScripts that
+    is a strike, not a judgement call. One frame every `every` seconds."""
+    from autoreel.gambling_check import frame_has_gambling, frame_jpeg
+
+    out, t = [], every / 2
+    while t < span:
+        verdict = frame_has_gambling(frame_jpeg(video, t), ask=ask)
+        if verdict and verdict[0]:
+            out.append({"start": max(0.0, t - every / 2), "end": t + every / 2,
+                        "reason": GAMBLING, "text": verdict[1], "who": ""})
+        t += every
+    return out
+
+
 def censor_all(video: str, work_dir: str):
     """Every swear bleeped (scope "all"). (censored path, transcript)."""
     from utils.censor import censor_video
@@ -441,6 +464,11 @@ def prepare(source: str, drafts: str = DRAFTS, target_s: float = TARGET_S, say=p
             cut_hate, muted_n = hate_split(segments)
             flags = flags_for(segments, cut_hate, _spans(segments, "sexual_content"),
                               muted_spans=muted_n)
+            casino = gambling_flags(piece, run_e - run_s)
+            if casino:
+                say(f"[Monkey] Part {k + 1}: a gambling site is on screen in "
+                    f"{len(casino)} of the spots looked at - those are cut.")
+            flags = sorted(flags + casino, key=lambda f: f["start"])
             say(f"[Monkey] Part {k + 1}: {len(muted_n)} everyday n-word(s) muted and kept, "
                 f"{len(cut_hate)} slur(s) cut.")
             say(f"[Monkey] Part {k + 1}: {len(flags)} flagged moment(s); listening for laughs...")
