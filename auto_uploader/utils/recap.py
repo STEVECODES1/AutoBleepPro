@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import tempfile
 from typing import List, Optional, Sequence, Tuple
@@ -126,11 +127,16 @@ def _duration(path: str) -> float:
 
 
 def build_from(items: Sequence[Tuple[str, float, float]], out_path: str,
-               video_filter: str = "") -> list:
+               video_filter: str = "", decor: Optional[Sequence[Optional[str]]] = None,
+               card: Optional[dict] = None) -> list:
     """Cut (source, start, end) pieces - from one file or several - and join
     them into `out_path`. Every piece is encoded with the same settings, so
     the join is a copy. Returns (start, end, item index) for each piece in
-    the result - a piece that failed to cut is left out - or [] on failure."""
+    the result - a piece that failed to cut is left out - or [] on failure.
+
+    decor: one caption/topic .ass per piece (or None) - turns on the edit:
+    every piece slides in over the one before, its .ass burned in.
+    card: {"still": (source, seconds), "ass": path} - an opening title card."""
     from utils.ffmpeg_tools import pick_video_encoder
 
     encoder = pick_video_encoder("auto")
@@ -143,21 +149,68 @@ def build_from(items: Sequence[Tuple[str, float, float]], out_path: str,
     parts = []
     placed = []
     at = 0.0
+    codec = ["-c:v", encoder, *quality]
+    behind = None          # the last frame so far - what the next moment slides over
     try:
+        if card:
+            # The opening card (utils/recap_edit): the title over a blurred
+            # still of the best moment.
+            from utils import recap_edit
+
+            png = os.path.join(work, "card.png")
+            part = os.path.join(work, "card.ts")
+            src, when = card["still"]
+            if (recap_edit.still(src, when, png)
+                    and recap_edit.render_card(part, png, card["ass"], codec)
+                    and os.path.getsize(part) > 0):
+                parts.append(part)
+                at = _duration(part) or recap_edit.CARD_S
+                last = os.path.join(work, "card_last.png")
+                behind = last if recap_edit.card_frame(png, card["ass"], last) else None
         for i, (source, s, e) in enumerate(items):
             part = os.path.join(work, f"part{i:03d}.ts")
-            done = subprocess.run(
-                ["ffmpeg", "-y", "-v", "error", "-ss", f"{s:.3f}", "-i", source,
-                 "-t", f"{e - s:.3f}", "-map", "0:v:0", "-map", "0:a:0",
-                 "-vf", vf, "-c:v", encoder, *quality,
-                 "-af", "aresample=48000,afade=t=in:d=0.15", "-c:a", "aac", "-b:a", "192k",
-                 "-ar", "48000", "-ac", "2", "-f", "mpegts", part],
-                capture_output=True, text=True, timeout=1800)
-            if done.returncode == 0 and os.path.getsize(part) > 0:
+            if decor is not None:
+                # Edited: slides in over the last frame, captions and topic
+                # tag burned in.
+                from utils import recap_edit
+
+                args = recap_edit.piece_args(source, s, e, part, vf, codec,
+                                             decor[i] if i < len(decor) else None, behind)
+                done = subprocess.run(["ffmpeg", "-y", "-v", "error", *args],
+                                      capture_output=True, text=True, timeout=1800)
+            else:
+                done = subprocess.run(
+                    ["ffmpeg", "-y", "-v", "error", "-ss", f"{s:.3f}", "-i", source,
+                     "-t", f"{e - s:.3f}", "-map", "0:v:0", "-map", "0:a:0",
+                     "-vf", vf, *codec,
+                     "-af", "aresample=48000,afade=t=in:d=0.15", "-c:a", "aac", "-b:a", "192k",
+                     "-ar", "48000", "-ac", "2", "-f", "mpegts", part],
+                    capture_output=True, text=True, timeout=1800)
+            if done.returncode == 0 and os.path.exists(part) and os.path.getsize(part) > 0:
                 parts.append(part)
                 length = _duration(part) or (e - s)
                 placed.append((round(at, 3), round(at + length, 3), i))
                 at += length
+                if decor is not None:
+                    last = os.path.join(work, f"last{i:03d}.png")
+                    behind = last if recap_edit.last_frame(part, last) else behind
+            elif decor is not None:
+                print(f"[Recap] Could not render moment {i + 1}: "
+                      f"{(done.stderr or '').strip()[-200:]}")
+        if placed and card and card.get("end_ass"):
+            # The closing card - where the full stream is - over the last
+            # frame of the last moment.
+            from utils import recap_edit
+
+            part = os.path.join(work, "end.ts")
+            png = behind
+            if not png:
+                src, when = card["still"]
+                png = os.path.join(work, "end.png")
+                png = png if recap_edit.still(src, when, png) else None
+            if png and recap_edit.render_card(part, png, card["end_ass"], codec,
+                                              recap_edit.END_CARD_S):
+                parts.append(part)
         if not parts:
             return []
         listing = os.path.join(work, "list.txt")
@@ -248,6 +301,98 @@ def _links_block(cfg) -> str:
     return "\n".join(block)
 
 
+def _edit_plan(cfg, source: str, segments, shown_title: str, stream_date: str,
+               work: str):
+    """(per-moment .ass, card, topic titles) for the edited recap - see
+    utils/recap_edit. (None, None, []) when the edit cannot be prepared:
+    the recap is then cut plain, never skipped."""
+    try:
+        from utils import recap_edit
+        from utils.censor import words_cache_path
+
+        words_path = words_cache_path(cfg.general.censored_folder,
+                                      os.path.splitext(os.path.basename(source))[0])
+        with open(words_path, encoding="utf-8") as f:
+            data = json.load(f)
+        transcript = list(data.get("segments") if isinstance(data, dict) else data)
+    except Exception as exc:
+        print(f"[Recap] No transcript for the edit ({exc}) - cutting it plain.")
+        return None, None, []
+    texts = [" ".join(str(seg.get("text", "")) for seg in transcript
+                      if st <= float(seg.get("start", 0)) < e) for st, e, _ in segments]
+    topics = recap_edit.topic_titles(texts)
+    print(f"[Recap] Topic tags for {sum(1 for t in topics if t)} of {len(topics)} moments.")
+    decor = [recap_edit.piece_ass(os.path.join(work, f"moment{i:02d}.ass"), transcript,
+                                  st, e, topics[i] if i < len(topics) else "")
+             for i, (st, e, _) in enumerate(segments)]
+    best = max(segments, key=lambda m: m[2])
+    card = {"still": (source, (best[0] + best[1]) / 2),
+            "ass": recap_edit.card_ass(os.path.join(work, "card.ass"), shown_title,
+                                       f"BEST MOMENTS  {stream_date}"),
+            "end_ass": recap_edit.card_ass(
+                os.path.join(work, "end.ass"), "THE FULL STREAM",
+                "YOUTUBE @WOPOVOD  -  UNCUT ON RUMBLE: BINSCRIPTS",
+                name="EVERY MINUTE OF IT", seconds=recap_edit.END_CARD_S)}
+    return decor, card, topics
+
+
+def _with_intro(cfg, path: str):
+    """(file to upload, intro seconds): the channel intro in front, the
+    same intro the full streams use (youtube.intro_path). Unchanged when
+    there is none or it cannot be joined."""
+    intro = (getattr(cfg.youtube, "intro_path", None)
+             or os.environ.get("YOUTUBE_INTRO_PATH", "") or "")
+    if not intro:
+        return path, 0.0
+    if not os.path.isabs(intro):
+        intro = os.path.join(getattr(cfg, "project_root", "") or "", intro)
+    if not os.path.exists(intro):
+        return path, 0.0
+    from utils.ffmpeg_tools import media_duration, prepend_intro
+
+    out = os.path.splitext(path)[0] + "_INTRO.mp4"
+    try:
+        if prepend_intro(intro, path, out):
+            return out, float(media_duration(intro) or 0.0)
+    except Exception as exc:
+        print(f"[Recap] Intro skipped ({exc}).")
+    return path, 0.0
+
+
+def recap_description(cfg, shown_title: str, stream_date: str, full: str, uncut: str,
+                      placed, topics, intro_s: float = 0.0) -> str:
+    """Both full streams first - that is the job of this channel - then
+    chapters named by the topic tags, then every link."""
+    from utils.weekly import chapters
+
+    lines = []
+    if full:
+        lines.append(f"▶ Full stream on YouTube: {full}")
+    if uncut:
+        lines.append(f"▶ Uncut & uncensored on Rumble: {uncut}")
+    if lines:
+        lines.append("")
+    lines.append(f"The best moments from Stackswopo's \"{shown_title}\" stream ({stream_date}). "
+                 "Every minute of it is on STACKSWOPO VODS: https://www.youtube.com/@wopovod")
+    marks = [(0.0, shown_title.upper())]
+    for a, _b, i in placed:
+        topic = topics[i] if i < len(topics) else ""
+        if topic:
+            marks.append((a + intro_s, topic))
+    if len(marks) > 1 and marks[1][0] < 10:
+        # The intro and card are shorter than the 10 s YouTube wants for a
+        # chapter: the first moment's chapter starts at 0:00 instead.
+        marks = [(0.0, marks[1][1])] + marks[2:]
+    marked = chapters(marks)
+    if marked:
+        lines += ["", marked]
+    block = _links_block(cfg)
+    if block:
+        lines += ["", block]
+    lines += ["", "#Stackswopo #GTARP #FunnyMoments"]
+    return "\n".join(lines)
+
+
 def make(cfg, source: str, stream_title: str, stream_date: str,
          ranges: Sequence[Tuple[float, float, float]]) -> str:
     """Build, censor and upload this stream's recap. The URL, or ""."""
@@ -280,8 +425,14 @@ def make(cfg, source: str, stream_title: str, stream_date: str,
     raw = os.path.join(cfg.general.censored_folder, f"{base}_RECAP.mp4")
     speed = dict(cfg.general.speed or {})
     print(f"[Recap] Cutting {len(segments)} moments ({total / 60:.1f} min) into a recap...")
-    placed = build(source, [(st, e) for st, e, _ in segments], raw,
-                   str(speed.get("video_filter", "") or ""))
+    from utils.templating import strip_trailing_stamp
+
+    shown_title = strip_trailing_stamp(stream_title) or stream_title
+    edit_dir = tempfile.mkdtemp(prefix="recap_edit_", dir=cfg.general.censored_folder)
+    decor, card, topics = _edit_plan(cfg, source, segments, shown_title, stream_date, edit_dir)
+    placed = build_from([(source, st, e) for st, e, _ in segments], raw,
+                        str(speed.get("video_filter", "") or ""), decor=decor, card=card)
+    shutil.rmtree(edit_dir, ignore_errors=True)
     if not placed:
         print("[Recap] Could not build the recap.")
         return ""
@@ -314,15 +465,16 @@ def make(cfg, source: str, stream_title: str, stream_date: str,
         from utils.templating import build_title
 
         full = link_for(stream_title, stream_date, "youtube")
+        uncut = link_for(stream_title, stream_date, "rumble")
         title = build_title(stream_title, stream_date,
                             "Stackswopo - {TITLE} - {date} (BEST MOMENTS)")
-        description = (
-            (f"▶ Full stream: {full}\n\n" if full else "")
-            + f"The best moments from Stackswopo's \"{stream_title}\" stream "
-              f"({stream_date}). Every minute of it is on STACKSWOPO VODS: "
-              f"https://www.youtube.com/@wopovod\n\n"
-            + _links_block(cfg)
-            + "\n\n#Stackswopo #GTARP #FunnyMoments")
+        # The intro goes on the uploaded copy only: the kept recap (for
+        # the weekly) stays without it, so its moment times stay right.
+        upload_path, intro_s = _with_intro(cfg, final)
+        if upload_path != final:
+            cleanup.append(upload_path)
+        description = recap_description(cfg, shown_title, stream_date, full, uncut,
+                                        placed, topics, intro_s)
         from utils.weekly import risky
 
         privacy = s["privacy"]
@@ -330,9 +482,12 @@ def make(cfg, source: str, stream_title: str, stream_date: str,
             # Strangers on camera: a person checks it before it goes public.
             privacy = "private"
             print("[Recap] Strangers-on-camera stream - uploading PRIVATE for you to check.")
-        url = upload(s["token_path"], final, title, description,
+        comment = "\n".join(line for line in (
+            f"▶ Full stream on YouTube: {full}" if full else "",
+            f"▶ Uncut & uncensored on Rumble: {uncut}" if uncut else "") if line)
+        url = upload(s["token_path"], upload_path, title, description,
                      ["Stackswopo", "GTA RP", "Stackswopo stream", "best moments",
-                      "funny moments", "GTA 5"], privacy, full)
+                      "funny moments", "GTA 5"], privacy, full or uncut, comment=comment)
         print(f"[Recap] Uploaded to STACKSWOPO GAMES ({privacy}): {url}")
         done = _done(cfg)
         done[key] = url
