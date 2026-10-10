@@ -114,15 +114,12 @@ echo  Uploader : censor, upload, clip, announce
 echo  Folder   : %~dp0auto_uploader\watch_folder
 echo.
 
-start "AutoBleep RECORDER" cmd /k ""%~dp0_RUN_RECORDER.bat""
+REM Recorder, uploader, Rumble Chrome and the Rumble live relay - each one
+REM only if it is not already running (the Startup folder starts them too
+REM after a reboot, and two recorders or two uploaders double everything).
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0_AUTOSTART.ps1"
 
-REM A moment apart so the two windows do not fight over the console while
-REM they start, and so the recorder's banner is readable.
-timeout /t 3 /nobreak >nul
-
-start "AutoBleep UPLOADER" cmd /k ""%~dp0_RUN_UPLOADER.bat""
-
-echo  Both windows are open. This one can be closed.
+echo  Everything is running. This window can be closed.
 echo.
 echo  Useful, in the uploader window:
 echo    python main.py --posting-status --verify   what would post right now
