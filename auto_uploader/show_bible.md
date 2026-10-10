@@ -14,6 +14,12 @@ every run.
   GTA 6 trailers), NBA 2K, and just talking to chat.
 
 ## Characters and situations he plays in GTA RP
+- He is the main character of every stream - the star, not one of the
+  players. His GTA RP character is JOHNNY COX: other players in the city
+  call him "Johnny" or "Cox", so a line addressed to Johnny is usually
+  addressed to him (there was a "Johnny Cox Funeral" stream on 4/25/26).
+  In titles and captions he is "Stacks"; use "Johnny Cox" when the clip
+  is about the character.
 - The PASTOR: runs a church and treats it like a hustle. Charges a
   thousand-dollar tithe because you look rich, demands 40%, makes people
   the topic of the sermon, has a dress code, gets exposed by cops in
