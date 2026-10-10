@@ -38,8 +38,21 @@ def test_flagged_moments_are_left_out_and_sexual_ones_only_listed():
     flags = [{"start": 190, "end": 215, "reason": "asked to stop / upset", "text": ""},
              {"start": 320, "end": 335, "reason": mp.SEXUAL_WORDS, "text": ""}]
     chosen, left = mp.pick(curve, segs, flags, target_s=600)
-    assert [round(m["start"]) for m in chosen] == [25, 295]
-    assert chosen[1]["checks"] == [mp.SEXUAL_WORDS]
+    # The moment around 200 keeps only its clean part, before the flagged line.
+    assert [round(m["start"]) for m in chosen] == [25, 165, 295]
+    assert chosen[1]["end"] <= 190
+    assert chosen[2]["checks"] == [mp.SEXUAL_WORDS]
+    assert left == []
+
+
+def test_a_moment_with_no_clean_stretch_left_is_left_out():
+    curve = [0.0] * 400
+    curve[200] = 0.9
+    segs = [seg(i, i + 5, "talking") for i in range(0, 400, 5)]
+    flags = [{"start": 150, "end": 230, "reason": "asked to stop / upset", "text": ""}]
+    chosen, left = mp.pick(curve, segs, flags, target_s=600)
+    assert all(not mp._overlaps(m, flags[0]) for m in chosen)
+    assert any(abs(m.get("peak", 0) - 200) < 1 for m in left)
     assert left[0]["reasons"] == ["asked to stop / upset"]
 
 

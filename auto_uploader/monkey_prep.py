@@ -136,6 +136,14 @@ def _speaker_at(segments: Sequence[dict], s: float, e: float) -> str:
 
 
 def _peaks(curve: Sequence[float], floor: float = 0.3, reach: int = 20) -> List[Tuple[int, float]]:
+    # The floor follows the stream, not a fixed number: on the 3/17 Monkey
+    # stream only ONE second in 80 minutes reached 0.3, so a fixed 0.3 found
+    # one moment and the draft came out empty. The loudest ~8% of the
+    # stream's own laughter is what counts as a laugh here - but never so
+    # low that plain talk or silence passes for one.
+    if curve:
+        ranked = sorted(float(v) for v in curve)
+        floor = max(0.08, min(floor, ranked[int(0.92 * (len(ranked) - 1))]))
     out = []
     for t, v in enumerate(curve):
         if v < floor:
@@ -163,17 +171,50 @@ def _overlaps(a: dict, b: dict) -> bool:
     return a["start"] < b["end"] and a["end"] > b["start"]
 
 
+MIN_PIECE_S = 15.0
+
+
+def _clean_piece(m: dict, cuts: Sequence[dict], segments: Sequence[dict]) -> Optional[dict]:
+    """The longest-useful stretch of moment `m` that touches no cut flag -
+    the one holding the laugh, or nearest it - trimmed to whole sentences.
+    None when no clean stretch of MIN_PIECE_S is left."""
+    s, e = float(m["start"]), float(m["end"])
+    peak = float(m.get("peak", (s + e) / 2))
+    free, cur = [], s
+    for a, b in sorted((max(s, float(f["start"])), min(e, float(f["end"]))) for f in cuts):
+        if a > cur:
+            free.append((cur, a))
+        cur = max(cur, b)
+    if cur < e:
+        free.append((cur, e))
+    free = [(a, b) for a, b in free if b - a >= MIN_PIECE_S]
+    if not free:
+        return None
+    a, b = min(free, key=lambda ab: 0.0 if ab[0] <= peak <= ab[1]
+               else min(abs(ab[0] - peak), abs(ab[1] - peak)))
+    inside = [seg for seg in segments
+              if float(seg["start"]) >= a and float(seg["end"]) <= b]
+    if inside and float(inside[-1]["end"]) - float(inside[0]["start"]) >= MIN_PIECE_S:
+        a, b = float(inside[0]["start"]), float(inside[-1]["end"])
+    return {"start": a, "end": b}
+
+
 def pick(curve: Sequence[float], segments: Sequence[dict], flags: Sequence[dict],
          target_s: float = TARGET_S, before: float = 35.0, after: float = 12.0):
     """(moments for the cut, moments left out). Moments are built around
     laughter peaks - with no laughter reading, around the busiest talk."""
     peaks = _peaks(curve)
-    if not peaks and segments:
+    if segments and len(peaks) * (before + after) < 2 * target_s:
+        # Too few laughs to fill a cut: the busiest talk is the next best
+        # sign something is happening. Laughs still rank first (they score
+        # higher than talk, which is scaled well under 1).
         span = float(segments[-1]["end"])
         talk = [0] * (int(span // 45) + 1)
         for seg in segments:
             talk[int(float(seg["start"]) // 45)] += len(str(seg.get("text", "")).split())
-        peaks = [(int(i * 45 + 33), n / 100.0) for i, n in enumerate(talk) if n >= 40]
+        busy = [(int(i * 45 + 33), min(0.07, n / 1500.0)) for i, n in enumerate(talk) if n >= 40]
+        taken = {t for t, _ in peaks}
+        peaks = sorted(peaks + [p for p in busy if all(abs(p[0] - t) > 30 for t in taken)])
     found: List[dict] = []
     for t, score in peaks:
         s, e = _snap(segments, max(0.0, t - before), t + after)
@@ -181,16 +222,23 @@ def pick(curve: Sequence[float], segments: Sequence[dict], flags: Sequence[dict]
             found[-1]["end"] = max(found[-1]["end"], e)
             found[-1]["score"] = max(found[-1]["score"], score)
         else:
-            found.append({"start": s, "end": e, "score": score})
+            found.append({"start": s, "end": e, "score": score, "peak": float(t)})
     keep, left_out = [], []
     for m in found:
         hits = [f for f in flags if _overlaps(m, f)]
+        cuts = [f for f in hits if is_cut(f)]
+        if cuts:
+            # Keep the clean part around the laugh instead of losing the
+            # whole moment to one flagged line near its edge.
+            piece = _clean_piece(m, cuts, segments)
+            if piece is None:
+                left_out.append({**m, "reasons": sorted({f["reason"] for f in cuts}),
+                                 "checks": sorted({f["reason"] for f in hits if not is_cut(f)})})
+                continue
+            m = {**m, **piece}
+            hits = [f for f in flags if _overlaps(m, f)]
         m["checks"] = sorted({f["reason"] for f in hits if not is_cut(f)})
-        reasons = sorted({f["reason"] for f in hits if is_cut(f)})
-        if reasons:
-            left_out.append({**m, "reasons": reasons})
-        else:
-            keep.append(m)
+        keep.append(m)
     chosen, total = [], 0.0
     for m in sorted(keep, key=lambda m: -m["score"]):
         if total + (m["end"] - m["start"]) <= target_s:
