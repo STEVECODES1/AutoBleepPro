@@ -39,6 +39,7 @@ PY = sys.executable
 
 BITRATE = "4500k"
 END_GRACE_S = 150          # recorder not recording this long = stream over
+NO_FEED_GIVE_UP_S = 600    # never got a feed for this id = not the live one
 STALE_HEARTBEAT_S = 240
 POLL_S = 15
 
@@ -260,8 +261,16 @@ def relay(video_id, cfg):
                 if src:
                     push = Push(src, cfg["RUMBLE_RTMP_URL"], cfg["RUMBLE_STREAM_KEY"])
                 else:
-                    log("No live feed URL yet - trying again")
                     push = None
+                    if not entry["went_live"] and time.time() - entry["started"] > NO_FEED_GIVE_UP_S:
+                        # Usually the heartbeat still naming the LAST stream's
+                        # video for a moment - that one is over and has no
+                        # feed. Stop so the real new id can be picked up.
+                        log(f"No live feed for {video_id} after "
+                            f"{NO_FEED_GIVE_UP_S // 60} min - giving up on this id")
+                        entry["no_feed"] = True
+                        break
+                    log("No live feed URL yet - trying again")
             if push is not None and not entry["went_live"]:
                 try:
                     studio = studio or Studio()

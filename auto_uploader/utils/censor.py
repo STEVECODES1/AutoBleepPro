@@ -154,7 +154,7 @@ def _extract_audio(source_path: str, raw_audio_path: str) -> None:
 
 
 def _mute_full_quality(source_path: str, whisper_wav: str, engine, violations,
-                       out_wav: str) -> bool:
+                       out_wav: str, spans=None) -> bool:
     """Silence the flagged spans on the source's ORIGINAL audio track.
 
     Same spans the pydub path would mute (engine.mute_spans), applied by
@@ -167,9 +167,10 @@ def _mute_full_quality(source_path: str, whisper_wav: str, engine, violations,
     if not have_ffmpeg():
         return False
     try:
-        with wave.open(whisper_wav, "rb") as wf:
-            total_ms = int(wf.getnframes() * 1000 / wf.getframerate())
-        spans = engine.mute_spans(violations, total_ms)
+        if spans is None:
+            with wave.open(whisper_wav, "rb") as wf:
+                total_ms = int(wf.getnframes() * 1000 / wf.getframerate())
+            spans = engine.mute_spans(violations, total_ms)
     except Exception as exc:
         print(f"[Censor] full-quality mute unavailable ({exc}) - using 16k path")
         return False
@@ -576,7 +577,10 @@ def censor_video(
     # that was already processed.
     # "hq": renders from before the full-quality-audio fix carried 16 kHz
     # mono sound and must not be reused.
-    cache_key = (f"{bleep_method}-{model_name}-hq-"
+    # Snap-to-sound + second listen (utils/censor_verify.py). Part of the
+    # cache key so a copy made without them is never reused as if it had them.
+    listen_again = bool(speed.get("second_listen", True))
+    cache_key = (f"{bleep_method}-{model_name}-hq-{'sl1-' if listen_again else ''}"
                 f"{_settings_fingerprint(padding_ms, mute_whole_segment, only_categories, custom_words, allow_words)}")
     output_video_path = os.path.join(work_dir, f"{basename}_CENSORED_{cache_key}.mp4")
 
@@ -702,11 +706,49 @@ def censor_video(
         # phone-call-quality sound. Mute the original full-quality track
         # with ffmpeg instead; fall back to the old path only if that fails.
         hq_done = False
+        heard_again = []
         if bleep_method != "beep" and speed.get("full_quality_audio", True):
+            spans = None
+            if listen_again:
+                # Mutes grown to where each word's sound really ends - see
+                # utils/censor_verify.py. Only ever adds muting.
+                try:
+                    import wave
+
+                    from utils.censor_verify import snap_to_sound
+
+                    with wave.open(raw_audio_path, "rb") as wf:
+                        total_ms = int(wf.getnframes() * 1000 / wf.getframerate())
+                    spans = snap_to_sound(raw_audio_path,
+                                          engine.mute_spans(violations, total_ms), violations)
+                except Exception as exc:
+                    print(f"[Censor] Could not snap the mutes to the sound ({exc}) - "
+                          f"using the padded mutes only.")
+                    spans = None
             hq_done = _mute_full_quality(source_path, raw_audio_path, engine,
-                                         violations, clean_audio_path)
+                                         violations, clean_audio_path, spans=spans)
             if hq_done:
                 timer.mark("censor audio [full quality]")
+            if hq_done and listen_again and spans:
+                from utils.censor_verify import merge, second_listen
+
+                around = spans
+                for _round in range(2):
+                    extra, words = second_listen(
+                        clean_audio_path, spans, engine,
+                        _get_transcriber(model_name, device,
+                                         reuse=bool(speed.get("reuse_model", True))),
+                        total_ms / 1000, source_wav16=raw_audio_path,
+                        around=around if _round else None)
+                    heard_again += words
+                    if not extra:
+                        break
+                    spans = merge(list(spans) + list(extra))
+                    around = extra
+                    if not _mute_full_quality(source_path, raw_audio_path, engine,
+                                              violations, clean_audio_path, spans=spans):
+                        raise RuntimeError("could not re-mute after the second listen")
+                timer.mark("second listen")
         if not hq_done:
             audio_segment = AudioSegment.from_wav(raw_audio_path)
             censored_audio = engine.censor_audio(audio_segment, violations, method=bleep_method)
@@ -748,7 +790,7 @@ def censor_video(
             output_path=output_video_path,
             was_censored=True,
             violation_count=len(violations),
-            censored_words=[v.word for v in violations],
+            censored_words=[v.word for v in violations] + list(heard_again),
         )
     finally:
         # Used (copied into the censored file) or not needed (nothing to
