@@ -90,7 +90,16 @@ SEXUAL_WORDS = "sexual comment"
 # are, so you can trim them. Everything else is left out.
 LOOKS_FROM_THEM = "insult from them, at him"
 MUTED_N = "n-word (muted, kept)"
-CHECK_ONLY = {SEXUAL_WORDS, LOOKS_FROM_THEM, MUTED_N}
+RACE_TALK = "race / religion talk - check it"
+CHECK_ONLY = {SEXUAL_WORDS, LOOKS_FROM_THEM, MUTED_N, RACE_TALK}
+# Listed, not cut: talk about a race, nationality or religion is not hate
+# speech by itself, but it is exactly what YouTube's hate policy reads in
+# context - the first draft kept "the chinese people" and "a family tree of
+# racist people" with nothing pointing at them.
+RULES.append((RACE_TALK, 5.0, re.compile(
+    r"\b(chinese|mexican|asian|indian|arab|african|haitian|puerto rican|dominican"
+    r"|white (people|boy|girl|folks|man|woman)|black (people|folks)|jewish|jews?"
+    r"|muslim|christian|pentecostal|immigrants?|illegals?|racist|racism)\b")))
 OTHER = "other person"          # autoreel.speaker_id.OTHER
 
 
