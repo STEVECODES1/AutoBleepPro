@@ -73,6 +73,16 @@ TASKBAR_STRIP = 0.06
 # offers.
 TASKBAR_MOVING = 0.02
 
+# A Monkey call is a lit desktop page. Below these the "still" picture is a
+# black screen, a dark game menu or loading page, or one flat colour.
+# Measured 2026-10-10: 15 spots across a real Monkey stream read 52-83
+# average grey; the 19 still spots of a GTA/Fight Night stream that used
+# to be called "monkey" read 18-57, and all but one under 50. Motion does
+# NOT help here - a Monkey call where nobody moves reads 0.0001, less than
+# any of those game menus.
+DARK_MEAN = 50.0      # average grey, 0-255
+FLAT_STD = 10.0       # spread of grey - a single flat colour is near 0
+
 
 def _changed_fraction(before, after, threshold: int = PIXEL_CHANGE) -> float:
     """Fraction of pixels that differ by more than `threshold`."""
@@ -128,6 +138,15 @@ def kind_for_frames(frames) -> str:
 
     pinned = bottom <= TASKBAR_MOVING
     if pinned and overall <= DESKTOP_MOVING:
+        # Still and pinned is ALSO a black screen, a loading screen and a
+        # frozen game menu - on a real GTA stream those were read as 106
+        # minutes of "Monkey App" (Fight Night menus, a black screen, a
+        # dark loading page). A call is a lit page with something in it.
+        import numpy as np
+
+        stack = np.stack([np.asarray(f, dtype=np.float32) for f in frames])
+        if float(stack.mean()) < DARK_MEAN or float(stack.std()) < FLAT_STD:
+            return ""
         return "monkey"
     if not pinned and overall >= GAMEPLAY_MOVING:
         return "gta"

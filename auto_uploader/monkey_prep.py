@@ -15,13 +15,18 @@ WHY IT STOPS SHORT OF UPLOADING
 
 WHAT YOU GET (D:\\BinScripts drafts\\<stream>\\)
     rough_cut.mp4   ~16 min of the best moments, in order. Every swear is
-                    bleeped and anything with a slur is cut out.
+                    bleeped and every slur is cut out (his everyday
+                    n-word is muted instead - see below).
     review.html     every moment in the cut with what was said, then every
                     moment LEFT OUT and why - age, "stop recording", looks,
                     sexual, names/socials, slurs - so you can check them.
 
 WHAT IT LEAVES OUT
-    hate speech       cut - a bleep still shows what was said
+    hate speech       cut - a bleep still shows what was said. The one
+                      exception: the everyday n-word from him, not in an
+                      insult, is muted like any swear and KEPT (each one is
+                      listed on the review page). Hard-r, every other slur,
+                      any slur from the other person - cut.
     age               "how old", "I'm 15", school, grade ... 90 s either side
     asked to stop     "stop recording", "delete that", "I'll report" ...
     looks / identity  insults about how somebody looks or what they are
@@ -84,7 +89,8 @@ SEXUAL_WORDS = "sexual comment"
 # judgement call. Those stay in the cut and are listed with where they
 # are, so you can trim them. Everything else is left out.
 LOOKS_FROM_THEM = "insult from them, at him"
-CHECK_ONLY = {SEXUAL_WORDS, LOOKS_FROM_THEM}
+MUTED_N = "n-word (muted, kept)"
+CHECK_ONLY = {SEXUAL_WORDS, LOOKS_FROM_THEM, MUTED_N}
 OTHER = "other person"          # autoreel.speaker_id.OTHER
 
 
@@ -93,7 +99,8 @@ def is_cut(flag: dict) -> bool:
 
 
 def flags_for(segments: Sequence[dict], hate_spans: Sequence[Tuple[float, float]] = (),
-              sexual_spans: Sequence[Tuple[float, float]] = ()) -> List[dict]:
+              sexual_spans: Sequence[Tuple[float, float]] = (),
+              muted_spans: Sequence[Tuple[float, float]] = ()) -> List[dict]:
     """Every moment that must not go out: [{start, end, reason, text, who}].
 
     `who` comes from autoreel.speaker_id when the segments were labelled
@@ -112,7 +119,8 @@ def flags_for(segments: Sequence[dict], hate_spans: Sequence[Tuple[float, float]
                     reason = LOOKS_FROM_THEM
                 out.append({"start": max(0.0, s - pad), "end": e + pad,
                             "reason": reason, "text": text, "who": who})
-    for spans, pad, reason in ((hate_spans, 5, HATE), (sexual_spans, 12, SEXUAL_WORDS)):
+    for spans, pad, reason in ((hate_spans, 5, HATE), (sexual_spans, 12, SEXUAL_WORDS),
+                               (muted_spans, 0, MUTED_N)):
         for (s, e) in spans:
             out.append({"start": max(0.0, s - pad), "end": e + pad, "reason": reason,
                         "text": "", "who": _speaker_at(segments, s, e)})
@@ -233,6 +241,38 @@ def _spans(segments: Sequence[dict], category: str) -> List[Tuple[float, float]]
     return [(v.start, v.end) for v in engine.scan_segments(segments)]
 
 
+# The everyday n-word, the way he says it all stream. Muted by the censor
+# like any swear and KEPT (decided 2026-10-10: cutting every moment with
+# it left 0 minutes of a real Monkey stream). The hard-r and every other
+# slur still cut - see utils/clip_queue.SEVERE_SLURS.
+EVERYDAY_N = frozenset({"nigga", "niggas", "niggaz", "nigg", "niggah"})
+# An n-word inside an insult is aimed at somebody - that is cut, not muted.
+HOSTILE = re.compile(r"\b(ugly|dumb|stupid|bitch|monkey|ape|coon|slave|cotton|retard\w*"
+                     r"|fat|broke|poor|go back|kill|dirty|nasty|stinky|smelly)\b")
+
+
+def hate_split(segments: Sequence[dict]):
+    """(spans to CUT, spans that are only MUTED) for hate-speech hits.
+
+    Muted only: the everyday n-word, said by Stacks (or by nobody we can
+    tell), in a line that is not an insult. Cut: any other slur, any slur
+    from the other person, any slur inside an insult."""
+    from autoreel.compliance import ComplianceEngine
+
+    engine = ComplianceEngine(only_categories=("hate_speech",))
+    cut, muted = [], []
+    for seg in segments:
+        low = str(seg.get("text") or "").lower()
+        for v in engine.scan_words(seg.get("words") or [], seg.get("start"), seg.get("end")):
+            plain = re.sub(r"[^a-z]", "", str(v.word or "").lower())
+            who = _speaker_at([seg], v.start, v.end) or str(seg.get("speaker") or "")
+            if plain in EVERYDAY_N and who != OTHER and not HOSTILE.search(low):
+                muted.append((v.start, v.end))
+            else:
+                cut.append((v.start, v.end))
+    return cut, muted
+
+
 def censor_all(video: str, work_dir: str):
     """Every swear bleeped (scope "all"). (censored path, transcript)."""
     from utils.censor import censor_video
@@ -291,7 +331,8 @@ padding:6px;vertical-align:top;text-align:left}}table{{border-collapse:collapse;
 .warn{{background:#fee;padding:10px;border-left:4px solid #c00}}h2{{margin-top:32px}}</style>
 <h1>{e(title)}</h1>
 <p><b>Nothing has been uploaded.</b> rough_cut.mp4 is in this folder: every swear bleeped,
-anything with a slur cut out. Watch it, finish the edit, and publish it yourself.</p>{warn}
+every slur cut out except his everyday n-word, which is muted and listed below as
+"n-word (muted, kept)". Watch it, finish the edit, and publish it yourself.</p>{warn}
 <p>Check every face in the cut. Nothing here can tell how old someone is.</p>
 <h2>In the cut ({len(chosen)} moments)</h2><table><tr><th>At</th><th>From the stream</th>
 <th>Length</th><th>Check</th><th>What was said</th></tr>{kept}</table>
@@ -340,8 +381,11 @@ def prepare(source: str, drafts: str = DRAFTS, target_s: float = TARGET_S, say=p
             except Exception as exc:
                 say(f"[Monkey] Could not tell the voices apart ({exc}) - "
                     "the flags will not say who.")
-            flags = flags_for(segments, _spans(segments, "hate_speech"),
-                              _spans(segments, "sexual_content"))
+            cut_hate, muted_n = hate_split(segments)
+            flags = flags_for(segments, cut_hate, _spans(segments, "sexual_content"),
+                              muted_spans=muted_n)
+            say(f"[Monkey] Part {k + 1}: {len(muted_n)} everyday n-word(s) muted and kept, "
+                f"{len(cut_hate)} slur(s) cut.")
             say(f"[Monkey] Part {k + 1}: {len(flags)} flagged moment(s); listening for laughs...")
             chosen, left = pick(listen(piece, say=say), segments, flags, target_s)
             for m in chosen + left:
