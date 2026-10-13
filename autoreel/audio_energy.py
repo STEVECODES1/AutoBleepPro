@@ -30,6 +30,7 @@ this streamer usually is", not a number.
 
 from __future__ import annotations
 
+import math
 import re
 import shutil
 import subprocess
@@ -44,7 +45,12 @@ WINDOW_SECONDS = 1.0
 SAMPLE_RATE = 8000
 
 _TIMEOUT = 60 * 20
-_RMS_LINE = re.compile(r"lavfi\.astats\.Overall\.RMS_level=(-?\d+(?:\.\d+)?)")
+# Digital silence reads as `-inf`, which the old numeric pattern did
+# not match - so silent seconds vanished from the series entirely and
+# every reading after a silent stretch was misaligned by the length
+# of the stretch. Found 2026-10-13 cutting commercial breaks, whose
+# audio is true silence: a 45-second file came back as 22 readings.
+_RMS_LINE = re.compile(r"lavfi\.astats\.Overall\.RMS_level=(\S+)")
 
 # Silence reads as -inf or a very large negative; clamped so one silent
 # second cannot drag an average to nothing.
@@ -84,9 +90,14 @@ def measure(source: str) -> list:
     levels = []
     for match in _RMS_LINE.finditer(done.stdout.decode("utf-8", "replace")):
         try:
-            levels.append(max(FLOOR_DB, float(match.group(1))))
+            value = float(match.group(1))
         except ValueError:
-            levels.append(FLOOR_DB)
+            value = FLOOR_DB
+        if not math.isfinite(value):
+            # -inf (digital silence), nan: floored, never dropped.
+            # Dropping them is what misaligned the series.
+            value = FLOOR_DB
+        levels.append(max(FLOOR_DB, value))
     return levels
 
 

@@ -145,10 +145,13 @@ def is_slate_frame(frame) -> bool:
         return False
     if spread > SLATE_FLAT_STD:
         return False
-    # Blue dominates green, red at least keeps up with green: the
-    # average of a purple-to-cyan gradient. Flat grey fails here
-    # (channels equal), flat red fails harder (no blue at all).
-    if not (blue >= green + 8.0 and red >= green - 10.0 and blue >= 70.0):
+    # Blue dominates green and red is clearly present: the average of
+    # a purple-to-cyan gradient. Flat grey fails here (channels equal),
+    # flat red fails harder (no blue at all), and dark blue menus fail
+    # on red. The red bar is deliberately a floor, not a balance ratio:
+    # compression and gradient position move the exact purple around,
+    # and duration + stillness + quiet carry the real decision.
+    if not (blue >= green + 8.0 and red >= 60.0 and blue >= 70.0):
         return False
     return True
 
@@ -268,19 +271,50 @@ def _runs(flags: Sequence[Tuple[float, bool]],
     return runs
 
 
+def _outside_median(levels: Sequence, start: float, end: float,
+                    window_seconds: float = 1.0) -> Optional[float]:
+    """Median loudness of everything OUTSIDE this run.
+
+    The whole-file median is the wrong reference here: a stream that is
+    half commercial break is half quiet, so the median lands in the
+    quiet and nothing is ever quiet relative to it - the more breaks a
+    video has, the less the check works, exactly backwards. (This is
+    the same trap silence_trim.speech_baseline avoids by measuring
+    over spoken parts; with no words available, everything outside
+    the candidate is the closest equivalent.)
+    """
+    outside = [db for i, db in enumerate(levels)
+               if i * window_seconds + window_seconds <= start
+               or i * window_seconds >= end]
+    audible = sorted(db for db in outside if db > -80.0)
+    if not audible:
+        return None
+    middle = len(audible) // 2
+    return (audible[middle] if len(audible) % 2
+            else (audible[middle - 1] + audible[middle]) / 2)
+
+
 def _quiet(levels: Sequence, start: float, end: float,
            words: Iterable[dict] = (),
-           quiet_below_db: float = QUIET_BELOW_DB) -> bool:
+           quiet_below_db: float = QUIET_BELOW_DB,
+           window_s: float = 1.0) -> bool:
     """The audio under this run, measured against the video's normal."""
     from autoreel import silence_trim
 
+    words = list(words or ())
     try:
-        baseline = silence_trim.speech_baseline(levels or [], words)
+        if words:
+            baseline = silence_trim.speech_baseline(
+                levels or [], words, window_seconds=window_s)
+        else:
+            baseline = _outside_median(levels or [], start, end,
+                                       window_seconds=window_s)
     except Exception:
         baseline = None
     try:
         return silence_trim.quiet_enough(
-            levels or [], start, end, quiet_below_db, baseline=baseline)
+            levels or [], start, end, quiet_below_db,
+            window_seconds=window_s, baseline=baseline)
     except Exception:
         # An unreadable audio track must not disable the picture
         # signal - return True the way quiet_enough does on no data.
@@ -304,6 +338,15 @@ def find_adbreaks(source: str, levels: Optional[Sequence] = None,
         return []
     words = list(words or ())
 
+    # The loudness series is SUPPOSED to be one reading per second,
+    # but the only thing guaranteed is one reading per window in
+    # order - so derive the window from the series itself rather
+    # than assuming. (Observed 2026-10-13: measure() yielding one
+    # reading per ~2s on this machine's ffmpeg; assuming 1.0 put
+    # every run's audio gate on the wrong seconds.)
+    levels = list(levels or [])
+    window_s = duration / len(levels) if levels else step_s
+
     flags: list = []
     prev = None
     for at, frame in iter_frames(source, sample_times(duration, step_s)):
@@ -317,7 +360,7 @@ def find_adbreaks(source: str, levels: Optional[Sequence] = None,
 
     cuts = []
     for start, end in _runs(flags, step_s, min_break_s):
-        if _quiet(levels or [], start, end, words):
+        if _quiet(levels, start, end, words, window_s=window_s):
             cuts.append((start, end))
     return cuts
 

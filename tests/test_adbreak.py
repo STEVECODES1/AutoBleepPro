@@ -19,7 +19,8 @@ sys.path.insert(0, ROOT)
 np = pytest.importorskip("numpy")
 
 from autoreel.adbreak import (  # noqa: E402
-    _runs, classify_samples, describe, is_slate_frame, MIN_BREAK_S)
+    _outside_median, _quiet, _runs, classify_samples, describe,
+    is_slate_frame, MIN_BREAK_S)
 
 H, W = 90, 160
 
@@ -73,6 +74,12 @@ def test_flat_red_is_not_a_slate():
     assert not any(is_slate_frame(f) for f in red)
 
 
+def test_dark_navy_menu_is_not_a_slate():
+    navy = [np.full((H, W, 3), (20, 30, 90), dtype=np.uint8)
+            for _ in range(3)]
+    assert not any(is_slate_frame(f) for f in navy)
+
+
 def test_a_moving_slate_is_not_a_break():
     """Colour alone is not enough: the same gradient visibly changing
     is a transition effect, not a held break screen."""
@@ -122,6 +129,31 @@ def test_one_noisy_frame_does_not_split_a_break():
 def test_two_breaks_stay_two():
     flags = _flags(300, [(30.0, 70.0), (200.0, 250.0)])
     assert len(_runs(flags)) == 2
+
+
+# ── the audio confirm ────────────────────────────────────────────
+
+def test_quiet_break_against_loud_rest_counts():
+    levels = [-20.0] * 10 + [-70.0] * 25 + [-20.0] * 10
+    assert _quiet(levels, 10.0, 35.0) is True
+
+
+def test_loud_break_against_quiet_rest_does_not():
+    levels = [-70.0] * 10 + [-20.0] * 25 + [-70.0] * 10
+    assert _quiet(levels, 10.0, 35.0) is False
+
+
+def test_baseline_ignores_the_break_itself():
+    """A video that is half break must not measure its normal from
+    the break: the median would land in the quiet and nothing would
+    ever count as quiet."""
+    levels = [-20.0] * 10 + [-70.0] * 25 + [-20.0] * 10
+    assert _outside_median(levels, 10.0, 35.0) == pytest.approx(-20.0)
+    assert _outside_median(levels, 0.0, 45.0) is None
+
+
+def test_no_audio_leaves_the_picture_signal_standing():
+    assert _quiet([], 10.0, 35.0) is True
 
 
 # ── the log line ───────────────────────────────────────────────────

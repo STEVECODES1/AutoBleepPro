@@ -20,6 +20,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Covered by `tests/test_adbreak.py` (13 tests, synthetic frames only -
   no video file or ffmpeg needed).
 
+### Fixed
+- **Silent seconds no longer vanish from loudness series**
+  (`autoreel/audio_energy.py`). Digital silence reads as RMS `-inf`,
+  which the parser's numeric pattern did not match - so silent seconds
+  were dropped and every reading after a silent stretch was misaligned
+  by the length of the stretch. `measure()` now floors `-inf`/`nan`
+  to `FLOOR_DB` instead of dropping the window. This also corrects
+  silence-trimming on streams with true digital silence.
+
 ## [2.3.0] - 2026-08-03
 
 ### Added
