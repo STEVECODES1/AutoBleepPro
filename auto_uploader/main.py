@@ -1559,6 +1559,46 @@ def _trim_dead_air(path: str, cfg, words=None) -> str:
         return path
 
 
+def _cut_adbreaks(path: str, cfg) -> str:
+    """Remove Twitch commercial-break slates from a censored copy.
+
+    Returns the path to upload. Never fatal, and never destructive:
+    on any failure the uncut file is returned untouched, because a
+    complete video is always better than a pacing feature.
+
+    Runs AFTER censoring for the same reason trimming does - cutting
+    first would move every word timing the censor pass depends on.
+    Only the YouTube copy is cut; Rumble takes the untouched source
+    by design, slate and all.
+    """
+    try:
+        from autoreel import adbreak
+        from autoreel.audio_energy import measure
+    except Exception as exc:
+        print(f"[AdBreak] Unavailable ({exc}) - keeping the full length.")
+        return path
+
+    duration = media_duration(path) or 0.0
+    if duration <= 0:
+        print("[AdBreak] Could not measure the video - keeping the full length.")
+        return path
+
+    cuts = adbreak.find_adbreaks(path, levels=measure(path), duration=duration)
+    print(f"[AdBreak] {adbreak.describe(cuts, duration)}")
+    if not cuts:
+        return path
+
+    cut = os.path.join(
+        os.path.dirname(path),
+        os.path.splitext(os.path.basename(path))[0] + "_NOBREAK.mp4")
+    try:
+        from autoreel import silence_trim
+        return silence_trim.apply_trim(path, cut, cuts, duration)
+    except silence_trim.TrimError as exc:
+        print(f"[AdBreak] Skipped: {exc}")
+        return path
+
+
 def _cached_words(path: str, cfg) -> list:
     """Word timings the censor pass already wrote for this video."""
     try:
@@ -1608,6 +1648,10 @@ def _apply_mode(cfg, name: str, settings: dict):
         clips["trim_silence"] = bool(settings["trim_silence"])
         if clips["trim_silence"]:
             print("       Dead air trimmed from the YouTube copy")
+    if "cut_adbreaks" in settings:
+        clips["cut_adbreaks"] = bool(settings["cut_adbreaks"])
+        if clips["cut_adbreaks"]:
+            print("       Commercial breaks cut from the YouTube copy")
     if settings.get("clips_to_shorts"):
         # Only a request. youtube_shorts still has to be enabled, signed
         # in and inside its cap - the mode does not get to bypass the
@@ -2763,6 +2807,8 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
                 _censored["path"] = _trim_dead_air(
                     _censored["path"], cfg,
                     getattr(censor_result, "words", None))
+            if (cfg.clips or {}).get("cut_adbreaks"):
+                _censored["path"] = _cut_adbreaks(_censored["path"], cfg)
 
         return vertical_path(_censored["path"])
 
@@ -3660,6 +3706,16 @@ def main(argv=None) -> int:
                         action="store_false",
                         help="Keep the full length even if the mode or config "
                              "asks for a trim.")
+    parser.add_argument("--cut-adbreaks", dest="cut_adbreaks",
+                        action="store_true", default=None,
+                        help="Cut Twitch 'Commercial break in progress' "
+                             "slates out of the censored copy before it "
+                             "uploads. Only removes still purple-blue "
+                             "stretches with quiet audio.")
+    parser.add_argument("--no-cut-adbreaks", dest="cut_adbreaks",
+                        action="store_false",
+                        help="Keep commercial breaks even if the mode or "
+                             "config asks to cut them.")
     parser.add_argument("--setup-youtube", action="store_true",
                         help="Sign in to the VOD YouTube channel again. "
                              "Needed when uploads start failing with "
@@ -3876,6 +3932,10 @@ def main(argv=None) -> int:
     if args.trim_silence is not None:
         cfg.clips = dict(cfg.clips or {})
         cfg.clips["trim_silence"] = bool(args.trim_silence)
+
+    if getattr(args, "cut_adbreaks", None) is not None:
+        cfg.clips = dict(cfg.clips or {})
+        cfg.clips["cut_adbreaks"] = bool(args.cut_adbreaks)
 
     if args.profile:
         cfg.clips = dict(cfg.clips or {})

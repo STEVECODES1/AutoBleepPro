@@ -94,6 +94,13 @@ auto_uploader/logs/*
 auto_uploader/downloaded_clips/
 auto_uploader/downloaded_vods/
 
+# Ad-break cut scratch and one-off redo folders - runtime output, ~GBs.
+auto_uploader/held_audio_only/
+auto_uploader/rumble_redo/
+
+# Atomic-write leftovers from an interrupted run - crash debris, not state.
+*.tmp
+
 # COMPILE.bat's working folder (deleted after each upload) and its ledger
 # of which source videos have been used - per machine, like posting_state.
 auto_uploader/compilations/

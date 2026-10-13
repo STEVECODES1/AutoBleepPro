@@ -332,6 +332,8 @@
     "_trim_comment": "Remove dead air from the CENSORED export before upload. Only cuts stretches with no transcribed speech AND quiet audio, so laughter and game noise survive. Off by default; the mode above turns it on.",
     "trim_silence": false,
     "min_silence_seconds": 2.5,
+    "_adbreak_comment": "Cut Twitch 'Commercial break in progress' slates from the CENSORED export before upload. Only removes still purple-blue stretches with quiet audio, 20s or longer, so colourful game moments survive. Off by default. --cut-adbreaks / --no-cut-adbreaks on the command line.",
+    "cut_adbreaks": false,
     "_align_comment": "Shift each clip's captions onto its own audio. OFF: shipped on and made captions worse on real clips, where speech sits over game audio and music and the match can land on the wrong peak. The measurement is still available through --check-sync, which reports it instead of acting on it.",
     "align_captions": false
   },

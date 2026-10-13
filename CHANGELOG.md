@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Commercial-break cutting** (`autoreel/adbreak.py`, off by default).
+  Detects Twitch's "Commercial break in progress" slate - a still
+  purple-to-blue gradient - by picture first (colour band, smoothness,
+  stillness across 1-second samples) with quiet audio as the confirm,
+  and only cuts runs of 20 seconds or more, so colourful game moments
+  survive. Cutting reuses `silence_trim`'s single-pass ffmpeg machinery.
+  Uploader: `clips.cut_adbreaks` in config (default false),
+  `--cut-adbreaks` / `--no-cut-adbreaks` flags, applied to the YouTube
+  copy after censoring; Rumble keeps the untouched source by design.
+  Covered by `tests/test_adbreak.py` (13 tests, synthetic frames only -
+  no video file or ffmpeg needed).
+
 ## [2.3.0] - 2026-08-03
 
 ### Added
