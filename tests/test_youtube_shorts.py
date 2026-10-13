@@ -163,7 +163,10 @@ def test_the_caps_stay_low_and_nothing_goes_public_by_itself():
     strangers see."""
     import json
 
-    with open(os.path.join(_UPLOADER, "config.json"), encoding="utf-8") as f:
+    # The shipped template, not the live file: these guard the safe
+    # defaults for a fresh install, and config.json is this machine's
+    # own settings, free to differ.
+    with open(os.path.join(_UPLOADER, "config.example.json"), encoding="utf-8") as f:
         config = json.load(f)
     settings = config["posting"]["platforms"]["youtube_shorts"]
 

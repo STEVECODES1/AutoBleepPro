@@ -282,11 +282,11 @@ def sidecar_paths(video_path: str) -> list:
     """
     if not video_path:
         return []
-    stem = os.path.splitext(video_path)[0]
+    stem = os.path.normpath(os.path.splitext(video_path)[0])
     stems = {stem}
-    plain = os.path.join(
+    plain = os.path.normpath(os.path.join(
         os.path.dirname(stem),
-        re.sub(r"^_?vertical[_\s]+", "", os.path.basename(stem), flags=re.I))
+        re.sub(r"^_?vertical[_\s]+", "", os.path.basename(stem), flags=re.I)))
     stems.add(plain)
     return [base + suffix for base in sorted(stems)
             for suffix in SIDECAR_SUFFIXES + JSON_SIDECAR_SUFFIXES]

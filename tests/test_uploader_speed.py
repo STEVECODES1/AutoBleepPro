@@ -327,7 +327,10 @@ def test_shipped_chunk_size_is_conservative_and_resumable():
 
 
 def test_speed_defaults_are_safe():
-    with open(os.path.join(_UPLOADER, "config.json"), encoding="utf-8") as f:
+    # The shipped template, not the live file: these are the safe
+    # defaults for a fresh install, and config.json is this machine's
+    # own settings, free to differ.
+    with open(os.path.join(_UPLOADER, "config.example.json"), encoding="utf-8") as f:
         speed = json.load(f)["general"]["speed"]
     # Stream copy is both faster AND lossless, so it's on; hardware encode
     # only ever applies to the fallback and auto-detects.

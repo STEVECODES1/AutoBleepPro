@@ -1571,16 +1571,21 @@ def _cut_adbreaks(path: str, cfg) -> str:
     Only the YouTube copy is cut; Rumble takes the untouched source
     by design, slate and all.
     """
+    # The duration probe comes BEFORE the imports: ffprobe on an
+    # unreadable file answers in milliseconds, while the imports
+    # (numpy via adbreak) cost a cold second - and this runs inside
+    # do_youtube's thread between dispatch and the head-start wait,
+    # where a second eats Rumble's whole overlap window.
+    duration = media_duration(path) or 0.0
+    if duration <= 0:
+        print("[AdBreak] Could not measure the video - keeping the full length.")
+        return path
+
     try:
         from autoreel import adbreak
         from autoreel.audio_energy import measure
     except Exception as exc:
         print(f"[AdBreak] Unavailable ({exc}) - keeping the full length.")
-        return path
-
-    duration = media_duration(path) or 0.0
-    if duration <= 0:
-        print("[AdBreak] Could not measure the video - keeping the full length.")
         return path
 
     cuts = adbreak.find_adbreaks(path, levels=measure(path), duration=duration)
@@ -3321,6 +3326,24 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
             for name, _ in jobs):
         threading.Thread(target=thumbnail_path_for, args=("",),
                          daemon=True).start()
+    # Warm the censor import before dispatch. upload_path_for() imports
+    # autoreel.transcription (torch) for the device label the first time
+    # YouTube needs censoring - a ~1s cold cost that otherwise lands
+    # inside do_youtube's thread, after dispatch, and eats Rumble's
+    # whole overlap window on a fast run. Warming it here costs the
+    # same once, on the main thread, before either thread starts, so
+    # the race starts fair. Both the import AND the first
+    # detect_device() call are warmed: the call itself initialises
+    # CUDA and costs real time exactly once per process.
+    if (parallel and any(name == "youtube" for name, _ in jobs)
+            and cfg.youtube.censor_uploads
+            and cfg.general.censor_before_upload):
+        try:
+            from autoreel.transcription import detect_device as _warm
+
+            _warm()
+        except Exception:
+            pass
     if parallel:
         if rumble_will_run:
             print(f"[Upload] Rumble first - YouTube waits for it to "

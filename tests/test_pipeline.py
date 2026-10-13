@@ -213,7 +213,10 @@ def test_instagram_posts_a_clip_every_25_minutes():
     is what the account owner asked for."""
     import json
 
-    with open(os.path.join(_UPLOADER, "config.json"), encoding="utf-8") as f:
+    # The shipped template, not the live file: these assert what the
+    # project intends (owner-asked pacing), and config.json is this
+    # machine's own settings, free to differ.
+    with open(os.path.join(_UPLOADER, "config.example.json"), encoding="utf-8") as f:
         instagram = json.load(f)["posting"]["platforms"]["instagram"]
     assert instagram["min_minutes_between"] == 25
     assert instagram["enabled"] is True
@@ -225,7 +228,10 @@ def test_the_instagram_cap_matches_instagram_s_own_limit():
     and count toward the circuit breaker."""
     import json
 
-    with open(os.path.join(_UPLOADER, "config.json"), encoding="utf-8") as f:
+    # The shipped template, not the live file: this asserts the
+    # project's own limit choice, and config.json is this machine's
+    # own settings, free to differ.
+    with open(os.path.join(_UPLOADER, "config.example.json"), encoding="utf-8") as f:
         instagram = json.load(f)["posting"]["platforms"]["instagram"]
     assert instagram["daily_cap"] == 50
 

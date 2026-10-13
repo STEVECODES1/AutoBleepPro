@@ -32,6 +32,27 @@ REM  Down to one as of 2026-10-07: the Stackswopo Twitch channel no longer exist
 REM  (Twitch answers "does not exist", not "offline"), so that thread
 REM  could never record anything. Put it back with the new name if the
 REM  channel returns.
+REM
+REM ── RECORD A DIFFERENT CHANNEL ─────────────────────────────────────
+REM  This is the one line that decides what gets recorded. To follow a
+REM  different channel - or to add one alongside this one - put its
+REM  LIVE page URL on the command below, in quotes, separated by a space:
+REM
+REM    python record_stream.py "https://www.youtube.com/@stackswopo_/live" "https://www.twitch.tv/somechannel" --name "Stackswopo"
+REM
+REM  Any public live page works: a YouTube @handle/live URL, a
+REM  twitch.tv/name URL, a kick.com/name URL. Each URL gets its own
+REM  watcher thread in this same window, and everything recorded lands
+REM  in auto_uploader\watch_folder for the uploader to pick up.
+REM  --name labels the files (used when no cleaner title is found).
+REM
+REM  The one cost is simultaneous recording: every LIVE source writes
+REM  at once, and on 2026-08-31 four at once plus a VOD download plus
+REM  the GPU overloaded this drive's write throughput and cost real
+REM  recording time. Two is fine. Past that, open a SECOND copy of this
+REM  window for the extra channel (copy this file, change the URL) so a
+REM  stall on one drive's worth of writes cannot take the main one down.
+REM ──────────────────────────────────────────────────────────────────
 :loop
 python record_stream.py "https://www.youtube.com/@stackswopo_/live" --name "Stackswopo"
 

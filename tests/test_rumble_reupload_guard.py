@@ -101,7 +101,7 @@ def scene(tmp_path, monkeypatch):
     os.makedirs(cfg.general.watch_folder, exist_ok=True)
     video = os.path.join(
         cfg.general.watch_folder,
-        '"REACTING TO BRANDRISK BOXING" 8-23-26 Stackswopo Stream.mp4')
+        'REACTING TO BRANDRISK BOXING 8-23-26 Stackswopo Stream.mp4')
     with open(video, "wb") as f:
         f.write(b"pretend video bytes" * 100)
 
@@ -125,6 +125,8 @@ def scene(tmp_path, monkeypatch):
             pass
 
         def upload(self, path, *a, **k):
+            from utils.channel_vods import _slug_words
+
             rumble_calls.append(path)
             callback = k.get("progress_callback")
             if callback:
@@ -132,9 +134,13 @@ def scene(tmp_path, monkeypatch):
             # Slug matches the title directly, so the pre-existing POST-upload
             # verification (_confirm_on_rumble) accepts it on the spot and
             # never touches find_on_channel - keeping these tests isolated
-            # to the NEW pre-upload check.
+            # to the NEW pre-upload check. Built from the title actually
+            # sent, so this holds for every title a test uses, not just
+            # the one this fixture was first written for.
+            title = a[0] if a else ""
+            slug = "-".join(_slug_words(title)) or "video"
             return ("https://rumble.com/user/BinScripts/"
-                    "v7fresh-reacting-to-brandrisk-boxing-stackswopo.html")
+                    f"v7fresh-{slug}.html")
 
     monkeypatch.setattr(main, "YouTubeUploader", FakeYouTube)
     monkeypatch.setattr(main, "RumbleUploader", FakeRumble)

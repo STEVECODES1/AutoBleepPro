@@ -25,6 +25,13 @@ for _path in (_REPO, _UPLOADER):
 
 
 UPLOAD_SECONDS = 0.4
+# Overlap is asserted on wall-clock spans, so the sleeps have to be
+# long against the threads' pre-upload work (censor resolution, intro
+# and gambling checks - a few hundred ms of spawns and imports even
+# with everything faked). 0.4s proved marginal under machine load;
+# 1.0s keeps the test honest without hiding a real regression: run
+# sequentially, the spans still cannot overlap whatever the value.
+OVERLAP_SECONDS = 1.0
 
 
 class Recorder:
@@ -57,6 +64,13 @@ def scene(tmp_path, monkeypatch):
     raw["general"]["watch_folder"] = "./watch_folder"
     raw["general"]["cleanup"] = {"source_video": "keep"}
     raw["clips"]["auto_from_streams"] = False
+    # Overlap here is measured on a 0.4s window, and the trims run
+    # inside YouTube's thread before its upload starts - a cold
+    # adbreak pass alone costs ~0.4s and would eat the window without
+    # anything about the threading being wrong. Both have their own
+    # tests; this fixture measures dispatch, not processing.
+    raw["clips"]["trim_silence"] = False
+    raw["clips"]["cut_adbreaks"] = False
     raw["features"]["social_promoter"]["enabled"] = False
     raw["posting"]["enabled"] = False
     raw["general"]["enable_desktop_notifications"] = False
@@ -93,7 +107,7 @@ def scene(tmp_path, monkeypatch):
                 # start for YouTube is keyed off exactly this.
                 if callback:
                     callback(1)
-                time.sleep(UPLOAD_SECONDS)
+                time.sleep(OVERLAP_SECONDS)
                 recorder.span(platform, started, time.monotonic())
                 if callback:
                     callback(100)
