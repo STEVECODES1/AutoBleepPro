@@ -801,7 +801,7 @@ def _censored_clip(platform: str, video_path: str, config: dict) -> tuple:
             bleep_method=general.get("censor_bleep_method", "silence"),
             custom_words=tuple(general.get("censor_custom_words", ()) or ()),
             device=general.get("censor_device") or None,
-            padding_ms=int(general.get("censor_padding_ms", 250)),
+            padding_ms=int(general.get("censor_padding_ms", 150)),
             # False - must match utils/config.py's GeneralConfig default
             # exactly. This read a raw dict straight off config.json
             # instead of the typed AppConfig, and defaulted to True here

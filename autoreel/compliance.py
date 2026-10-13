@@ -132,9 +132,12 @@ def _matcher(phrases):
 # How far a mute may cross into the word next to it. Whisper's word
 # timings are 100-300ms out, so a pad that stops dead at the neighbour's
 # reported boundary can still leave the flagged syllable audible. This is
-# the margin that absorbs that error - large enough to cover the timing
-# slop, small enough that a neighbouring word stays intelligible.
-NEIGHBOUR_BLEED_MS = 120
+# the margin that absorbs that error. Tightened 2026-10-13 (was 120) at
+# the owner's call: 120ms into the neighbour is a swallowed syllable
+# start, plainly audible as chopping. 60ms takes at most a consonant
+# edge, and anything it lets through is caught by the second listen
+# (censor_verify), which re-mutes what is still audible.
+NEIGHBOUR_BLEED_MS = 60
 
 # How far a whole-sentence mute (mute_whole_segment) may reach either
 # side of the slur. About a short sentence's worth.
@@ -194,8 +197,14 @@ class ComplianceEngine:
     use_profanity_filter: bool = True
     # Whisper's word timestamps are approximate - typically 100-300ms out.
     # Muting exactly the reported span leaves the first syllable audible,
-    # which for a slur is the whole problem. Pad both edges.
-    padding_ms: int = 250
+    # which for a slur is the whole problem. Pad both edges. 150 (was 250
+    # until 2026-10-13): still past the 100ms the timing error needs, but
+    # 200ms less dead air per mute in the open, and less pressure on the
+    # neighbour clamp in tight speech. Worst case (zero-gap neighbours)
+    # the pre-roll shrinks toward the bleed margin - and the second
+    # listen re-mutes anything still audible, so a leak is a retry, not
+    # a strike.
+    padding_ms: int = 150
     # Mute the entire segment around a high-severity hit, not just the
     # word. Off: the point of a word-level censor is that the sentence
     # survives. Turn it on only if a platform is acting on context rather

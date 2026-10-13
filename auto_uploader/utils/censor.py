@@ -550,7 +550,7 @@ def censor_video(
     custom_words: tuple = (),
     device: Optional[str] = None,
     speed: Optional[dict] = None,
-    padding_ms: int = 250,
+    padding_ms: int = 150,
     mute_whole_segment: bool = True,
     only_categories: tuple = (),
     allow_words: tuple = (),

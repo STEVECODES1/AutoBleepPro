@@ -114,31 +114,31 @@ def test_slur_mutes_the_whole_sentence_when_asked_to():
     engine = ComplianceEngine(mute_whole_segment=True)
     spans = engine.mute_spans(engine.scan_segments(segs()), 60_000)
     # 10.0-14.0 widened by the padding, not just the 11.2-11.6 word.
-    assert (9_750, 14_250) in spans
+    assert (9_850, 14_150) in spans
 
 
 def test_ordinary_profanity_does_not_mute_the_sentence():
     engine = ComplianceEngine(mute_whole_segment=True)
     spans = engine.mute_spans(engine.scan_segments(segs()), 60_000)
-    # Word+padding, not the whole 20.0-22.0 sentence. Starts at 20_080
+    # Word+padding, not the whole 20.0-22.0 sentence. Starts at 20_150
     # rather than 20_050 because "oh" ends at 20.2 and the pad is clamped
     # to it - see test_padding_stops_at_the_previous_word.
-    assert (20_080, 20_950) in spans, "should be word+padding, not 20.0-22.0"
+    assert (20_150, 20_850) in spans, "should be word+padding, not 20.0-22.0"
 
 
 def test_whole_segment_muting_is_off_by_default():
     hits = ComplianceEngine().scan_segments(segs())
     spans = ComplianceEngine().mute_spans(hits, 60_000)
-    # Ends at 11_820 rather than 11_850: "people" starts at 11.7, so the
+    # Ends at 11_750 rather than 11_850: "people" starts at 11.7, so the
     # trailing pad stops there rather than clipping it.
-    assert (10_950, 11_820) in spans
-    assert (9_750, 14_250) not in spans, "the sentence around it must survive"
+    assert (11_050, 11_750) in spans
+    assert (9_850, 14_150) not in spans, "the sentence around it must survive"
 
 
 def test_missing_segment_bounds_fall_back_to_the_word():
     """A caller using scan_words directly has no segment to widen to."""
     v = Violation("nigga", 11.2, 11.6, "hate_speech")
-    assert ComplianceEngine().mute_spans([v], 60_000) == [(10_950, 11_850)]
+    assert ComplianceEngine().mute_spans([v], 60_000) == [(11_050, 11_750)]
 
 
 # ── Span merging ─────────────────────────────────────────────────────────────
@@ -146,7 +146,7 @@ def test_missing_segment_bounds_fall_back_to_the_word():
 def test_overlapping_spans_merge():
     """Padding makes nearby hits overlap, which would corrupt the rebuild."""
     hits = [Violation("a", 1.0, 1.2, "profanity"), Violation("b", 1.3, 1.5, "profanity")]
-    assert ComplianceEngine().mute_spans(hits, 60_000) == [(750, 1_750)]
+    assert ComplianceEngine().mute_spans(hits, 60_000) == [(850, 1_650)]
 
 
 def test_spans_come_back_sorted():
@@ -192,8 +192,8 @@ def test_leading_syllable_is_covered(tone):
         tone, v, method="silence")
     unpadded = ComplianceEngine(padding_ms=0, mute_whole_segment=False).censor_audio(
         tone, v, method="silence")
-    assert padded[11_000:11_150].max == 0
-    assert unpadded[11_000:11_150].max > 0, "this is the syllable that used to leak"
+    assert padded[11_100:11_200].max == 0
+    assert unpadded[11_100:11_200].max > 0, "this is the syllable that used to leak"
 
 
 def test_no_violations_returns_the_input(tone):
@@ -234,17 +234,17 @@ def _one(word="shit", start=5.0, end=5.4, **kw):
 
 
 def test_padding_stops_at_the_previous_word():
-    """Without this the pad ran 250ms backwards into whatever was said
+    """Without this the pad ran backwards into whatever was said
     before, clipping its ending."""
     v = _one(prev_end=4.9)
     (start_ms, _), = ComplianceEngine(padding_ms=250).mute_spans([v], 60_000)
-    assert start_ms == 4_780, "the pad ate into the previous word"
+    assert start_ms == 4_840, "the pad ate into the previous word"
 
 
 def test_padding_stops_at_the_next_word():
     v = _one(next_start=5.5)
     (_, end_ms), = ComplianceEngine(padding_ms=250).mute_spans([v], 60_000)
-    assert end_ms == 5_620
+    assert end_ms == 5_560
 
 
 def test_full_padding_is_used_when_there_is_silence_around_the_word():
@@ -271,14 +271,15 @@ def test_a_word_with_no_neighbours_is_padded_normally():
 def test_the_neighbour_clamp_still_covers_whisper_s_timing_error():
     """Stopping dead at the neighbour's reported boundary would leave the
     flagged syllable audible in exactly the tight-speech case that needs
-    the padding most, because the boundary itself is only approximate."""
-    from autoreel.compliance import NEIGHBOUR_BLEED_MS
-
-    assert NEIGHBOUR_BLEED_MS >= 100
+    the padding most, because the boundary itself is only approximate.
+    So the mute still reaches past the reported word edge - but bounded:
+    60ms takes a consonant edge, not a syllable. Anything that still
+    leaks is caught by the second listen, which re-mutes what is
+    audible, rather than by muting the neighbour pre-emptively."""
     v = _one(prev_end=5.0, next_start=5.4)     # no gap at all
-    (start_ms, end_ms), = ComplianceEngine(padding_ms=250).mute_spans([v], 60_000)
-    assert start_ms == 5_000 - NEIGHBOUR_BLEED_MS
-    assert end_ms == 5_400 + NEIGHBOUR_BLEED_MS
+    (start_ms, end_ms), = ComplianceEngine().mute_spans([v], 60_000)
+    assert start_ms < 5_000 and end_ms > 5_400
+    assert 5_000 - start_ms <= 100 and end_ms - 5_400 <= 100
 
 
 def test_the_surrounding_speech_survives_a_word_level_mute(tone):
@@ -296,4 +297,4 @@ def test_neighbour_clamping_does_not_apply_to_whole_segment_mutes():
     surrounding speech; clamping it to a neighbour would half-undo that."""
     engine = ComplianceEngine(mute_whole_segment=True)
     spans = engine.mute_spans(engine.scan_segments(segs()), 60_000)
-    assert (9_750, 14_250) in spans
+    assert (9_850, 14_150) in spans

@@ -128,7 +128,7 @@ class GeneralConfig:
     censor_device: Optional[str]
     censor_custom_words: tuple
     censored_folder: str
-    censor_padding_ms: int = 250
+    censor_padding_ms: int = 150
     # OFF. On, a flagged hate-speech word takes the WHOLE Whisper
     # segment with it - and a segment is a sentence, not a word, so one
     # slur silences several seconds of a clip. That is what "too much
@@ -464,7 +464,7 @@ def load_config(config_path: str = "config.json", env_path: str = ".env") -> App
         censor_device=os.environ.get("CENSOR_DEVICE") or gen.get("censor_device") or None,
         censor_custom_words=tuple(gen.get("censor_custom_words", [])),
         censored_folder=_resolve_path(project_root, gen.get("censored_folder", "./censored")),
-        censor_padding_ms=int(gen.get("censor_padding_ms", 250)),
+        censor_padding_ms=int(gen.get("censor_padding_ms", 150)),
         censor_mute_whole_segment=bool(gen.get("censor_mute_whole_segment", False)),
         censor_categories=str(gen.get("censor_categories", "ad_safe")),
         auto_thumbnail=bool(gen.get("auto_thumbnail", True)),

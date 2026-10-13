@@ -43,7 +43,7 @@ WORD_START, WORD_END = 8.0, 8.4          # a 400ms word
 
 
 def _engine(**kwargs):
-    kwargs.setdefault("padding_ms", 250)
+    kwargs.setdefault("padding_ms", 150)
     kwargs.setdefault("mute_whole_segment", False)
     return ComplianceEngine(**kwargs)
 
@@ -79,6 +79,19 @@ def test_tight_speech_does_not_eat_the_neighbouring_words():
     length = _length(_engine(), violation)
 
     assert length <= 800, f"{length}ms swallowed the words either side"
+
+
+def test_the_bleed_into_a_neighbour_is_at_most_a_consonant_edge():
+    """Tightened 2026-10-13 (was 120ms): 120ms into the next word is a
+    swallowed syllable start, plainly audible as chopping."""
+    violation = Violation(word="murder", category="violence",
+                          start=WORD_START, end=WORD_END,
+                          prev_end=7.95, next_start=8.45)
+
+    start, end = _span(_engine(), violation)
+
+    assert start >= 7.95 * 1000 - 60, "mute reaches back into the previous word"
+    assert end <= 8.45 * 1000 + 60, "mute runs on into the next word"
 
 
 def test_the_word_itself_is_always_fully_covered():

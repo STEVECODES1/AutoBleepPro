@@ -939,7 +939,7 @@ def censor(source: str, folder: str, settings: dict) -> str:
         bleep_method=general.get("censor_bleep_method", "silence"),
         custom_words=tuple(general.get("censor_custom_words", ()) or ()),
         device=general.get("censor_device") or None,
-        padding_ms=int(general.get("censor_padding_ms", 250)),
+        padding_ms=int(general.get("censor_padding_ms", 150)),
         mute_whole_segment=bool(general.get("censor_mute_whole_segment",
                                             True)),
         only_categories=tuple(scope),

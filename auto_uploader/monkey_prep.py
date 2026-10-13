@@ -257,11 +257,40 @@ def pick(curve: Sequence[float], segments: Sequence[dict], flags: Sequence[dict]
 
 
 def monkey_runs(source: str, min_seconds: float = 3 * 60) -> List[Tuple[float, float]]:
-    """Where the stream is on Monkey App, by looking at it once a minute."""
+    """Where the stream is on Monkey App, by looking at it once a minute -
+    then by actually looking at it.
+
+    The pixel pass (autoreel.vod_segments) cannot tell a dark, still game
+    scene from a video call - stillness plus mid-brightness is what both
+    look like at 160x90 grey, so a parked car or a death screen reads
+    "monkey" and a GTA run lands in a Monkey draft. Every candidate run
+    is therefore shown to the local vision model (autoreel.monkey_check)
+    before it counts: most of its frames must read as a video call.
+    A run the model cannot judge stays - no measurement, no cut - and any
+    failure here returns the pixel runs unchanged, never nothing.
+    """
     from autoreel.vod_segments import segments_for
 
-    return [(s.start, s.end) for s in segments_for(source, min_seconds=min_seconds)
+    runs = [(s.start, s.end) for s in segments_for(source, min_seconds=min_seconds)
             if s.kind == "monkey"]
+    if not runs:
+        return []
+    try:
+        from autoreel.audio_energy import measure
+        from autoreel.content_kind import _seconds_long
+        from autoreel.monkey_check import confirm_runs
+
+        levels = measure(source)
+        span = _seconds_long(source)
+        window_s = span / len(levels) if levels and span > 0 else 1.0
+        kept, dropped = confirm_runs(source, runs, levels=levels,
+                                     window_s=window_s)
+    except Exception:
+        return runs
+    for start, end, seen in dropped:
+        print(f"[Monkey] Not a video call after all "
+              f"({_clock(start)}-{_clock(end)}: {seen}) - left out.")
+    return kept
 
 
 def _general() -> dict:
@@ -365,7 +394,7 @@ def censor_all(video: str, work_dir: str):
                           custom_words=tuple(g.get("censor_custom_words", ()) or ()),
                           device=g.get("censor_device") or None,
                           speed={"stream_copy_video": True},
-                          padding_ms=int(g.get("censor_padding_ms", 250)),
+                          padding_ms=int(g.get("censor_padding_ms", 150)),
                           mute_whole_segment=False,
                           only_categories=scope_categories("all"))
     return result.output_path, _words(work_dir, video)

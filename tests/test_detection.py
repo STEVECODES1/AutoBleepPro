@@ -471,7 +471,7 @@ def test_the_shipped_model_is_not_the_tiny_one():
 
     path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                         "auto_uploader", "config.json")
-    with open(path) as f:
+    with open(path, encoding="utf-8") as f:
         model = json.load(f)["general"]["censor_model"]
     assert model not in ("tiny", "base"), \
         f"censor_model is {model!r}: too small to catch everything spoken"

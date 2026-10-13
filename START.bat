@@ -62,12 +62,19 @@ REM  Tracked files only - no -u. With -u every start also swept away
 REM  every UNTRACKED file: the uploader's own logs and backups, scripts
 REM  being worked on, and on 2026-10-06 a morning's notes. Untracked
 REM  files cannot make the code stale, so they are left where they are.
+REM
+REM  Count stashes before and after: `git stash push` on a clean tree
+REM  says "nothing to save" but still exits 0, so the exit code alone
+REM  cannot tell whether anything was parked. Popping blind would then
+REM  pop somebody ELSE's stranded stash.
+for /f %%N in ('git stash list ^| find /c /v ""') do set BEFORE=%%N
 git stash push -m "START.bat auto-stash" >nul 2>&1
-if %ERRORLEVEL% equ 0 (
-    set STASHED=1
-    echo  Local edits parked in git stash - restore with: git stash pop
-) else (
-    set STASHED=0
+for /f %%N in ('git stash list ^| find /c /v ""') do set AFTER=%%N
+set STASHED=0
+if %AFTER% gtr %BEFORE% set STASHED=1
+if %STASHED% equ 1 (
+    echo  Local edits parked in git stash - they come back below, after
+    echo  the pull.
 )
 
 REM  --no-edit, because a plain `git pull` that has to MERGE opens an
@@ -104,6 +111,29 @@ echo.
 timeout /t 10 /nobreak >nul
 
 :pull_done
+REM  Bring the parked edits back - on a failed pull too. The tree the
+REM  pull left behind is what runs below either way, and stranded edits
+REM  are how a night's work ends up in `git stash list` instead of in
+REM  the run. `git stash pop` only drops the stash on success: if the
+REM  pull touched the same lines, the stash is KEPT and the conflict is
+REM  said out loud instead of silently running without the edits.
+if "%STASHED%"=="1" (
+    git stash pop
+    if errorlevel 1 (
+        echo.
+        echo  ############################################################
+        echo  #  WARNING: parked local edits could NOT be restored -
+        echo  #  the pull touched the same lines. They are still in
+        echo  #  git stash - run:  git stash list
+        echo  #  then resolve with:  git stash pop
+        echo  #  The run below does NOT include them.
+        echo  ############################################################
+        echo.
+        timeout /t 10 /nobreak ^>nul
+    ) else (
+        echo  Parked local edits restored.
+    )
+)
 echo.
 echo ============================================================
 echo  Starting AutoBleepPro

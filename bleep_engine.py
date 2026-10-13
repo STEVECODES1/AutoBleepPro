@@ -122,12 +122,15 @@ MODEL_CHOICES = ("tiny", "base", "small", "medium", "turbo",
 # Widen every mute by this much on each side. Whisper's word timings are
 # 100-300ms out, so muting the exact reported span leaves the leading
 # syllable audible - and a word whose first syllable survives is not
-# censored. This engine had no padding at all.
-DEFAULT_PADDING_MS = 250
-# How far that pad may cross into the word next to it. Large enough to
-# absorb the timing error above, small enough that the neighbouring word
-# stays intelligible. See _clamp_to_neighbours.
-NEIGHBOUR_BLEED_MS = 120
+# censored. 150 (was 250 until 2026-10-13, same change as
+# autoreel/compliance.py): past the 100ms the error needs, 200ms less
+# dead air per mute, less pressure on the neighbour clamp. The second
+# listen re-mutes anything the tighter pad lets through.
+DEFAULT_PADDING_MS = 150
+# How far that pad may cross into the word next to it. 60 (was 120):
+# a consonant edge at most, not a swallowed syllable. See
+# _clamp_to_neighbours.
+NEIGHBOUR_BLEED_MS = 60
 COMPUTE_CHOICES = ("auto", "int8", "float16", "float32")
 ENCODE_CHOICES = ("ultrafast", "fast", "medium", "slow")
 

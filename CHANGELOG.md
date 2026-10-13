@@ -21,6 +21,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   no video file or ffmpeg needed).
 
 ### Fixed
+- **Tighter mutes: padding 250ms to 150ms, neighbour bleed 120ms to
+  60ms.** A mute was eating into the words around it - 120ms into a
+  neighbour is a swallowed syllable start. Pre-roll still covers the
+  documented ~200ms timing error band in normal gaps, and the second
+  listen re-mutes anything the tighter pad lets through, so a leak is
+  a retry rather than a strike. Applies to the uploader, the GUI/CLI
+  engine, compilations and Monkey drafts alike; old caches invalidate
+  via the settings fingerprint.
+- **START.bat restores parked edits.** It stashed the working tree on
+  every launch and never popped: twenty stranded stashes back to Oct 4,
+  and one night's work silently reverted mid-session. It now pops after
+  the pull (warns loudly on conflict instead of running without the
+  edits) and only claims a stash when one was actually created.
 - **Silent seconds no longer vanish from loudness series**
   (`autoreel/audio_energy.py`). Digital silence reads as RMS `-inf`,
   which the parser's numeric pattern did not match - so silent seconds
