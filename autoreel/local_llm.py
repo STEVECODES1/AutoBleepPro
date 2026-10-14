@@ -108,6 +108,27 @@ def ready(model: str = "") -> bool:
     return _STATE["ready"]
 
 
+def evict(model: str = "") -> bool:
+    """Unload the model from the card. Best effort, never raises.
+
+    Ollama keeps a model resident for KEEP_ALIVE after each call. On an
+    8 GB card shared with Whisper, a resident 3 GB vision model plus a
+    transcription pass plus the laughter tagger is how overnight runs
+    die ugly deaths. Call this when the vision work is done and the
+    GPU stages are next.
+    """
+    try:
+        payload = {"model": model_name(model), "keep_alive": 0}
+        request = urllib.request.Request(
+            host() + "/api/generate", data=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json"}, method="POST")
+        with urllib.request.urlopen(request, timeout=10):
+            pass
+        return True
+    except Exception:
+        return False
+
+
 def chat(system: str, prompt: str, model: str = "",
          images: Optional[List[str]] = None, json_reply: bool = True,
          timeout: int = _TIMEOUT) -> Tuple[str, str]:

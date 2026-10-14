@@ -227,6 +227,51 @@ def listen(source: str, say=print) -> List[float]:
 measure = listen
 
 
+def _cache_fresh(cache_path: str, source: str):
+    """A curve measured earlier for this exact file, or None.
+
+    Freshness is the file's own mtime+size: a re-cut piece has a new
+    mtime, so a stale curve can never attach to new audio. An empty
+    curve is never cached by listen_cached - [] means "no detector",
+    not "no laughter", and must be retried, not replayed.
+    """
+    try:
+        with open(cache_path, encoding="utf-8") as handle:
+            data = json.load(handle)
+        stat = os.stat(source)
+        if (data.get("mtime") == stat.st_mtime
+                and data.get("size") == stat.st_size
+                and isinstance(data.get("curve"), list)
+                and data["curve"]):
+            return [float(v) for v in data["curve"]]
+    except (OSError, ValueError, TypeError):
+        pass
+    return None
+
+
+def listen_cached(source: str, cache_path: str, say=print) -> List[float]:
+    """listen(), but the curve is kept beside the piece.
+
+    A draft that dies mid-prep (killed process, lost GPU, reboot)
+    re-runs from these caches instead of re-hearing every piece: each
+    piece costs one GPU pass ever, not one per attempt. Best effort
+    throughout - an unreadable cache just means listening again.
+    """
+    hit = _cache_fresh(cache_path, source)
+    if hit is not None:
+        return hit
+    curve = listen(source, say=say)
+    if curve:
+        try:
+            stat = os.stat(source)
+            with open(cache_path, "w", encoding="utf-8") as handle:
+                json.dump({"mtime": stat.st_mtime, "size": stat.st_size,
+                           "curve": curve}, handle)
+        except OSError:
+            pass
+    return curve
+
+
 # ── reading the curve ─────────────────────────────────────────────────
 
 def peak(curve: Sequence[float], start: float,

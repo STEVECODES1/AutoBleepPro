@@ -94,6 +94,45 @@ def test_a_helper_that_fails_is_no_opinion_too(monkeypatch):
     assert "CUDA out of memory" in said[0]
 
 
+def _video(tmp_path, name="piece.mp4"):
+    path = tmp_path / name
+    path.write_bytes(b"pretend video")
+    return str(path)
+
+
+def test_a_cached_curve_is_reused_without_listening(tmp_path, monkeypatch):
+    video = _video(tmp_path)
+    cache = str(tmp_path / "piece_laugh.json")
+    calls = []
+    monkeypatch.setattr(L, "listen",
+                        lambda *a, **k: calls.append(1) or [0.1, 0.2])
+    first = L.listen_cached(video, cache, say=lambda *a: None)
+    second = L.listen_cached(video, cache, say=lambda *a: None)
+    assert first == second == [0.1, 0.2]
+    assert calls == [1], "the second call must come from the cache"
+
+
+def test_a_recut_piece_is_heard_again(tmp_path, monkeypatch):
+    video = _video(tmp_path)
+    cache = str(tmp_path / "piece_laugh.json")
+    monkeypatch.setattr(L, "listen", lambda *a, **k: [0.5])
+    L.listen_cached(video, cache, say=lambda *a: None)
+    with open(video, "wb") as handle:      # same name, new bytes
+        handle.write(b"a different cut")
+    monkeypatch.setattr(L, "listen", lambda *a, **k: [0.9])
+    assert L.listen_cached(video, cache, say=lambda *a: None) == [0.9]
+
+
+def test_no_detector_is_not_cached_as_no_laughter(tmp_path, monkeypatch):
+    """[] means the model was missing, not that nobody laughed -
+    caching it would skip the piece forever."""
+    video = _video(tmp_path)
+    cache = str(tmp_path / "piece_laugh.json")
+    monkeypatch.setattr(L, "listen", lambda *a, **k: [])
+    assert L.listen_cached(video, cache, say=lambda *a: None) == []
+    assert not os.path.exists(cache)
+
+
 @needs_ffmpeg
 def test_one_reading_per_second_lined_up_with_the_audio(tmp_path, monkeypatch):
     """The framing, without the 330 MB model: a stand-in tagger that

@@ -47,6 +47,40 @@ def test_no_ollama_no_gpu_provider(monkeypatch):
     assert H.api_key(H.LOCAL) == ""
 
 
+def test_evict_unloads_the_model(monkeypatch):
+    """On an 8 GB card shared with Whisper, a resident vision model is
+    how overnight runs die - evicting is one POST, best effort."""
+    import urllib.request
+
+    seen = {}
+
+    class Reply:
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def read(self): return b"{}"
+
+    def fake_open(request, timeout=None):
+        seen["url"] = request.full_url
+        seen["body"] = json.loads(request.data.decode("utf-8"))
+        return Reply()
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_open)
+    assert local_llm.evict() is True
+    assert seen["url"].endswith("/api/generate")
+    assert seen["body"]["keep_alive"] == 0
+    assert seen["body"]["model"] == local_llm.DEFAULT_MODEL
+
+
+def test_evict_never_raises(monkeypatch):
+    import urllib.request
+
+    def broken(*a, **k):
+        raise OSError("no server")
+
+    monkeypatch.setattr(urllib.request, "urlopen", broken)
+    assert local_llm.evict() is False
+
+
 def test_the_gpu_model_is_its_own_setting(monkeypatch):
     monkeypatch.delenv("OLLAMA_MODEL", raising=False)
     assert H.resolve_model(H.LOCAL, "local", "gemini-3.5-flash") == \

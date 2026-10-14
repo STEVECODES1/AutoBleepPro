@@ -460,7 +460,6 @@ def _folder_name(source: str) -> str:
 
 def prepare(source: str, drafts: str = DRAFTS, target_s: float = TARGET_S, say=print) -> str:
     """Rough cut + review page for one stream. The draft folder, or ""."""
-    from autoreel.laughter import listen
     from utils.recap import build_from
 
     runs = monkey_runs(source)
@@ -501,7 +500,23 @@ def prepare(source: str, drafts: str = DRAFTS, target_s: float = TARGET_S, say=p
             say(f"[Monkey] Part {k + 1}: {len(muted_n)} everyday n-word(s) muted and kept, "
                 f"{len(cut_hate)} slur(s) cut.")
             say(f"[Monkey] Part {k + 1}: {len(flags)} flagged moment(s); listening for laughs...")
-            chosen, left = pick(listen(piece, say=say), segments, flags, target_s)
+            # The vision model has done its last job for this piece
+            # (gambling check above); unload it before the GPU stages.
+            # On an 8 GB card shared with Whisper, a resident 3 GB model
+            # plus transcription plus the laughter tagger is how overnight
+            # runs die. Best effort and silent - the draft must never fail
+            # on a cleanup step.
+            try:
+                from autoreel import local_llm
+
+                local_llm.evict()
+            except Exception:
+                pass
+            from autoreel.laughter import listen_cached
+
+            curve = listen_cached(
+                piece, os.path.join(work, f"monkey_{k}_laugh.json"), say=say)
+            chosen, left = pick(curve, segments, flags, target_s)
             for m in chosen + left:
                 m["where"] = _clock(run_s + m["start"])
                 m["said"] = _said(segments, m["start"], m["end"])
