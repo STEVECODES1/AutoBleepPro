@@ -227,6 +227,62 @@ def listen(source: str, say=print) -> List[float]:
 measure = listen
 
 
+def _child_listen(source: str, cache_path: str) -> int:
+    """Entry point for the isolated child: hear, cache, exit.
+
+    Must stay top-level and picklable-argument-only: Windows spawn
+    re-imports this module in the child. Returns an exit code rather
+    than raising, so every failure mode arrives as an int the parent
+    can read - including modes that print straight to stderr.
+    """
+    try:
+        listen_cached(source, cache_path, say=lambda *a: None)
+    except Exception:
+        return 1
+    return 0
+
+
+def listen_isolated(source: str, cache_path: str, say=print,
+                    timeout: int = _TIMEOUT) -> List[float]:
+    """listen() in a child process that is allowed to die.
+
+    A GPU abort (CUDA teardown lottery on a shared 8 GB card) kills
+    whatever process it happens in. In the draft process that death
+    takes hours of finished work with it; in a child it takes nothing:
+    the parent checks the cache file afterwards and either uses the
+    curve or goes on without laughter. Laughter is a hint, never a
+    requirement - a dead listener must cost a clip its bonus, not the
+    draft its existence.
+    """
+    import multiprocessing
+
+    hit = _cache_fresh(cache_path, source)
+    if hit is not None:
+        return hit
+    try:
+        ctx = multiprocessing.get_context("spawn")
+        proc = ctx.Process(target=_child_listen, args=(source, cache_path))
+        proc.start()
+        proc.join(timeout)
+        if proc.is_alive():
+            try:
+                proc.terminate()
+            except Exception:
+                pass
+            proc.join(30)
+            say("[Clips] Laughter listen timed out - going on without it.")
+            return []
+        if proc.exitcode != 0:
+            say("[Clips] Laughter listen died (exit "
+                f"{proc.exitcode}) - going on without it.")
+            return []
+    except Exception as exc:            # spawning itself failed
+        say(f"[Clips] Could not start the laughter listener ({exc}) - "
+            f"going on without it.")
+        return []
+    return _cache_fresh(cache_path, source) or []
+
+
 def _cache_fresh(cache_path: str, source: str):
     """A curve measured earlier for this exact file, or None.
 

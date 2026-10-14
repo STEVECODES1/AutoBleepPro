@@ -512,9 +512,13 @@ def prepare(source: str, drafts: str = DRAFTS, target_s: float = TARGET_S, say=p
                 local_llm.evict()
             except Exception:
                 pass
-            from autoreel.laughter import listen_cached
+            # Isolated, not in-process: a GPU abort in the listener kills
+            # a child that cost nothing, not the draft process holding
+            # hours of finished work. A dead listener costs the moments
+            # their laugh bonus, never the draft.
+            from autoreel.laughter import listen_isolated
 
-            curve = listen_cached(
+            curve = listen_isolated(
                 piece, os.path.join(work, f"monkey_{k}_laugh.json"), say=say)
             chosen, left = pick(curve, segments, flags, target_s)
             for m in chosen + left:

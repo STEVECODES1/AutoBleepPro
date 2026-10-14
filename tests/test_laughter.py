@@ -133,6 +133,77 @@ def test_no_detector_is_not_cached_as_no_laughter(tmp_path, monkeypatch):
     assert not os.path.exists(cache)
 
 
+class _FakeProcess:
+    """A child that behaves as directed, without spawning anything."""
+    instances = []
+
+    def __init__(self, target, args, exitcode=0, dies=False, hangs=False):
+        self._target = target
+        self._args = args
+        self.exitcode = exitcode
+        self._dies = dies
+        self._alive = hangs
+        self.terminated = False
+        _FakeProcess.instances.append(self)
+
+    def start(self):
+        if self._dies:
+            self.exitcode = 1
+            return
+        if self._alive:
+            return
+        self._target(*self._args)
+
+    def join(self, timeout=None):
+        return
+
+    def is_alive(self):
+        return self._alive
+
+    def terminate(self):
+        self.terminated = True
+        self._alive = False
+
+
+def _fake_context(monkeypatch, **kwargs):
+    import multiprocessing
+
+    _FakeProcess.instances = []
+    monkeypatch.setattr(
+        multiprocessing, "get_context",
+        lambda name=None: type("Ctx", (), {
+            "Process": lambda self, target, args: _FakeProcess(
+                target, args, **kwargs)})())
+
+
+def test_isolated_uses_the_cache_without_spawning(tmp_path, monkeypatch):
+    video = _video(tmp_path)
+    cache = str(tmp_path / "piece_laugh.json")
+    monkeypatch.setattr(L, "listen", lambda *a, **k: [0.3])
+    L.listen_cached(video, cache, say=lambda *a: None)
+    _fake_context(monkeypatch)
+    assert L.listen_isolated(video, cache, say=lambda *a: None) == [0.3]
+    assert _FakeProcess.instances == []
+
+
+def test_isolated_child_death_costs_the_bonus_not_the_draft(tmp_path, monkeypatch):
+    video = _video(tmp_path)
+    cache = str(tmp_path / "piece_laugh.json")
+    _fake_context(monkeypatch, dies=True)
+    said = []
+    assert L.listen_isolated(video, cache, say=said.append) == []
+    assert len(_FakeProcess.instances) == 1
+    assert said and "died" in said[0]
+
+
+def test_isolated_timeout_kills_the_child(tmp_path, monkeypatch):
+    video = _video(tmp_path)
+    cache = str(tmp_path / "piece_laugh.json")
+    _fake_context(monkeypatch, hangs=True)
+    assert L.listen_isolated(video, cache, say=lambda *a: None, timeout=1) == []
+    assert _FakeProcess.instances[0].terminated is True
+
+
 @needs_ffmpeg
 def test_one_reading_per_second_lined_up_with_the_audio(tmp_path, monkeypatch):
     """The framing, without the 330 MB model: a stand-in tagger that
