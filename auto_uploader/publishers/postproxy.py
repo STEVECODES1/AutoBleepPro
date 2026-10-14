@@ -273,8 +273,10 @@ class PostproxyPublisher:
         # No made_for_kids: a multipart form can only carry text, and
         # Postproxy answered "false" with HTTP 422 "must be a boolean".
         # Left out, the upload is not marked made for kids.
+        # video_path matters: without it the description loses the
+        # per-clip full-stream link (the template links still apply).
         return [
-            ("post[body]", fit_caption(shorts.description_for(caption),
+            ("post[body]", fit_caption(shorts.description_for(caption, video_path),
                                        CAPTION_LIMITS["youtube"])),
             ("platforms[youtube][title]", title),
             ("platforms[youtube][privacy_status]", self._youtube_privacy),

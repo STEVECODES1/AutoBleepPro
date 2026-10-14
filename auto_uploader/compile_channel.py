@@ -154,6 +154,15 @@ def load_settings(config_path: str) -> dict:
     general = raw.get("general") or {}
     settings["_general"] = {key: general[key] for key in CENSOR_KEYS
                             if key in general}
+    # The links footer for the description comes from the uploader's own
+    # template when it has one, else the default channels - see
+    # utils/stream_links.youtube_footer. Read here, once, rather than
+    # importing the uploader's config machinery into the builder.
+    youtube = raw.get("youtube") or {}
+    settings["_footer_template"] = str(
+        youtube.get("description_template") or "")
+    settings["_rumble_url"] = str(
+        (raw.get("rumble") or {}).get("channel_url") or "")
     return settings
 
 
@@ -583,7 +592,8 @@ def chapters(videos: List[Video], durations: List[float],
 
 
 def make_description(series: str, length: str, videos: List[Video],
-                     durations: List[float], settings: dict) -> str:
+                     durations: List[float], settings: dict,
+                     footer: str = "") -> str:
     credit = settings["credit_name"]
     series = safe(series, settings) or settings["mixed_series_label"]
     parts = [
@@ -599,6 +609,10 @@ def make_description(series: str, length: str, videos: List[Video],
     ]
     parts += [f"- {safe(v.title, settings) or 'Original'}: "
               f"https://youtu.be/{v.id}" for v in videos]
+    # Links are clickable on YouTube, so every description carries the
+    # channels - compilations used to go up with only the sources.
+    if footer:
+        parts += ["", footer]
     parts += ["", "#stackswopo #gta #gtarp #fivem"]
     text = "\n".join(parts)
     # YouTube's limit is 5000; the originals list is what gets cut.
@@ -995,13 +1009,17 @@ def build(series: str, picks: List[Video], settings: dict,
     total = sum(durations)
     number = ledger.next_number(series)
     length = length_label(total)
+    from utils.stream_links import youtube_footer
+
     job = {
         "final": final,
         "series": series,
         "number": number,
         "title": make_title(series, number, total, settings),
         "description": make_description(series, length, picks, durations,
-                                        settings),
+                                        settings,
+                                        youtube_footer(settings.get("_footer_template", ""),
+                                                       settings.get("_rumble_url", ""))),
         "tags": list(settings["tags"]),
         "thumbnail": make_thumbnail(picks, final, total, work),
         "videos": [vars(v) for v in picks],

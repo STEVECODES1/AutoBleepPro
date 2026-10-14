@@ -156,3 +156,43 @@ def link_for_clip(clip_path: str, platform: str = "",
     note = source_of(clip_path, folders)
     return link_for(note.get("stream_title", ""), note.get("stream_date", ""),
                     platform, store)
+
+
+# The channels, for every YouTube description. Links are clickable on
+# YouTube (unlike Instagram), so every surface that uploads there
+# carries them: VODs, recaps, Shorts, weeklies, compilations, and
+# clips fanned out through Postproxy.
+_FOOTER_LINES = (
+    "YouTube, full streams: https://www.youtube.com/@wopovod",
+    "YouTube Shorts: https://www.youtube.com/@wopoclipper",
+    "TikTok: https://www.tiktok.com/@wopocl1ps",
+    "Instagram: https://www.instagram.com/stackswopomanz/",
+    "X: https://x.com/WOPOCLIPS",
+    "Facebook: https://www.facebook.com/1049886138210517",
+    "Monkey App videos: https://www.youtube.com/@BinScript",
+    "Stackswopo live on YouTube: https://www.youtube.com/@stackswopo_",
+)
+
+
+def youtube_footer(template_text: str = "", rumble_url: str = "") -> str:
+    """The ALL LINKS block for a YouTube description.
+
+    The uploader's own youtube.description_template carries one; that
+    wins whenever it is there. Otherwise a default with the same
+    channels, so a description never goes up linkless just because a
+    template lost its header. The Rumble line follows the configured
+    channel URL rather than a hardcoded one.
+    """
+    lines = str(template_text or "").splitlines()
+    if "ALL LINKS" in lines:
+        start = lines.index("ALL LINKS")
+        block = []
+        for line in lines[start:]:
+            if not line.strip():
+                break
+            block.append(line)
+        if block:
+            return "\n".join(block)
+    rumble = (rumble_url or "").strip() or "https://rumble.com/user/BinScripts"
+    return "\n".join(["ALL LINKS", *_FOOTER_LINES[:6],
+                      f"Rumble: {rumble}", *_FOOTER_LINES[6:]])

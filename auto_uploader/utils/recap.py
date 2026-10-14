@@ -301,16 +301,17 @@ def _done(cfg) -> dict:
 
 
 def _links_block(cfg) -> str:
-    lines = str(cfg.youtube.description_template or "").splitlines()
-    if "ALL LINKS" not in lines:
-        return ""
-    start = lines.index("ALL LINKS")
-    block = []
-    for line in lines[start:]:
-        if not line.strip():
-            break
-        block.append(line)
-    return "\n".join(block)
+    from utils.stream_links import youtube_footer
+
+    try:
+        template = str(cfg.youtube.description_template or "")
+    except AttributeError:
+        template = ""
+    try:
+        rumble_url = str(getattr(cfg.rumble, "channel_url", "") or "")
+    except AttributeError:
+        rumble_url = ""
+    return youtube_footer(template, rumble_url)
 
 
 def _edit_plan(cfg, source: str, segments, shown_title: str, stream_date: str,
