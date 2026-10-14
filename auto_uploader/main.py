@@ -1403,6 +1403,42 @@ def _already_on_rumble(title: str, cfg) -> str:
         return ""
 
 
+def _already_on_youtube(title: str, service, default_title: str = "") -> str:
+    """The channel's link for this exact title, or "" - never raises.
+
+    A YouTube upload that times out on the final response usually
+    LANDED anyway: the bytes are all there, only the acknowledgement
+    never came back. Retrying blind uploads it a second time, and the
+    operator deletes the duplicate by hand. So before every RETRY (not
+    the first try), the channel is asked whether this exact title is
+    already up - including still-processing ones, which is what a
+    minutes-old landing looks like.
+
+    Generic fallback titles ("Gaming Stream") never match: every
+    untitled stream shares one, so matching on it would cancel uploads
+    that are genuinely new. The content hash still protects those.
+    """
+    if not title or service is None:
+        return ""
+    try:
+        if default_title and is_placeholder_title(title, default_title):
+            return ""
+    except Exception:
+        pass
+    try:
+        from utils.youtube_checker import _normalize, fetch_existing_videos
+
+        want = _normalize(title)
+        if len(want) < 8:
+            return ""
+        for video in fetch_existing_videos(service):
+            if _normalize(video.title) == want:
+                return video.url
+    except Exception:
+        pass
+    return ""
+
+
 def _vod_gambling(video_path: str, samples: int = 12, need: int = 2) -> str:
     """What gambling a full stream shows ("" for none / could not tell).
 
@@ -3080,8 +3116,29 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
             def yt_on_retry(attempt, delay, exc):
                 yt_logger.warning(f"{filename}: attempt {attempt} failed ({exc}); retrying in {delay}s")
 
-            url = retry_with_backoff(
-                lambda: yt.upload(
+            yt_attempts = [0]
+
+            def yt_attempt():
+                # A timeout on the final response usually means the video
+                # LANDED and only the acknowledgement never came back -
+                # retrying blind uploads it a second time (the operator
+                # deletes the duplicate by hand). So every retry first
+                # asks the channel whether this exact title is already
+                # up, the same way Rumble retries check before re-sending.
+                yt_attempts[0] += 1
+                if yt_attempts[0] > 1:
+                    try:
+                        already = _already_on_youtube(
+                            yt_title, yt.get_service(),
+                            cfg.general.default_title)
+                    except Exception:
+                        already = ""
+                    if already:
+                        print(f"[YouTube] Already on the channel from the "
+                              f"last attempt -> {already}. Not uploading "
+                              f"it again.")
+                        return already
+                return yt.upload(
                     yt_source, yt_title, yt_description, cfg.youtube.tags,
                     chunk_mb=float(getattr(cfg.youtube, 'upload_chunk_mb', 8) or 8),
                     privacy=yt_privacy, category_id=cfg.youtube.category_id,
@@ -3090,7 +3147,10 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
                         cfg.youtube.thumbnail_path) or None,
                     playlist_id=cfg.youtube.playlist_id or None,
                     progress_callback=progress_reporter("YouTube", parallel),
-                ),
+                )
+
+            url = retry_with_backoff(
+                yt_attempt,
                 max_retries=cfg.general.max_retries, delays=cfg.general.retry_delays, on_retry=yt_on_retry,
                 should_retry=youtube_should_retry,
             )
