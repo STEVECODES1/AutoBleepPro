@@ -54,7 +54,7 @@ REM  window for the extra channel (copy this file, change the URL) so a
 REM  stall on one drive's worth of writes cannot take the main one down.
 REM ──────────────────────────────────────────────────────────────────
 :loop
-python record_stream.py "https://www.youtube.com/@stackswopo_/live" --name "Stackswopo"
+python record_stream.py "https://www.youtube.com/@stackswopo_/live" "https://www.youtube.com/@stackswopoman10k/live" --name "Stackswopo"
 
 REM  Grabbed BEFORE anything else runs. ERRORLEVEL is whatever the LAST
 REM  command set, and `set /a` sets it too - so reading it after the

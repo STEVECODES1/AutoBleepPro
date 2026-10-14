@@ -26,7 +26,9 @@
     "_chunk_comment": "Resumable-upload chunk size in MB. Bigger = fewer HTTP round-trips on a fast connection; smaller = less re-sent data after a dropped connection. 8 is conservative; 32-64 is reasonable on a solid line.",
     "upload_chunk_mb": 8,
     "playlist_id": "",
-    "thumbnail_path": "./thumbnails/default.jpg"
+    "thumbnail_path": "./thumbnails/default.jpg",
+    "_link_comment_comment": "A comment left under EVERY YouTube upload, with {rumble} filled in from rumble.channel_url. This is the tappable route to the uncut copy for mobile viewers, who rarely open descriptions. Empty (the old default) means no comment.",
+    "link_comment": "Full uncut stream on Rumble (no bleeps): {rumble}"
   },
   "rumble": {
     "channel": "BinScripts",
