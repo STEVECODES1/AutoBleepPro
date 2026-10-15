@@ -81,3 +81,46 @@ def test_what_was_said_shows_whose_line_it_is():
     segs = [dict(seg(0, 2, "yo what's good"), speaker="Stackswopo"),
             dict(seg(2, 4, "nothing much"), speaker="other person")]
     assert mp._said(segs, 0, 4) == "STACKS: yo what's good THEM: nothing much"
+
+
+def _talk(s, speaker, text="yeah bro"):
+    return {"start": s, "end": s + 2, "text": text, "words": [
+        {"word": text.split()[0], "start": s, "end": s + 2,
+         "speaker": speaker}]}
+
+
+def test_back_and_forth_outscores_a_monologue():
+    convo = [_talk(0, "Stackswopo"), _talk(2, "other person"),
+             _talk(4, "Stackswopo"), _talk(6, "other person"),
+             _talk(8, "Stackswopo"), _talk(10, "other person")]
+    solo = [_talk(100, "Stackswopo"), _talk(102, "Stackswopo"),
+            _talk(104, "Stackswopo"), _talk(106, "Stackswopo")]
+    assert mp.conversation(convo, 0, 12) > mp.conversation(solo, 100, 112)
+    # One voice alone: no turns, no boost - the laugh score stands as is.
+    assert mp.conversation(solo, 100, 112) == 0.0
+
+
+def test_untagged_speech_counts_for_nothing_not_against():
+    segs = [seg(0, 5, "talking talking talking")]
+    assert mp.conversation(segs, 0, 5) == 0.0
+    assert mp.conversation([], 0, 5) == 0.0
+
+
+def test_questions_lift_a_conversation():
+    plain = [_talk(0, "Stackswopo", "yeah bro"), _talk(2, "other person", "for real")]
+    asking = [_talk(0, "Stackswopo", "how old are you"),
+              _talk(2, "other person", "guess though?")]
+    assert mp.conversation(asking, 0, 4) > mp.conversation(plain, 0, 4)
+
+
+def test_pick_prefers_the_conversation_over_the_monologue():
+    """Same laugh, two windows: the one where they talk back and forth
+    wins over one voice alone."""
+    curve = [0.0] * 400
+    curve[60] = curve[300] = 0.9
+    segs = ([_talk(i, "Stackswopo" if i % 4 == 0 else "other person")
+             for i in range(30, 80, 2)]
+            + [_talk(i, "Stackswopo") for i in range(270, 320, 2)])
+    chosen, _left = mp.pick(curve, segs, [], target_s=600)
+    by_peak = {round(m.get("peak", 0)): m for m in chosen}
+    assert by_peak[60]["score"] > by_peak[300]["score"]

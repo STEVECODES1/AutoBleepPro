@@ -144,6 +144,48 @@ def _speaker_at(segments: Sequence[dict], s: float, e: float) -> str:
     return ""
 
 
+def conversation(segments: Sequence[dict], start: float, end: float) -> float:
+    """How much back-and-forth talk fills this window, 0.0 and up.
+
+    A Monkey draft is only worth anything when he is actually
+    conversating with people: turns passing between him and them,
+    both voices heard, questions asked. A laugh peak over one person
+    talking alone - or over no tagged speech at all - scores nothing
+    extra, so the cut fills with conversation instead of monologues.
+
+    Graceful when labels are missing: untagged speech simply does not
+    count, and a window with no tags at all scores 0 rather than
+    failing anything.
+    """
+    from autoreel.speaker_id import OTHER, STREAMER
+
+    speakers: list = []
+    questions = 0
+    for seg in segments:
+        seg_start = float(seg.get("start", 0))
+        seg_end = float(seg.get("end", 0))
+        if seg_end <= start or seg_start >= end:
+            continue
+        questions += str(seg.get("text") or "").count("?")
+        for w in seg.get("words") or []:
+            if float(w.get("end", 0)) <= start or float(w.get("start", 0)) >= end:
+                continue
+            who = str(w.get("speaker") or seg.get("speaker") or "")
+            if who:
+                speakers.append(who)
+    if not speakers:
+        return 0.0
+    turns = sum(1 for a, b in zip(speakers, speakers[1:]) if a != b)
+    parties = {s for s in speakers if s in (STREAMER, OTHER, "both")}
+    score = min(1.0, turns / 8)
+    if len(parties) >= 2 or "both" in parties:
+        score *= 1.0
+    else:
+        # One voice the whole window: a monologue, not a conversation.
+        score *= 0.5
+    return min(1.3, score + min(0.3, 0.1 * questions))
+
+
 def _peaks(curve: Sequence[float], floor: float = 0.3, reach: int = 20) -> List[Tuple[int, float]]:
     # The floor follows the stream, not a fixed number: on the 3/17 Monkey
     # stream only ONE second in 80 minutes reached 0.3, so a fixed 0.3 found
@@ -247,6 +289,9 @@ def pick(curve: Sequence[float], segments: Sequence[dict], flags: Sequence[dict]
             m = {**m, **piece}
             hits = [f for f in flags if _overlaps(m, f)]
         m["checks"] = sorted({f["reason"] for f in hits if not is_cut(f)})
+        # Conversating beats monologue: moments where the talk passes
+        # back and forth outrank a laugh over one voice alone.
+        m["score"] = m["score"] * (1.0 + conversation(segments, m["start"], m["end"]))
         keep.append(m)
     chosen, total = [], 0.0
     for m in sorted(keep, key=lambda m: -m["score"]):
