@@ -144,6 +144,41 @@ def _speaker_at(segments: Sequence[dict], s: float, e: float) -> str:
     return ""
 
 
+def separate_game_moments(chosen: Sequence[dict], piece: str, ask=None) -> tuple:
+    """Split chosen moments into (Monkey calls, game footage).
+
+    The run gate works on whole runs; a kept run can still hold game
+    minutes inside it, and those do not belong in a Monkey draft -
+    Monkey and GTA stay separated in both directions (recaps cut
+    Monkey parts the same way - see utils/recap.stranger_spans).
+    Each moment gets two frames looked at; it is dropped only when
+    both read as not-a-video-call. Anything unjudgeable stays: no
+    measurement, no cut. Dropped moments go back with a reason, so the
+    review page shows what left and why instead of silently losing it.
+    """
+    from autoreel.monkey_check import frame_has_monkey, frame_jpeg
+
+    kept, left_out = [], []
+    for m in chosen:
+        s, e = float(m["start"]), float(m["end"])
+        span = max(0.0, e - s)
+        times = [s + span / 3, s + 2 * span / 3] if span > 0 else [s]
+        verdicts = []
+        for t in times:
+            try:
+                verdict = frame_has_monkey(frame_jpeg(piece, t), ask=ask)
+            except Exception:
+                verdict = None
+            if verdict is not None:
+                verdicts.append(bool(verdict[0]))
+        if verdicts and not any(verdicts):
+            left_out.append({**m, "reasons": ["game footage, not Monkey App"],
+                             "checks": list(m.get("checks", []))})
+        else:
+            kept.append(m)
+    return kept, left_out
+
+
 def conversation(segments: Sequence[dict], start: float, end: float) -> float:
     """How much back-and-forth talk fills this window, 0.0 and up.
 
@@ -566,6 +601,14 @@ def prepare(source: str, drafts: str = DRAFTS, target_s: float = TARGET_S, say=p
             curve = listen_isolated(
                 piece, os.path.join(work, f"monkey_{k}_laugh.json"), say=say)
             chosen, left = pick(curve, segments, flags, target_s)
+            # Monkey and GTA stay separated: a kept run can still hold
+            # game minutes inside it. Moments that read as game on both
+            # frames go back with a reason instead of into the cut.
+            kept, game = separate_game_moments(chosen, piece)
+            if game:
+                say(f"[Monkey] Part {k + 1}: {len(game)} moment(s) are game "
+                    f"footage, not Monkey App - left out.")
+            chosen, left = kept, left + game
             for m in chosen + left:
                 m["where"] = _clock(run_s + m["start"])
                 m["said"] = _said(segments, m["start"], m["end"])

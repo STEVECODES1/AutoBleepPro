@@ -124,3 +124,48 @@ def test_pick_prefers_the_conversation_over_the_monologue():
     chosen, _left = mp.pick(curve, segs, [], target_s=600)
     by_peak = {round(m.get("peak", 0)): m for m in chosen}
     assert by_peak[60]["score"] > by_peak[300]["score"]
+
+
+def _moment(s, e):
+    return {"start": s, "end": e, "score": 0.9, "checks": []}
+
+
+def _ask_factory(answers):
+    def ask(system, prompt, images):
+        return answers.get(images[0], "{}")
+    return ask
+
+
+def test_game_footage_leaves_the_cut_with_a_reason(monkeypatch):
+    """Monkey and GTA stay separated: a moment reading as game on both
+    frames goes back with a reason instead of into the draft."""
+    import autoreel.monkey_check as mc
+
+    monkeypatch.setattr(mc, "frame_jpeg", lambda src, at: f"frame{at}")
+    ask = _ask_factory({"frame10.0": '{"monkey": false, "what": "GTA HUD"}',
+                        "frame20.0": '{"monkey": false, "what": "GTA HUD"}'})
+    kept, left = mp.separate_game_moments([_moment(0, 30)], "piece.mp4",
+                                          ask=ask)
+    assert kept == []
+    assert left[0]["reasons"] == ["game footage, not Monkey App"]
+
+
+def test_one_call_frame_keeps_the_moment(monkeypatch):
+    import autoreel.monkey_check as mc
+
+    monkeypatch.setattr(mc, "frame_jpeg", lambda src, at: f"frame{at}")
+    ask = _ask_factory({"frame10.0": '{"monkey": true, "what": "call pane"}',
+                        "frame20.0": '{"monkey": false, "what": "menu"}'})
+    kept, left = mp.separate_game_moments([_moment(0, 30)], "piece.mp4",
+                                          ask=ask)
+    assert len(kept) == 1 and left == []
+
+
+def test_unjudgeable_moments_stay(monkeypatch):
+    """No measurement, no cut - same rule as the run gate."""
+    import autoreel.monkey_check as mc
+
+    monkeypatch.setattr(mc, "frame_jpeg", lambda src, at: "")
+    kept, left = mp.separate_game_moments([_moment(0, 30)], "piece.mp4",
+                                          ask=lambda *a: "garbage")
+    assert len(kept) == 1 and left == []
