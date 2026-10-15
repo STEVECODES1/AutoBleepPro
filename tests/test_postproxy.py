@@ -139,6 +139,28 @@ def test_the_youtube_route_posts_only_to_youtube_as_a_titled_short(
     assert result["results"][0]["post_url"] == "https://youtu.be/abc"
 
 
+def test_the_youtube_route_leaves_the_rumble_link_comment(
+        pp, monkeypatch):
+    """Shorts viewers ask "what does he stream on" because the
+    description hides behind a tap - the comment is tappable."""
+    from publishers import youtube_shorts as shorts_mod
+
+    postproxy, clip = pp
+    http = FakeHTTP(created=_created(("youtube", "published",
+                                      {"url": "https://youtu.be/abc"})))
+    monkeypatch.setattr(postproxy, "requests", http)
+    seen = {}
+    monkeypatch.setattr(
+        shorts_mod, "leave_link_comment",
+        lambda cfg, url: seen.setdefault("url", url) or True)
+    cfg = {"youtube_shorts": {"privacy": "public"}}
+
+    postproxy.PostproxyPublisher(cfg, "postproxy_youtube").post_clip(
+        clip, "He really said that")
+
+    assert seen.get("url") == "https://youtu.be/abc"
+
+
 def test_x_is_trimmed_to_its_limit(pp, monkeypatch):
     postproxy, clip = pp
     profiles = {"data": [{"id": "x1", "name": "WOPOCLIPS",

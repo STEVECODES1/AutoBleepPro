@@ -396,4 +396,19 @@ class PostproxyPublisher:
             log.info("postproxy: %s -> %s%s", result["platform"],
                      "ok" if result["success"] else "FAILED",
                      f" ({result['error']})" if result.get("error") else "")
+        if self.platform == "youtube":
+            # The Rumble link as a comment, like the direct Shorts
+            # publisher leaves: Shorts viewers ask "what does he stream
+            # on" because the description hides behind a tap on mobile.
+            for result in results:
+                if result.get("platform") == "youtube_shorts" and result.get(
+                        "success") and result.get("post_url"):
+                    try:
+                        from .youtube_shorts import leave_link_comment
+
+                        leave_link_comment(self._cfg, result["post_url"])
+                    except Exception as exc:
+                        log.warning("postproxy: link comment failed (%s)",
+                                    exc)
+                    break
         return {"post_id": post.get("id"), "results": results}

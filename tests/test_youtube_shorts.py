@@ -19,7 +19,8 @@ for _path in (_REPO, _UPLOADER):
         sys.path.insert(0, _path)
 
 from publishers.errors import NotConfigured
-from publishers.youtube_shorts import SHORTS_TAG, YouTubeShortsPublisher
+from publishers.youtube_shorts import (SHORTS_TAG, YouTubeShortsPublisher,
+                                        leave_link_comment)
 
 
 def _config(tmp_path, **overrides):
@@ -30,6 +31,48 @@ def _config(tmp_path, **overrides):
     settings.update(overrides)
     return {"youtube": {"client_secrets_path": str(secrets)},
             "youtube_shorts": settings}
+
+
+def _linked(tmp_path):
+    cfg = _config(tmp_path)
+    cfg["youtube"]["link_comment"] = "Uncut here: {rumble}"
+    cfg["rumble"] = {"channel_url": "https://rumble.com/user/BinScripts"}
+    return cfg
+
+
+def test_the_rumble_link_goes_under_every_short(tmp_path, monkeypatch):
+    """Viewers ask "what does he stream on" because the description
+    hides behind a tap on mobile - the comment is tappable."""
+    import publishers.youtube_shorts as shorts_mod
+
+    seen = {}
+
+    class FakeUploader:
+        def __init__(self, *a, **k):
+            pass
+
+        def comment(self, url, text):
+            seen["url"] = url
+            seen["text"] = text
+            return "comment-id"
+
+    monkeypatch.setattr("utils.youtube_uploader.YouTubeUploader", FakeUploader)
+    assert leave_link_comment(_linked(tmp_path),
+                              "https://www.youtube.com/shorts/abc") is True
+    assert seen["url"] == "https://www.youtube.com/shorts/abc"
+    assert seen["text"] == ("Uncut here: "
+                            "https://rumble.com/user/BinScripts")
+
+
+def test_no_template_means_no_comment_but_no_crash(tmp_path, monkeypatch):
+    import publishers.youtube_shorts as shorts_mod
+
+    monkeypatch.setattr("utils.youtube_uploader.YouTubeUploader",
+                        lambda *a, **k: (_ for _ in ()).throw(
+                            AssertionError("must not upload")))
+    assert leave_link_comment(_config(tmp_path),
+                              "https://www.youtube.com/shorts/abc") is False
+    assert leave_link_comment(_linked(tmp_path), "not a url") is False
 
 
 def test_it_is_not_ready_until_that_channel_is_signed_into(tmp_path):

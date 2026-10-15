@@ -105,7 +105,6 @@ def _bare_line(text: str) -> str:
 
 class YouTubeShortsPublisher:
     """Uploads one clip to the Shorts channel."""
-
     def __init__(self, config: dict):
         self.config = config or {}
         self.settings = dict(self.config.get("youtube_shorts", {}) or {})
@@ -221,7 +220,7 @@ class YouTubeShortsPublisher:
 
         uploader = YouTubeUploader(self.client_secrets_path(),
                                    self.token_path())
-        return uploader.upload(
+        url = uploader.upload(
             video_path,
             title=self.title_for(caption, video_path),
             description=self.description_for(caption, video_path),
@@ -233,3 +232,41 @@ class YouTubeShortsPublisher:
             category_id=str(self.settings.get("category_id", "20")),
             made_for_kids=bool(self.settings.get("made_for_kids", False)),
         )
+        # The Rumble link as a comment: Shorts viewers ask "what does he
+        # stream on" because the description hides behind a tap on
+        # mobile. Best effort, always: the video is live either way.
+        leave_link_comment(self.config, url)
+        return url
+
+
+def leave_link_comment(config: dict, url: str) -> bool:
+    """Post the Rumble link under a Short. True if it went out.
+
+    Same template as full uploads (youtube.link_comment, {rumble} for
+    the channel); empty template means the feature is off. Never
+    raises: a missing comment is a missing nicety, not a failed post.
+    Shared by the direct publisher and the Postproxy YouTube route.
+    """
+    try:
+        template = str((config.get("youtube", {}) or {}).get(
+            "link_comment", "") or "").strip()
+        rumble = str((config.get("rumble", {}) or {}).get(
+            "channel_url", "") or "").strip()
+        if not template or ("{rumble}" in template and not rumble):
+            return False
+        text = template.replace("{rumble}", rumble).strip()
+        if not text or not str(url or "").startswith("http"):
+            return False
+        from utils.youtube_uploader import YouTubeUploader
+
+        shorts = (config.get("youtube_shorts", {}) or {})
+        secrets = (shorts.get("client_secrets_path", "")
+                   or (config.get("youtube", {}) or {}).get(
+                       "client_secrets_path", ""))
+        token = shorts.get("token_path", "")
+        if not secrets or not token:
+            return False
+        return bool(YouTubeUploader(secrets, token).comment(url, text))
+    except Exception as exc:
+        print(f"[YouTube Shorts] Could not leave the link comment: {exc}")
+        return False
