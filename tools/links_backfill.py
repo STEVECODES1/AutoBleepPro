@@ -94,11 +94,37 @@ def comment_text(desc, foot):
     return f"{first}\n\n{foot}"
 
 
+def shorts_comment_text(desc):
+    """Under a Short: the full video first - "where's the full video" is
+    what people ask - then the uncut one on Rumble, then every stream.
+    YouTube does not make these clickable under a Short; they are there to
+    be read and copied."""
+    m = re.search(r"Full stream: (https://www\.youtube\.com/watch\?v=[\w-]+)", desc or "")
+    full = m.group(1) if m else ""
+    rumble = ""
+    if full:
+        try:
+            with open(os.path.join(UPLOADER, "logs", "stream_links.json"), encoding="utf-8") as f:
+                for entry in json.load(f):
+                    if entry.get("youtube") == full and str(entry.get("rumble", "")).startswith("https://rumble.com/"):
+                        rumble = entry["rumble"]
+        except (OSError, ValueError):
+            pass
+    lines = [f"▶ Full video: {full}"] if full else []
+    lines.append(f"▶ Uncut & uncensored on Rumble: {rumble or RUMBLE}")
+    lines.append("▶ Every full stream: https://www.youtube.com/@wopovod")
+    return "\n".join(lines)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--apply", action="store_true")
     ap.add_argument("--max", type=int, default=40)
     ap.add_argument("--channel", default="")
+    ap.add_argument("--shorts", action="store_true",
+                    help="also comment under Shorts (the clips channel)")
+    ap.add_argument("--comments-first", action="store_true",
+                    help="comments only this run (the ones viewers ask for)")
     args = ap.parse_args()
     foot = footer()
     writes = 0
@@ -113,13 +139,14 @@ def main():
             if "ALL LINKS" not in desc and len(desc) + len(foot) + 2 <= MAX_DESC:
                 need_desc.append(v)
             short = seconds(v["contentDetails"].get("duration")) <= 180
-            if not short and has_link_comment(svc, channel_id, v["id"]) is False:
+            v["_short"] = short
+            if (not short or args.shorts) and has_link_comment(svc, channel_id, v["id"]) is False:
                 need_comment.append(v)
         print(f"== {label}: {len(videos)} public, missing ALL LINKS {len(need_desc)}, "
               f"missing links comment {len(need_comment)}")
         if not args.apply:
             continue
-        for v in need_desc:
+        for v in ([] if args.comments_first else need_desc):
             if writes >= args.max:
                 break
             old = v["snippet"].get("description", "")
@@ -138,7 +165,8 @@ def main():
         for v in need_comment:
             if writes >= args.max:
                 break
-            text = comment_text(v["snippet"].get("description", ""), foot)
+            desc = v["snippet"].get("description", "")
+            text = shorts_comment_text(desc) if v.get("_short") else comment_text(desc, foot)
             try:
                 svc.commentThreads().insert(part="snippet", body={"snippet": {
                     "videoId": v["id"],

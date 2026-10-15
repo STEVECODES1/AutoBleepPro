@@ -242,3 +242,26 @@ def _no_gambling_model(monkeypatch, request):
         return
     monkeypatch.setattr(gc, "frame_has_gambling", lambda *a, **k: None)
     monkeypatch.setattr(gc, "gambling_on_screen", lambda *a, **k: (None, []))
+
+
+# Every variable that makes a REAL notification go out.
+_NOTIFY_NAMES = ("DISCORD_WEBHOOK_URL", "DISCORD_JOB_WEBHOOK_URL", "NTFY_TOPIC")
+
+
+@pytest.fixture(autouse=True)
+def _no_real_notifications(monkeypatch):
+    """No test may ping the operator's phone.
+
+    On 10-15 two runs of the suite posted six "Recording came up short -
+    Stackswopo is still live right now" alerts to the real Discord channel
+    while Stacks was offline: test_recorder's fixtures, delivered through
+    DISCORD_WEBHOOK_URL that a load_config() elsewhere had put in
+    os.environ. An alert the operator learns to ignore is worse than none.
+
+    Set to "" rather than deleted: load_dotenv() never overrides a
+    variable that exists, so a test that loads the real .env mid-test
+    cannot bring the webhook back. A test of the notifier sets its own
+    value with monkeypatch.setenv, which still wins.
+    """
+    for name in _NOTIFY_NAMES:
+        monkeypatch.setenv(name, "")

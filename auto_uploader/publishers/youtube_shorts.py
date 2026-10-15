@@ -235,36 +235,62 @@ class YouTubeShortsPublisher:
         # The Rumble link as a comment: Shorts viewers ask "what does he
         # stream on" because the description hides behind a tap on
         # mobile. Best effort, always: the video is live either way.
-        leave_link_comment(self.config, url)
+        leave_link_comment(self.config, url, video_path)
         return url
 
 
-def leave_link_comment(config: dict, url: str) -> bool:
-    """Post the Rumble link under a Short. True if it went out.
+def link_comment_for(config: dict, video_path: str = "") -> str:
+    """The comment under a Short: the full video it came from, the uncut
+    one on Rumble, and every full stream. "" when the feature is off
+    (an empty youtube.link_comment).
 
-    Same template as full uploads (youtube.link_comment, {rumble} for
-    the channel); empty template means the feature is off. Never
-    raises: a missing comment is a missing nicety, not a failed post.
+    Viewers under a Short ask "where's the full video" - so the answer is
+    the first line, not the channel page.
+    """
+    template = str((config.get("youtube", {}) or {}).get(
+        "link_comment", "") or "").strip()
+    rumble = str((config.get("rumble", {}) or {}).get(
+        "channel_url", "") or "").strip()
+    if not template or ("{rumble}" in template and not rumble):
+        return ""
+    full = rumble_stream = ""
+    if video_path:
+        try:
+            from utils.stream_links import link_for_clip
+
+            full = link_for_clip(video_path, "youtube")
+            rumble_stream = link_for_clip(video_path, "rumble")
+        except Exception:
+            full = rumble_stream = ""
+    lines = []
+    if full:
+        lines.append(f"\u25b6 Full video: {full}")
+    lines.append(template.replace("{rumble}", rumble_stream or rumble).strip())
+    lines.append("\u25b6 Every full stream: https://www.youtube.com/@wopovod")
+    return "\n".join(line for line in lines if line)
+
+
+def leave_link_comment(config: dict, url: str, video_path: str = "") -> bool:
+    """Post the links under a Short. True if it went out.
+
+    Never raises: a missing comment is a missing nicety, not a failed post.
     Shared by the direct publisher and the Postproxy YouTube route.
+
+    The token and client secrets come from the publisher's own resolvers.
+    Reading them raw from config.json - where client_secrets_path is unset
+    and the token path is relative - made this return False silently, and
+    no Short ever got its comment.
     """
     try:
-        template = str((config.get("youtube", {}) or {}).get(
-            "link_comment", "") or "").strip()
-        rumble = str((config.get("rumble", {}) or {}).get(
-            "channel_url", "") or "").strip()
-        if not template or ("{rumble}" in template and not rumble):
-            return False
-        text = template.replace("{rumble}", rumble).strip()
+        text = link_comment_for(config, video_path)
         if not text or not str(url or "").startswith("http"):
             return False
         from utils.youtube_uploader import YouTubeUploader
 
-        shorts = (config.get("youtube_shorts", {}) or {})
-        secrets = (shorts.get("client_secrets_path", "")
-                   or (config.get("youtube", {}) or {}).get(
-                       "client_secrets_path", ""))
-        token = shorts.get("token_path", "")
-        if not secrets or not token:
+        publisher = YouTubeShortsPublisher(config)
+        secrets, token = publisher.client_secrets_path(), publisher.token_path()
+        if not secrets or not token or not os.path.isfile(token):
+            print("[YouTube Shorts] No Shorts token - link comment skipped.")
             return False
         return bool(YouTubeUploader(secrets, token).comment(url, text))
     except Exception as exc:

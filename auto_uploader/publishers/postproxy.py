@@ -409,7 +409,7 @@ class PostproxyPublisher:
                     try:
                         from .youtube_shorts import leave_link_comment
 
-                        leave_link_comment(self._cfg, result["post_url"])
+                        leave_link_comment(self._cfg, result["post_url"], video_path)
                     except Exception as exc:
                         log.warning("postproxy: link comment failed (%s)",
                                     exc)
