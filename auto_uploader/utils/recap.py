@@ -385,7 +385,8 @@ def recap_description(cfg, shown_title: str, stream_date: str, full: str, uncut:
         lines.append(f"▶ Uncut & uncensored on Rumble: {uncut}")
     if lines:
         lines.append("")
-    lines.append(f"The best moments from Stackswopo's \"{shown_title}\" stream ({stream_date}). "
+    when = f" ({stream_date})" if str(stream_date or "").strip() else ""
+    lines.append(f"The best moments from Stackswopo's \"{shown_title}\" stream{when}. "
                  "Every minute of it is on STACKSWOPO VODS: https://www.youtube.com/@wopovod")
     marks = [(0.0, shown_title.upper())]
     for a, _b, i in placed:
