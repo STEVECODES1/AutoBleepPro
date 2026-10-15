@@ -2586,7 +2586,21 @@ def main(argv: Optional[list] = None) -> int:
         if len(args.url) == 1:
             return args.name
         kind = "clips" if is_clips_url(url) else "live"
-        return f"{args.name} {platform_of(url)} {kind}"
+        base = f"{args.name} {platform_of(url)} {kind}"
+        # Two live pages on the SAME site (the main channel plus
+        # @stackswopoman10k) used to get the same label: the same segment
+        # paths, and one heartbeat file the two threads overwrote in turn,
+        # so the idle channel's "waiting" hid the live one's "recording"
+        # every 30 s. The first source on each site keeps the plain label
+        # (nothing downstream that knows that name changes); later ones
+        # get their channel name added.
+        same = [u for u in args.url
+                if platform_of(u) == platform_of(url)
+                and is_clips_url(u) == is_clips_url(url)]
+        if same.index(url) == 0:
+            return base
+        m = re.search(r"/@?([A-Za-z0-9_.-]+)(?:/live)?/?$", url)
+        return f"{base} {m.group(1) if m else same.index(url) + 1}"
 
     print("=" * 62)
     print(f" Recording : {args.name}")

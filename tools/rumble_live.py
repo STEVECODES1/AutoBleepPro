@@ -76,22 +76,56 @@ def env():
     return out
 
 
-def heartbeat():
+def heartbeats():
+    """Every fresh heartbeat of a Stackswopo YouTube recorder.
+
+    Not just Stackswopo.json: with two live pages on the recorder (the main
+    channel plus @stackswopoman10k) each source writes its own file under
+    its own label, and Stackswopo.json goes stale. Reading only that one
+    file is why the 10-14 and 10-15 streams never reached Rumble live.
+    """
+    out = []
+    folder = os.path.dirname(HEARTBEAT)
     try:
-        with open(HEARTBEAT, encoding="utf-8") as f:
-            hb = json.load(f)
-    except (OSError, ValueError):
+        names = [n for n in os.listdir(folder) if n.lower().endswith(".json")]
+    except OSError:
+        return out
+    for name in names:
+        try:
+            with open(os.path.join(folder, name), encoding="utf-8") as f:
+                hb = json.load(f)
+        except (OSError, ValueError):
+            continue
+        if not isinstance(hb, dict):
+            continue
+        url = str(hb.get("url", "")).lower()
+        if "youtube.com" not in url or "stackswopo" not in url:
+            continue
+        try:
+            fresh = time.time() - float(hb.get("time", 0) or 0) <= STALE_HEARTBEAT_S
+        except (TypeError, ValueError):
+            fresh = False
+        if fresh:
+            out.append(hb)
+    return out
+
+
+def heartbeat():
+    hbs = heartbeats()
+    if not hbs:
         return None
-    if time.time() - hb.get("time", 0) > STALE_HEARTBEAT_S:
-        return None
-    return hb
+    live = [h for h in hbs if h.get("state") == "recording" and h.get("video_id")]
+    return max(live or hbs, key=lambda h: h.get("time", 0))
+
+
+def recording_ids():
+    return {hb["video_id"] for hb in heartbeats()
+            if hb.get("state") == "recording" and hb.get("video_id")}
 
 
 def recording_id():
-    hb = heartbeat()
-    if hb and hb.get("state") == "recording" and hb.get("video_id"):
-        return hb["video_id"]
-    return ""
+    ids = sorted(recording_ids())
+    return ids[0] if ids else ""
 
 
 def ledger_load():
@@ -265,14 +299,14 @@ def relay(video_id, cfg):
     push, pushed, studio, off_since = None, 0.0, None, None
     try:
         while True:
-            live_id = recording_id()
-            if live_id == video_id:
+            still_live = video_id in recording_ids()
+            if still_live:
                 off_since = None
             else:
                 off_since = off_since or time.time()
                 if time.time() - off_since > END_GRACE_S:
                     break
-            if (push is None or not push.alive()) and live_id == video_id:
+            if (push is None or not push.alive()) and still_live:
                 if push is not None:
                     pushed += push.stop()
                     entry["restarts"] += 1
@@ -332,9 +366,10 @@ def main():
         return 2
     log("Rumble live relay waiting for Stackswopo to go live")
     while True:
-        vid = recording_id()
-        if vid and vid not in ledger_load():
-            relay(vid, cfg)
+        done = ledger_load()
+        fresh = sorted(v for v in recording_ids() if v not in done)
+        if fresh:
+            relay(fresh[0], cfg)
         time.sleep(POLL_S)
 
 
