@@ -1293,3 +1293,22 @@ def hashtags_for(title: str, platform: str = "instagram",
     for tag in FILLER_TAGS:
         add(tag)
     return " ".join(f"#{tag}" for tag in chosen)
+
+
+# Last stop for the announcement text and captions built here: a garbled
+# template must never reach a Page or a feed (see utils/unmojibake.py).
+# Rebinding the module names means every caller - inside this module and
+# every `from utils.social_promoter import build_caption` - gets the check.
+def _checked(build):
+    import functools
+
+    @functools.wraps(build)
+    def wrapper(*args, **kwargs):
+        from utils.unmojibake import fix
+        return fix(build(*args, **kwargs))
+    wrapper.unchecked = build
+    return wrapper
+
+
+build_message = _checked(build_message)
+build_caption = _checked(build_caption)

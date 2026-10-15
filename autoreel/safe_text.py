@@ -167,6 +167,20 @@ MAX_REMOVED_FRACTION = 0.34
 MIN_TITLE_WORDS = 3
 
 
+# Words that send a video to YouTube's child-safety review when a title puts
+# them next to a stranger or a body. "Stacks accuses a stranger of
+# child-related issues" went out as a recap chapter on 10-15. A funny
+# moment never needs one of these in its title, so a line with one is not
+# used at all - not masked, not trimmed.
+CHILD_RISK = re.compile(
+    r"\b(child\w*|kids?|minors?|underage|teens?|pedo\w*|paedo\w*|groom\w*|"
+    r"molest\w*|predator\w*|frott\w*|incest\w*|rap(e|es|ed|ing|ist))\b", re.I)
+
+
+def child_risk(text: str) -> bool:
+    return bool(CHILD_RISK.search(text or ""))
+
+
 def clean_title(text: str, fallback: str = "", checker=None) -> str:
     """A safe title, or `fallback` when cleaning would wreck it.
 
@@ -193,6 +207,8 @@ def clean_title(text: str, fallback: str = "", checker=None) -> str:
     can recognise rather than an empty one; see the clip-title path in
     auto_uploader/main.py.
     """
+    if child_risk(text):
+        return fallback
     counts: dict = {}
     cleaned = clean(text, checker, counts=counts)
     if not cleaned:

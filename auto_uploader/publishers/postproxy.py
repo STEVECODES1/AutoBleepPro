@@ -285,7 +285,10 @@ class PostproxyPublisher:
 
     def _create(self, video_path: str, caption: str,
                 profiles: List[dict]) -> dict:
-        files: List[tuple] = [(name, (None, value))
+        from utils.unmojibake import fix as _unmojibake
+        # Templates are added inside _form (the Shorts description) - the
+        # last place text can be checked before it is public.
+        files: List[tuple] = [(name, (None, _unmojibake(value)))
                               for name, value in self._form(caption,
                                                             video_path)]
         files += [("profiles[]", (None, str(p.get("id"))))

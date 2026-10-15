@@ -617,6 +617,11 @@ def prepare(source: str, drafts: str = DRAFTS, target_s: float = TARGET_S, say=p
             pool += [{**m, "_src": censored, "_k": k} for m in chosen]
             left_all += left
             flags_all += flags
+        # Never the same moment twice: not one BinScripts already posted,
+        # not one an earlier draft already took. Matched on what is SAID -
+        # the posted videos are edited past recognition, the words are not.
+        pool, repeats = _not_used_before(pool, drafts, out_dir, say)
+        left_all += repeats
         picked, total = [], 0.0
         for m in sorted(pool, key=lambda m: -m["score"]):
             if total + (m["end"] - m["start"]) <= target_s:
@@ -632,10 +637,60 @@ def prepare(source: str, drafts: str = DRAFTS, target_s: float = TARGET_S, say=p
             kept.append({**picked[i], "at_cut": at})
         with open(os.path.join(out_dir, "review.html"), "w", encoding="utf-8") as f:
             f.write(review_page(os.path.basename(source), kept, left_all, flags_all))
+        try:
+            from utils.posted_lines import write_used
+
+            write_used(out_dir, source, kept)
+        except Exception as exc:
+            say(f"[Monkey] Could not record this draft's moments ({exc}).")
         say(f"[Monkey] Done: {len(kept)} moments, {total / 60:.1f} min -> {out_dir}")
         return out_dir
     finally:
         shutil.rmtree(work, ignore_errors=True)
+
+
+def _not_used_before(pool: list, drafts: str, out_dir: str, say=print) -> tuple:
+    """(fresh moments, left-out entries for the repeats). Best effort: if
+    the posted captions cannot be read, the drafts' own record still counts."""
+    try:
+        from utils import posted_lines as pl
+    except ImportError:
+        return pool, []
+    posted_dir = os.path.join(drafts, "_posted_binscripts")
+    try:
+        pl.refresh(posted_dir, say=say)
+    except Exception as exc:
+        say(f"[Monkey] Could not refresh what BinScripts posted ({exc}).")
+    pl.backfill_used(drafts, say=say)
+    posted = pl.posted_shingles(posted_dir)
+    drafted = pl.drafted_shingles(drafts, skip=out_dir)
+    fresh, repeats = [], []
+    for m in pool:
+        said = m.get("said", "")
+        if posted and pl.already_used(said, posted):
+            repeats.append({**m, "reasons": ["already posted on BinScripts"]})
+        elif drafted and pl.already_used(said, drafted):
+            repeats.append({**m, "reasons": ["already in an earlier draft"]})
+        else:
+            fresh.append(m)
+    if repeats:
+        say(f"[Monkey] {len(repeats)} moment(s) were already used (posted or drafted) - left out.")
+    return fresh, repeats
+
+
+def next_source(folder: str, drafts: str = DRAFTS, say=print) -> str:
+    """The stream to draft next: the most Monkey minutes, not drafted yet."""
+    rows = scan(folder, drafts, say=lambda *_: None)
+    done = {name.lower() for name in os.listdir(drafts)} if os.path.isdir(drafts) else set()
+    fresh = [r for r in rows if r.get("monkey_min", 0) >= 10
+             and _folder_name(r["file"]).lower() not in done]
+    if not fresh:
+        say("[Monkey] Every stream with a real Monkey part has a draft already.")
+        return ""
+    best = max(fresh, key=lambda r: r["monkey_min"])
+    say(f"[Monkey] Next up: {os.path.basename(best['file'])} "
+        f"({best['monkey_min']:.0f} min of Monkey App; {len(fresh) - 1} more waiting).")
+    return best["file"]
 
 
 SCAN_EVERY_S = 300.0
@@ -703,12 +758,19 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ap.add_argument("--scan", metavar="FOLDER", help="list which videos have a Monkey part")
     ap.add_argument("--out", default=DRAFTS, help=f"where drafts go (default {DRAFTS})")
     ap.add_argument("--minutes", type=float, default=TARGET_S / 60, help="rough cut length")
+    ap.add_argument("--next", metavar="FOLDER", nargs="?", const=r"D:\videos stizz",
+                    help="draft the best stream in FOLDER that has no draft yet")
     args = ap.parse_args(argv)
     if args.scan:
         scan(args.scan, args.out)
-    for video in args.videos:
+    videos = list(args.videos)
+    if args.next:
+        pick_one = next_source(args.next, args.out)
+        if pick_one:
+            videos.append(pick_one)
+    for video in videos:
         prepare(video, args.out, args.minutes * 60)
-    if not args.scan and not args.videos:
+    if not args.scan and not args.videos and not args.next:
         ap.print_help()
     return 0
 

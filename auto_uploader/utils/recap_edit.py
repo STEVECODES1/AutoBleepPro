@@ -123,7 +123,11 @@ TOPIC_SYSTEM = (
     "'Pulled over again', 'The pastor wants his tithe'. Clean enough for a TV guide: "
     "no swears, no slurs, no body parts, nothing sexual, no drugs, never mock how anyone "
     "looks - if the moment is only about one of those, describe the situation instead "
-    "('Barbershop argument'). No quotes, no emoji, no hashtags. Reply as JSON: "
+    "('Barbershop argument'). Never mention children, kids, minors or anything a "
+    "viewer could read as about them. Write it the way a fan would tell a friend "
+    "what was funny - the joke or the reaction, not a court summary: 'Stacks loses "
+    "it at the barber' beats 'Stacks negotiates with a barber'. "
+    "No quotes, no emoji, no hashtags. Reply as JSON: "
     '{"titles": ["...", "..."]} with exactly one title per moment, in order.')
 
 

@@ -41,6 +41,11 @@ def test_the_uploader_restarts_itself():
 def test_start_launches_the_keepalives_not_python_directly():
     """The whole point: nothing may run the recorder once."""
     body = _read("START.bat")
+    # Since 10-10 START.bat hands off to _AUTOSTART.ps1, which starts each
+    # keepalive only if it is not already running (no second recorder
+    # when START.bat is run twice). The keepalives are named there.
+    if "_AUTOSTART.ps1" in body:
+        body += _read("_AUTOSTART.ps1")
 
     assert "_RUN_RECORDER.bat" in body
     assert "_RUN_UPLOADER.bat" in body

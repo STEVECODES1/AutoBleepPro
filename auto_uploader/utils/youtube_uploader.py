@@ -217,6 +217,8 @@ class YouTubeUploader:
         progress_callback: Optional[Callable[[int], None]] = None,
     ) -> str:
         """Uploads `video_path`, returns the resulting watch URL."""
+        from utils.unmojibake import fix as _unmojibake
+        title, description = _unmojibake(title), _unmojibake(description)
         service = self._client()
 
         body = {
@@ -319,6 +321,8 @@ class YouTubeUploader:
         video_id = _video_id(video_url_or_id)
         if not video_id or not str(text or "").strip():
             return False
+        from utils.unmojibake import fix as _unmojibake
+        text = _unmojibake(str(text))
         try:
             service = self._client()
             service.commentThreads().insert(

@@ -1426,12 +1426,15 @@ def _already_on_youtube(title: str, service, default_title: str = "") -> str:
     except Exception:
         pass
     try:
-        from utils.youtube_checker import _normalize, fetch_existing_videos
+        # Under its own name: re-importing the module-level
+        # fetch_existing_videos here would make it a local for the whole
+        # function (see test_no_function_shadows_a_module_level_import).
+        from utils.youtube_checker import _normalize, fetch_existing_videos as _existing
 
         want = _normalize(title)
         if len(want) < 8:
             return ""
-        for video in fetch_existing_videos(service):
+        for video in _existing(service):
             if _normalize(video.title) == want:
                 return video.url
     except Exception:

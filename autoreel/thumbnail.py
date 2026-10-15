@@ -594,6 +594,50 @@ def make(clip_path: str, duration: float, out_path: str = "",
         shutil.rmtree(workspace, ignore_errors=True)
 
 
+KIND_LOOK_S = 4.0         # seconds content_kind watches at each look
+
+
+GTA_STREAM_SHARE = 0.4   # this share of the looks in the game: a GTA stream
+MIN_GAME_LOOKS = 3       # fewer game frames than this is no pick at all
+
+
+def _content_pick(source: str, looks: list) -> tuple:
+    """(kind, pool) from what the frames actually show.
+
+    content_kind can say "gta" with confidence (moving picture, no pinned
+    taskbar); everything else on this channel is the desktop - a Monkey
+    call, a TikTok being reacted to, a Twitch page - and it says "monkey"
+    for the lit ones and "" for the dark ones. So the GAME frames decide:
+
+      "gta"        most looks are the game: game frames, GTA framing, badge
+      "gta-mixed"  some game: still pick from the game frames (no stranger
+                   from a call or a TikTok can lead), but no GTA RP badge -
+                   the video is not mostly GTA
+      "monkey"     desktop stream: his face (facecam/avatar), never a
+                   stranger's; no badge
+      None         nothing could be read: leave it as it was
+    """
+    try:
+        from autoreel.content_kind import kind_for_video
+    except ImportError:
+        return None, looks
+    kinds = []
+    for at, _data, _stats in looks:
+        try:
+            kinds.append(kind_for_video(source, max(0.0, at - KIND_LOOK_S / 2),
+                                        KIND_LOOK_S))
+        except Exception:
+            kinds.append("")
+    if not any(kinds):
+        return None, looks
+    game = [look for look, kind in zip(looks, kinds) if kind == "gta"]
+    if game and len(game) >= GTA_STREAM_SHARE * len(looks):
+        return "gta", game
+    if len(game) >= MIN_GAME_LOOKS:
+        return "gta-mixed", game
+    return "monkey", [look for look, kind in zip(looks, kinds) if kind != "gta"] or looks
+
+
 def _make_stream(source: str, duration: float, out_path: str, ask,
                  logo_path: str, sticker_path: str,
                  provider: str = "", text: str = "",
@@ -619,6 +663,23 @@ def _make_stream(source: str, duration: float, out_path: str, ask,
         lit = [look for look in looks
                if not look[2] or look[2][0] >= DARK_YAVG]
         candidates = lit or looks
+
+        # The title only says "monkey" when Stacks writes it, and most
+        # streams are GTA with Monkey calls in between. Unchecked, the
+        # GTA framing picked a stranger from a TikTok he was reacting to
+        # (10-15, with a GTA RP badge on a stream with no GTA in it). So
+        # when nobody said, look - see _content_pick for the three cases.
+        if not (mode or "").strip():
+            # The lit candidates only: tried on all 24 looks (dark Discord
+            # and Twitch pages included) the pick got worse - a stranger's
+            # TikTok grid - not better.
+            kind, pool = _content_pick(source, candidates)
+            if kind == "monkey":
+                mode, badge = "monkey", ""
+            elif kind in ("gta", "gta-mixed"):
+                if kind == "gta-mixed":
+                    badge = ""
+                candidates = pool
 
         picked, box = None, None
         try:

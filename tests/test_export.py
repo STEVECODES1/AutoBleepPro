@@ -353,7 +353,8 @@ def test_full_padding_is_used_where_there_is_silence(tone):
                  {"word": "shit", "start": 2.0, "end": 3.0}]
     out = engine.apply_bleeps(tone, [all_words[1]], method=METHOD_SILENCE,
                               all_words=all_words)
-    assert out[1_760:1_990].max == 0, "the pad was not used despite the gap"
+    # DEFAULT_PADDING_MS is 150 since 10-13 (was 250): the pad starts at 1.85 s.
+    assert out[1_855:1_990].max == 0, "the pad was not used despite the gap"
 
 
 def test_the_transcript_is_optional(tone):
@@ -361,7 +362,7 @@ def test_the_transcript_is_optional(tone):
     have the full word list; padding still applies, just unclamped."""
     out = engine.apply_bleeps(tone, [{"start": 2.0, "end": 3.0}],
                               method=METHOD_SILENCE, all_words=None)
-    assert out[1_800:2_000].max == 0
+    assert out[1_855:2_000].max == 0      # the 150 ms pad, unclamped
 
 
 def test_padding_can_be_turned_off(tone):

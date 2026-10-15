@@ -617,3 +617,47 @@ def test_the_mode_reaches_the_model(tmp_path, monkeypatch):
                         lambda name: "/usr/bin/" + name)
     thumbnail.make(str(clip), 100.0, ask=ask, mode="monkey")
     assert "STREAMER" in seen["prompt"]
+
+
+# --- full-stream thumbnails look at what the frames show -------------------
+
+def _looks(n):
+    return [(float(i * 60), b"x", (120.0, 30.0)) for i in range(n)]
+
+
+def _kinds(monkeypatch, seq):
+    from autoreel import content_kind
+    it = iter(seq)
+    monkeypatch.setattr(content_kind, "kind_for_video", lambda *a, **k: next(it))
+
+
+def test_gta_stream_picks_from_the_game(monkeypatch):
+    from autoreel import thumbnail
+    _kinds(monkeypatch, ["gta", "monkey", "gta", "", "gta"])
+    kind, pool = thumbnail._content_pick("s.ts", _looks(5))
+    assert kind == "gta"
+    assert [c[0] for c in pool] == [0.0, 120.0, 240.0]
+
+
+def test_a_little_game_still_leads_but_no_badge(monkeypatch):
+    from autoreel import thumbnail
+    _kinds(monkeypatch, ["gta", "monkey", "gta", "", "gta"] + ["monkey"] * 5)
+    kind, pool = thumbnail._content_pick("s.ts", _looks(10))
+    assert kind == "gta-mixed" and len(pool) == 3
+
+
+def test_desktop_stream_gets_his_face_not_a_page(monkeypatch):
+    """10-15: a TikTok/Twitch reaction stream with no GTA - lit pages read
+    monkey, dark pages read nothing. It is still a desktop stream."""
+    from autoreel import thumbnail
+    _kinds(monkeypatch, ["monkey", "", "", "monkey", ""])
+    kind, pool = thumbnail._content_pick("s.ts", _looks(5))
+    assert kind == "monkey" and len(pool) == 5
+    assert thumbnail.prompt_for("monkey", stream=True) == thumbnail.MONKEY_PROMPT
+
+
+def test_no_reading_changes_nothing(monkeypatch):
+    from autoreel import content_kind, thumbnail
+    monkeypatch.setattr(content_kind, "kind_for_video", lambda *a, **k: "")
+    looks = _looks(4)
+    assert thumbnail._content_pick("s.ts", looks) == (None, looks)

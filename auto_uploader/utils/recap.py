@@ -266,6 +266,9 @@ def upload(token_path: str, path: str, title: str, description: str,
     comment. Returns the watch URL."""
     from googleapiclient.http import MediaFileUpload
 
+    from utils.unmojibake import fix as _unmojibake
+    title, description, comment = (_unmojibake(title), _unmojibake(description),
+                                   _unmojibake(comment))
     yt = _youtube(token_path)
     body = {"snippet": {"title": title[:100], "description": description[:4900],
                         "tags": list(tags)[:15], "categoryId": "20"},

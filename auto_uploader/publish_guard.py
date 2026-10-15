@@ -175,8 +175,13 @@ def daily_cap_of(settings: dict) -> int:
 
 
 def unknown_keys(settings: dict) -> list:
-    """Keys in a platform block that nothing reads."""
-    return sorted(k for k in (settings or {}) if k not in KNOWN_PLATFORM_KEYS)
+    """Keys in a platform block that nothing reads.
+
+    A key starting with "_" is a note to the operator (_comment,
+    _off_reason, ...) - config.json's comment convention, never a setting -
+    so it is not a misspelling to report."""
+    return sorted(k for k in (settings or {})
+                  if k not in KNOWN_PLATFORM_KEYS and not str(k).startswith("_"))
 
 
 def platform_names(posting: dict) -> list:

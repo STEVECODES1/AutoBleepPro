@@ -100,8 +100,10 @@ def test_the_urls_come_from_the_recorder_itself():
     which is the point of the test."""
     urls = check_links.watched_urls()
 
-    assert len(urls) == 1
+    # 10-14: @stackswopoman10k added alongside the main channel.
+    assert len(urls) == 2
     assert "youtube.com/@stackswopo_/live" in urls[0]
+    assert "youtube.com/@stackswopoman10k/live" in urls[1]
     assert not any("twitch.tv" in url for url in urls)
     assert not any("OnlyThaGuys26" in url for url in urls)
     assert not any("kick.com" in url for url in urls)

@@ -385,6 +385,20 @@ def load_config(config_path: str = "config.json", env_path: str = ".env") -> App
     with open(config_path, "r", encoding="utf-8") as f:
         raw = json.load(f, object_pairs_hook=_warn_on_duplicate_keys)
 
+    # A non-UTF-8 edit (PowerShell reading the file as ANSI) garbles every
+    # emoji in the templates, and they go out that way on every post until
+    # someone notices. Repaired here for the run, loudly.
+    try:
+        from utils.unmojibake import fix_tree
+    except ImportError:  # pragma: no cover - imported as a package
+        from .unmojibake import fix_tree
+    repaired = fix_tree(raw)
+    if repaired != raw:
+        print("[Config] config.json has garbled emoji text (saved by a non-UTF-8 "
+              "editor) - repaired for this run. Fix the file for good: "
+              "python tools/unmojibake.py --config")
+        raw = repaired
+
     yt = raw["youtube"]
     rb = raw["rumble"]
     gen = raw["general"]
