@@ -579,3 +579,41 @@ def test_when_nobody_finds_a_close_face_the_best_answer_is_still_used(monkeypatc
     index, box = T._choose([b"a", b"b"], prompt_template=T.STREAM_PROMPT,
                            want_box=True)
     assert index == 1 and box is not None
+
+
+# ── the right thumbnail for the content ──────────────────────────────
+
+def test_monkey_calls_get_the_streamer_never_a_stranger():
+    prompt = thumbnail.prompt_for("monkey")
+    assert "STREAMER" in prompt
+    assert "NEVER pick a frame led by a stranger" in prompt
+    assert "face" in prompt and "box" in prompt
+
+
+def test_everything_else_keeps_the_character_framing():
+    assert thumbnail.prompt_for("") is thumbnail.PROMPT
+    assert thumbnail.prompt_for("gta") is thumbnail.PROMPT
+    assert thumbnail.prompt_for("nonsense") is thumbnail.PROMPT
+    assert thumbnail.prompt_for("monkey", stream=True) is thumbnail.MONKEY_PROMPT
+    assert thumbnail.prompt_for("", stream=True) is thumbnail.STREAM_PROMPT
+
+
+def test_the_mode_reaches_the_model(tmp_path, monkeypatch):
+    clip = tmp_path / "clip.mp4"
+    clip.write_bytes(b"x")
+    seen = {}
+
+    def grab(source, at, out_path, width=0, **_k):
+        with open(out_path, "wb") as handle:
+            handle.write(b"\xff\xd8jpeg")
+        return True
+
+    def ask(prompt, frames):
+        seen["prompt"] = prompt
+        return '{"frame": 3}'
+
+    monkeypatch.setattr(thumbnail, "_grab", grab)
+    monkeypatch.setattr(thumbnail.shutil, "which",
+                        lambda name: "/usr/bin/" + name)
+    thumbnail.make(str(clip), 100.0, ask=ask, mode="monkey")
+    assert "STREAMER" in seen["prompt"]

@@ -2915,6 +2915,17 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
                 # landscape picture, which Rumble showed as a band of
                 # video between two black bars in the Shorts grid. A
                 # clip gets a plain, graded, full-height frame instead.
+                # Monkey calls get the streamer-picked prompt (his
+                # face, never a stranger's); everything else keeps
+                # the character/action framing. Title first, like
+                # cropping.
+                try:
+                    from autoreel.crop_strategy import profile_for_title
+
+                    thumb_mode = 'monkey' if profile_for_title(
+                        stream_title, fallback='') == 'monkey' else ''
+                except Exception:
+                    thumb_mode = ''
                 made = autoreel_thumbnail.make(
                     video_path, duration, out_path=out_path,
                     logo_path="" if is_clip else cfg.general.thumbnail_logo,
@@ -2928,7 +2939,9 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
                     # GTA RP badge in the corner. thumbnail.stamp_text is
                     # still there if that changes; pass yt_title here.
                     text="",
-                    badge="" if is_clip else "GTA RP")
+                    badge="" if (is_clip or thumb_mode == 'monkey')
+                    else 'GTA RP',
+                    mode=thumb_mode)
             except Exception as exc:
                 print(f"[Thumbnail] Could not generate one: {exc}")
                 made = ""

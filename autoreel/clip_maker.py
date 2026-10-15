@@ -1394,7 +1394,11 @@ class ClipMaker:
                     try:
                         from autoreel import thumbnail
 
-                        thumbnail.make(output_path, spec.end - spec.start)
+                        profile = str((self.config.get("clips", {})
+                                       or {}).get("profile", ""))
+                        thumbnail.make(
+                            output_path, spec.end - spec.start,
+                            mode="monkey" if profile == "monkey" else "")
                     except Exception as exc:
                         print(f"[Clips] Clip {spec.index:02d}: no thumbnail "
                               f"({exc}) - the platform will pick a frame.")

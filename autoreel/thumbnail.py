@@ -129,6 +129,43 @@ Answer as JSON: {"frame": <number from 1 to %(count)d>, "face": [ymin, xmin, yma
 No other text.
 """
 
+MONKEY_PROMPT = """These are %(count)d frames from one video call compilation (Monkey App), in
+order. One will be the video's thumbnail.
+
+Pick the ONE that would make somebody scrolling past stop and click.
+This is HIS show: strongly prefer a frame where THE STREAMER - the
+recurring face across these frames, usually in a corner box or side
+pane - is close, expressive and clearly visible: laughing, shocked,
+pointing, mid-sentence. NEVER pick a frame led by a stranger's face:
+no random person gets to be the face of his channel. After that: his
+reaction to something plainly odd on screen. Avoid slots pages,
+browser pages, loading screens, menus, plain scenery, crowded wide
+shots and motion blur. Never a frame that is mostly a game, a road or
+a building: a thumbnail with no face in it does not get clicked. The
+face must be CLOSE - at least a tenth of the frame's height - not a
+figure in the distance.
+
+Give two boxes as [ymin, xmin, ymax, xmax] on a 0-1000 scale of the
+frame: "face" around the streamer's face (forehead to chin), and
+"box" around their head and upper body (head to waist).
+
+Answer as JSON: {"frame": <number from 1 to %(count)d>, "face": [ymin, xmin, ymax, xmax], "box": [ymin, xmin, ymax, xmax]}
+No other text.
+"""
+
+# The face-led crop, the grade and the badges are content-blind: only
+# the PICK (which frame, whose face) changes with the content.
+CONTENT_MODES = ("", "monkey", "gta")
+
+
+def prompt_for(mode: str = "", stream: bool = False) -> str:
+    """Which pick prompt: Monkey calls get the streamer, everything
+    else the character/action framing. Unknown modes fall back to the
+    default rather than guessing."""
+    if (mode or "").strip().lower() == "monkey":
+        return MONKEY_PROMPT
+    return STREAM_PROMPT if stream else PROMPT
+
 # A face smaller than this share of the frame's height is a figure in the
 # distance: zoomed far enough to see it, the picture is mush. Answers
 # below it are passed over for the next model's.
@@ -333,14 +370,17 @@ def zoom_window(box: Optional[tuple], aspect: float = 16 / 9) -> tuple:
     return x, y, w, h
 
 
-def _choose(frames: list, ask=None, prompt_template: str = PROMPT,
-            want_box: bool = False, provider: str = ""):
+def _choose(frames: list, ask=None, prompt_template: str = None,
+            want_box: bool = False, provider: str = "", mode: str = "",
+            stream: bool = False):
     """Which frame (0-based), from a model. None when nobody answered.
     With `want_box`, (index, box) - box None when it was not given."""
     from .vision_frames import as_inline_data
 
     if not frames:
         return (None, None) if want_box else None
+    if prompt_template is None:
+        prompt_template = prompt_for(mode, stream)
     prompt = prompt_template % {"count": len(frames)}
 
     if ask is not None:
@@ -497,7 +537,8 @@ def stream_filters(window: tuple, brightness: Optional[float]) -> str:
 def make(clip_path: str, duration: float, out_path: str = "",
          ask=None, logo_path: str = "", grade: bool = True,
          style: str = "clip", sticker_path: str = "",
-         provider: str = "", text: str = "", badge: str = "") -> str:
+         provider: str = "", text: str = "", badge: str = "",
+         mode: str = "") -> str:
     """Write a thumbnail for this clip. "" when one cannot be made.
 
     Never raises and never blocks a post: a clip with no thumbnail is a
@@ -510,8 +551,9 @@ def make(clip_path: str, duration: float, out_path: str = "",
         return ""
     out_path = out_path or os.path.splitext(clip_path)[0] + "_thumb.jpg"
     if style == "stream":
-        return _make_stream(clip_path, duration, out_path, ask, logo_path,
-                            sticker_path, provider, text, badge)
+        return _make_stream(clip_path, duration, out_path, ask,
+                            logo_path, sticker_path, provider, text, badge,
+                            mode=mode)
 
     marks = timestamps(duration)
     workspace = tempfile.mkdtemp(prefix="thumb_")
@@ -533,7 +575,8 @@ def make(clip_path: str, duration: float, out_path: str = "",
 
         picked = None
         try:
-            picked = _choose(frames, ask=ask, provider=provider)
+            picked = _choose(frames, ask=ask, provider=provider,
+                             mode=mode)
         except Exception:
             picked = None
 
@@ -554,7 +597,7 @@ def make(clip_path: str, duration: float, out_path: str = "",
 def _make_stream(source: str, duration: float, out_path: str, ask,
                  logo_path: str, sticker_path: str,
                  provider: str = "", text: str = "",
-                 badge: str = "") -> str:
+                 badge: str = "", mode: str = "") -> str:
     marks = timestamps(duration, STREAM_SAMPLES)
     workspace = tempfile.mkdtemp(prefix="thumb_")
     try:
@@ -580,8 +623,9 @@ def _make_stream(source: str, duration: float, out_path: str, ask,
         picked, box = None, None
         try:
             picked, box = _choose([data for _, data, _ in candidates],
-                                  ask=ask, prompt_template=STREAM_PROMPT,
-                                  want_box=True, provider=provider)
+                                  ask=ask, want_box=True,
+                                   provider=provider, mode=mode,
+                                   stream=True)
         except Exception:
             picked, box = None, None
         if picked is None or not 0 <= picked < len(candidates):
