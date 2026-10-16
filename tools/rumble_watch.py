@@ -299,6 +299,26 @@ def replay(item, slug, out):
     return ""
 
 
+def deliver(src, dest):
+    """Move a finished recording into the watch folder.
+
+    The recording is on C: and the watch folder on D:, and os.replace
+    cannot cross drives - on 10-15 that failed at the last step with a
+    complete 1.95 h recording sitting in staging. Copied under a name the
+    uploader ignores, renamed only once complete (so it never picks up half
+    a file), then the original removed.
+    """
+    import shutil
+
+    partial = dest + ".copying"
+    shutil.copyfile(src, partial)
+    os.replace(partial, dest)
+    try:
+        os.remove(src)
+    except OSError:
+        pass
+
+
 def _size(path):
     for cand in (path, path + ".part"):
         if cand and os.path.isfile(cand):
@@ -389,7 +409,7 @@ def record(item, slug):
     if os.path.exists(dest) or os.path.exists(os.path.join(UPLOADER, "uploaded", f"{title}.ts")):
         dest = os.path.join(WATCH, f"{title} {time.strftime('%m-%d-%y')}.ts")
     os.makedirs(WATCH, exist_ok=True)
-    os.replace(best, dest)
+    deliver(best, dest)
     log(f"delivered {os.path.basename(dest)} ({got / 3600:.2f} h) to the uploader")
     discord(f"\u2705 **Rumble stream recorded** - {title}: {got / 3600:.2f} h, handed to the uploader")
     return True
