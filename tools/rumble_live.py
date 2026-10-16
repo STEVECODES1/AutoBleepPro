@@ -369,7 +369,15 @@ def main():
         done = ledger_load()
         fresh = sorted(v for v in recording_ids() if v not in done)
         if fresh:
-            relay(fresh[0], cfg)
+            sys.path.insert(0, UPLOADER)
+            try:
+                from utils.keep_awake import KeepAwake
+            except Exception:
+                relay(fresh[0], cfg)
+            else:
+                # A sleeping PC drops the push and ends the Rumble live.
+                with KeepAwake("relaying the live to Rumble"):
+                    relay(fresh[0], cfg)
         time.sleep(POLL_S)
 
 

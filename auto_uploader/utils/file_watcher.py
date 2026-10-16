@@ -153,12 +153,29 @@ class _NewVideoHandler(FileSystemEventHandler):
             if path in self._pending:
                 return
             self._pending.add(path)
+        # Said straight away: the wait below is minutes long, and a window
+        # that says nothing while a 2-hour stream sits in the folder reads
+        # as the uploader being stuck (10-16, "what is going on?").
+        print(f"[Watch] {os.path.basename(path)} arrived - checking it has "
+              f"finished copying before it is processed...")
         threading.Thread(target=self._wait_for_stable, args=(path,), daemon=True).start()
 
     def _wait_for_stable(self, path: str) -> None:
         """Poll file size until it hasn't changed for `stability_seconds`,
         which is a simple, dependency-free way to detect 'done writing'
-        without needing OS-specific file-lock APIs."""
+        without needing OS-specific file-lock APIs.
+
+        A file whose last write is already older than the whole window -
+        moved in finished, like the Rumble recorder's delivery - only has
+        to hold still for QUICK_STABLE_S. One being written has a fresh
+        modified time, so it still gets the full wait."""
+        try:
+            from utils.keep_awake import KeepAwake
+        except Exception:  # pragma: no cover
+            KeepAwake = None
+        hold = KeepAwake("waiting for a video to finish copying") if KeepAwake else None
+        if hold:
+            hold.__enter__()
         try:
             last_size = -1
             stable_since = None
@@ -191,6 +208,9 @@ class _NewVideoHandler(FileSystemEventHandler):
                     stable_since = now
                 elif stable_since and (now - stable_since) >= needed:
                     break
+                elif stable_since and (now - stable_since) >= QUICK_STABLE_S \
+                        and _finished_long_ago(path, needed, now):
+                    break
                 if now >= deadline:
                     print(f"[Watch] {os.path.basename(path)} is still growing "
                           f"after {MAX_STABILITY_WAIT_S / 60:.0f} min - giving up "
@@ -204,6 +224,8 @@ class _NewVideoHandler(FileSystemEventHandler):
             # video _maybe_watch() will refuse to queue ever again.
             with self._lock:
                 self._pending.discard(path)
+            if hold:
+                hold.__exit__(None, None, None)
 
         self.on_ready(path)
 
@@ -212,6 +234,17 @@ class _NewVideoHandler(FileSystemEventHandler):
 # it. Long enough for a slow copy of a multi-GB stream, short enough that
 # a stalled one does not block the folder forever.
 MAX_STABILITY_WAIT_S = 30 * 60
+
+# A file that was last written longer ago than the stability window, and
+# holds still this long, is finished - see _wait_for_stable.
+QUICK_STABLE_S = 30
+
+
+def _finished_long_ago(path: str, window: float, now: float) -> bool:
+    try:
+        return now - os.path.getmtime(path) >= window
+    except OSError:
+        return False
 
 
 class FolderWatcher:

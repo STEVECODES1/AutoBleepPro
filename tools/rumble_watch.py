@@ -311,7 +311,9 @@ def deliver(src, dest):
     import shutil
 
     partial = dest + ".copying"
-    shutil.copyfile(src, partial)
+    # copy2 keeps the finish time: the uploader's watcher sees an
+    # already-finished file and takes it after 30 s, not 10 minutes.
+    shutil.copy2(src, partial)
     os.replace(partial, dest)
     try:
         os.remove(src)
@@ -338,6 +340,18 @@ GIVE_UP_AFTER_END_S = 900    # a capture still running this long after he ended 
 
 
 def record(item, slug):
+    """Held awake for the whole stream and the hand-off: a PC that sleeps
+    mid-stream loses the connection and the recording with it."""
+    sys.path.insert(0, UPLOADER)
+    try:
+        from utils.keep_awake import KeepAwake
+    except Exception:  # pragma: no cover - never blocks a recording
+        return _record(item, slug)
+    with KeepAwake("recording Stackswopo on Rumble"):
+        return _record(item, slug)
+
+
+def _record(item, slug):
     """Two captures at once, the longer one delivered:
       * from the start of the DVR (ffmpeg) - the whole stream,
       * at the live edge (yt-dlp) - the backup if the DVR one fails.
