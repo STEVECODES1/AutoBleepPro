@@ -36,3 +36,8 @@ if (-not (Running 'rumble_live\.py|_RUN_RUMBLE_LIVE\.bat')) {
     Start-Process cmd -ArgumentList '/k', "`"$root\_RUN_RUMBLE_LIVE.bat`"" -WindowStyle Minimized
     "started Rumble live relay"
 }
+# Stackswopo streams on Rumble (stackswopo10k) - the YouTube recorder never sees it.
+if (-not (Running 'rumble_watch\.py|_RUN_RUMBLE_WATCH\.bat')) {
+    Start-Process cmd -ArgumentList '/k', "`"$root\_RUN_RUMBLE_WATCH.bat`"" -WindowStyle Minimized
+    "started Rumble recorder"
+}

@@ -54,6 +54,10 @@ CLIPS_PER_WINDOW = 2
 # Two clips overlapping by more than this share are the same moment.
 SAME_MOMENT = 0.3
 
+# The Rumble recorder's from-the-start capture (tools/rumble_watch.py).
+_TS_LIVE = re.compile(r"^Stackswopo rumble .+ fromstart\.ts$", re.I)
+TS_EDGE_S = 15               # stay this far behind the end of a growing TS
+
 _FRAG = re.compile(r"^(?P<base>.+)\.f(?P<fmt>\d+)\.(?:mp4|m4a|webm)\.part"
                    r"-Frag(?P<n>\d+)$", re.IGNORECASE)
 # The newest fragments may still be arriving out of order: stay this many
@@ -71,10 +75,16 @@ class LiveRecording:
     video: dict = field(default_factory=dict)   # fragment number -> path
     audio: dict = field(default_factory=dict)
     newest: float = 0.0          # mtime of the newest fragment
+    # A growing MPEG-TS instead of fragments: the Rumble recorder
+    # (tools/rumble_watch.py) writes one file from the DVR's first segment.
+    ts_path: str = ""
+    label: str = ""              # its name for clips: "<name> <date> <time>"
 
     @property
     def key(self) -> str:
         """The recording's own name, without the part/extension."""
+        if self.label:
+            return self.label
         return re.sub(r"\.part\d+\.ts$", "", self.base, flags=re.I)
 
 
@@ -130,6 +140,20 @@ def find_live(folder: str, now: Optional[float] = None) -> List[LiveRecording]:
                                  os.path.getmtime(path))
         except OSError:
             pass
+    growing = []
+    for name in names:
+        if not _TS_LIVE.match(name):
+            continue
+        path = os.path.join(folder, name)
+        try:
+            mtime, created = os.path.getmtime(path), os.path.getctime(path)
+        except OSError:
+            continue
+        if now - mtime <= ACTIVE_S:
+            growing.append(LiveRecording(
+                name, folder, newest=mtime, ts_path=path,
+                label="Stackswopo rumble live " + time.strftime(
+                    "%Y-%m-%d %H_%M", time.localtime(created))))
     found: dict = {}
     for (base, fmt), frags in pieces.items():
         rec = found.setdefault(base, LiveRecording(base, folder))
@@ -146,7 +170,7 @@ def find_live(folder: str, now: Optional[float] = None) -> List[LiveRecording]:
         elif kind == "audio" and not rec.audio:
             rec.audio = frags
     return [rec for rec in found.values()
-            if rec.video and now - rec.newest <= ACTIVE_S]
+            if rec.video and now - rec.newest <= ACTIVE_S] + growing
 
 
 # Uploads wait while the recording's picture is this far behind its sound,
@@ -192,6 +216,8 @@ def uploads_on_hold(cfg) -> bool:
 
 def edge_seconds(rec: LiveRecording) -> float:
     """How far into the stream the recording safely reaches."""
+    if rec.ts_path:
+        return max(0.0, _ts_seconds(rec.ts_path) - TS_EDGE_S)
     numbers = sorted(rec.video)
     if not numbers:
         return 0.0
@@ -199,6 +225,19 @@ def edge_seconds(rec: LiveRecording) -> float:
     usable = [n for n in numbers if n <= target] or numbers[:1]
     started = _start(rec.video[usable[-1]])
     return float(started or 0.0)
+
+
+def _ts_seconds(path: str) -> float:
+    """How long a (growing) MPEG-TS is - ffprobe reads the timestamps at
+    both ends, so this is right even while the file is being written."""
+    try:
+        done = subprocess.run(["ffprobe", "-v", "error", "-show_entries",
+                               "format=duration,start_time", "-of", "json", path],
+                              capture_output=True, text=True, timeout=120)
+        fmt = json.loads(done.stdout or "{}").get("format", {})
+        return max(0.0, float(fmt.get("duration") or 0.0))
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return 0.0
 
 
 def fragments_for(rec: LiveRecording, start: float, end: float) -> List[int]:
@@ -262,7 +301,8 @@ def is_already_clipped(span: Tuple[float, float], ranges) -> bool:
 
 def stream_title(rec: LiveRecording) -> str:
     """The stream's title from the recorder's "<name>.txt", date removed."""
-    path = os.path.join(rec.folder, rec.key + ".txt")
+    path = (os.path.splitext(rec.ts_path)[0] + ".txt" if rec.ts_path
+            else os.path.join(rec.folder, rec.key + ".txt"))
     try:
         with open(path, encoding="utf-8") as handle:
             first = handle.readline().strip()
@@ -348,6 +388,20 @@ def cut_window(rec: LiveRecording, start: float, end: float,
     Returns where the window really starts in the stream (fragments do
     not land exactly on `start`), or None if it could not be made. The
     recording is only ever read."""
+    if rec.ts_path:
+        try:
+            done = subprocess.run(
+                ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+                 "-ss", f"{start:.2f}", "-i", rec.ts_path, "-t", f"{end - start:.2f}",
+                 "-map", "0:v:0", "-map", "0:a:0?", "-c", "copy",
+                 "-movflags", "+faststart", out_path],
+                capture_output=True, text=True, timeout=300)
+        except (OSError, subprocess.SubprocessError):
+            return None
+        if done.returncode != 0 or not os.path.isfile(out_path) \
+                or os.path.getsize(out_path) == 0:
+            return None
+        return float(start)
     numbers = fragments_for(rec, start, end)
     if not numbers:
         return None
