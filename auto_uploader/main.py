@@ -1442,6 +1442,29 @@ def _already_on_youtube(title: str, service, default_title: str = "") -> str:
     return ""
 
 
+def _generic_clip_title(title: str, video_path: str = "") -> bool:
+    """True when a clip's filename-derived title is really its STREAM's
+    title (or reads like one) - every clip of that stream would share it,
+    so it needs its clip number to stay unique on Rumble. A distinctive
+    title ("Riley's calm kid persona") does not."""
+    def norm(text):
+        return " ".join(re.findall(r"[a-z0-9]+", str(text or "").lower()))
+
+    mine = norm(title)
+    if len(mine.split()) < 3:
+        return True
+    try:
+        from utils.stream_links import source_of
+
+        parent = norm(source_of(video_path).get("stream_title", "")) if video_path else ""
+    except Exception:
+        parent = ""
+    if parent and (parent in mine or mine in parent):
+        return True
+    return bool(re.search(r"full stream|\bstream\b|\blive\b|\d{1,2}[-/]\d{1,2}[-/]\d{2,4}"
+                          r"|\d{4}-\d{2}-\d{2}", str(title), re.I))
+
+
 def _vod_gambling(video_path: str, samples: int = 12, need: int = 2) -> str:
     """What gambling a full stream shows ("" for none / could not tell).
 
@@ -2454,9 +2477,14 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
             # a clip number is always a safe, cheap, guaranteed-unique
             # thing to add regardless of whether the clip's own name
             # happened to already be distinct.
+            #
+            # Only where it is needed, though: "Riley's calm kid persona
+            # (Clip 1)" is a real title made worse by the number (10-15).
+            # A title that is the stream's own name - or reads like one -
+            # keeps it; a distinctive one does not.
             match = re.search(r"[-\s]+clip\s*(\d+)\s*$",
                               os.path.splitext(filename)[0], re.I)
-            if match:
+            if match and _generic_clip_title(stream_title, video_path):
                 stream_title = f"{stream_title} (Clip {int(match.group(1))})"
             print(f"[Clip] Title from the filename: {stream_title}")
     else:
