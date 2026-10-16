@@ -58,3 +58,18 @@ def test_monkey_drafts_cut_the_casino_spots(monkeypatch):
                               if imgs[0] == "f45" else '{"gambling": false}')
     assert [(f["start"], f["end"]) for f in flags] == [(30.0, 60.0)]
     assert mp.is_cut(flags[0])
+
+
+def test_a_video_site_logo_is_not_gambling():
+    from autoreel.gambling_check import _parse
+
+    assert _parse('{"gambling": true, "what": "Rumble logo"}') == (False, "")
+    assert _parse('{"gambling": true, "what": "Rumble website with gambling content"}') == (False, "")
+
+
+def test_a_casino_shown_on_a_video_site_still_counts():
+    from autoreel.gambling_check import _parse
+
+    assert _parse('{"gambling": true, "what": "Stake logo on Kick stream"}')[0] is True
+    assert _parse('{"gambling": true, "what": "slot reels in a Twitch window"}')[0] is True
+    assert _parse('{"gambling": true, "what": "casino banner"}')[0] is True

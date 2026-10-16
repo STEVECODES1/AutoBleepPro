@@ -34,7 +34,9 @@ SYSTEM = (
     "(Howl, Stake, Roobet, Rollbit, Shuffle, Gamdom ...), or a banner with a "
     "gambling promo code. It is false for an ordinary video game (GTA, sports or "
     "boxing games, shooters), a video call or chat app, a stream overlay, a "
-    "website that is not gambling, or a desktop.")
+    "website that is not gambling, or a desktop. The logo, player or page of a "
+    "video site (Rumble, YouTube, Twitch, Kick, TikTok) is NOT gambling by "
+    "itself: Rumble is a video site, not a casino.")
 
 WIDTH = 768
 
@@ -54,6 +56,24 @@ def frame_jpeg(source: str, at: float, width: int = WIDTH) -> str:
     return base64.b64encode(done.stdout).decode("ascii")
 
 
+# A model that sees the Rumble player in the corner sometimes answers
+# "gambling: true, what: Rumble logo". A video site's own logo is not a
+# casino, and that false alarm held good clips back from every platform.
+# A hit only counts as benign when it names a video site AND none of the
+# words that name real gambling - so "Stake logo on Kick" is still held.
+_VIDEO_SITE = re.compile(r"\b(rumble|youtube|twitch|kick|tiktok|instagram|facebook|twitter)\b", re.I)
+_REAL_GAMBLING = re.compile(
+    r"casino|slot|spin|roulette|blackjack|poker|baccarat|\bbet|sportsbook|odds|"
+    r"jackpot|crash|plinko|mines|dice|promo|bonus|multiplier|wager|lotter|"
+    r"stake|howl|roobet|rollbit|shuffle|gamdom|keydrop|crate|case open|gambl(e|er)\b",
+    re.I)
+
+
+def _only_a_video_site(what: str) -> bool:
+    """True when the model's reason names a video site and no real gambling."""
+    return bool(_VIDEO_SITE.search(what or "")) and not _REAL_GAMBLING.search(what or "")
+
+
 def _parse(reply: str) -> Optional[Tuple[bool, str]]:
     m = re.search(r"\{.*\}", reply or "", re.S)
     if not m:
@@ -68,7 +88,10 @@ def _parse(reply: str) -> Optional[Tuple[bool, str]]:
         value = True if word in ("true", "yes") else False if word in ("false", "no") else None
     if not isinstance(value, bool):
         return None
-    return value, str(data.get("what") or "")[:80]
+    what = str(data.get("what") or "")[:80]
+    if value and _only_a_video_site(what):
+        return False, ""
+    return value, what
 
 
 def frame_has_gambling(jpeg_b64: str, ask=None) -> Optional[Tuple[bool, str]]:
