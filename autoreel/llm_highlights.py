@@ -276,7 +276,7 @@ MAX_CANDIDATES = 60
 # return a candidate at 15 and have it posted if fewer than `count` came
 # back. This is the code-side floor that makes the instruction actually
 # binding: it is enforced here whether or not the model honoured it.
-MIN_CLIP_SCORE = 50.0
+MIN_CLIP_SCORE = 70.0
 
 # How many candidates get FRAMES attached. Every image is tokens and
 # upload time, and the text pass has already sorted the list - so the
@@ -356,6 +356,17 @@ whether somebody watching it alone laughs or says "oh damn". Bias
 toward the moments where something is genuinely funny or surprising
 over the ones that are merely eventful.
 
+WHAT GOES VIRAL FOR STACKS - look for these, and name the one it is:
+- unhinged: a rant, yelling, losing it at a viewer, a player or the game
+- baffled: the "chat, is this guy serious?" moment - stunned, staring,
+  lost for words at what just happened
+- roast: a perfectly timed insult to a viewer, a stranger or a friend
+- caught out: someone exposed, lying, contradicted on the spot
+- chaos: a calm or wholesome moment that falls apart in seconds
+- trolling: a stranger wound up, played or completely fooled
+Standard gameplay and ordinary chatting are none of these - leave them
+out, however long they run.
+
 Pick the candidates where SOMETHING HAPPENS - an argument, a punchline,
 a reaction, someone getting caught out, a story landing, a bit that
 pays off. Reject the ones that are only loud, only filler, or require
@@ -418,19 +429,27 @@ well on their own. Spread picks across DIFFERENT moments of the
 stream - different scenes, different setups, different parts of what
 happened - over cramming the batch with one bit's leftovers.
 
-For each one you pick, write a TITLE:
-- what actually happens in it, in the streamer's own words where possible
+For each one you pick, write a TITLE. It is also the hook text on
+screen for the first seconds, so it has to make a scroller NEED the rest:
+- a hook, not a summary: a strong verb, a question, or the moment cut
+  off right before it pays off. "He caught a fake idol red-handed..."
+  beats "Stackswopo calling out a phony idol on stream". Built only from
+  what actually happens - never promise what the clip does not deliver
 - NEVER reproduce a slur or a masked word. Some transcripts arrive with
   words starred out; those are censored on purpose. Describe the moment
   instead - "the instant he finds out her age" - and never copy the
   stars into the title either
-- no hashtags, no emoji, no "you won't believe", no ALL CAPS
-- under 70 characters, and a real phrase rather than a label
+- no hashtags, no emoji, no "you won't believe". ONE word in capitals
+  for emphasis is fine ("EXPOSES"); a whole title in capitals is not
+- under 60 characters, a real phrase rather than a label, and SPELLED
+  RIGHT - a typo ("Rasting a viewer") kills the click
 - never "Funny Moment", "Epic Fail", "Clip 3" or anything that would fit
   any other clip equally well
 
-Reply with JSON only:
-{"clips": [{"index": <candidate number>, "score": <0-100>, "title": "..."}]}
+Reply with JSON only. Decide the archetype and say why BEFORE you
+score it - a moment you cannot explain in one sentence is not a clip:
+{"clips": [{"index": <candidate number>, "archetype": "<one of the six>",
+"why": "<one sentence, from the words>", "score": <0-100>, "title": "..."}]}
 
 Order does not matter.
 
@@ -439,7 +458,8 @@ here. You are given far more candidates than there are good moments in a
 stream, and a list padded to the number requested is worse than a short
 list - every weak clip posted costs the channel more than a missing one
 would. If only six of forty are worth posting, return six. Score
-anything you are unsure about below 50 and leave it out.\
+anything you are unsure about below 70 and leave it out. Score honestly:
+80 and up is a clip you would bet on; under 70 is not posted at all.\
 """
 
 
@@ -2033,6 +2053,42 @@ def _ask_one_provider(provider, key, model, shortlist, count, source_path,
     return picked, shortlist
 
 
+_SPELL: dict = {}
+
+
+def misspelled(title: str, context: str = "") -> list:
+    """Words in a title that are not English and were not said in the clip.
+
+    "Rasting a viewer trying to give game tutorials" went out on Rumble on
+    10-15 - a typo is the cheapest way to lose a click. A word the clip
+    itself says (a name, slang, "stackswopo") is never a typo; a capital
+    mid-title is a name. Nothing is ever "corrected" - guessing the fix
+    gets it wrong ("rasting" -> "lasting") - the title is just not used.
+    Without pyspellchecker installed this finds nothing.
+    """
+    if "checker" not in _SPELL:
+        try:
+            from spellchecker import SpellChecker
+
+            _SPELL["checker"] = SpellChecker()
+        except Exception:
+            _SPELL["checker"] = None
+    checker = _SPELL["checker"]
+    if checker is None or not title:
+        return []
+    said = {w.lower().strip("'") for w in re.findall(r"[A-Za-z']+", context or "")}
+    out = []
+    for i, word in enumerate(re.findall(r"[A-Za-z']+", title)):
+        bare = word.lower().strip("'")
+        if bare.endswith("'s"):
+            bare = bare[:-2]
+        if len(bare) < 4 or bare in said or (i > 0 and word[0].isupper()):
+            continue
+        if checker.unknown([bare]):
+            out.append(word)
+    return out
+
+
 def _chosen_from(picked: list, shortlist: list, count: int) -> list:
     """The model's picks, as Highlights, in timeline order.
 
@@ -2057,6 +2113,11 @@ def _chosen_from(picked: list, shortlist: list, count: int) -> list:
     chosen = []
     for index, score, title in strong[:count]:
         highlight = shortlist[index - 1]
+        typos = misspelled(title, getattr(highlight, "text", "")) if title else []
+        if typos:
+            print(f"[Clips] Title {title!r} has a typo ({', '.join(typos)}) - "
+                  f"using the clip's own line instead.")
+            title = ""
         if title:
             # The model read the clip; its title beats the best sentence
             # picked out of it by length and punctuation alone.

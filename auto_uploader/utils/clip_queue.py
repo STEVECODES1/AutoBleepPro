@@ -736,6 +736,39 @@ def _gambling_verdict(video_path: str, config: dict) -> str:
     return seen
 
 
+def _hold_if_child_risk(platform: str, video_path: str, config: dict) -> None:
+    """Raise HeldBack when the clip's title or line is about children.
+
+    "Calm kid persona gets called out" / "hangs in Discords with kids" went
+    to Shorts on 10-16: the title was refused (safe_text.CHILD_RISK) and the
+    Short went out as "Stackswopo clip" with the line still burned in. On
+    YouTube that is a child-safety review waiting to happen. Rumble keeps it."""
+    if base_platform(platform) == "rumble":
+        return
+    try:
+        from autoreel.safe_text import child_risk
+        from utils.social_promoter import clip_title
+    except Exception:
+        return
+    folders = tuple((config or {}).get("note_folders", ()) or ())
+    texts = [clip_title(video_path, folders)]
+    stem = os.path.splitext(video_path)[0]
+    for suffix in ("_line.txt", "_caption.txt", ".txt"):
+        try:
+            with open(stem + suffix, encoding="utf-8") as handle:
+                texts.append(handle.read(400))
+        except OSError:
+            pass
+    hit = next((t for t in texts if child_risk(t)), "")
+    if not hit:
+        return
+    from publishers.errors import HeldBack
+
+    print(f"[Clips] {platform}: held back - the clip is about children "
+          f"({hit.strip()[:60]!r}). Rumble still gets it.")
+    raise HeldBack("held: about children (YouTube child-safety risk)")
+
+
 def _hold_if_gambling(platform: str, video_path: str, config: dict) -> None:
     """Raise HeldBack when a casino / betting site is on screen.
 
@@ -774,6 +807,7 @@ def _censored_clip(platform: str, video_path: str, config: dict) -> tuple:
     # muted) reached Shorts, Instagram, Facebook, X and TikTok on 10-09.
     _hold_if_slurs(platform, video_path, config)
     _hold_if_gambling(platform, video_path, config)
+    _hold_if_child_risk(platform, video_path, config)
     settings = (config or {}).get(platform, {}) or {}
     wanted = settings.get("censor_uploads")
     if wanted is None:

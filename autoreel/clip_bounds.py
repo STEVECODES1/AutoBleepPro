@@ -50,7 +50,9 @@ Answer two things:
   If the first lines belong to an earlier, different conversation or
   joke (a leftover the cut caught by accident), skip them. If the clip
   already opens on the bit, answer 1. Never skip the setup the punchline
-  needs.
+  needs - but start as LATE as it allows: a Short has under two seconds
+  to hook a stranger, so a slow build-up starts at its last sentence, not
+  its first (the title on screen carries the rest of the context).
 - end: the number of the last line that belongs to the bit, INCLUDING the
   immediate reaction to the punchline (the comeback, the laugh line). It
   may be an [AFTER] line if the reaction continues there. Stop before a

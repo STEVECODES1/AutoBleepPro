@@ -152,7 +152,7 @@ def test_the_youtube_route_leaves_the_rumble_link_comment(
     seen = {}
     monkeypatch.setattr(
         shorts_mod, "leave_link_comment",
-        lambda cfg, url: seen.setdefault("url", url) or True)
+        lambda cfg, url, video_path="": seen.setdefault("url", url) or True)
     cfg = {"youtube_shorts": {"privacy": "public"}}
 
     postproxy.PostproxyPublisher(cfg, "postproxy_youtube").post_clip(

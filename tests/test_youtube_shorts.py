@@ -60,8 +60,12 @@ def test_the_rumble_link_goes_under_every_short(tmp_path, monkeypatch):
     assert leave_link_comment(_linked(tmp_path),
                               "https://www.youtube.com/shorts/abc") is True
     assert seen["url"] == "https://www.youtube.com/shorts/abc"
-    assert seen["text"] == ("Uncut here: "
-                            "https://rumble.com/user/BinScripts")
+    # The template line, then every full stream (10-16: the comment answers
+    # "where's the full video" - the full video's own link leads when the
+    # clip's stream is known).
+    assert seen["text"].splitlines() == [
+        "Uncut here: https://rumble.com/user/BinScripts",
+        "▶ Every full stream: https://www.youtube.com/@wopovod"]
 
 
 def test_no_template_means_no_comment_but_no_crash(tmp_path, monkeypatch):

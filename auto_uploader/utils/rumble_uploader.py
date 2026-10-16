@@ -318,7 +318,11 @@ class RumbleUploader:
         privacy: str = "public",
         thumbnail_path: Optional[str] = None,
         progress_callback: Optional[Callable[[int], None]] = None,
+        related_url: str = "",
     ) -> str:
+        # Rumble's "Related Video (shown on Shorts only)": a clip that
+        # links its full stream - the one clickable route from a Short.
+        self._related_url = str(related_url or "").strip()
         with sync_playwright() as p:
             browser = page = None
             should_close_browser = True
@@ -1211,6 +1215,16 @@ class RumbleUploader:
             tags_field = page.get_by_label("Tags").or_(page.locator("input[name='tags']"))
             if tags_field.count() > 0:
                 tags_field.fill(", ".join(t.lstrip("#") for t in tags))
+
+            related = getattr(self, "_related_url", "")
+            if related:
+                try:
+                    box = page.get_by_placeholder(re.compile(r"related video", re.I))
+                    if box.count() > 0:
+                        box.first.fill(related)
+                        print(f"[Rumble] Related video (shown on the Short): {related}")
+                except Exception as exc:
+                    print(f"[Rumble] Could not set the related video ({exc})")
 
             self._set_visibility(page, privacy)
 

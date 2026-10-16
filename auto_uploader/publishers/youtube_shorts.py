@@ -157,26 +157,45 @@ class YouTubeShortsPublisher:
         caption = clean_lines(caption)
         template = str(self.settings.get("description_template", "")).strip()
         body = template.replace("[CAPTION]", caption) if template else caption
-        # The full stream this was cut from, right under the caption, when
-        # it is up - see utils/stream_links.
+        # Right under the caption, where the "more" tap lands: the full
+        # video on YouTube AND uncut on Rumble - see utils/stream_links.
+        # YouTube gives Shorts no clickable link, so these are there to be
+        # read and searched; Rumble is the one the channel lives on.
         try:
             from utils.stream_links import link_for_clip
 
             full = link_for_clip(video_path, "youtube") if video_path else ""
+            uncut = link_for_clip(video_path, "rumble") if video_path else ""
         except Exception:
-            full = ""
+            full = uncut = ""
+        lines = []
         if full and full not in body:
+            lines.append(f"\u25b6 Full video: {full}")
+        if uncut and uncut.startswith("https://rumble.com/v") and uncut not in body:
+            lines.append(f"\u25b6 Uncut & uncensored on Rumble: {uncut}")
+        if lines:
             head, sep, rest = body.partition("\n\n")
-            body = f"{head}\n\n▶ Full stream: {full}" + (
-                f"\n\n{rest}" if sep else "")
+            body = f"{head}\n\n" + "\n".join(lines) + (f"\n\n{rest}" if sep else "")
         if SHORTS_TAG.lower() not in body.lower():
             body = f"{body}\n\n{SHORTS_TAG}".strip()
         return body
 
     def safe_fallback(self, video_path: str) -> str:
-        """What to title a clip whose spoken line cannot be published."""
+        """What to title a clip whose spoken line cannot be published.
+
+        The stream it came from, not a bare "Stackswopo clip": a Short
+        titled that on 10-16 told nobody anything. Only when the stream
+        is unknown does the configured fallback stand."""
+        try:
+            from utils.stream_links import source_of
+
+            stream = str(source_of(video_path).get("stream_title", "") or "").strip()
+        except Exception:
+            stream = ""
+        if stream and not re.search(r"\d{4}-\d{2}-\d{2}|rumble live", stream, re.I):
+            return f'Stacks went OFF on "{stream.upper()}"'[:90]
         configured = str(self.settings.get("safe_title", "") or "").strip()
-        return configured or "Stackswopo clip"
+        return configured or "Stacks went OFF on stream"
 
     def title_for(self, caption: str, video_path: str) -> str:
         """A Short's title is the first line of the caption, trimmed.
@@ -289,7 +308,7 @@ def leave_link_comment(config: dict, url: str, video_path: str = "") -> bool:
 
         publisher = YouTubeShortsPublisher(config)
         secrets, token = publisher.client_secrets_path(), publisher.token_path()
-        if not secrets or not token or not os.path.isfile(token):
+        if not secrets or not token:
             print("[YouTube Shorts] No Shorts token - link comment skipped.")
             return False
         return bool(YouTubeUploader(secrets, token).comment(url, text))

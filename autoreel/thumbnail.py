@@ -117,7 +117,9 @@ picture or blocks the view - that is the most common bad thumbnail. After
 that: a face mid-reaction, a fight, a chase, an arrest, something plainly
 odd. Avoid dark frames, loading screens, menus, plain scenery, crowded
 wide shots and motion blur. Never a frame that is mostly a car, a road
-or a building: a thumbnail with no face in it does not get clicked. The
+or a building: a thumbnail with no face in it does not get clicked.
+Never a frame showing a mugshot, a booking or ID photo, a document, or
+anyone's personal details on screen. The
 character must be CLOSE - their face at least a tenth of the frame's
 height - not a figure in the distance.
 
@@ -137,7 +139,9 @@ This is HIS show: strongly prefer a frame where THE STREAMER - the
 recurring face across these frames, usually in a corner box or side
 pane - is close, expressive and clearly visible: laughing, shocked,
 pointing, mid-sentence. NEVER pick a frame led by a stranger's face:
-no random person gets to be the face of his channel. After that: his
+no random person gets to be the face of his channel.
+Never a frame showing a mugshot, a booking or ID photo, a document, or
+anyone's personal details on screen. After that: his
 reaction to something plainly odd on screen. Avoid slots pages,
 browser pages, loading screens, menus, plain scenery, crowded wide
 shots and motion blur. Never a frame that is mostly a game, a road or
@@ -680,6 +684,11 @@ def _make_stream(source: str, duration: float, out_path: str, ask,
                 if kind == "gta-mixed":
                     badge = ""
                 candidates = pool
+        # Title text only on a stream that is NOT GTA RP (owner, 10-16):
+        # a GTA thumbnail stays clean, character and badge only. Unknown
+        # content counts as GTA - the clean picture is the safe default.
+        if (mode or "").strip().lower() != "monkey":
+            text = ""
 
         picked, box = None, None
         try:

@@ -115,6 +115,33 @@ WATERMARK_MARGIN_Y = 22
 # 0 = fully transparent, 1 = fully opaque.  0.55 keeps it unobtrusive.
 WATERMARK_ALPHA = 0.55
 
+# The call to action, burned into every clip under the hook (10-16). The
+# little bottom-left URL sat under YouTube's own title and buttons on a
+# Short - nobody could read it, and YouTube gives Shorts no clickable link,
+# so the picture is the one place left to send people to Rumble.
+CTA_TEXT = "FULL STREAMS UNCUT ON RUMBLE"
+CTA_FONTSIZE = 44                 # on a 1080-wide frame
+CTA_URL_FONTSIZE = 38
+CTA_Y = 0.225                     # share of the height: below the hook, above the picture
+CTA_COLOR = "0xFFD400"
+CTA_BOX = "black@0.62"
+_BOLD_CANDIDATES = (
+    "C:/Windows/Fonts/arialbd.ttf",
+    "C:/Windows/Fonts/segoeuib.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+    "/Library/Fonts/Arial Bold.ttf",
+)
+
+
+def bold_font_file() -> str:
+    windir = os.environ.get("WINDIR", "").replace("\\", "/")
+    for candidate in _BOLD_CANDIDATES:
+        if windir and candidate.startswith("C:/Windows"):
+            candidate = candidate.replace("C:/Windows", windir, 1)
+        if os.path.isfile(candidate):
+            return candidate
+    return font_file()
+
 
 # Font files to try, most-preferred first. An EXPLICIT file is the whole
 # point: `font=monospace` asks fontconfig to resolve a name, and Windows
@@ -173,17 +200,21 @@ def watermark_filter() -> str:
     usable font ships the clip without the text instead of shipping
     nothing.
     """
-    path = font_file()
+    path = bold_font_file()
     if not path:
         return ""
+    font = escape_font_path(path)
+    # Sized to the frame (1080 wide is the design size) so a 720-wide
+    # render gets the same proportions.
     return (
-        f"drawtext="
-        f"fontfile='{escape_font_path(path)}':"
-        f"text='{WATERMARK_TEXT}':"
-        f"fontsize={WATERMARK_FONTSIZE}:"
-        f"fontcolor=white@{WATERMARK_ALPHA:.2f}:"
-        f"x={WATERMARK_MARGIN_X}:"
-        f"y=h-th-{WATERMARK_MARGIN_Y}"
+        f"drawtext=fontfile='{font}':text='{CTA_TEXT}':"
+        f"fontsize=w*{CTA_FONTSIZE}/1080:fontcolor={CTA_COLOR}:"
+        f"box=1:boxcolor={CTA_BOX}:boxborderw=12:"
+        f"x=(w-tw)/2:y=h*{CTA_Y},"
+        f"drawtext=fontfile='{font}':text='{WATERMARK_TEXT}':"
+        f"fontsize=w*{CTA_URL_FONTSIZE}/1080:fontcolor=white:"
+        f"box=1:boxcolor={CTA_BOX}:boxborderw=10:"
+        f"x=(w-tw)/2:y=h*{CTA_Y}+w*66/1080"
     )
 
 

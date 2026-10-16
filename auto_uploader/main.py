@@ -1442,6 +1442,17 @@ def _already_on_youtube(title: str, service, default_title: str = "") -> str:
     return ""
 
 
+def _rumble_full_stream_for(video_path: str) -> str:
+    """The Rumble URL of the full stream a clip came from, or "" (not up yet)."""
+    try:
+        from utils.stream_links import link_for_clip
+
+        url = link_for_clip(video_path, "rumble")
+    except Exception:
+        return ""
+    return url if str(url).startswith("https://rumble.com/v") else ""
+
+
 def _generic_clip_title(title: str, video_path: str = "") -> bool:
     """True when a clip's filename-derived title is really its STREAM's
     title (or reads like one) - every clip of that stream would share it,
@@ -2965,11 +2976,13 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
                         cfg.general, "thumbnail_sticker", ""),
                     provider=str((cfg.clips or {}).get("llm_provider", "")
                                  or ""),
-                    # No big hook text: the channel owner preferred the
-                    # picture clean (2026-10-06) - only the small red
-                    # GTA RP badge in the corner. thumbnail.stamp_text is
-                    # still there if that changes; pass yt_title here.
-                    text="",
+                    # Big title text, but never on a GTA RP stream: those
+                    # stay clean with the small GTA RP badge (owner, 10-06
+                    # and 10-16). A reaction / chatting / Monkey stream has
+                    # no character to carry the picture, and a bare frame
+                    # of strangers is not clickable - thumbnail.make drops
+                    # the text itself whenever the frames are the game.
+                    text="" if is_clip else stream_title,
                     badge="" if (is_clip or thumb_mode == 'monkey')
                     else 'GTA RP',
                     mode=thumb_mode)
@@ -3287,6 +3300,7 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
                     thumbnail_path=lambda: thumbnail_path_for(
                         cfg.rumble.thumbnail_path) or None,
                     progress_callback=rb_progress,
+                    related_url=_rumble_full_stream_for(video_path) if is_clip else "",
                 )
 
             url = retry_with_backoff(
