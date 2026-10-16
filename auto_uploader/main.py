@@ -5597,5 +5597,44 @@ def main(argv=None) -> int:
     return 0
 
 
+# ── "busy" marker ────────────────────────────────────────────────────────
+#
+# logs/processing.json exists for exactly as long as a video is being
+# processed - censor, upload, clips - with this process's pid in it. Anything
+# that restarts the uploader "at a quiet moment" reads it. On 10-16 a quiet
+# restart judged busy-ness by child processes alone, saw none while the
+# YouTube and Rumble uploads ran inside this process (threads, and a
+# node.exe Playwright driver it did not count), and killed it at 75% of the
+# Rumble upload: the stream started over and a second upload tab opened.
+
+def _busy_marker_path() -> str:
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs", "processing.json")
+
+
+_process_file_unmarked = process_file
+
+
+def process_file(*args, **kwargs):  # noqa: F811 - the marked version
+    path = args[0] if args else kwargs.get("video_path", "")
+    marker = _busy_marker_path()
+    try:
+        os.makedirs(os.path.dirname(marker), exist_ok=True)
+        with open(marker, "w", encoding="utf-8") as handle:
+            json.dump({"file": os.path.basename(str(path)), "pid": os.getpid(),
+                       "started": time.time()}, handle)
+    except OSError:
+        pass
+    try:
+        return _process_file_unmarked(*args, **kwargs)
+    finally:
+        try:
+            os.remove(marker)
+        except OSError:
+            pass
+
+
+process_file.__doc__ = _process_file_unmarked.__doc__
+
+
 if __name__ == "__main__":
     sys.exit(main())
