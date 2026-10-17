@@ -127,3 +127,5 @@ auto_uploader/_thumb_preview/
 
 # Voice model (downloaded) and Stackswopos voiceprint (made on this PC - never shared)
 models/speaker/
+
+/logs/

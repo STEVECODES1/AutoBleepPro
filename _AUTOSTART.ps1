@@ -17,11 +17,20 @@ function Running($pattern) {
 }
 
 # The logged-in Rumble browser: Rumble uploads and the live relay drive it.
-if (-not (Running 'remote-debugging-port=9222')) {
+# chrome.exe only: a shell whose own command line mentions the port must not
+# be mistaken for the browser (it hid a closed Chrome on 10-17).
+$chromeUp = [bool](Get-CimInstance Win32_Process -Filter "Name='chrome.exe'" |
+    Where-Object { $_.CommandLine -match 'RumbleChromeProfile' })
+if (-not $chromeUp) {
     Start-Process "C:\Program Files\Google\Chrome\Application\chrome.exe" -WindowStyle Minimized `
         -ArgumentList '--remote-debugging-port=9222', '--user-data-dir=C:\RumbleChromeProfile',
                       '--no-first-run', '--no-default-browser-check', 'https://rumble.com/'
     "started Rumble Chrome"
+}
+# Keeps that browser alive afterwards (checks every minute).
+if (-not (Running '_RUN_RUMBLE_CHROME\.bat')) {
+    Start-Process cmd -ArgumentList '/k', "`"$root\_RUN_RUMBLE_CHROME.bat`"" -WindowStyle Hidden
+    "started Rumble Chrome keeper"
 }
 if (-not (Running 'record_stream\.py|_RUN_RECORDER\.bat')) {
     Start-Process cmd -ArgumentList '/k', "`"$root\_RUN_RECORDER.bat`"" -WindowStyle Normal

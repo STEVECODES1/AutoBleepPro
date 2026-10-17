@@ -106,3 +106,19 @@ def test_every_watched_channel_survived_the_move():
     assert "twitch.tv/stackswopo/clips" not in body, \
         "removed deliberately to cut concurrent load on the drive"
     assert '--name "Stackswopo"' in body
+
+
+def test_the_rumble_chrome_has_a_keeper():
+    # Found closed on 10-16 and 10-17 with nothing to bring it back.
+    auto = _read("_AUTOSTART.ps1")
+    assert "_RUN_RUMBLE_CHROME.bat" in auto
+    bat = _read("_RUN_RUMBLE_CHROME.bat")
+    assert "ensure_rumble_chrome.ps1" in bat
+    assert "goto loop" in bat and "timeout" in bat
+
+
+def test_the_chrome_check_cannot_match_its_own_command_line():
+    # A shell whose command line names the debugging port fooled the old check.
+    ensure = _read("tools/ensure_rumble_chrome.ps1")
+    assert "Name='chrome.exe'" in ensure
+    assert "Name='chrome.exe'" in _read("_AUTOSTART.ps1")
