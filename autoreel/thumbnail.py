@@ -673,6 +673,7 @@ def _make_stream(source: str, duration: float, out_path: str, ask,
         # GTA framing picked a stranger from a TikTok he was reacting to
         # (10-15, with a GTA RP badge on a stream with no GTA in it). So
         # when nobody said, look - see _content_pick for the three cases.
+        kind = None
         if not (mode or "").strip():
             # The lit candidates only: tried on all 24 looks (dark Discord
             # and Twitch pages included) the pick got worse - a stranger's
@@ -716,7 +717,12 @@ def _make_stream(source: str, duration: float, out_path: str, ask,
             return ""
         if sticker_path and os.path.isfile(sticker_path):
             _stamp_sticker(out_path, sticker_path)
-        has_logo = bool(logo_path and os.path.isfile(logo_path))
+        # The logo is the GAME's: it goes only where the GTA RP badge would.
+        # A Monkey call or a mostly-desktop stream gets neither (10-15: a
+        # GTA mark on a stream with no GTA in it).
+        not_the_game = ((mode or "").strip().lower() == "monkey"
+                        or kind == "gta-mixed")
+        has_logo = bool(logo_path and os.path.isfile(logo_path)) and not not_the_game
         if text:
             # Words cost the words, never the picture.
             stamp_text(out_path, text)
