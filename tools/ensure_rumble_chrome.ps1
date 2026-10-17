@@ -13,6 +13,7 @@ $up = Get-CimInstance Win32_Process -Filter "Name='chrome.exe'" |
 if (-not $up) {
     Start-Process "C:\Program Files\Google\Chrome\Application\chrome.exe" -WindowStyle Minimized `
         -ArgumentList '--remote-debugging-port=9222', '--user-data-dir=C:\RumbleChromeProfile',
-                      '--no-first-run', '--no-default-browser-check', 'https://rumble.com/'
+                      '--no-first-run', '--no-default-browser-check', '--disable-extensions',
+                      'https://rumble.com/'
     "$(Get-Date -Format 'HH:mm:ss') started Rumble Chrome"
 }
