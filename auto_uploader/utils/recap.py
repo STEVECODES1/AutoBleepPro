@@ -115,6 +115,51 @@ def stranger_spans(source: str, look=None) -> List[Tuple[float, float]]:
     return spans
 
 
+def transcript_of(cfg, source: str) -> list:
+    """The stream's transcript segments (from the censor's words cache),
+    or [] - never raises."""
+    try:
+        from utils.censor import words_cache_path
+
+        path = words_cache_path(cfg.general.censored_folder,
+                                os.path.splitext(os.path.basename(source))[0])
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+        return list(data.get("segments") if isinstance(data, dict) else data)
+    except Exception:
+        return []
+
+
+def said(transcript, start: float, end: float) -> str:
+    """Everything said in [start, end) - any line that overlaps it, since a
+    line that started a second early is still on screen as a caption."""
+    out = []
+    for seg in transcript or []:
+        try:
+            s = float(seg.get("start", 0))
+            e = float(seg.get("end", s))
+        except (TypeError, ValueError, AttributeError):
+            continue
+        if s < end and max(e, s + 0.01) > start:
+            out.append(str(seg.get("text", "")))
+    return " ".join(out)
+
+
+def about_children(text: str) -> bool:
+    """A line YouTube's child-safety review would act on. On 10-16 the
+    weekly went out with "YOU DO F*** KIDS, THOUGH." burned in as a caption:
+    masking the swear does not help, the subject is the problem. So a
+    moment with one of these words is not used on YouTube at all."""
+    try:
+        from autoreel.safe_text import child_risk
+    except Exception:
+        import re
+        return bool(re.search(r"\b(child\w*|kids?|minors?|underage|teens?|pedo\w*|"
+                              r"groom\w*|molest\w*|predator\w*|rap(e|es|ed|ing|ist))\b",
+                              text or "", re.I))
+    return child_risk(text)
+
+
 def without(ranges, spans) -> list:
     """`ranges` minus any that touch one of `spans`."""
     return [r for r in ranges
@@ -266,11 +311,12 @@ def upload(token_path: str, path: str, title: str, description: str,
     comment. Returns the watch URL."""
     from googleapiclient.http import MediaFileUpload
 
-    from utils.unmojibake import fix as _unmojibake
-    title, description, comment = (_unmojibake(title), _unmojibake(description),
-                                   _unmojibake(comment))
+    from utils import text_guard as _guard
+    title = _guard.title(title, fallback="Stackswopo - BEST MOMENTS")
+    description = _guard.youtube_description(description, limit_bytes=4900)
+    comment = _guard.text(comment, "comment")
     yt = _youtube(token_path)
-    body = {"snippet": {"title": title[:100], "description": description[:4900],
+    body = {"snippet": {"title": title, "description": description,
                         "tags": list(tags)[:15], "categoryId": "20"},
             "status": {"privacyStatus": privacy, "selfDeclaredMadeForKids": False}}
     request = yt.videos().insert(part="snippet,status", body=body,
@@ -438,19 +484,31 @@ def make(cfg, source: str, stream_title: str, stream_date: str,
     # gambling site Google has not approved (logo or promo code included).
     # Each picked moment gets two frames looked at; a moment that shows
     # one is taken out of the running and the pick is made again.
+    # Nothing about children either: the captions are burned in, so a line
+    # like that is on screen for YouTube's reviewers, masked swear or not.
+    transcript = transcript_of(cfg, source)
     checked: dict = {}
     for _round in range(3):
         bad = []
+        kids = [(st, e) for st, e, _ in segments if about_children(said(transcript, st, e))]
         for st, e, _score in segments:
+            if (st, e) in kids:
+                continue
             if (st, e) not in checked:
                 checked[(st, e)] = _shows_gambling(source, st, e)
             if checked[(st, e)]:
                 bad.append((st, e))
-        if not bad:
+        if not bad and not kids:
             break
-        print(f"[Recap] Left out {len(bad)} moment(s) with a gambling site on screen.")
-        ranges = without(ranges, bad)
+        if kids:
+            print(f"[Recap] Left out {len(kids)} moment(s) that talk about kids "
+                  f"(YouTube child-safety risk).")
+        if bad:
+            print(f"[Recap] Left out {len(bad)} moment(s) with a gambling site on screen.")
+        ranges = without(ranges, bad + kids)
         segments = pick_moments(ranges, duration, s["max_s"], scored=True)
+    # The last re-pick above is not looked at again: never let one through.
+    segments = [m for m in segments if not about_children(said(transcript, m[0], m[1]))]
     total = sum(e - st for st, e, _ in segments)
     if total < RECAP_MIN_S:
         print(f"[Recap] Only {total / 60:.1f} min of moments - not enough for a recap.")
@@ -531,8 +589,10 @@ def make(cfg, source: str, stream_title: str, stream_date: str,
         try:
             from utils import weekly
             # Only the pieces that were actually cut, with their scores.
+            # With what was said, so the weekly can check each moment again.
             weekly.keep(cfg, final, stream_title, stream_date, url, full,
-                        [(a, b, segments[i][2]) for a, b, i in placed])
+                        [(a, b, segments[i][2], said(transcript, segments[i][0], segments[i][1]))
+                         for a, b, i in placed])
             cleanup.remove(final)
         except Exception as exc:
             print(f"[Recap] Could not keep the recap for the weekly ({exc}).")
@@ -541,6 +601,12 @@ def make(cfg, source: str, stream_title: str, stream_date: str,
             weekly.maybe_make(cfg)
         except Exception as exc:
             print(f"[Weekly] Failed: {exc}")
+        try:
+            # The wopovod playlists, at most once a week, in the background.
+            from utils import playlists
+            playlists.maybe_sync(cfg)
+        except Exception as exc:
+            print(f"[Playlists] Failed: {exc}")
         return url
     except Exception as exc:
         print(f"[Recap] Failed: {exc}")

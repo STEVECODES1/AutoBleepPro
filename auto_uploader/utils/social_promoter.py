@@ -1304,8 +1304,8 @@ def _checked(build):
 
     @functools.wraps(build)
     def wrapper(*args, **kwargs):
-        from utils.unmojibake import fix
-        return fix(build(*args, **kwargs))
+        from utils import text_guard
+        return text_guard.text(build(*args, **kwargs), "post")
     wrapper.unchecked = build
     return wrapper
 

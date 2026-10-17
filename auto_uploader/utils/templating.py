@@ -381,8 +381,17 @@ def build_title(stream_title: str, date_str: str, title_format: str) -> str:
                  shortened, date_str)
 
 
+_RECORDING_STAMP = re.compile(
+    r"\s+\d{4}-\d{2}-\d{2}[ _T]\d{2}[-:_]\d{2}(?:[-:_]\d{2})?\s*$")
+
+
 def build_description(template: str, date_str: str, stream_title: str) -> str:
-    """Fill [DATE] / [STREAM TITLE] placeholders in a description template."""
+    """Fill [DATE] / [STREAM TITLE] placeholders in a description template.
+
+    The recorder's start time comes off the name first: every full stream
+    went out as 'with the title "FREEEEEE 2026-10-03 18:06"', which reads
+    like a file name and repeats the date the sentence already gives."""
+    stream_title = _RECORDING_STAMP.sub("", stream_title or "").strip() or stream_title
     description = template.replace("[DATE]", date_str).replace("[STREAM TITLE]", stream_title)
     if len(description) > 5000:
         # YouTube hard-caps descriptions at 5000 characters.

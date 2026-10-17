@@ -1397,8 +1397,14 @@ def _already_on_rumble(title: str, cfg) -> str:
         return ""
     try:
         from utils.channel_vods import find_on_channel
+        from utils.text_guard import title as _tidied
 
-        return find_on_channel(channel, title) or ""
+        found = find_on_channel(channel, title)
+        tidied = _tidied(title, limit=0, youtube=False)
+        if not found and tidied and tidied != title:
+            # what the uploader actually sent (see text_guard)
+            found = find_on_channel(channel, tidied)
+        return found or ""
     except Exception:
         return ""
 
@@ -1434,8 +1440,12 @@ def _already_on_youtube(title: str, service, default_title: str = "") -> str:
         want = _normalize(title)
         if len(want) < 8:
             return ""
+        # The uploader tidies a broken title on the way out (text_guard),
+        # so what landed may be the tidied one - both count as this video.
+        from utils.text_guard import title as _tidied
+        wants = {w for w in (want, _normalize(_tidied(title))) if len(w) >= 8}
         for video in _existing(service):
-            if _normalize(video.title) == want:
+            if _normalize(video.title) in wants:
                 return video.url
     except Exception:
         pass

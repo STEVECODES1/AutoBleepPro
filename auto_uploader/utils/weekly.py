@@ -104,8 +104,10 @@ def keep(cfg, path: str, stream_title: str, stream_date: str, recap_url: str,
         json.dump({"video": os.path.basename(dest), "stream_title": stream_title,
                    "stream_date": stream_date, "recap": recap_url,
                    "full_stream": full_url, "made": _now(now).isoformat(timespec="seconds"),
-                   "moments": [[round(float(a), 3), round(float(b), 3), float(sc or 0)]
-                               for a, b, sc in moments]}, f, indent=1)
+                   # [start, end, score] or [start, end, score, what was said]
+                   "moments": [[round(float(m[0]), 3), round(float(m[1]), 3), float(m[2] or 0)]
+                               + ([str(m[3])] if len(m) > 3 else [])
+                               for m in moments]}, f, indent=1, ensure_ascii=False)
     return dest
 
 
@@ -161,9 +163,16 @@ def recaps(cfg) -> List[dict]:
 def pick(window: List[dict], max_s: float = WEEKLY_MAX_S) -> list:
     """Best-scoring moments across the week's recaps, up to max_s, in the
     order they happened: [(recap, start, end, score)]."""
+    from utils.recap import about_children
+
     pool = []
     for order, r in enumerate(window):
-        for a, b, sc in r.get("moments") or []:
+        for m in r.get("moments") or []:
+            a, b, sc = m[0], m[1], m[2]
+            # Checked again here: the weekly is on STACKSWOPOVODS, and a
+            # caption about kids is a strike there whatever the recap did.
+            if len(m) > 3 and about_children(m[3]):
+                continue
             if b - a >= 4:
                 pool.append((float(sc or 0), order, float(a), float(b), r))
     chosen, total = [], 0.0

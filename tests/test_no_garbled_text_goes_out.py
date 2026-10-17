@@ -43,11 +43,20 @@ def test_social_promoter_text_is_checked():
     assert GARBLED not in out
 
 
+# Every route passes its text through utils/text_guard.py, which runs the
+# mojibake repair first and then drops the other never-meant-to-be-seen
+# bits (a dangling "(10-09-26 to )", empty brackets, unfilled tokens).
 @pytest.mark.parametrize("module,needle", [
-    ("utils/youtube_uploader.py", "_unmojibake(title), _unmojibake(description)"),
-    ("utils/recap.py", "_unmojibake(title), _unmojibake(description)"),
-    ("utils/clip_queue.py", "post_clip(upload, _unmojibake(caption)"),
-    ("publishers/postproxy.py", "(None, _unmojibake(value))"),
+    ("utils/youtube_uploader.py", "title = _guard.title(title"),
+    ("utils/youtube_uploader.py", "description = _guard.youtube_description(description)"),
+    ("utils/youtube_uploader.py", "text = _guard.text(str(text), \"comment\")"),
+    ("utils/recap.py", "title = _guard.title(title"),
+    ("utils/recap.py", "description = _guard.youtube_description(description"),
+    ("utils/rumble_uploader.py", "title = _guard.title(title"),
+    ("utils/rumble_uploader.py", "description = _guard.text(description"),
+    ("utils/clip_queue.py", "post_clip(upload, _guard.text(caption"),
+    ("publishers/postproxy.py", "else _guard.text(value, name)"),
+    ("utils/social_promoter.py", "return text_guard.text(build(*args, **kwargs)"),
 ])
 def test_every_outbound_route_checks_its_text(module, needle):
     with open(os.path.join(UPLOADER, module), encoding="utf-8") as f:

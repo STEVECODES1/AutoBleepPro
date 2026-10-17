@@ -320,6 +320,11 @@ class RumbleUploader:
         progress_callback: Optional[Callable[[int], None]] = None,
         related_url: str = "",
     ) -> str:
+        # The last place a broken title or description can be caught
+        # before Rumble shows it (see utils/text_guard.py).
+        from utils import text_guard as _guard
+        title = _guard.title(title, fallback="Stackswopo Stream", limit=0, youtube=False)
+        description = _guard.text(description, "description")
         # Rumble's "Related Video (shown on Shorts only)": a clip that
         # links its full stream - the one clickable route from a Short.
         self._related_url = str(related_url or "").strip()

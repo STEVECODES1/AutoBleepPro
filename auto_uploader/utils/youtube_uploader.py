@@ -217,8 +217,11 @@ class YouTubeUploader:
         progress_callback: Optional[Callable[[int], None]] = None,
     ) -> str:
         """Uploads `video_path`, returns the resulting watch URL."""
-        from utils.unmojibake import fix as _unmojibake
-        title, description = _unmojibake(title), _unmojibake(description)
+        # Every YouTube upload (full streams, Shorts, compilations) comes
+        # through here: the last place a broken title can be caught.
+        from utils import text_guard as _guard
+        title = _guard.title(title, fallback="Stackswopo Stream")
+        description = _guard.youtube_description(description)
         service = self._client()
 
         body = {
@@ -321,8 +324,8 @@ class YouTubeUploader:
         video_id = _video_id(video_url_or_id)
         if not video_id or not str(text or "").strip():
             return False
-        from utils.unmojibake import fix as _unmojibake
-        text = _unmojibake(str(text))
+        from utils import text_guard as _guard
+        text = _guard.text(str(text), "comment")
         try:
             service = self._client()
             service.commentThreads().insert(

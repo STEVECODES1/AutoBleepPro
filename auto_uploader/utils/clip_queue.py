@@ -945,8 +945,8 @@ def publish(platform: str, video_path: str, caption: str,
             # Awake for the post itself: an upload cut off by sleep is
             # a clip half-sent. Not for the queue check around it.
             with KeepAwake("posting a clip"):
-                from utils.unmojibake import fix as _unmojibake
-                posted = publisher.post_clip(upload, _unmojibake(caption), dry_run)
+                from utils import text_guard as _guard
+                posted = publisher.post_clip(upload, _guard.text(caption, "caption"), dry_run)
         except (NotConfigured, PermanentlyRejected):
             # Both mean "a retry cannot help", for different reasons.
             # Neither may be swallowed by the catch-all below.
