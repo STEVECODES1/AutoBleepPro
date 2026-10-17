@@ -678,13 +678,25 @@ def scope_categories(mode: str) -> tuple:
 
 def _hold_if_slurs(platform: str, video_path: str, config: dict) -> None:
     """Raise HeldBack when this clip must not go to a social platform."""
+    try:
+        # A person watched it in Discord and said post it (utils/held_review).
+        from utils.held_review import approved
+        if approved(video_path):
+            return
+    except Exception:
+        pass
     held = _slur_heavy(video_path, config)
     if not held:
         return
     from publishers.errors import HeldBack
 
     print(f"[Clips] {platform}: held back - {held}. Rumble still gets it; "
-          f"post it by hand if you judge it fine.")
+          f"it goes to Discord for you to watch and decide.")
+    try:
+        from utils.held_review import send_at_hold
+        send_at_hold(video_path, held)
+    except Exception:
+        pass
     raise HeldBack(f"held: {held}")
 
 

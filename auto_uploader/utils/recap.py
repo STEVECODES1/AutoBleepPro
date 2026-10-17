@@ -607,6 +607,18 @@ def make(cfg, source: str, stream_title: str, stream_date: str,
             playlists.maybe_sync(cfg)
         except Exception as exc:
             print(f"[Playlists] Failed: {exc}")
+        try:
+            # Held clips to Discord for a person to watch (utils/held_review).
+            from utils import held_review
+            held_review.maybe_send_in_background(cfg)
+        except Exception as exc:
+            print(f"[Held] Failed: {exc}")
+        try:
+            # How the posted clips did, so the picker learns (every 2 days).
+            from utils.view_harvest import maybe_harvest_in_background
+            maybe_harvest_in_background()
+        except Exception as exc:
+            print(f"[Learn] Failed: {exc}")
         return url
     except Exception as exc:
         print(f"[Recap] Failed: {exc}")

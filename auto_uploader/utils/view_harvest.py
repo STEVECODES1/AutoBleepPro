@@ -320,3 +320,41 @@ def harvest_all(say=print, ytdlp_limit: int = 40) -> Dict[str, int]:
                 say(f"  {platform:<10} {count:>8,}  {rec.hook[:60]}")
     ledger.save()
     return found
+
+
+# Until 10-17 this only ran from `main.py --learn`, which nobody runs: 514
+# clips were remembered and 1 had a view count, so the picker never learned
+# anything. Now it runs by itself after a stream, at most every LEARN_DAYS.
+LEARN_DAYS = 2
+
+
+def maybe_harvest_in_background(say=print) -> bool:
+    """Read the posted clips' views in a background thread, if due."""
+    import json as _json
+    import threading
+    import time as _time
+
+    here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    stamp = os.path.join(here, "logs", "learn_last.json")
+    try:
+        with open(stamp, encoding="utf-8") as f:
+            last = float(_json.load(f).get("at", 0))
+    except (OSError, ValueError, AttributeError):
+        last = 0.0
+    if _time.time() - last < LEARN_DAYS * 86400:
+        return False
+
+    def run():
+        try:
+            got = harvest_all(say=say)
+            from autoreel.memory import Ledger, harvest, learn, ledger_path
+            ledger = Ledger(ledger_path())
+            harvest(ledger, say=say)
+            say(f"[Learn] Views read: {got}. " + learn(Ledger(ledger_path())).summary()[:300])
+            os.makedirs(os.path.dirname(stamp), exist_ok=True)
+            with open(stamp, "w", encoding="utf-8") as f:
+                _json.dump({"at": _time.time(), "got": got}, f)
+        except Exception as exc:
+            say(f"[Learn] View harvest failed ({exc}).")
+    threading.Thread(target=run, name="view-harvest", daemon=True).start()
+    return True
