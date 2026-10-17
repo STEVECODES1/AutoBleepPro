@@ -129,6 +129,33 @@ def evict(model: str = "") -> bool:
         return False
 
 
+def free_gpu() -> None:
+    """Hand this process's spare graphics memory back before a vision call.
+
+    The card is 8 GB. Whisper stays loaded after transcribing (and torch
+    keeps what it freed in its own cache), the vision model needs ~5.5 GB,
+    and on 10-17 the two together left Ollama spilling onto the CPU: a
+    frames-and-words ask ran past five minutes and the clip pick fell back
+    to the words alone. The transcript is done by the time frames are
+    looked at, so Whisper goes (it reloads in seconds next time). Never
+    raises; never imports torch if nothing loaded it."""
+    try:
+        try:
+            from utils.censor import release_models
+        except ImportError:
+            release_models = None
+        if release_models:
+            release_models()
+        import gc
+        import sys as _sys
+        gc.collect()
+        torch = _sys.modules.get("torch")
+        if torch is not None and torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except Exception:
+        pass
+
+
 def chat(system: str, prompt: str, model: str = "",
          images: Optional[List[str]] = None, json_reply: bool = True,
          timeout: int = _TIMEOUT) -> Tuple[str, str]:
@@ -136,6 +163,7 @@ def chat(system: str, prompt: str, model: str = "",
     message = {"role": "user", "content": prompt}
     if images:
         message["images"] = list(images)
+        free_gpu()
     payload = {
         "model": model_name(model),
         "messages": [{"role": "system", "content": system}, message],
