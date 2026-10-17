@@ -64,7 +64,7 @@ def test_all_landed_says_so():
     report = JobReport(title="x", destinations={
         "rumble": "https://r/1", "youtube": "https://y/1"})
 
-    assert report.headline() == "All 2 landed."
+    assert report.headline() == "✅ 2 posted"
     assert report.colour() == COLOUR_OK
 
 
@@ -72,7 +72,7 @@ def test_a_partial_run_names_both_numbers():
     report = JobReport(title="x", destinations={
         "rumble": "https://r/1", "youtube": "FAILED: nope"})
 
-    assert report.headline() == "1 of 2 landed, 1 failed."
+    assert report.headline() == "⚠️ 1 posted · 1 failed"
     assert report.colour() == COLOUR_PARTIAL
 
 
@@ -80,7 +80,7 @@ def test_a_total_failure_is_red():
     report = JobReport(title="x", destinations={
         "rumble": "FAILED: a", "youtube": "FAILED: b"})
 
-    assert report.headline() == "Nothing landed - 2 of 2 failed."
+    assert report.headline() == "❌ 2 failed"
     assert report.colour() == COLOUR_FAILED
 
 
@@ -90,7 +90,7 @@ def test_everything_already_posted_is_not_a_failure():
     report = JobReport(title="x", destinations={
         "rumble": "skipped: already posted"})
 
-    assert report.headline() == "Nothing new to post."
+    assert report.headline() == "✅ Already up everywhere - nothing new to post."
     assert report.colour() == COLOUR_OK
 
 
@@ -101,11 +101,12 @@ def test_every_destination_appears_with_its_link():
         "rumble": "https://rumble.com/v70abc-x.html",
         "youtube_shorts": "FAILED: quota exceeded for today"})
 
-    body = build_embed(report)["description"]
+    embed = build_embed(report)
+    body = embed["description"] + json.dumps(embed["fields"], ensure_ascii=False)
 
-    assert "https://rumble.com/v70abc-x.html" in body
-    assert "quota exceeded for today" in body, "the reason is the useful half"
-    assert "Rumble" in body and "YouTube Shorts" in body
+    assert "[Rumble](https://rumble.com/v70abc-x.html)" in embed["description"]
+    assert "YouTube daily limit" in body, "the reason, in plain words"
+    assert "YouTube Shorts" in body
 
 
 def test_the_platform_key_is_not_what_gets_shown():
@@ -120,11 +121,11 @@ def test_the_clips_and_the_bleeping_are_reported():
                        clips_made=3, censor_note="silenced 14 word(s)",
                        seconds=1877.0)
 
-    names = {f["name"]: f["value"] for f in build_embed(report)["fields"]}
+    footer = build_embed(report)["footer"]["text"]
 
-    assert "3 from this stream" in names["Clips cut"]
-    assert names["Audio"] == "silenced 14 word(s)"
-    assert names["Took"] == "31m 17s"
+    assert "3 clips cut" in footer
+    assert "silenced 14 word(s)" in footer
+    assert "took 31m 17s" in footer
 
 
 def test_a_run_with_nothing_to_report_still_renders():
@@ -227,3 +228,35 @@ def test_it_is_sent_from_the_end_of_process_file():
         "the clip destinations are not in the receipt"
     assert body.index("return results") > spot, \
         "the receipt has to be the last thing that happens"
+
+
+
+# ── the 10-17 clean-up: only what matters, links together ────────────
+
+def test_switched_off_destinations_are_not_listed_or_counted():
+    report = JobReport(title="Bloody come to this side", is_clip=True, destinations={
+        "rumble": "FAILED: Chrome is not reachable at http://localhost:9222 (Call log: ...)",
+        "postproxy_x": "skipped: postproxy_x is disabled in config",
+        "tiktok": "skipped: tiktok is disabled in config",
+        "instagram": "", "buffer_x": "",
+        "youtube_shorts": "skipped: youtube_shorts daily cap reached (5/5)"})
+    embed = build_embed(report)
+    text = json.dumps(embed, ensure_ascii=False)
+
+    assert "disabled" not in text and "Postproxy" not in text
+    assert report.headline() == "❌ 3 queued · 1 failed"
+    cols = {f["name"]: f["value"] for f in embed["fields"]}
+    assert cols["❌ Failed"] == "Rumble - browser froze - retried automatically"
+    assert "YouTube Shorts - daily limit reached" in cols["⏳ Queued"]
+    assert "Call log" not in text
+
+
+def test_every_link_sits_together_and_the_title_opens_the_first():
+    report = JobReport(title="x", destinations={
+        "rumble": "https://rumble.com/v1", "youtube": "https://youtu.be/a",
+        "instagram": "held: a severe slur (f*****)"})
+    embed = build_embed(report)
+
+    assert embed["description"] == "🔗 [Rumble](https://rumble.com/v1)  •  [YouTube](https://youtu.be/a)"
+    assert embed["url"] == "https://rumble.com/v1"
+    assert {f["name"] for f in embed["fields"]} == {"✅ Posted", "🚫 Held"}

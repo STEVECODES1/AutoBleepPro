@@ -145,11 +145,22 @@ class JobReport:
         return {name: classify(value)
                 for name, value in (self.destinations or {}).items()}
 
+    def counts(self) -> dict:
+        """How many destinations ended up in each column. Ones switched
+        off in config are not part of the job and are not counted."""
+        out = {POSTED: 0, PENDING: 0, HELD: 0, FAILED: 0, ALREADY: 0, SKIPPED: 0}
+        for value in (self.destinations or {}).values():
+            if is_off(value):
+                continue
+            k = kind(value)
+            out[k] = out.get(k, 0) + 1
+        return out
+
     def landed(self) -> int:
-        return sum(1 for s in self.statuses().values() if s == POSTED)
+        return self.counts()[POSTED]
 
     def failed(self) -> int:
-        return sum(1 for s in self.statuses().values() if s == FAILED)
+        return self.counts()[FAILED]
 
     def colour(self) -> int:
         if self.failed() and not self.landed():
@@ -160,15 +171,78 @@ class JobReport:
 
     def headline(self) -> str:
         """The one line that has to survive being read on a lock screen."""
-        landed, failed = self.landed(), self.failed()
-        total = len(self.destinations or {})
-        if not total:
-            return "Nothing was attempted."
-        if failed and not landed:
-            return f"Nothing landed - {failed} of {total} failed."
-        if failed:
-            return f"{landed} of {total} landed, {failed} failed."
-        return f"All {landed} landed." if landed else "Nothing new to post."
+        c = self.counts()
+        if not any(c.values()):
+            return "Nothing to post."
+        if c[ALREADY] and not (c[POSTED] or c[PENDING] or c[HELD] or c[FAILED]):
+            return "✅ Already up everywhere - nothing new to post."
+        parts = []
+        for key, word in ((POSTED, "posted"), (PENDING, "queued"),
+                          (HELD, "held"), (FAILED, "failed")):
+            if c[key]:
+                parts.append(f"{c[key]} {word}")
+        if not parts:
+            return "Nothing new to post."
+        mark = "❌" if c[FAILED] and not c[POSTED] else ("⚠️" if c[FAILED] else "✅")
+        return f"{mark} " + " · ".join(parts)
+
+
+# Destinations switched off in config are not part of the job. Listing
+# them buried the one line that mattered: on 10-17 a clip's receipt said
+# "Nothing landed - 1 of 14 failed" with eight "disabled in config" lines
+# between the reader and the Rumble failure.
+def is_off(outcome: str) -> bool:
+    text = str(outcome or "").lower()
+    return ("disabled in config" in text or " is disabled" in text
+            or "not configured" in text)
+
+
+HELD, ALREADY = "held", "already"
+
+
+def kind(outcome: str) -> str:
+    """classify(), split finer for the receipt's columns: held and
+    already-up are their own, and a daily-cap or spacing skip is a wait."""
+    text = str(outcome or "").strip()
+    lowered = text.lower()
+    status = classify(text)
+    if status != POSTED and "held" in lowered:
+        return HELD
+    if status == SKIPPED:
+        if "already" in lowered or "duplicate" in lowered:
+            return ALREADY
+        if any(w in lowered for w in ("cap", "spacing", "wait", "later",
+                                      "queued", "deferred")):
+            return PENDING
+    return status
+
+
+# A failure reason in plain words. The raw one is a stack of Playwright
+# call log that nobody reads on a phone.
+_PLAIN = (
+    (("9222", "connect_over_cdp", "chrome is not reachable", "did not answer"),
+     "browser froze - retried automatically"),
+    (("quota",), "YouTube daily limit"),
+    (("daily cap", "cap reached"), "daily limit reached"),
+    (("slur",), "slur in the clip"),
+    (("children", "kids", "child-safety"), "about kids"),
+    (("gambling", "casino"), "gambling on screen"),
+    (("timed out", "timeout"), "timed out"),
+    (("401", "unauthor", "expired", "re-login", "reauth"), "needs a fresh login"),
+)
+
+
+def reason(outcome: str) -> str:
+    text = str(outcome or "").strip()
+    lowered = text.lower()
+    for needles, plain in _PLAIN:
+        if any(n in lowered for n in needles):
+            return plain
+    first = text.split("\n", 1)[0].strip()
+    for prefix in ("FAILED:", "failed:", "skipped:", "held:"):
+        if first.startswith(prefix):
+            first = first[len(prefix):].strip()
+    return _clip(first, 70)
 
 
 def _clip(text: str, limit: int) -> str:
@@ -176,61 +250,61 @@ def _clip(text: str, limit: int) -> str:
     return text if len(text) <= limit else text[:limit - 1] + "…"
 
 
-def _line(platform: str, outcome: str) -> str:
-    """One destination, as a single readable line."""
-    status = classify(outcome)
-    mark = _MARK.get(status, "")
-    name = pretty(platform)
-    if status == POSTED and is_link(outcome):
-        return f"{mark} **{name}** - {outcome}"
-    if status == POSTED:
-        return f"{mark} **{name}** - posted"
-    if status == PENDING:
-        return f"{mark} **{name}** - not attempted"
-    # The recorded reason, which is the useful half of a failure.
-    reason = str(outcome or "").strip()
-    reason = reason.split(":", 1)[1].strip() if ":" in reason else reason
-    return f"{mark} **{name}** - {_clip(reason, 160) or status}"
+_COLUMNS = ((POSTED, "✅ Posted"), (PENDING, "⏳ Queued"), (HELD, "🚫 Held"),
+            (FAILED, "❌ Failed"), (SKIPPED, "⏭️ Skipped"))
 
 
 def build_embed(report: JobReport) -> dict:
-    """The Discord embed for one finished job."""
-    lines = [_line(name, value)
-             for name, value in sorted((report.destinations or {}).items())]
-    description = "\n".join(lines) or "No destinations were configured."
+    """The Discord embed for one finished job: every link together at
+    the top, then one column per outcome, side by side."""
+    columns = {key: [] for key, _ in _COLUMNS}
+    links = []
+    for platform, value in sorted((report.destinations or {}).items()):
+        if is_off(value):
+            continue
+        name, text, k = pretty(platform), str(value or "").strip(), kind(value)
+        if k == POSTED:
+            if is_link(text):
+                links.append(f"[{name}]({text})")
+            columns[POSTED].append(name)
+        elif k == ALREADY:
+            url = next((w for w in text.split() if is_link(w)), "")
+            if url:
+                links.append(f"[{name}]({url})")
+            columns[POSTED].append(f"{name} (already up)")
+        elif k == PENDING:
+            why = reason(text) if text else ""
+            columns[PENDING].append(name + (f" - {why}" if why else ""))
+        else:
+            columns[k if k in columns else SKIPPED].append(f"{name} - {reason(text)}")
 
-    fields = []
-    if report.clips_made:
-        fields.append({
-            "name": "Clips cut",
-            "value": _clip(f"{report.clips_made} from this stream"
-                           + (f"\n`{report.clips_folder}`"
-                              if report.clips_folder else ""),
-                           MAX_FIELD_VALUE),
-            "inline": True})
-    if report.censor_note:
-        fields.append({"name": "Audio",
-                       "value": _clip(report.censor_note, MAX_FIELD_VALUE),
-                       "inline": True})
+    description = ("🔗 " + "  •  ".join(links)) if links else "Nothing has posted yet."
+    fields = [{"name": title, "value": _clip("\n".join(columns[key]), MAX_FIELD_VALUE),
+               "inline": True}
+              for key, title in _COLUMNS if columns[key]]
+
+    took = ""
     if report.seconds:
         minutes, seconds = divmod(int(report.seconds), 60)
-        fields.append({
-            "name": "Took",
-            "value": f"{minutes}m {seconds:02d}s" if minutes else f"{seconds}s",
-            "inline": True})
+        took = f"{minutes}m {seconds:02d}s" if minutes else f"{seconds}s"
+    footer = " • ".join(p for p in (
+        "Clip" if report.is_clip else "Stream",
+        f"took {took}" if took else "",
+        f"{report.clips_made} clips cut" if report.clips_made else "",
+        report.censor_note,
+        report.filename) if p)
 
     embed = {
-        "title": _clip(report.title or report.filename or "Untitled",
-                       MAX_TITLE),
+        "title": _clip(report.title or report.filename or "Untitled", MAX_TITLE),
         "description": _clip(description, MAX_DESCRIPTION),
         "color": report.colour(),
         "fields": fields[:MAX_FIELDS],
-        "footer": {"text": _clip(
-            ("Clip" if report.is_clip else "Stream")
-            + (f" • {report.filename}" if report.filename else ""),
-            MAX_FIELD_VALUE)},
+        "footer": {"text": _clip(footer, 2048)},
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime()) + "Z",
     }
+    first = next((l.split("](", 1)[1][:-1] for l in links), "")
+    if first:
+        embed["url"] = first           # the title opens the first link
     return embed
 
 
