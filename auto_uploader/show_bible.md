@@ -49,6 +49,32 @@ every run.
   "i can't wait to play house", "They damned me to hell".
 - Most hits are 9 to 40 seconds: one setup, one line, one reaction.
 
+## What actually did best on his channels (views, 10-17)
+- Long form: Monkey App trolling is the biggest thing he has - the two
+  "monkey app trolling (MUST WATCH)" uploads have 102K and 87K views,
+  "Trolling Monkey App #6" 15K. Talking-to-chat streams with a strong
+  name do next best ("THE ONE U WANNA HEAR FR", "scammer wop back to
+  pay my dues", "STIZZ OR STACKS", "OLD STACKS IS BACK").
+- Shorts that worked: "Streamer pays for shoes to see if they're Rick
+  Owens", "reacts to haters deleting videos", "Finally Addresses The
+  GTA RP Drama", roasting his own headset setup, "Sticking up a downed
+  player in the city", "funny how though", "Johnny Cox threatens to fold
+  him like a pizza box", "Calling out the rat wearing police gloves",
+  "GTA RP mechanic says he also shoots people", a boxer "fighting like he
+  got a doctor's appointment", arguing Burna Boy vs Drake mid street.
+- Recurring topics: GTA RP drama and beef, haters and clip/plug channels
+  reposting him, other streamers (Kai Cenat), boxing reacts, fashion and
+  sneakers, "STIZZ" (in his own stream titles: "STIZZ SHOW", "STIZZ OR
+  STACKS").
+
+## Titles that get clicked
+- A person + what they did + the twist, in plain words: "Mechanic says
+  he also shoots people", "Pays for shoes to see if they're Rick Owens".
+- Or the punchline itself in quotes: "You a funny guy bro, funny how
+  though".
+- Never generic: "Stackswopo GTA RP live on YouTube" and "goes full chaos
+  mode" were among the weakest. Name the actual thing that happens.
+
 ## What does NOT work
 - Him reading chat, setting up, loading screens, driving around.
 - Rants or arguments that are mostly slurs with no joke in them.
@@ -56,3 +82,9 @@ every run.
 - Five clips from the same room and the same conversation.
 - A joke cut off before the reaction, or starting in the middle of a
   different bit.
+
+## Never for YouTube (Rumble only, if at all)
+- Anything about kids or minors, even as a joke or an insult.
+- Telling viewers to do something dangerous (drink bleach, hurt
+  themselves), or jokes whose whole point is someone's disability.
+- These get channels struck; a funny delivery does not change that.
