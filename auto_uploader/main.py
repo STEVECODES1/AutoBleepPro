@@ -1400,7 +1400,8 @@ def _already_on_rumble(title: str, cfg) -> str:
         from utils.text_guard import title as _tidied
 
         found = find_on_channel(channel, title)
-        tidied = _tidied(title, limit=0, youtube=False)
+        from utils.rumble_uploader import mask_slurs
+        tidied = mask_slurs(_tidied(title, limit=0, youtube=False))
         if not found and tidied and tidied != title:
             # what the uploader actually sent (see text_guard)
             found = find_on_channel(channel, tidied)

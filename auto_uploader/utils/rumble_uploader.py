@@ -150,6 +150,23 @@ STALL_SECONDS = 20 * 60
 NO_READOUT_SECONDS = 3 * 60
 
 
+_SLUR = re.compile(r"\b(nigg\w*|faggots?|faggy|fags?|trann(?:y|ies)|chinks?|spics?|kikes?)\b",
+                   re.IGNORECASE)
+
+
+def mask_slurs(title: str) -> str:
+    """Rumble gets the uncut video, but a slur in the TITLE is what search,
+    recommendations and ad buyers read first (10-17: "...and a nigga goes to
+    center city"). n***a keeps the line readable; the video is unchanged."""
+    def hide(m):
+        w = m.group(0)
+        return w[0] + "*" * (len(w) - 2) + w[-1] if len(w) > 2 else w[0] + "*"
+    try:
+        return _SLUR.sub(hide, title or "")
+    except Exception:
+        return title
+
+
 def upload_timeout_for(video_path: str) -> int:
     """A wait ceiling proportional to the file, never below the floor."""
     try:
@@ -323,7 +340,8 @@ class RumbleUploader:
         # The last place a broken title or description can be caught
         # before Rumble shows it (see utils/text_guard.py).
         from utils import text_guard as _guard
-        title = _guard.title(title, fallback="Stackswopo Stream", limit=0, youtube=False)
+        title = mask_slurs(_guard.title(title, fallback="Stackswopo Stream", limit=0,
+                                        youtube=False))
         description = _guard.text(description, "description")
         # Rumble's "Related Video (shown on Shorts only)": a clip that
         # links its full stream - the one clickable route from a Short.
