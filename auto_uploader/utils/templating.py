@@ -382,7 +382,7 @@ def build_title(stream_title: str, date_str: str, title_format: str) -> str:
 
 
 _RECORDING_STAMP = re.compile(
-    r"\s+\d{4}-\d{2}-\d{2}[ _T]\d{2}[-:_]\d{2}(?:[-:_]\d{2})?\s*$")
+    r"\s+\d{4}-\d{2}-\d{2}(?:[ _T]\d{2}[-:_]\d{2}(?:[-:_]\d{2})?)?\s*$")
 
 
 def build_description(template: str, date_str: str, stream_title: str) -> str:

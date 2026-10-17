@@ -74,7 +74,9 @@ def main():
                 print(f"         [{state}] {v['id']}  {v['snippet']['title'][:80]}")
         if not args.fix:
             continue
-        flagged.sort(key=lambda v: v.get("status", {}).get("privacyStatus") != "public")
+        # Public only: nobody sees a private description, and private and
+        # unlisted uploads include old ones that are not this pipeline's.
+        flagged = [v for v in flagged if v.get("status", {}).get("privacyStatus") == "public"]
         for v in flagged:
             if done >= args.max:
                 break

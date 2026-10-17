@@ -39,8 +39,9 @@ _EMPTY = re.compile(r"[ \t]*[(\[{][ \t" + re.escape(_SEP) + r":,/]*[)\]}]")
 # into a sentence is left alone. STAMP (no lead space) is shared with the
 # dedup checks so both sides of a title comparison drop it the same way.
 STAMP = re.compile(r"\d{4}-\d{2}-\d{2}[ _T]\d{2}[-:_]\d{2}(?:[-:_]\d{2})?"
-                   r"(?=[ \t]*(?:$|[\"'”)\](]))", re.M)
-_STAMP = re.compile(r"(?<=\S)[ \t]+" + STAMP.pattern, re.M)
+                   r"(?=[ \t]*(?:$|[\"'”)\](]))"
+                   r"|\d{4}-\d{2}-\d{2}(?=[\"”])", re.M)    # "FINGER 2026-10-05"
+_STAMP = re.compile(r"(?<=\S)[ \t]+(?:" + STAMP.pattern + ")", re.M)
 _DOUBLE_SEP = re.compile(r"[ \t]+([" + re.escape(_SEP) + r"])(?:[ \t]+[" + re.escape(_SEP) + r"])+(?=[ \t])")
 _TRAIL_SEP = re.compile(r"(?<=\S)[ \t]+[" + re.escape(_SEP) + r"/]+[ \t]*$", re.M)
 _LONE_BULLET = re.compile(r"^[ \t]*[" + re.escape(_SEP) + r"][ \t]*$", re.M)

@@ -48,6 +48,19 @@ def test_the_start_time_leaves_a_description_but_never_a_title():
         'with the title "THE RETURN" on the channel'
     assert g.text("first aired 2026-10-09 14:55 in Atlanta") == \
         "first aired 2026-10-09 14:55 in Atlanta"
+    assert g.text('with the title "FINGER 2026-10-05" on the') == 'with the title "FINGER" on the'
+    assert g.text("streamed on 2026-10-05 for real") == "streamed on 2026-10-05 for real"
+
+
+def test_the_description_template_drops_the_start_time_at_the_source():
+    from utils.templating import build_description
+    tpl = 'with the title "[STREAM TITLE]" on [DATE]'
+    assert build_description(tpl, "10/3/26", "FREEEEEE 2026-10-03 18:06") == \
+        'with the title "FREEEEEE" on 10/3/26'
+    assert build_description(tpl, "10/5/26", "FINGER 2026-10-05") == \
+        'with the title "FINGER" on 10/5/26'
+    assert build_description(tpl, "10/5/26", "2026-10-05 18:06") == \
+        'with the title "2026-10-05 18:06" on 10/5/26'
 
 
 def test_a_title_is_cut_at_a_word_and_never_left_empty():
