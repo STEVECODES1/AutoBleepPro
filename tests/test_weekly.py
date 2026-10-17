@@ -109,3 +109,28 @@ def test_weekly_uploads_private_when_a_stream_had_strangers(tmp_path, monkeypatc
     led = json.load(open(tmp_path / "logs" / "weekly.json", encoding="utf-8"))
     assert led["used"] == ["a_RECAP.mp4", "b_RECAP.mp4"]
     assert weekly.maybe_make(cfg, NOW) == ""          # never twice
+
+
+def test_a_recap_saved_without_a_stream_date_still_dates_the_weekly_title():
+    # the 10-16 weekly read "BEST OF THE WEEK (10-09-26 to )"
+    streams = [
+        {"stream_title": "THE RETURN", "stream_date": "10-09-26"},
+        {"stream_title": "THE ONE N ONLY", "stream_date": "",
+         "made": "2026-10-15T23:40:00"},
+        {"stream_title": "exposing", "stream_date": " ",
+         "made": "2026-10-16T22:05:00"},
+    ]
+    assert weekly.span_of(streams) == "10-09-26 to 10-16-26"
+    assert weekly.when(streams[1]) == "10-15-26"
+
+
+def test_the_span_is_one_date_for_one_day_and_blank_when_nothing_is_dated():
+    one = [{"stream_date": "10-09-26"}, {"stream_date": "10-09-26"}]
+    assert weekly.span_of(one) == "10-09-26"
+    assert weekly.span_of([{"stream_date": ""}, {}]) == ""
+
+
+def test_a_raw_recording_name_loses_its_start_time_and_shouting_case_is_kept():
+    assert weekly.shown({"stream_title": "THE RETURN 2026-10-09 14:55"}) == "THE RETURN"
+    assert weekly.shown({"stream_title": "exposing"}) == "EXPOSING"
+    assert weekly.shown({"stream_title": "Talk To Me Real Quick"}) == "Talk To Me Real Quick"

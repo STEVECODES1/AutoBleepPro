@@ -19,6 +19,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 import os
+import re
 import shutil
 from typing import List, Optional
 
@@ -106,6 +107,36 @@ def keep(cfg, path: str, stream_title: str, stream_date: str, recap_url: str,
                    "moments": [[round(float(a), 3), round(float(b), 3), float(sc or 0)]
                                for a, b, sc in moments]}, f, indent=1)
     return dest
+
+
+def when(rec: dict) -> str:
+    """The date a recap's stream was on, as MM-DD-YY. A recap saved without a
+    stream date falls back to the day it was made, so a weekly title never
+    reads "(10-09-26 to )"."""
+    d = str(rec.get("stream_date") or "").strip()
+    if d:
+        return d
+    made = str(rec.get("made") or "").strip()
+    try:
+        return dt.datetime.fromisoformat(made).strftime("%m-%d-%y")
+    except ValueError:
+        return ""
+
+
+def shown(rec: dict) -> str:
+    """A stream title fit to print: a raw recording name carries its start
+    time ("THE RETURN 2026-10-09 14:55") and may be all lower case."""
+    t = re.sub(r"\s+\d{4}-\d{2}-\d{2}[ _T]\d{2}[:_]\d{2}(?:[:_]\d{2})?\s*$", "",
+               str(rec.get("stream_title") or "")).strip()
+    return t.upper() if t and t == t.lower() else t
+
+
+def span_of(streams: List[dict]) -> str:
+    """"10-09-26", "10-09-26 to 10-16-26", or "" when nothing has a date."""
+    dates = [d for d in (when(r) for r in streams) if d]
+    if not dates:
+        return ""
+    return dates[0] if dates[0] == dates[-1] else f"{dates[0]} to {dates[-1]}"
 
 
 def recaps(cfg) -> List[dict]:
@@ -234,15 +265,15 @@ def maybe_make(cfg, now: Optional[dt.datetime] = None) -> str:
                 print("[Weekly] Could not build the weekly.")
                 return ""
             streams = [r for r in window if any(p[0] is r for p in picks)]
-            groups = [(start, picks[i][0]["stream_title"].upper()) for start, _, i in placed]
-            dates = [r.get("stream_date", "") for r in streams]
-            span = dates[0] if dates[0] == dates[-1] else f"{dates[0]} to {dates[-1]}"
-            title = f"Stackswopo - BEST OF THE WEEK ({span})"
+            groups = [(start, shown(picks[i][0]).upper()) for start, _, i in placed]
+            span = span_of(streams)
+            title = f"Stackswopo - BEST OF THE WEEK ({span})" if span else "Stackswopo - BEST OF THE WEEK"
             lines = [f"▶ Every full stream: {WOPOVOD}", "",
                      "This week's streams:"]
             for r in streams:
                 link = r.get("full_stream") or WOPOVOD
-                lines.append(f"• {r['stream_title']} ({r.get('stream_date', '')}): {link}")
+                day = when(r)
+                lines.append(f"• {shown(r)}{f' ({day})' if day else ''}: {link}")
             marks = chapters(groups)
             if marks:
                 lines += ["", marks]
