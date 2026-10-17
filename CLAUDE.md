@@ -66,4 +66,4 @@ Rumble: BinScripts, uncensored. IG stackswopomanz, FB Page, X WOPOCLIPS, TikTok 
 
 - GTA RP Clips playlist and 4 more Best Clips items finish on the next playlist run.
 - Recaps 10-14/10-15 and the 10-16 weekly carry a "kids" caption; the user chose to leave them public.
-- 21 clips held for slurs await the user. Game mark = thumbnails\gta_rp_badge.png (original, tools\make_game_badge.py), GTA streams only.
+- 21 clips held for slurs await the user. Game mark = thumbnails\gtav_logo.png (the GTA V logo the user picked, from pngimg.com, not in git; gta_rp_badge.png is the original fallback), stamped on GTA streams only.
