@@ -129,3 +129,6 @@ auto_uploader/_thumb_preview/
 models/speaker/
 
 /logs/
+
+# Moved here instead of deleted - empty it by hand when sure.
+_to_delete/
