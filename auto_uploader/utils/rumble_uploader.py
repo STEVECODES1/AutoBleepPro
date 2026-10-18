@@ -165,6 +165,20 @@ _LAST_HEAL = [0.0]
 HEAL_EVERY_S = 30 * 60
 
 
+def _kill_chrome_on_port(port: int) -> None:
+    """Stop the Chrome that owns this debugging port - the operator's real
+    window. Never from the test suite: on 10-18 a test of the self-heal
+    below closed the real Chrome at 2:32 AM."""
+    if os.environ.get("PYTEST_CURRENT_TEST"):
+        return
+    subprocess.run(
+        ["powershell", "-NoProfile", "-Command",
+         "Get-CimInstance Win32_Process -Filter \"Name='chrome.exe'\" | "
+         f"Where-Object {{ $_.CommandLine -match 'remote-debugging-port={int(port)}' }} | "
+         "ForEach-Object { Stop-Process -Id $_.ProcessId -Force }"],
+        timeout=60, capture_output=True)
+
+
 def _heal_chrome(cdp_url: str) -> bool:
     with _ACTIVE_LOCK:
         if _ACTIVE[0] > 1 or time.time() - _LAST_HEAL[0] < HEAL_EVERY_S:
@@ -174,12 +188,7 @@ def _heal_chrome(cdp_url: str) -> bool:
     print("[Rumble] Chrome answered but hung on attach - restarting that window "
           "(nothing else is using it), then trying once more.")
     try:
-        subprocess.run(
-            ["powershell", "-NoProfile", "-Command",
-             "Get-CimInstance Win32_Process -Filter \"Name='chrome.exe'\" | "
-             f"Where-Object {{ $_.CommandLine -match 'remote-debugging-port={port}' }} | "
-             "ForEach-Object { Stop-Process -Id $_.ProcessId -Force }"],
-            timeout=60, capture_output=True)
+        _kill_chrome_on_port(port)
         time.sleep(4)
         from utils.chrome_cdp import ensure_chrome
         ready, detail = ensure_chrome(cdp_url)

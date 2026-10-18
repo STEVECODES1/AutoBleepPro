@@ -265,3 +265,27 @@ def _no_real_notifications(monkeypatch):
     """
     for name in _NOTIFY_NAMES:
         monkeypatch.setenv(name, "")
+
+
+@pytest.fixture(autouse=True)
+def _real_chrome_never_closed(monkeypatch):
+    """No test closes the operator's Chrome.
+
+    utils.rumble_uploader restarts a Chrome that hangs on attach by
+    stopping whatever owns the debugging port - the operator's real,
+    signed-in window. On 10-18 the hang tests did exactly that at 2:32 AM
+    and a later test started a fresh, empty one. Here the stop is a no-op
+    and the self-heal counts as just used, so it stays off; a test of the
+    heal turns it on and patches _kill_chrome_on_port to see the call."""
+    import sys as _sys
+    import time as _time
+
+    _sys.path.insert(0, _UPLOADER)
+    try:
+        from utils import rumble_uploader
+    except Exception:
+        return
+    monkeypatch.setattr(rumble_uploader, "_kill_chrome_on_port",
+                        lambda port: None)
+    rumble_uploader._LAST_HEAL[0] = _time.time()
+    rumble_uploader._ACTIVE[0] = 0

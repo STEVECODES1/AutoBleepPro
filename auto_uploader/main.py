@@ -3291,6 +3291,19 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
                 rb_logger.warning(f"{filename}: attempt {attempt} failed ({exc}); retrying in {delay}s")
 
             rb_attempts = [0]
+            # A CLIP about kids still goes to Rumble, but PRIVATE (10-17:
+            # "Exposing a minor's age" went up public and was taken down by
+            # hand). Full streams are whole VODs and are not judged by title.
+            rb_privacy = cfg.rumble.privacy
+            if is_clip:
+                try:
+                    from utils.recap import about_children
+                    if about_children(rb_title):
+                        rb_privacy = "private"
+                        print("[Rumble] This clip's title is about kids - uploading "
+                              "it PRIVATE (make it public in Rumble if it is fine).")
+                except Exception:
+                    pass
 
             def rb_attempt():
                 # A retry after a failure that came AFTER Rumble accepted
@@ -3307,7 +3320,7 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
                 rb_attempts[0] += 1
                 return rb.upload(
                     rb_source, rb_title, rb_description, cfg.rumble.tags,
-                    privacy=cfg.rumble.privacy,
+                    privacy=rb_privacy,
                     thumbnail_path=lambda: thumbnail_path_for(
                         cfg.rumble.thumbnail_path) or None,
                     progress_callback=rb_progress,
