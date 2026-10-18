@@ -3621,6 +3621,17 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
         except Exception as exc:
             print(f"[Social] WARNING: announce failed: {exc}")
 
+        # A post on wopovod's Posts tab for each new full stream - the
+        # owner asked for one every time (10-18). It runs as a process of
+        # its own (utils/community_post), off this path.
+        if not is_clip and str(newly_uploaded.get("youtube") or "").startswith("https://"):
+            try:
+                from utils.community_post import post_later
+
+                post_later(cfg, newly_uploaded["youtube"], yt_stream_title)
+            except Exception as exc:
+                print(f"[Post] could not start the channel post: {exc}")
+
         try:
             optimizer_cfg = cfg.features.get("content_optimizer", {})
             if optimizer_cfg.get("enabled", True):
