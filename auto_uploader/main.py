@@ -5637,6 +5637,12 @@ def main(argv=None) -> int:
                         brain.tick()
                     except Exception as exc:
                         print(f"[Brain] WARNING: watchdog check failed: {exc}")
+                    try:
+                        # One message a day to the owner's phone: what
+                        # went up, what posted, what needs them.
+                        brain.daily_digest()
+                    except Exception as exc:
+                        print(f"[Brain] WARNING: daily report failed: {exc}")
         except KeyboardInterrupt:
             print("\nStopping...")
             watcher.stop()

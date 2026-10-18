@@ -101,12 +101,13 @@ DEFAULT_MODELS = {
     # here and costs latency on every clip. is_reasoning_model already
     # matches "deepseek-r" if you pin the reasoner anyway.
     DEEPSEEK: "deepseek-chat",
-    # OpenRouter is a gateway to 443 models, free and paid mixed, so
+    # OpenRouter is a gateway to 471 models, free and paid mixed, so
     # this is pinned like xKiro's - an auto-pick off that catalogue
-    # could quietly start billing. Text only: nex-n2.5-pro reads 8
-    # frames in 5.8s and returns EMPTY content at 48, which is the
-    # number this actually sends.
-    OPENROUTER: "nex-agi/nex-n2.5-pro:free",
+    # could quietly start billing. Text only (see VISION_PROVIDERS).
+    # 10-18: nex-agi/nex-n2.5-pro lost its free tier and every call
+    # answered 404 "unavailable for free"; Gemma 4 31B is Google's and
+    # was on the free list (16 models) that day.
+    OPENROUTER: "google/gemma-4-31b-it:free",
     # Qwen3-VL 4B: reads frames and writes JSON, 3.3 GB - it fits on an
     # 8 GB card next to Whisper. OLLAMA_MODEL in .env picks another.
     LOCAL: "qwen3-vl:4b",

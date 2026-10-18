@@ -65,6 +65,13 @@ MUTE_HOURS = 6
 CRASH_LOOP_STARTS = 5
 CRASH_LOOP_MINUTES = 30
 
+CHROME_DOWN_MINUTES = 5
+STUCK_STREAM_HOURS = 6
+STUCK_CLIP_HOURS = 2
+BIG_VIDEO_BYTES = 500 * 1024 * 1024
+DIGEST_HOUR = 10
+_VIDEO_EXTS = (".ts", ".mp4", ".mkv", ".flv", ".mov", ".webm")
+
 HEARTBEAT_DIR = ".heartbeat"     # matches tools/record_stream.py
 _TIMEOUT = 15
 
@@ -160,6 +167,29 @@ def _default_live_check(project_root: str) -> Optional[Callable]:
         return None
 
 
+def _default_chrome_check(cfg) -> Optional[Callable]:
+    """'Is the Rumble Chrome answering?' when a CDP port is configured."""
+    url = str(getattr(getattr(cfg, "rumble", None), "cdp_url", "") or "")
+    if not url:
+        return None
+    try:
+        from .chrome_cdp import cdp_port, is_listening
+    except Exception:
+        return None
+    port = cdp_port(url)
+    if not port:
+        return None
+    return lambda: is_listening(port)
+
+
+def _read_json(path: str, default):
+    try:
+        with open(path, encoding="utf-8") as handle:
+            return json.load(handle)
+    except (OSError, ValueError):
+        return default
+
+
 def _minutes(seconds: float) -> str:
     minutes = int(seconds // 60)
     return f"{minutes // 60}h {minutes % 60:02d}m" if minutes >= 60 \
@@ -170,6 +200,7 @@ class Brain:
     def __init__(self, cfg, settings: Optional[dict] = None, *,
                  send: Optional[Callable] = None,
                  live_check: Optional[Callable] = None,
+                 chrome_check: Optional[Callable] = None,
                  desktop: bool = False,
                  now: Callable[[], float] = time.time,
                  say: Callable = print):
@@ -209,6 +240,13 @@ class Brain:
         self._bytes: Dict[str, Tuple[int, float]] = {}
         self._live_seen: Dict[str, float] = {}
         self._next_live_check = 0.0
+        self.project_root = root
+        self.logs_folder = cfg.general.logs_folder
+        # The Rumble Chrome (uploads + live relay) - only watched when one
+        # is configured. Injectable so tests never probe a real port.
+        self._chrome_check = chrome_check if chrome_check is not None \
+            else _default_chrome_check(cfg)
+        self._chrome_down_since: Optional[float] = None
         self.state = self._load()
 
     # ── state ────────────────────────────────────────────────────────────
@@ -339,11 +377,115 @@ class Brain:
                     f"restarting it (START.bat) usually fixes it.")
         return problems
 
+    def _chrome(self, now: float) -> Problems:
+        """The Rumble Chrome closed and nobody brought it back."""
+        if self._chrome_check is None:
+            return {}
+        try:
+            up = bool(self._chrome_check())
+        except Exception:
+            return {}
+        if up:
+            self._chrome_down_since = None
+            return {}
+        if self._chrome_down_since is None:
+            self._chrome_down_since = now
+        down = now - self._chrome_down_since
+        if down < CHROME_DOWN_MINUTES * 60:
+            return {}
+        return {"chrome_down": (
+            "Rumble Chrome is closed",
+            f"The Chrome window that Rumble uploads and the live relay use "
+            f"has not answered for {_minutes(down)}. Nothing can go to Rumble "
+            f"until it is back. Its keeper reopens it within a minute - if "
+            f"this does not clear, run START.bat.")}
+
+    def _youtube_blocked(self, now: float) -> Problems:
+        """wopovod refused an upload (a strike or an upload limit)."""
+        data = _read_json(os.path.join(self.logs_folder, "youtube_blocked.json"), {})
+        try:
+            until = float((data or {}).get("until", 0))
+        except (TypeError, ValueError, AttributeError):
+            return {}
+        if until <= now:
+            return {}
+        return {"youtube_blocked": (
+            "YouTube is refusing uploads",
+            f"wopovod refused an upload - usually a strike or a daily upload "
+            f"limit. Full streams wait until "
+            f"{time.strftime('%H:%M', time.localtime(until))} and then go up "
+            f"by themselves. Check YouTube Studio for a notice.")}
+
+    def _upload_moving(self, now: float) -> bool:
+        """An upload touched logs/uploading.json in the last 10 minutes."""
+        try:
+            return now - os.path.getmtime(
+                os.path.join(self.logs_folder, "uploading.json")) < 600
+        except OSError:
+            return False
+
+    def _stuck_streams(self, now: float) -> Problems:
+        """A full stream sitting in the watch folder with nothing moving.
+
+        10-17: the money stream's YouTube upload was cut off and nothing
+        said so for hours. A big video still here after hours, with no
+        upload under way, is waiting on something a person has to fix."""
+        try:
+            names = os.listdir(self.watch_folder)
+        except OSError:
+            return {}
+        if self._upload_moving(now):
+            return {}
+        problems: Problems = {}
+        for name in names:
+            if not name.lower().endswith(_VIDEO_EXTS):
+                continue
+            path = os.path.join(self.watch_folder, name)
+            try:
+                size, mtime = os.path.getsize(path), os.path.getmtime(path)
+            except OSError:
+                continue
+            age = now - mtime
+            if size >= BIG_VIDEO_BYTES and age >= STUCK_STREAM_HOURS * 3600:
+                problems[f"stuck_stream:{name}"] = (
+                    "A full stream is stuck",
+                    f"{name} ({size / 1e9:.1f} GB) has waited "
+                    f"{_minutes(age)} in watch_folder and nothing is uploading "
+                    f"it. Usually a platform refused it - the uploader window "
+                    f"says which. It retries by itself; a restart "
+                    f"(START.bat) forces a fresh try.")
+        return problems
+
+    def _stuck_clips(self, now: float) -> Problems:
+        """A clip post that has said 'in progress' for hours."""
+        data = _read_json(os.path.join(self.project_root, "clip_jobs.json"), {})
+        jobs = data.get("jobs", {}) if isinstance(data, dict) else {}
+        jobs = jobs.values() if isinstance(jobs, dict) else jobs
+        stuck = []
+        for job in jobs:
+            if not isinstance(job, dict) or job.get("state") != "in_progress":
+                continue
+            since = float(job.get("claimed_at") or job.get("updated_at") or now)
+            if now - since >= STUCK_CLIP_HOURS * 3600:
+                stuck.append(job)
+        if not stuck:
+            return {}
+        first = stuck[0]
+        return {"stuck_clip": (
+            "A clip post is stuck",
+            f"{len(stuck)} clip post(s) have said 'in progress' for over "
+            f"{STUCK_CLIP_HOURS} h (e.g. {first.get('platform')}: "
+            f"{os.path.basename(str(first.get('clip_path', '')))}). Restarting "
+            f"the uploader (START.bat) frees them.")}
+
     def problems(self) -> Problems:
         now = self._now()
         found: Problems = {}
         for check in (lambda: self._crash_loop(now), self._disk,
-                      lambda: self._recorder(now)):
+                      lambda: self._recorder(now), lambda: self._chrome(now),
+                      lambda: self._youtube_blocked(now),
+                      lambda: self._stuck_streams(now),
+                      lambda: self._stuck_clips(now)):
             try:
                 found.update(check())
             except Exception as exc:
@@ -400,9 +542,82 @@ class Brain:
             self._save()
         return current
 
+    # ── once a day: what the last 24 hours did ──────────────────────────
+    _NAMES = {"youtube_shorts": "Shorts", "instagram": "IG", "facebook": "FB",
+              "buffer_x": "X", "buffer_tiktok": "TikTok", "rumble": "Rumble"}
+
+    def digest_text(self, now: Optional[float] = None) -> str:
+        """The owner away from the PC reads this and knows where things are."""
+        now = self._now() if now is None else now
+        day = 86400
+        lines = []
+        links = _read_json(os.path.join(self.logs_folder, "stream_links.json"), [])
+        streams = [e for e in links if isinstance(e, dict)
+                   and now - float(e.get("at", 0) or 0) < day]
+        if streams:
+            lines.append("**Full streams**")
+            for e in streams[-5:]:
+                where = " · ".join(f"{name} {e[key]}" for key, name in
+                                   (("youtube", "YouTube"), ("rumble", "Rumble"))
+                                   if str(e.get(key, "")).startswith("https://"))
+                lines.append(f"• {e.get('title', '?')} ({e.get('date', '')}) - {where or 'no links yet'}")
+        else:
+            lines.append("No full stream went up in the last 24 h.")
+        data = _read_json(os.path.join(self.project_root, "clip_jobs.json"), {})
+        jobs = data.get("jobs", {}) if isinstance(data, dict) else {}
+        jobs = [j for j in (jobs.values() if isinstance(jobs, dict) else jobs)
+                if isinstance(j, dict)
+                and now - float(j.get("updated_at", 0) or 0) < day]
+        posted: Dict[str, int] = {}
+        held = failed = waiting = 0
+        for job in jobs:
+            state, error = job.get("state"), str(job.get("last_error") or "")
+            if state == "done":
+                name = self._NAMES.get(job.get("platform"), job.get("platform"))
+                posted[name] = posted.get(name, 0) + 1
+            elif state == "failed" and error.startswith("held"):
+                held += 1
+            elif state == "failed":
+                failed += 1
+            elif state == "blocked":
+                waiting += 1
+        if posted:
+            lines.append("**Clips posted:** " + ", ".join(
+                f"{name} {count}" for name, count in sorted(posted.items())))
+        else:
+            lines.append("**Clips posted:** none")
+        lines.append(f"Held back by the guards: {held} · waiting for a slot: "
+                     f"{waiting} · failed: {failed}")
+        free = disk_free_gb(self.watch_folder)
+        if free >= 0:
+            lines.append(f"Disk: {free:.0f} GB free")
+        opened = self.state.get("open") or {}
+        if opened:
+            lines.append("**Needs you:** " + "; ".join(
+                str(v.get("title", k)) for k, v in opened.items()))
+        else:
+            lines.append("Nothing needs you right now.")
+        return "\n".join(lines)[:1900]
+
+    def daily_digest(self, hour: int = DIGEST_HOUR) -> bool:
+        """Once a day, after `hour` local time. Never urgent."""
+        if not self.enabled:
+            return False
+        now = self._now()
+        local = time.localtime(now)
+        today = time.strftime("%Y-%m-%d", local)
+        if local.tm_hour < hour or self.state.get("digest_day") == today:
+            return False
+        self.state["digest_day"] = today
+        self._save()
+        self._alert("Daily report", self.digest_text(now), urgent=False)
+        return True
+
     def describe(self) -> str:
         channels = alert_channels()
         where = ", ".join(channels) if channels else \
             "console only (set NTFY_TOPIC or DISCORD_ALERT_USER_ID in .env)"
-        return (f"[Brain] Watching the recorder, disk space and crash loops "
-                f"every minute. Alerts: {where}.")
+        return (f"[Brain] Watching the recorder, the Rumble Chrome, YouTube "
+                f"refusals, stuck streams and clip posts, disk space and crash "
+                f"loops every minute; a daily report after {DIGEST_HOUR}:00. "
+                f"Alerts: {where}.")
