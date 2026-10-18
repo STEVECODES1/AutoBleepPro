@@ -174,14 +174,84 @@ def _link_of(thread, posts_url: str) -> str:
     return href if href.startswith("http") else f"https://www.youtube.com{href}"
 
 
+CHANNEL_NAME = "STACKSWOPO VODS"
+ALERTS = os.path.join(_ROOT, "logs", "community_post_alerts.json")
+
+
+def _alert(text: str, key: str) -> None:
+    """One line to the owner's Discord, once per key. Never from tests."""
+    if os.environ.get("PYTEST_CURRENT_TEST"):
+        return
+    with _LOCK:
+        sent = _load(ALERTS)
+        if key in sent:
+            return
+        sent[key] = time.time()
+        try:
+            os.makedirs(os.path.dirname(ALERTS), exist_ok=True)
+            with open(ALERTS, "w", encoding="utf-8") as handle:
+                json.dump(sent, handle, indent=1)
+        except OSError:
+            pass
+    try:
+        from dotenv import load_dotenv
+
+        load_dotenv(os.path.join(_ROOT, ".env"))
+    except Exception:
+        pass
+    url = os.environ.get("DISCORD_WEBHOOK_URL", "").strip()
+    if not url:
+        return
+    import urllib.request
+
+    request = urllib.request.Request(
+        url, data=json.dumps({"content": text}).encode("utf-8"),
+        headers={"Content-Type": "application/json", "User-Agent": "AutoBleep"})
+    try:
+        urllib.request.urlopen(request, timeout=20).read()
+    except Exception:
+        pass
+
+
+def _post_box(page, wait_ms: int = 30_000) -> bool:
+    try:
+        page.wait_for_selector("#placeholder-area", timeout=wait_ms)
+        return True
+    except Exception:
+        return False
+
+
+def _switch_to(page, name: str = CHANNEL_NAME) -> bool:
+    """Make the window act as `name` on YouTube (profile picture -> Switch
+    account). 10-18: after a restart at 5:45 AM the window came back as
+    another of the owner's channels and the post box was gone."""
+    try:
+        page.goto("https://www.youtube.com/", wait_until="domcontentloaded", timeout=60_000)
+        page.click("button#avatar-btn", timeout=15_000)
+        page.get_by_text("Switch account", exact=True).first.click(timeout=10_000)
+        item = page.locator("ytd-account-item-renderer", has_text=name).first
+        item.wait_for(timeout=10_000)
+        item.click()
+        page.wait_for_timeout(5_000)
+        return True
+    except Exception:
+        return False
+
+
 def _make(page, vid, title, text, posts_url, ledger, dry_run, say) -> str:
     page.goto(posts_url, wait_until="domcontentloaded", timeout=60_000)
-    try:
-        page.wait_for_selector("#placeholder-area", timeout=30_000)
-    except Exception:
-        say("[Post] No post box on the channel page - Chrome is not signed "
-            "in as the channel.")
-        return ""
+    if not _post_box(page):
+        if _switch_to(page):
+            say(f"[Post] Switched the window to {CHANNEL_NAME}.")
+            page.goto(posts_url, wait_until="domcontentloaded", timeout=60_000)
+        if not _post_box(page):
+            say(f"[Post] No post box on the channel page - the Chrome window is "
+                f"not signed in as {CHANNEL_NAME}.")
+            _alert(f"⚠️ Can't post on wopovod: the Rumble Chrome window is not signed in "
+                   f"as {CHANNEL_NAME}. Sign it back in there (profile picture -> Switch "
+                   f"account), then the post goes up on the next try.",
+                   key=f"signed_out:{time.strftime('%Y-%m-%d')}")
+            return ""
     page.wait_for_timeout(3_000)
     earlier = _post_of(page, vid)
     if earlier.count():
@@ -252,14 +322,23 @@ def processed(vid: str):
 def wait_until_processed(vid: str, max_hours: float = 12, every_s: float = 600,
                          say=print) -> bool:
     """Wait for YouTube to finish the video (one 1-unit read per check)."""
-    end = time.time() + max_hours * 3600
+    started = time.time()
+    end = started + max_hours * 3600
     while True:
         state = processed(vid)
         if state:
             return True
         if state is None:
             say(f"[Post] {vid} failed processing or is gone - no channel post.")
+            _alert(f"⚠️ wopovod: https://youtu.be/{vid} failed processing or is gone. "
+                   f"Check it in Studio.", key=f"gone:{vid}")
             return False
+        if time.time() - started > 3 * 3600:
+            # 10-17's upload was cut off and sat on "Processing will begin
+            # shortly" for hours before anyone noticed.
+            _alert(f"⚠️ wopovod: https://youtu.be/{vid} is still processing after 3 hours - "
+                   f"the upload may have been cut off. Check it in Studio: "
+                   f"https://studio.youtube.com/video/{vid}/edit", key=f"slow:{vid}")
         if time.time() >= end:
             say(f"[Post] {vid} still processing after {max_hours:g}h - no channel post.")
             return False

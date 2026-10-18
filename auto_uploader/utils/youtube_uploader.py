@@ -267,6 +267,12 @@ class YouTubeUploader:
                           f"({drops}/{MAX_RESUMES})...")
                     time.sleep(wait)
                     continue
+                try:
+                    # A restart must never land mid-upload (utils/upload_beat).
+                    from utils.upload_beat import beat
+                    beat("youtube", int(status.progress() * 100) if status else None)
+                except Exception:
+                    pass
                 if status and progress_callback:
                     progress_callback(int(status.progress() * 100))
         except HttpError as exc:

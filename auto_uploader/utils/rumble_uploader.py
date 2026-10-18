@@ -1135,6 +1135,12 @@ class RumbleUploader:
             match = re.search(r"(\d{1,3})\s*%", body_text)
             if match:
                 percent = int(match.group(1))
+            try:
+                # A restart must never land mid-upload (utils/upload_beat).
+                from utils.upload_beat import beat
+                beat("rumble", percent)
+            except Exception:
+                pass
 
             if percent is not None and percent != last_reported:
                 last_reported = percent
