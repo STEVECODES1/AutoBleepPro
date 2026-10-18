@@ -114,8 +114,11 @@ a 4.4 GB full stream takes ~3 h to YouTube.
 
 ## Open items (10-18)
 
-- The 9222 Chrome must be signed back into STACKSWOPO VODS by the owner. A post retrier for H5-UgZr8OD0
-  runs until ~22:00 10-18 (logs\community_post_today.log) and posts once it can.
+- H5-UgZr8OD0 (10-17 stream): the 25 kid-talk parts were cut in the Studio editor 10-18 ~15:05 (3:18:21 ->
+  2:57:39, processing). Once it shows 2:57:39: add the GAMES collab and the channel post (both held till then).
+- Every full stream now goes through `utils/kid_guard.py` before YouTube: kid talk is stream-copied out of the
+  YouTube copy (Rumble keeps it) and the times go to Discord; too much of it or a failed cut -> PRIVATE, no post.
+- The 9222 CDP attach works again (Rumble live clips uploaded through it 10-18 afternoon).
 - `_to_delete\` holds ~7.2 GB of leftovers (old _verify, browser profiles, rumble_redo, scratch) for the
   owner to empty. One-off scripts moved to `_archive\` (in git).
 - Recaps 10-14/10-15 and the 10-16 weekly carry a "kids" caption; the owner chose to leave them public.
