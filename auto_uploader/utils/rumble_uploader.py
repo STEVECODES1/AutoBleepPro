@@ -31,7 +31,10 @@ Two ways to authenticate:
 import os
 import re
 import shutil
+import subprocess
+import threading
 import time
+import urllib.parse
 from typing import Callable, Optional
 
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
@@ -149,6 +152,43 @@ STALL_SECONDS = 20 * 60
 # scrape (small clips do) or this page has no readout to wait for.
 NO_READOUT_SECONDS = 3 * 60
 
+
+
+# 10-17: from ~17:45 every Rumble upload hung in connect_over_cdp - Chrome
+# answered ("ws connected") and then nothing for 60 s - until the window was
+# restarted by hand at 18:26. Four clips failed in between. A hung window is
+# now restarted here, once per HEAL_EVERY_S, and only when no other upload in
+# this process is inside that Chrome (killing it would kill that upload).
+_ACTIVE_LOCK = threading.Lock()
+_ACTIVE = [0]
+_LAST_HEAL = [0.0]
+HEAL_EVERY_S = 30 * 60
+
+
+def _heal_chrome(cdp_url: str) -> bool:
+    with _ACTIVE_LOCK:
+        if _ACTIVE[0] > 1 or time.time() - _LAST_HEAL[0] < HEAL_EVERY_S:
+            return False
+        _LAST_HEAL[0] = time.time()
+    port = urllib.parse.urlsplit(cdp_url).port or 9222
+    print("[Rumble] Chrome answered but hung on attach - restarting that window "
+          "(nothing else is using it), then trying once more.")
+    try:
+        subprocess.run(
+            ["powershell", "-NoProfile", "-Command",
+             "Get-CimInstance Win32_Process -Filter \"Name='chrome.exe'\" | "
+             f"Where-Object {{ $_.CommandLine -match 'remote-debugging-port={port}' }} | "
+             "ForEach-Object { Stop-Process -Id $_.ProcessId -Force }"],
+            timeout=60, capture_output=True)
+        time.sleep(4)
+        from utils.chrome_cdp import ensure_chrome
+        ready, detail = ensure_chrome(cdp_url)
+        print(f"[Rumble] {detail}")
+        time.sleep(6)
+        return bool(ready)
+    except Exception as exc:
+        print(f"[Rumble] Could not restart Chrome ({exc}).")
+        return False
 
 _SLUR = re.compile(r"\b(nigg\w*|faggots?|faggy|fags?|trann(?:y|ies)|chinks?|spics?|kikes?)\b",
                    re.IGNORECASE)
@@ -326,7 +366,16 @@ class RumbleUploader:
         self.headless = headless
         self.cdp_url = cdp_url
 
-    def upload(
+    def upload(self, *args, **kwargs) -> str:
+        with _ACTIVE_LOCK:
+            _ACTIVE[0] += 1
+        try:
+            return self._upload_inner(*args, **kwargs)
+        finally:
+            with _ACTIVE_LOCK:
+                _ACTIVE[0] -= 1
+
+    def _upload_inner(
         self,
         video_path: str,
         title: str,
@@ -369,8 +418,14 @@ class RumbleUploader:
                 ready, detail = ensure_chrome(self.cdp_url)
                 print(f"[Rumble] {detail}")
                 try:
-                    browser = p.chromium.connect_over_cdp(
-                        self.cdp_url, timeout=CDP_ATTACH_TIMEOUT_MS)
+                    try:
+                        browser = p.chromium.connect_over_cdp(
+                            self.cdp_url, timeout=CDP_ATTACH_TIMEOUT_MS)
+                    except Exception as first:
+                        if "ws connected" not in str(first) or not _heal_chrome(self.cdp_url):
+                            raise
+                        browser = p.chromium.connect_over_cdp(
+                            self.cdp_url, timeout=CDP_ATTACH_TIMEOUT_MS)
                     context = browser.contexts[0] if browser.contexts else browser.new_context()
                     page = context.new_page()
                     should_close_browser = False  # the user's window - don't close it

@@ -101,12 +101,6 @@ def launch_args(chrome: str, port: int, profile_dir: str) -> list:
         f"--user-data-dir={profile_dir}",
         "--no-first-run",
         "--no-default-browser-check",
-        # No extensions in the upload browser. 10-17: from ~17:45 every
-        # Rumble upload hung in connect_over_cdp ("ws connected", then
-        # nothing for 60 s) with only two blank tabs open - the one thing
-        # in that window besides them was an extension's service worker
-        # and offscreen page, which the CDP attach waits on too.
-        "--disable-extensions",
         # Opened on the site we need, so logging in the first time is
         # obvious rather than a blank window with no explanation.
         "https://rumble.com/",
