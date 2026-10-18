@@ -9,7 +9,11 @@ Read this first. It is what earlier sessions learned the slow way.
   (no `logs\processing.json` pid, no in_progress clip job, no ffmpeg/python/node child) and the keepalive
   brings it back. Never kill it any other way - on 10-16 that cut a full-stream upload at 75%.
 - Rumble uploads attach over CDP to the Chrome on port 9222 (profile `C:\RumbleChromeProfile`), kept up by
-  `tools\ensure_rumble_chrome.ps1`.
+  `tools\ensure_rumble_chrome.ps1`. That window IS the user's main Chrome (Studio, IG, FB, the Claude
+  extension) - never start it with --disable-extensions. A Chrome that hangs on attach ("ws connected")
+  is restarted by `rumble_uploader._heal_chrome` at most every 30 min and never under another upload;
+  `tools\restart_when_idle.ps1 -Hours N` restarts Chrome + uploader once idle. Tests can never close
+  it (conftest stubs `_kill_chrome_on_port`; on 10-18 a test did).
 - Tests: `python -X utf8 -m pytest tests -q -p no:cacheprovider` (~11 min). Known failures that are NOT
   regressions (stale tests vs committed code): test_cap_keys shorts cap, test_clip_offer_parallel overlap,
   test_jump_cuts silent pause, test_parallel_uploads x2, test_job_report end-of-process_file,
@@ -37,6 +41,8 @@ Rumble: BinScripts, uncensored. IG stackswopomanz, FB Page, X WOPOCLIPS, TikTok 
   sites. Titles keep a recorder start time on purpose (retry dedup matches on titles).
 - Child-safety: no moment about kids in recaps/weekly (`recap.about_children`), clips held back
   (`clip_queue._hold_if_child_risk`), gambling sites on screen (`autoreel/gambling_check.py`).
+- Rumble: a clip whose title is about kids uploads PRIVATE (main.py `rb_privacy`); slurs in Rumble
+  titles are masked (`rumble_uploader.mask_slurs`), the video stays uncut.
 - The user's rule: wopovod must be fully secured; GAMES/recaps matter less.
 
 ## Tools (all in tools\, all print what they do)
@@ -47,10 +53,14 @@ Rumble: BinScripts, uncensored. IG stackswopomanz, FB Page, X WOPOCLIPS, TikTok 
 - `make_banner.py` + `set_banner.py <token> <png> [--about txt]` - channel banner / About text via API
   (Studio's file picker cannot be driven; the API can).
 - `rumble_cta_backfill.py`, `links_backfill.py` - description footers; `quiet_restart.ps1` - safe restart.
+- "Does this clip have audio?": the posted vertical file stays in auto_uploader\uploaded\<clip>.mp4 (the
+  clip_queue_files copy is removed once posted) - ffmpeg volumedetect on it; on the live post,
+  `video.webkitAudioDecodedByteCount` grows while it plays (10-18: TikTok clip fine, ~-22 dB).
 
 ## Browser work (Claude-in-Chrome)
 
-- Chrome = user's main browser: wopovod Studio, Instagram stackswopomanz, Facebook, Rumble.
+- Chrome = the port-9222 RumbleChromeProfile window = user's main browser: wopovod Studio, Instagram
+  stackswopomanz, Facebook, Rumble.
   Brave = STACKSWOPO GAMES (connected as its own browser). Device ids change - `list_connected_browsers`.
 - YouTube collaborations (not in the API): Studio video edit -> Show more -> Collaboration -> Invite a
   collaborator -> search "StackswopoGames" -> option -> Create link -> close the link popup -> Save. The
@@ -75,4 +85,5 @@ Rumble: BinScripts, uncensored. IG stackswopomanz, FB Page, X WOPOCLIPS, TikTok 
 
 - GTA RP Clips playlist and 4 more Best Clips items finish on the next playlist run.
 - Recaps 10-14/10-15 and the 10-16 weekly carry a "kids" caption; the user chose to leave them public.
+- Rumble clip "Exposing a minor's age" (v7h0f3q) set PRIVATE 10-17 at the user's request.
 - 21 clips held for slurs await the user. Game mark = thumbnails\gtav_logo.png (the GTA V logo the user picked, from pngimg.com, not in git; gta_rp_badge.png is the original fallback), stamped on GTA streams only.
