@@ -3104,9 +3104,11 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
     # start moving bytes to begin with.
     rumble_will_run = "rumble" in active_platforms and not existing_rb
     rumble_upload_started = threading.Event()
+    kid_private = [False]  # set when kid talk sends the YouTube copy up private
 
     def do_youtube(parallel: bool) -> None:
         _intro_tmp = None  # temp concat file (with intro); cleaned up in finally
+        _kidcut = None  # copy with the kid talk cut out; cleaned up in finally
         try:
             # Resolved HERE, not before dispatch - this is the slow part
             # (transcription, minutes on a long VOD) and it runs in
@@ -3132,6 +3134,23 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
                 _guarded = _music_guard(yt_source, cfg.general.censored_folder)
                 if _guarded != yt_source:
                     _nomusic = yt_source = _guarded
+
+            # --- Kid talk out (YouTube VOD only - Rumble keeps it) ---
+            # Talk about kids in a sexual way is a strike on wopovod (10-17:
+            # 25 parts cut by hand). utils/kid_guard cuts those parts from
+            # the transcript; too much to cut, or a failed cut, goes private.
+            if not is_clip:
+                try:
+                    from utils import kid_guard as _kid_guard
+
+                    _safe, _why = _kid_guard.make_safe(
+                        cfg, video_path, yt_source, cfg.general.censored_folder)
+                    if _safe:
+                        _kidcut = yt_source = _safe
+                    elif _why:
+                        kid_private[0] = True
+                except Exception as _exc:
+                    print(f"[YouTube] kid-talk check error: {_exc}")
 
             # --- Prepend intro (YouTube VOD only — never clips, never Rumble) ---
             # Looks for cfg.youtube.intro_path, then YOUTUBE_INTRO_PATH env var,
@@ -3193,6 +3212,9 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
                     print(f"[YouTube] A gambling site is on screen in this stream "
                           f"({casino}) - uploading it PRIVATE so the channel is "
                           f"not put at risk. Check it in YouTube Studio.")
+            if kid_private[0] and not is_clip:
+                yt_privacy = "private"
+                print("[YouTube] Kid talk could not be cut - uploading PRIVATE.")
             yt = YouTubeUploader(cfg.youtube.client_secrets_path, cfg.youtube.token_path)
 
             def yt_on_retry(attempt, delay, exc):
@@ -3278,6 +3300,11 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
             if _intro_tmp and os.path.isfile(_intro_tmp):
                 try:
                     os.unlink(_intro_tmp)
+                except OSError:
+                    pass
+            if _kidcut and os.path.isfile(_kidcut):
+                try:
+                    os.unlink(_kidcut)
                 except OSError:
                     pass
             record("youtube", yt_title)
@@ -3624,7 +3651,8 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
         # A post on wopovod's Posts tab for each new full stream - the
         # owner asked for one every time (10-18). It runs as a process of
         # its own (utils/community_post), off this path.
-        if not is_clip and str(newly_uploaded.get("youtube") or "").startswith("https://"):
+        if (not is_clip and not kid_private[0]
+                and str(newly_uploaded.get("youtube") or "").startswith("https://")):
             try:
                 from utils.community_post import post_later
 
