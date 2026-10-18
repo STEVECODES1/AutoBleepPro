@@ -350,7 +350,7 @@ LOG = os.path.join(_ROOT, "logs", "community_post.log")
 
 
 def post_later(cfg, video_url: str, title: str, wait_s: float = 90,
-               tries: int = 3, say=print) -> bool:
+               tries: int = 18, between_s: float = 1200, say=print) -> bool:
     """After a new full stream lands on wopovod: post it from a process
     of its own (tools/community_post.py), so neither the upload path nor
     a restart of the uploader can hold it up or lose it.
@@ -373,8 +373,12 @@ def post_later(cfg, video_url: str, title: str, wait_s: float = 90,
     os.makedirs(os.path.dirname(LOG), exist_ok=True)
     with open(LOG, "a", encoding="utf-8") as log:
         subprocess.Popen(
+            # Patient: a window signed out (10-18) is fixed by a person,
+            # and the post should go up on its own once they have - every
+            # 20 minutes for 6 hours, one Discord note a day meanwhile.
             [sys.executable, "-X", "utf8", TOOL, video_url, title or "",
-             "--wait", str(wait_s), "--tries", str(tries), "--cdp", cdp_url],
+             "--wait", str(wait_s), "--tries", str(tries),
+             "--between", str(between_s), "--cdp", cdp_url],
             stdout=log, stderr=subprocess.STDOUT, cwd=os.path.dirname(_ROOT),
             creationflags=getattr(subprocess, "DETACHED_PROCESS", 0)
             | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0))
