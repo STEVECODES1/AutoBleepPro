@@ -130,6 +130,25 @@ def link_for(stream_title: str, stream_date: str = "", platform: str = "",
     return ""
 
 
+def date_for(stream_title: str, store: str = "",
+             now: Optional[float] = None) -> str:
+    """The date the stream's full upload went out with, or "".
+
+    A recording named after the stream ("exposing.ts") has no date in its
+    name, and the recaps of 10-15..10-17 went up as "... - (BEST
+    MOMENTS)" because of it. The full stream had one all along."""
+    wanted = _normal(stream_title)
+    if not wanted:
+        return ""
+    now = time.time() if now is None else now
+    found = [e for e in _load(store or DEFAULT_STORE)
+             if _normal(e.get("title")) == wanted and e.get("date")
+             and now - float(e.get("at", 0)) < MAX_AGE_S]
+    if not found:
+        return ""
+    return str(max(found, key=lambda e: float(e.get("at", 0)))["date"])
+
+
 def source_of(clip_path: str, folders: Iterable[str] = ()) -> dict:
     """The <clip>_source.json note for a clip, wherever it is kept."""
     stem = os.path.splitext(os.path.basename(clip_path or ""))[0]

@@ -52,7 +52,7 @@ def test_social_promoter_text_is_checked():
     ("utils/youtube_uploader.py", "text = _guard.text(str(text), \"comment\")"),
     ("utils/recap.py", "title = _guard.title(title"),
     ("utils/recap.py", "description = _guard.youtube_description(description"),
-    ("utils/rumble_uploader.py", "title = _guard.title(title"),
+    ("utils/rumble_uploader.py", "title = mask_slurs(_guard.title(title"),
     ("utils/rumble_uploader.py", "description = _guard.text(description"),
     ("utils/clip_queue.py", "post_clip(upload, _guard.text(caption"),
     ("publishers/postproxy.py", "else _guard.text(value, name)"),

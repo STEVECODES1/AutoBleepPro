@@ -340,6 +340,29 @@ def strip_trailing_stamp(stream_title: str) -> str:
     return trimmed.strip(" -|,") or (stream_title or "").strip()
 
 
+def without_doubled_lead(title_format: str, stream_title: str) -> str:
+    """The format minus its lead name when the stream's own name starts
+    with it.
+
+    "Stackswopo - {TITLE} - ..." for a stream Stacks named "STACKSWOPO
+    EXPOSED FOR BEING A FAKE GANGSTER" went up on 10-17 - on wopovod,
+    Rumble and the recap - as "Stackswopo - STACKSWOPO EXPOSED ...": the
+    name twice, which reads like a bot made it."""
+    title_format = title_format or ""
+    for token in ("{TITLE}", "{title}"):
+        at = title_format.find(token)
+        if at <= 0:
+            continue
+        lead = title_format[:at]
+        name = lead.strip(" -|:–—\"'“")
+        if name and re.match(rf"[\s\"'“]*{re.escape(name)}(?![a-z0-9])",
+                             stream_title or "", re.I):
+            quote = re.search(r"[\"'“]*$", lead).group(0)
+            return quote + title_format[at:]
+        break
+    return title_format
+
+
 def build_title(stream_title: str, date_str: str, title_format: str) -> str:
     """Fill `title_format` (e.g. '"{title}" {date} Stackswopo Stream').
 
@@ -351,6 +374,7 @@ def build_title(stream_title: str, date_str: str, title_format: str) -> str:
     the end, on a title that was nothing but the raw stream name.
     """
     stream_title = strip_trailing_stamp(stream_title)
+    title_format = without_doubled_lead(title_format, stream_title)
     # The format supplies its own quotes. A name that arrived carrying one
     # - a stream titled '7 DAYS ON YT"' - came out '"7 DAYS ON YT""'.
     # Only when the format quotes the name itself; a name whose own quotes

@@ -923,9 +923,18 @@ def cut_clips_from_stream(cfg, video_path: str, is_clip: bool,
         for r in (locals().get("live_ranges") or []):
             moments.append((float(r[0]), float(r[1]), 0.5))
         when = extract_date_from_filename(os.path.basename(source))
-        make_recap(cfg, source, title,
-                   format_date(when, cfg.general.date_style) if when else "",
-                   moments)
+        recap_date = format_date(when, cfg.general.date_style) if when else ""
+        if not recap_date:
+            # "exposing.ts" has no date in its name; the full stream went
+            # up dated (10-15..10-17 recaps read "... - (BEST MOMENTS)").
+            try:
+                from utils.stream_links import date_for
+                recap_date = date_for(title)
+            except Exception:
+                recap_date = ""
+            recap_date = recap_date or format_date(datetime.now(),
+                                                   cfg.general.date_style)
+        make_recap(cfg, source, title, recap_date, moments)
     except Exception as exc:
         print(f"[Recap] Skipped: {exc}")
     return delivered
@@ -1445,6 +1454,11 @@ def _already_on_youtube(title: str, service, default_title: str = "") -> str:
         # so what landed may be the tidied one - both count as this video.
         from utils.text_guard import title as _tidied
         wants = {w for w in (want, _normalize(_tidied(title))) if len(w) >= 8}
+        # Up to 10-17 a stream Stacks named "STACKSWOPO ..." went up with
+        # the name twice ("Stackswopo - STACKSWOPO ..."; see
+        # templating.without_doubled_lead) - the same video either way.
+        wants |= {"stackswopo" + w for w in wants
+                  if w.startswith("stackswopo") and not w.startswith("stackswopostackswopo")}
         for video in _existing(service):
             if _normalize(video.title) in wants:
                 return video.url

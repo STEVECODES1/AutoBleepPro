@@ -177,8 +177,57 @@ CHILD_RISK = re.compile(
     r"molest\w*|predator\w*|frott\w*|incest\w*|rap(e|es|ed|ing|ist))\b", re.I)
 
 
+# An age under 18 said out loud is the same risk as the word "minor":
+# "Exposing a minor's age" was caught on 10-17, "he said he was 15" was
+# not. Only forms that are about a person's age - "15 minutes", "10 toes
+# down", "12 deep", "she's a 10" and "I was 12 when..." stay out.
+AGE_RISK = re.compile(
+    r"\b(?:[1-9]|1[0-7])\s*-?\s*(?:years?|yrs?|yr)\s*-?\s*old\b"
+    r"|\b(?:[1-9]|1[0-7])(?:yo|\s?y/o)\b"
+    r"|\b(?:middle|elementary|primary|grade|junior\s+high)\s+school\w*"
+    r"|\bhigh\s+schoolers?\b"
+    r"|\b(?:[1-9]|1[0-2])(?:st|nd|rd|th)\s+grade\w*"
+    r"|\bjailbait\b|\blolis?\b|\bschool\s*girls?\b|\bbarely\s+legal\b"
+    r"|\bunder\s*18\b|\bnot\s+(?:even\s+)?18\b|\bunder\s+the\s+age\b", re.I)
+
+STATED_AGE = re.compile(
+    r"\b(?:he['’]?s|she['’]?s|i['’]?m|you['’]?re|they['’]?re|ur|"
+    r"(?:he|she)\s+(?:is|was|turned|just\s+turned)|"
+    r"(?:you|u|they)\s+(?:are|were|turned)|i\s+am|"
+    r"(?:this|that|the|his|her|my|your|ur)\s+(?:girl|boy|kid|son|daughter|sister|"
+    r"brother|sis|bro|cousin|nephew|niece|gf|girlfriend|bf|boyfriend)"
+    r"(?:['’]s|\s+is|\s+was|\s+turned))"
+    r"\s+(?:only\s+|just\s+|like\s+|literally\s+|barely\s+|probably\s+|prolly\s+|maybe\s+)?"
+    r"(?:1[0-7]|[5-9])\b"
+    r"(?!\s*(?:['’\"]|/|%|\+|-\s*\d|\.\d|percent|out\s+of|of\b|minutes?|mins?\b|seconds?|secs?\b|"
+    r"hours?|hrs?\b|days?|weeks?|months?|k\b|grand|bucks?|dollars?|points?|pts\b|times?|"
+    r"feet|foot|ft\b|inch\w*|lbs?\b|pounds?|kills?|deep|toes|down\b|up\b|away|behind|ahead|"
+    r"outta|games?|rounds?|levels?|stars?|wins?|losses?|to\s+\d|and\s+\d|or\s+\d|"
+    r"years?\s+(?:in|into|deep|clean|sober|married|later|ago|older|younger)))",
+    re.I)
+
+
+# "those clips were 4 years old", "a 10 year old account": a THING's age.
+_THING_AGE = re.compile(
+    r"\b(?:clips?|videos?|vods?|streams?|accounts?|posts?|tweets?|cars?|phones?|pcs?|"
+    r"laptops?|computers?|setups?|shoes?|houses?|games?|memes?|beefs?)\s+"
+    r"(?:is|are|was|were|be|that\s+(?:is|are|was|were))\s+"
+    r"(?:like\s+|only\s+|just\s+|almost\s+|over\s+|about\s+)?"
+    r"\d{1,2}\s*-?\s*(?:years?|yrs?|yr)\s*-?\s*old\b"
+    r"|\b\d{1,2}\s*-?\s*(?:years?|yrs?|yr)\s*-?\s*old\s+(?:account|car|phone|video|clip|vod|"
+    r"pc|laptop|computer|setup|game|house|tweet|post|dog|cat|puppy|meme|beef|drama)s?\b", re.I)
+
+
+def _age_of_a_person(text: str) -> bool:
+    things = [m.span() for m in _THING_AGE.finditer(text)]
+    return any(not any(a <= m.start() and m.end() <= b for a, b in things)
+               for m in AGE_RISK.finditer(text))
+
+
 def child_risk(text: str) -> bool:
-    return bool(CHILD_RISK.search(text or ""))
+    text = text or ""
+    return bool(CHILD_RISK.search(text) or _age_of_a_person(text)
+                or STATED_AGE.search(text))
 
 
 def clean_title(text: str, fallback: str = "", checker=None) -> str:

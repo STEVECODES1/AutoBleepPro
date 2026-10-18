@@ -773,12 +773,59 @@ def _hold_if_child_risk(platform: str, video_path: str, config: dict) -> None:
             pass
     hit = next((t for t in texts if child_risk(t)), "")
     if not hit:
-        return
+        spoken = _spoken_child_risk(platform, video_path, config)
+        if not spoken:
+            return
+        from publishers.errors import HeldBack
+
+        print(f"[Clips] {platform}: held back - the clip {spoken}. "
+              f"Rumble still gets it.")
+        raise HeldBack(f"held: about children - {spoken}")
     from publishers.errors import HeldBack
 
     print(f"[Clips] {platform}: held back - the clip is about children "
           f"({hit.strip()[:60]!r}). Rumble still gets it.")
     raise HeldBack("held: about children (YouTube child-safety risk)")
+
+
+# Said in the clip, not written in its title: YouTube and TikTok hear the
+# audio. A 10-18 scan of 106 transcripts found "...and she was 17" and
+# "my girlfriend is 16" with nothing in the titles. The age forms are the
+# careful ones in autoreel.safe_text; the everyday "kid"/"child" are not
+# used here - they come up in ordinary talk all the time.
+_SPOKEN_ABUSE = re.compile(r"\b(molest\w*|incest\w*|underage|jailbait)\b", re.I)
+# Calling someone a pedophile - Stacks' trolling does - holds the Short
+# only: YouTube is the channel the owner asked to guard, and Shorts have
+# more clips waiting than the 5 a day it takes.
+_SPOKEN_PEDO = re.compile(r"\b(pedo\w*|paedo\w*)\b", re.I)
+
+
+def _spoken_child_risk(platform: str, video_path: str, config: dict) -> str:
+    """What the clip says that is a child-safety risk, or "" (also when
+    there is no transcript yet - the check after the censor pass sees it)."""
+    try:
+        segments = _clip_segments(video_path, config)
+        if not segments:
+            return ""
+        from autoreel.safe_text import STATED_AGE, _age_of_a_person
+
+        said = " ".join(str(s.get("text", "")) for s in segments
+                        if isinstance(s, dict))
+    except Exception:
+        return ""
+    found = STATED_AGE.search(said)
+    if found:
+        return f"says an age under 18 ({found.group(0).strip()!r})"
+    if _age_of_a_person(said):
+        return "says an age under 18"
+    found = _SPOKEN_ABUSE.search(said)
+    if found:
+        return f"says {found.group(0).lower()!r}"
+    if base_platform(platform) == "youtube_shorts":
+        found = _SPOKEN_PEDO.search(said)
+        if found:
+            return f"calls someone a {found.group(0).lower()!r} (held from YouTube only)"
+    return ""
 
 
 def _hold_if_gambling(platform: str, video_path: str, config: dict) -> None:
@@ -876,6 +923,7 @@ def _censored_clip(platform: str, video_path: str, config: dict) -> tuple:
     # The censor pass has just written the clip's transcript.
     try:
         _hold_if_slurs(platform, video_path, config)
+        _hold_if_child_risk(platform, video_path, config)
     except Exception:
         made = getattr(result, "output_path", "") or ""
         if made and made != video_path:
