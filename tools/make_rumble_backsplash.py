@@ -86,6 +86,9 @@ def main():
     centered(d, top + 22, TITLE, fit(d, TITLE, "impact.ttf", 175), YELLOW, 8)
     centered(d, top + 232, LINE2, fit(d, LINE2, "impact.ttf", 62), WHITE, 4)
     centered(d, top + 322, LINE3, fit(d, LINE3, "arialbd.ttf", 44), (235, 235, 235), 3)
+    # Rumble stores the header as 1430x291; anything not exactly that shape
+    # gets a white strip. 2x that size, so nothing is padded.
+    img = img.resize((2860, 582), Image.LANCZOS)
     img.save(OUT, "PNG", optimize=True)
     print(OUT, os.path.getsize(OUT) // 1024, "KB")
 
