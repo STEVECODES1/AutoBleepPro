@@ -3366,6 +3366,7 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
                         cfg.rumble.thumbnail_path) or None,
                     progress_callback=rb_progress,
                     related_url=_rumble_full_stream_for(video_path) if is_clip else "",
+                    promote=not is_clip,
                 )
 
             url = retry_with_backoff(

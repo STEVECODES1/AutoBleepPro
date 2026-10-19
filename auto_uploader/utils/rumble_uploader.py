@@ -394,6 +394,7 @@ class RumbleUploader:
         thumbnail_path: Optional[str] = None,
         progress_callback: Optional[Callable[[int], None]] = None,
         related_url: str = "",
+        promote: bool = False,
     ) -> str:
         # The last place a broken title or description can be caught
         # before Rumble shows it (see utils/text_guard.py).
@@ -404,6 +405,7 @@ class RumbleUploader:
         # Rumble's "Related Video (shown on Shorts only)": a clip that
         # links its full stream - the one clickable route from a Short.
         self._related_url = str(related_url or "").strip()
+        self._promote = bool(promote)
         with sync_playwright() as p:
             browser = page = None
             should_close_browser = True
@@ -758,6 +760,33 @@ class RumbleUploader:
                 self._tick_checkbox(checkbox, label_text)
             except Exception:
                 continue  # a stray/detached checkbox shouldn't abort the upload
+
+    # Owner, 10-18: every full stream goes on top of the profile and pings
+    # followers' phones. Full streams only (main.py passes promote=not
+    # is_clip) - a clip would push the full stream off the top and spend
+    # the one push Rumble allows a day.
+    _PROMOTE_PATTERN = re.compile(r"feature video on the top|push notification", re.I)
+
+    def _promote_upload(self, page) -> None:
+        """Tick "Feature video on the top of your profile" and "Send mobile
+        push notification to followers". Never fatal."""
+        try:
+            boxes = page.locator("input[type='checkbox']").all()
+        except Exception:
+            return
+        for checkbox in boxes:
+            try:
+                label_text = checkbox.evaluate(
+                    "el => (el.id && document.querySelector(`label[for='${el.id}']`)?.innerText)"
+                    " || el.closest('label')?.innerText || el.parentElement?.innerText || ''") or ""
+                if not self._PROMOTE_PATTERN.search(label_text) or checkbox.is_checked():
+                    continue
+                if checkbox.is_disabled():
+                    print(f"[Rumble] Not available now (push is once a day): {label_text.strip()[:60]!r}")
+                    continue
+                self._tick_checkbox(checkbox, label_text)
+            except Exception as exc:
+                print(f"[Rumble] Could not tick a promote box ({exc})")
 
     def _tick_checkbox(self, checkbox, label_text: str) -> None:
         """Tick a required checkbox, loudly.
@@ -1320,6 +1349,8 @@ class RumbleUploader:
                     print(f"[Rumble] Could not set the related video ({exc})")
 
             self._set_visibility(page, privacy)
+            if getattr(self, "_promote", False) and str(privacy or "public").lower() == "public":
+                self._promote_upload(page)
 
             if callable(thumbnail_path):
                 # Made now, while the video is already on its way up - not
