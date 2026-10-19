@@ -405,7 +405,7 @@ class RumbleUploader:
         # Rumble's "Related Video (shown on Shorts only)": a clip that
         # links its full stream - the one clickable route from a Short.
         self._related_url = str(related_url or "").strip()
-        self._promote = bool(promote)
+        self._promote = bool(promote) and str(privacy or "public").lower() == "public"
         with sync_playwright() as p:
             browser = page = None
             should_close_browser = True
@@ -754,6 +754,16 @@ class RumbleUploader:
                         label_text = ""
 
                 if not self._TERMS_PATTERN.search(label_text):
+                    # 10-18: the feature box ticked on the form came back
+                    # unticked at submit time (Rumble redraws it), so a full
+                    # stream ticks it again at every step.
+                    if getattr(self, "_promote", False) and self._PROMOTE_PATTERN.search(label_text):
+                        if checkbox.is_disabled():
+                            print(f"[Rumble] Not available now (push is once a day): "
+                                  f"{label_text.strip()[:60]!r}")
+                        else:
+                            self._tick_checkbox(checkbox, label_text)
+                        continue
                     print(f"[Rumble] Leaving optional checkbox unticked: {label_text.strip()[:70]!r}")
                     continue
 

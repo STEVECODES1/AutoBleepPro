@@ -21,6 +21,58 @@ def test_promote_boxes_match_and_terms_do_not():
     assert not RumbleUploader._TERMS_PATTERN.search("Send mobile push notification to followers")
 
 
+class _Box:
+    def __init__(self, label, checked=False):
+        self.label, self.checked = label, checked
+
+    def is_checked(self):
+        return self.checked
+
+    def is_disabled(self):
+        return False
+
+    def get_attribute(self, name):
+        return None
+
+    def evaluate(self, js):
+        return self.label
+
+    def check(self, force=True, timeout=0):
+        self.checked = True
+
+
+class _Page:
+    def __init__(self, boxes):
+        self.boxes = boxes
+
+    def locator(self, sel):
+        page = self
+
+        class L:
+            def all(self):
+                return page.boxes
+        return L()
+
+
+def _uploader(promote):
+    up = RumbleUploader.__new__(RumbleUploader)
+    up._promote = promote
+    return up
+
+
+def test_feature_box_is_ticked_again_at_submit_for_a_full_stream():
+    feature = _Box("Feature video on the top of your profile")
+    terms = _Box("I agree to the terms of service")
+    _uploader(True)._accept_terms(_Page([feature, terms]))
+    assert feature.checked and terms.checked
+
+
+def test_a_clip_leaves_the_feature_box_alone():
+    feature = _Box("Feature video on the top of your profile")
+    _uploader(False)._accept_terms(_Page([feature]))
+    assert not feature.checked
+
+
 def test_only_full_streams_are_promoted():
     src = open(os.path.join(ROOT, "auto_uploader", "main.py"), encoding="utf-8").read()
     assert "promote=not is_clip," in src
