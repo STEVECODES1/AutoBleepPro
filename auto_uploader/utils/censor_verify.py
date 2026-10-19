@@ -188,7 +188,7 @@ def _new_ms(span, spans):
 
 
 def second_listen(clean_wav, spans, engine, transcriber, total_s, source_wav16=None,
-                  around=None):
+                  around=None, batch_size=None):
     """Spans still needed after listening to the cleaned audio again.
 
     Returns (extra_spans, heard_words). Raises nothing: a re-listen that
@@ -206,7 +206,14 @@ def second_listen(clean_wav, spans, engine, transcriber, total_s, source_wav16=N
         wins = windows_for(around or spans, total_s)
         table = _join_windows(wav16, wins, joined)
         heard_s = sum(b - a for a, b, _ in table)
-        result = transcriber.transcribe(joined)
+        # Batched on the GPU: 10-18 a 5 h stream's second listen took 84 min
+        # one window at a time. Its new spots are snapped to the sound below,
+        # so batching's looser word edges do not reach the mute.
+        try:
+            result = (transcriber.transcribe(joined, batch_size=batch_size) if batch_size
+                      else transcriber.transcribe(joined))
+        except TypeError:
+            result = transcriber.transcribe(joined)
         segments = _back_to_source(result.get("segments"), table)
         found = engine.scan_segments(segments)
         if not found:

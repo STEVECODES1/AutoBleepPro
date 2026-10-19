@@ -408,7 +408,8 @@ class Transcriber:
         self._load()
         return True
 
-    def transcribe(self, audio_path: str, vad_filter: bool = True) -> dict:
+    def transcribe(self, audio_path: str, vad_filter: bool = True,
+                   batch_size: Optional[int] = None) -> dict:
         """Transcribe, falling back to the CPU if the GPU fails mid-run.
 
         One retry only, and only for a failure that names CUDA - see
@@ -416,15 +417,16 @@ class Transcriber:
         whole job; a GPU is an optimisation.
         """
         try:
-            return self._transcribe_once(audio_path, vad_filter)
+            return self._transcribe_once(audio_path, vad_filter, batch_size)
         except Exception as exc:
             if not looks_like_a_gpu_problem(exc):
                 raise
             if not self._fall_back_to_cpu(exc):
                 raise
-        return self._transcribe_once(audio_path, vad_filter)
+        return self._transcribe_once(audio_path, vad_filter, batch_size)
 
-    def _transcribe_once(self, audio_path: str, vad_filter: bool = True) -> dict:
+    def _transcribe_once(self, audio_path: str, vad_filter: bool = True,
+                         batch_size: Optional[int] = None) -> dict:
         """Return a Whisper-style result: {'segments': [...]}, each
         segment carrying word-level timestamps.
 
@@ -462,13 +464,19 @@ class Transcriber:
             if self.hotwords:
                 shared["hotwords"] = self.hotwords
 
-            if self._batch is not None:
+            # A per-call batch_size (the censor's second listen, whose new
+            # spots are snapped to the sound afterwards) beats the default.
+            bs = int(batch_size or self.batch_size or 1)
+            if (bs > 1 and self._batch is None and self.backend == BACKEND_FASTER
+                    and self._resolved_device == "cuda"):
+                self._batch = _batched(model)
+            if self._batch is not None and bs > 1:
                 try:
                     # The iterator is lazy, so normalising has to happen
                     # inside the try - a batch that will not fit in VRAM
                     # raises while it is being consumed, not here.
                     segments_iter, info = self._batch.transcribe(
-                        audio_path, batch_size=int(self.batch_size), **shared)
+                        audio_path, batch_size=bs, **shared)
                     return _normalise_faster_whisper(segments_iter, info)
                 except Exception as exc:
                     # Out of VRAM, or a faster-whisper whose batched

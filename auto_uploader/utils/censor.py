@@ -739,7 +739,8 @@ def censor_video(
                         _get_transcriber(model_name, device,
                                          reuse=bool(speed.get("reuse_model", True))),
                         total_ms / 1000, source_wav16=raw_audio_path,
-                        around=around if _round else None)
+                        around=around if _round else None,
+                        batch_size=int(speed.get("second_listen_batch", 8) or 1))
                     heard_again += words
                     if not extra:
                         break
