@@ -34,8 +34,7 @@ def centred(text, y, f, fill):
     d.text(((W - w) / 2, y), text, font=f, fill=fill)
 
 
-centred("FULL STREAMS - UNCUT & UNCENSORED", 120, font("impact.ttf", 170), (255, 255, 255))
-centred("EVERY STACKSWOPO STREAM  |  GTA RP  |  LIVE REACTIONS", 330, font("arialbd.ttf", 74), GREEN)
-centred("Fan channel - posted with Stackswopo's permission", 450, font("arial.ttf", 52), (175, 175, 175))
+centred("FULL STREAMS - UNCUT & UNCENSORED", 175, font("impact.ttf", 132), (255, 255, 255))
+centred("EVERY STACKSWOPO STREAM  |  GTA RP  |  LIVE REACTIONS", 370, font("arialbd.ttf", 60), GREEN)
 img.save(OUT, optimize=True)
 print(OUT, os.path.getsize(OUT) // 1024, "KB")

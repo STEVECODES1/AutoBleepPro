@@ -27,8 +27,10 @@ PLAYLIST_TITLE = "Stackswopo Best Moments - every stream"
 # 10-18: YouTube removed @WOPOCLIPPER for impersonation - it looked like
 # Stackswopo's own channel. Every channel we keep says up top that it is
 # fan-run, posted with his permission, and links his real channel.
-DISCLOSURE = ("Fan-run channel - not Stackswopo's own channel. Clips and VODs are posted with "
-              "his permission. His official channel: https://www.youtube.com/@stackswopo_\n\n")
+DISCLOSURE = ("Fan channel - not Stackswopo's own channel. "
+              "His channel: https://www.youtube.com/@stackswopo_\n\n")
+OLD_DISCLOSURES = ("Fan-run channel - not Stackswopo's own channel. Clips and VODs are posted with "
+                   "his permission. His official channel: https://www.youtube.com/@stackswopo_\n\n",)
 GAMES_ABOUT = DISCLOSURE + (
     "Stackswopo's best moments from every stream - the funniest parts, cut down for you.\n\n"
     f"▶ Full streams, every minute: {WOPOVOD}\n"
@@ -39,7 +41,9 @@ GAMES_ABOUT = DISCLOSURE + (
 def disclosed(existing):
     """The About with the fan-channel notice on top (unchanged if there)."""
     existing = existing or ""
-    if "Fan-run channel" in existing:
+    for old in OLD_DISCLOSURES:
+        existing = existing.replace(old.strip(), "").strip()
+    if existing.startswith(DISCLOSURE.strip()):
         return existing
     return (DISCLOSURE + existing.strip())[:5000]
 
