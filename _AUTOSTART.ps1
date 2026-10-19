@@ -50,3 +50,8 @@ if (-not (Running 'rumble_watch\.py|_RUN_RUMBLE_WATCH\.bat')) {
     Start-Process cmd -ArgumentList '/k', "`"$root\_RUN_RUMBLE_WATCH.bat`"" -WindowStyle Hidden
     "started Rumble recorder"
 }
+# Keeps the PC awake only while recording, rendering or uploading (tools/stay_awake.py).
+if (-not (Running 'stay_awake\.py')) {
+    Start-Process python -ArgumentList '-X', 'utf8', "`"$root\tools\stay_awake.py`"" -WindowStyle Hidden
+    "started stay-awake keeper"
+}

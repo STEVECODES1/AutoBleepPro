@@ -141,25 +141,65 @@ def make_safe(cfg, video_path, yt_source, out_dir, alert=None):
         print("[Kids] no transcript cached - child-safety check skipped")
         return None, ""
     duration = _duration(yt_source) or float(segs[-1].get("end") or 0)
-    found = [(a, min(b, duration), ts) for a, b, ts in ranges(segs) if a < duration]
+    name = os.path.basename(video_path or yt_source)
+    # Kid talk by pattern, plus the whole-policy AI read (utils/policy_guard).
+    found = [(a, min(b, duration), "kid talk") for a, b, _ in ranges(segs) if a < duration]
+    flags, note = _policy(segs)
+    # The AI read only CUTS child-safety calls from a strong (cloud) model.
+    # 10-19 test: the small local model called a phone-call GAME's threats
+    # "harassment" a dozen times in 15 minutes - cutting on that would gut
+    # the stream. Everything else is reported, for a person to judge.
+    strong = [f for f in flags if f["severity"] == "cut" and f["category"] == "child_safety"
+              and not str(f.get("model", "")).startswith("local")]
+    found += [(f["start"], min(f["end"], duration), f["category"] + ": " + f["why"])
+              for f in strong if f["start"] < duration]
+    found = merged(found)
+    warns = "\n".join([f"{hms(f['start'])} {f['category']}: {f['why']}"
+                       for f in flags if f not in strong][:15])
+    extra = (f"\n\nWorth a look (not cut):\n{warns}" if warns else "") + (f"\n({note})" if note else "")
     if not found:
+        if warns:
+            say("Check these parts of the new stream",
+                f"{name}: nothing clear enough to cut, but the policy read flagged:\n{warns}",
+                urgent=False)
         return None, ""
     total = sum(b - a for a, b, _ in found)
-    name = os.path.basename(video_path or yt_source)
-    times = "\n".join(f"{hms(a)} - {hms(b)}" for a, b, _ in found)
-    print(f"[Kids] {len(found)} part(s), {total / 60:.1f} min, talk about kids in a sexual way")
+    times = "\n".join(f"{hms(a)} - {hms(b)}  {why}" for a, b, why in found)
+    print(f"[Kids] {len(found)} risky part(s), {total / 60:.1f} min")
     if total > MAX_CUT_S or total > MAX_SHARE * max(duration, 1):
-        say("Kid talk all through a stream - YouTube upload PRIVATE",
-            f"{name}: {len(found)} parts, {total / 60:.0f} min - too much to cut. "
-            f"It goes up PRIVATE; check it in Studio. Times in the stream:\n{times}")
-        return None, "too much kid talk to cut"
+        say("Too much to cut - YouTube upload PRIVATE",
+            f"{name}: {len(found)} parts, {total / 60:.0f} min break YouTube's rules - too much "
+            f"to cut. It goes up PRIVATE; check it in Studio. Times in the stream:\n{times}{extra}")
+        return None, "too much to cut"
     out = os.path.join(out_dir, os.path.splitext(os.path.basename(yt_source))[0] + "_KIDSAFE.mp4")
     if cut(yt_source, found, out, duration):
-        say("Cut kid talk out of the YouTube upload",
+        say(f"Cut {len(found)} risky part(s) out of the YouTube upload",
             f"{name}: cut {len(found)} parts ({total / 60:.1f} min) before wopovod. "
-            f"Rumble keeps them. Times in the stream:\n{times}", urgent=False)
+            f"Rumble keeps them. Times in the stream:\n{times}{extra}", urgent=False)
         return out, ""
-    say("Kid-talk cut FAILED - YouTube upload PRIVATE",
+    say("Risky-part cut FAILED - YouTube upload PRIVATE",
         f"{name}: {len(found)} parts ({total / 60:.1f} min) could not be cut. "
-        f"It goes up PRIVATE; cut these in Studio:\n{times}")
-    return None, "kid-talk cut failed"
+        f"It goes up PRIVATE; cut these in Studio:\n{times}{extra}")
+    return None, "risky-part cut failed"
+
+
+def merged(parts, join=JOIN):
+    """Overlapping/near cuts become one, keeping every reason."""
+    out = []
+    for a, b, why in sorted(parts):
+        if out and a <= out[-1][1] + join:
+            out[-1] = (out[-1][0], max(out[-1][1], b),
+                       out[-1][2] if why in out[-1][2] else out[-1][2] + ", " + why)
+        else:
+            out.append((a, b, why))
+    return out
+
+
+def _policy(segs):
+    """(flags, note) from utils/policy_guard; never raises."""
+    try:
+        from utils import policy_guard
+        return policy_guard.review(segs)
+    except Exception as exc:
+        print(f"[Policy] review error: {exc}")
+        return [], f"policy review error: {exc}"
