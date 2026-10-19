@@ -79,6 +79,12 @@ def test_keeper_is_busy_only_while_work_runs(tmp_path, monkeypatch):
     monkeypatch.setattr(sa, "ROOT", str(tmp_path))
     assert sa.busy_reason(ffmpeg=lambda: False, recording=lambda: False) == ""
     assert sa.busy_reason(ffmpeg=lambda: False, recording=lambda: True) == "recording"
-    (tmp_path / "logs").mkdir()
-    (tmp_path / "logs" / "uploading.json").write_text("{}")
+    logs = tmp_path / "auto_uploader" / "logs"
+    logs.mkdir(parents=True)
+    (logs / "processing.json").write_text('{"pid": 4242}')
+    assert sa.busy_reason(ffmpeg=lambda: False, recording=lambda: False,
+                          alive=lambda pid: pid == 4242) == "processing"
+    assert sa.busy_reason(ffmpeg=lambda: False, recording=lambda: False,
+                          alive=lambda pid: False) == ""
+    (logs / "uploading.json").write_text("{}")
     assert sa.busy_reason(ffmpeg=lambda: False, recording=lambda: False) == "uploading"

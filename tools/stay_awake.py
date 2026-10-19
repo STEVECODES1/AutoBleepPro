@@ -57,11 +57,40 @@ def _recording():
     return False
 
 
-def busy_reason(ffmpeg=_ffmpeg_running, recording=_recording):
-    if _fresh(os.path.join(ROOT, "logs", "uploading.json"), 600):
+def _pid_alive(pid):
+    try:
+        out = subprocess.run(["tasklist", "/FI", f"PID eq {int(pid)}", "/NH"],
+                             capture_output=True, text=True, timeout=20).stdout
+        return str(int(pid)) in out
+    except Exception:
+        return False
+
+
+def _logs():
+    return (os.path.join(ROOT, "auto_uploader", "logs"), os.path.join(ROOT, "logs"))
+
+
+def _clip_jobs_running():
+    try:
+        with open(os.path.join(ROOT, "auto_uploader", "clip_jobs.json"), encoding="utf-8") as f:
+            jobs = json.load(f).get("jobs", {})
+        return any(v.get("state") == "in_progress" for v in jobs.values())
+    except Exception:
+        return False
+
+
+def busy_reason(ffmpeg=_ffmpeg_running, recording=_recording, alive=_pid_alive):
+    if any(_fresh(os.path.join(d, "uploading.json"), 600) for d in _logs()):
         return "uploading"
-    if os.path.exists(os.path.join(ROOT, "logs", "processing.json")):
-        return "processing"
+    for d in _logs():
+        try:
+            with open(os.path.join(d, "processing.json"), encoding="utf-8") as f:
+                if alive(json.load(f).get("pid", 0)):
+                    return "processing"
+        except Exception:
+            continue
+    if _clip_jobs_running():
+        return "clips"
     if recording():
         return "recording"
     if ffmpeg():
