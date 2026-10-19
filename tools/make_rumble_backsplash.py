@@ -1,40 +1,94 @@
-"""Rumble user-page backsplash for BinScripts: 3600x600 (Rumble's spec), text in the
-centre safe zone, says plainly it is a fan channel (10-18, after the impersonation
-removal on YouTube)."""
-import os
-from PIL import Image, ImageDraw, ImageFont
+"""Rumble backsplash for BinScripts, in the same look as the wopovod banner
+(tools/make_banner.py): a dark, blurred collage of the newest stream thumbnails
+with a black band, red rules and a yellow title.
 
-W, H = 3600, 600
-GREEN = (133, 199, 66)
-OUT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                   "auto_uploader", "thumbnails", "rumble_backsplash.png")
+2960x600 fills Rumble's user-page header (about 4.93:1) with no white bars.
+The words stay inside the middle 1500px, which phones keep when they crop.
+
+  python -X utf8 tools/make_rumble_backsplash.py
+"""
+import io
+import json
+import os
+import urllib.request
+
+from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageFont
+
+W, H = 2960, 600
+SAFE_W = 1500
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+OUT = os.path.join(ROOT, "auto_uploader", "thumbnails", "rumble_backsplash.png")
+YELLOW, RED, WHITE = (255, 214, 0), (226, 35, 35), (255, 255, 255)
+TITLE = "STACKSWOPO FULL STREAMS"
+LINE2 = "UNCUT & UNCENSORED  \u2022  GTA RP  \u2022  REACTIONS  \u2022  MONKEY APP"
+LINE3 = "A NEW FULL STREAM AFTER EVERY STREAM"
 
 
 def font(name, size):
-    for path in (rf"C:\Windows\Fonts\{name}", r"C:\Windows\Fonts\arialbd.ttf"):
+    for n in (name, "impact.ttf", "arialbd.ttf"):
         try:
-            return ImageFont.truetype(path, size)
+            return ImageFont.truetype(os.path.join(r"C:\Windows\Fonts", n), size)
         except OSError:
             continue
     return ImageFont.load_default()
 
 
-img = Image.new("RGB", (W, H), (8, 10, 8))
-d = ImageDraw.Draw(img)
-for x in range(-H, W, 90):  # faint diagonal stripes
-    d.line([(x, H), (x + H, 0)], fill=(16, 24, 14), width=34)
-for y in range(H):  # green glow at the bottom
-    a = max(0, (y - H * 0.55) / (H * 0.45))
-    d.line([(0, y), (W, y)], fill=(int(8 + 20 * a), int(10 + 45 * a), int(8 + 12 * a)))
-d.rectangle([0, H - 14, W, H], fill=GREEN)
+def thumbs():
+    try:
+        with open(os.path.join(ROOT, "auto_uploader", "logs", "banner_ids.json"), encoding="utf-8") as f:
+            ids = json.load(f)
+    except (OSError, ValueError):
+        ids = []
+    out = []
+    for vid in ids:
+        for kind in ("maxresdefault", "hqdefault"):
+            try:
+                with urllib.request.urlopen(f"https://i.ytimg.com/vi/{vid}/{kind}.jpg", timeout=15) as r:
+                    img = Image.open(io.BytesIO(r.read())).convert("RGB")
+                if img.width >= 480:
+                    out.append(img)
+                    break
+            except Exception:
+                continue
+    return out
 
 
-def centred(text, y, f, fill):
-    w = d.textlength(text, font=f)
-    d.text(((W - w) / 2, y), text, font=f, fill=fill)
+def collage(images):
+    bg = Image.new("RGB", (W, H), (8, 8, 10))
+    if not images:
+        return bg
+    th, tw = H // 2, (H // 2) * 16 // 9  # 300 x 533 tiles, 2 rows
+    cols = W // tw + 1
+    for i in range(cols * 2):
+        img = images[(i * 5) % len(images)].resize((tw, th))
+        bg.paste(img, ((i % cols) * tw, (i // cols) * th))
+    return ImageEnhance.Brightness(bg.filter(ImageFilter.GaussianBlur(6))).enhance(0.38)
 
 
-centred("FULL STREAMS - UNCUT & UNCENSORED", 175, font("impact.ttf", 132), (255, 255, 255))
-centred("EVERY STACKSWOPO STREAM  |  GTA RP  |  LIVE REACTIONS", 370, font("arialbd.ttf", 60), GREEN)
-img.save(OUT, optimize=True)
-print(OUT, os.path.getsize(OUT) // 1024, "KB")
+def fit(draw, text, name, size, width=SAFE_W):
+    while size > 20 and draw.textlength(text, font=font(name, size)) > width:
+        size -= 2
+    return font(name, size)
+
+
+def centered(draw, y, text, f, fill, stroke=0):
+    w = draw.textlength(text, font=f)
+    draw.text(((W - w) / 2, y), text, font=f, fill=fill, stroke_width=stroke, stroke_fill=(0, 0, 0))
+
+
+def main():
+    img = collage(thumbs())
+    d = ImageDraw.Draw(img, "RGBA")
+    top, bot = 95, 505
+    d.rectangle([0, top, W, bot], fill=(0, 0, 0, 170))
+    d.rectangle([0, top - 6, W, top], fill=RED)
+    d.rectangle([0, bot, W, bot + 6], fill=RED)
+    centered(d, top + 22, TITLE, fit(d, TITLE, "impact.ttf", 175), YELLOW, 8)
+    centered(d, top + 232, LINE2, fit(d, LINE2, "impact.ttf", 62), WHITE, 4)
+    centered(d, top + 322, LINE3, fit(d, LINE3, "arialbd.ttf", 44), (235, 235, 235), 3)
+    img.save(OUT, "PNG", optimize=True)
+    print(OUT, os.path.getsize(OUT) // 1024, "KB")
+
+
+if __name__ == "__main__":
+    main()
