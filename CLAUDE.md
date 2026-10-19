@@ -121,8 +121,10 @@ a 4.4 GB full stream takes ~3 h to YouTube.
 - Impersonation rules (support.google.com/youtube/answer/2801947): a fan channel must say "fan" in its
   NAME or HANDLE; no copying his picture/banner; no "Clips/Shorts/Live/Backup/Official" + his name.
   Done: every About starts with the fan notice (tools/funnel_setup.py), the wopovod description
-  template has the fan line. Still to do in Studio (the API cannot rename - tools/fan_names.py):
-  names -> "STACKSWOPO VODS (Fan Channel)", "STACKSWOPO GAMES (Fan Channel)", "STACKSWOPOVODS (Fan Channel)".
+  template has the fan line. All three renamed "(Fan Channel)" 10-19 in Studio (the API cannot
+  rename - tools/fan_names.py). Browsers: wopovod = Chrome, GAMES = Brave, STACKSWOPOVODS = the
+  Claude desktop app's own browser pane (Claude_Browser tools). Its handle @STACKSWOPO10K looks like
+  Stacks' own names - owner to decide on a fan handle. CLIPS appeal sent 10-19.
 
 - H5-UgZr8OD0 (10-17 stream): the 25 kid-talk parts were cut in the Studio editor 10-18 ~15:05 (3:18:21 ->
   2:57:39, processing). Once it shows 2:57:39: add the GAMES collab and the channel post (both held till then).
