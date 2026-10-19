@@ -11,10 +11,15 @@ def test_doubled_name_is_dropped_once():
     assert fs.fixed_title("Stackswopo - EXPOSING - (BEST MOMENTS)") == "Stackswopo - EXPOSING - (BEST MOMENTS)"
 
 
-def test_clips_about_gets_links_once():
-    once = fs.clips_about("StacksWopo Clips | GTA RP")
-    assert once.startswith(fs.CLIPS_LEAD) and once.endswith("StacksWopo Clips | GTA RP")
-    assert fs.clips_about(once) == once
+def test_every_about_says_fan_run_once():
+    once = fs.disclosed("Full streams of Stackswopo")
+    assert once.startswith(fs.DISCLOSURE) and once.endswith("Full streams of Stackswopo")
+    assert fs.disclosed(once) == once
+    assert fs.GAMES_ABOUT.startswith(fs.DISCLOSURE) and "@stackswopo_" in fs.DISCLOSURE
+
+
+def test_no_link_to_the_removed_clips_channel():
+    assert "WOPOCLIPPER" not in fs.GAMES_ABOUT.upper()
 
 
 def test_only_missing_recaps_are_added_up_to_cap():

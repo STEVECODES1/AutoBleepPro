@@ -183,7 +183,6 @@ def link_for_clip(clip_path: str, platform: str = "",
 # clips fanned out through Postproxy.
 _FOOTER_LINES = (
     "YouTube, full streams: https://www.youtube.com/@wopovod",
-    "YouTube Shorts: https://www.youtube.com/@wopoclipper",
     "TikTok: https://www.tiktok.com/@wopocl1ps",
     "Instagram: https://www.instagram.com/stackswopomanz/",
     "X: https://x.com/WOPOCLIPS",

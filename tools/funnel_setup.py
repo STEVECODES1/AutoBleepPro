@@ -24,23 +24,24 @@ RUMBLE = "https://rumble.com/user/BinScripts"
 GAMES = "https://www.youtube.com/@StackswopoGames"
 CLIPS = "https://www.youtube.com/@WOPOCLIPPER"
 PLAYLIST_TITLE = "Stackswopo Best Moments - every stream"
-GAMES_ABOUT = (
+# 10-18: YouTube removed @WOPOCLIPPER for impersonation - it looked like
+# Stackswopo's own channel. Every channel we keep says up top that it is
+# fan-run, posted with his permission, and links his real channel.
+DISCLOSURE = ("Fan-run channel - not Stackswopo's own channel. Clips and VODs are posted with "
+              "his permission. His official channel: https://www.youtube.com/@stackswopo_\n\n")
+GAMES_ABOUT = DISCLOSURE + (
     "Stackswopo's best moments from every stream - the funniest parts, cut down for you.\n\n"
     f"▶ Full streams, every minute: {WOPOVOD}\n"
-    f"▶ Uncut & uncensored on Rumble: {RUMBLE}\n"
-    f"▶ Daily clips & Shorts: {CLIPS}\n"
-    "▶ Watch Stacks live: https://www.youtube.com/@stackswopo_\n\n"
+    f"▶ Uncut & uncensored on Rumble: {RUMBLE}\n\n"
     "Subscribe - Onna Bros! 🔔")
-CLIPS_LEAD = (f"▶ Full streams, every minute: {WOPOVOD}\n"
-              f"▶ Uncut & uncensored on Rumble: {RUMBLE}\n"
-              f"▶ Best moments of every stream: {GAMES}\n\n")
 
 
-def clips_about(existing):
+def disclosed(existing):
+    """The About with the fan-channel notice on top (unchanged if there)."""
     existing = existing or ""
-    if WOPOVOD.lower() in existing.lower():
+    if "Fan-run channel" in existing:
         return existing
-    return (CLIPS_LEAD + existing.strip())[:5000]
+    return (DISCLOSURE + existing.strip())[:5000]
 
 
 def fixed_title(title):
@@ -157,7 +158,8 @@ def main():
     if not a.playlist_only:
         print("GAMES about changed:", set_about(games, lambda old: GAMES_ABOUT, a.dry_run))
         print("titles fixed:", fix_titles(games, vids, a.cap, a.dry_run))
-        print("CLIPS about changed:", set_about(service("youtube_shorts_token.json"), clips_about, a.dry_run))
+        for tok in ("youtube_token.json", "youtube_compilation_token.json"):
+            print(tok, "about changed:", set_about(service(tok), disclosed, a.dry_run))
     playlist(games, vids, a.cap, a.dry_run)
 
 

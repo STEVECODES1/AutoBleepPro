@@ -28,10 +28,11 @@ def test_the_template_block_wins_when_it_is_there():
 def test_the_fallback_names_every_channel():
     block = youtube_footer("", "")
     for needle in ("https://www.youtube.com/@wopovod",
-                   "https://www.youtube.com/@wopoclipper",
                    "https://rumble.com/user/BinScripts",
                    "https://www.youtube.com/@stackswopo_"):
         assert needle in block
+    # YouTube removed @wopoclipper on 10-18 (impersonation): no dead link.
+    assert "@wopoclipper" not in block
 
 
 def test_the_fallback_follows_the_configured_rumble_channel():
