@@ -145,6 +145,19 @@ def main():
         done = 0
         for video, new in chosen:
             snippet = video.get("snippet", {}) or {}
+            # The batch videos.list call lags behind a just-applied update:
+            # a video that already got the notice can come back stale and
+            # look like it still needs it. Re-read this one by its id (1
+            # unit) before spending a 50-unit write on what may be a no-op.
+            try:
+                fresh = yt.videos().list(part="snippet",
+                                         id=video["id"]).execute().get("items", [])
+                live_desc = (fresh[0].get("snippet", {}) or {}).get(
+                    "description", "") if fresh else ""
+                if has_disclaimer(live_desc):
+                    continue
+            except Exception:
+                pass  # the batch read is still better than nothing
             try:
                 update(yt, video, new)
             except HttpError as exc:
