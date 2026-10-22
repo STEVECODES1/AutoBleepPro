@@ -25,8 +25,7 @@ away from the PC: it must work by itself after one START, and say plainly when i
   held/waiting/failed, disk, what needs the owner.
 - Tests: `python -X utf8 -m pytest tests -q -p no:cacheprovider` (~11 min). Known stale failures (not
   regressions): test_cap_keys shorts cap, test_clip_offer_parallel overlap, test_jump_cuts silent pause,
-  test_parallel_uploads (1-2, flaky), test_job_report end-of-process_file, test_stream_links /
-  test_youtube_links "Full stream" vs "Full video" wording.
+  test_parallel_uploads (1-2, flaky), test_job_report end-of-process_file.
 - Always `python -X utf8`. In PowerShell: .NET file calls use the process cwd; `Start-Process
   -ArgumentList` does not quote - wrap an argument with spaces in '"..."'.
 
@@ -35,9 +34,9 @@ away from the PC: it must work by itself after one START, and say plainly when i
 | token (auto_uploader\) | channel | role |
 |---|---|---|
 | youtube_token.json | STACKSWOPO VODS @WOPOVOD (UCbS-_v6Y9AZmAAU3EpzLsvA) | full streams - THE money channel |
-| youtube_shorts_token.json | @WOPOCLIPPER | Shorts |
+| youtube_shorts_token.json | STACKSWOPO CLIPS (Fan Channel) @WOPOCLIPPER (UCMeMDcCirQBxkhH3vuFgliA) | Shorts - RESTORED 10-22 |
 | youtube_games_token.json | STACKSWOPO GAMES (UCKj0xrFqNNXpBCl_B1shckA) | recaps (has a strike) |
-| youtube_compilation_token.json | STACKSWOPOVODS @stackswopo10k | weekly, Monkey compilations |
+| youtube_compilation_token.json | STACKSWOPOVODS (Fan Channel) @stackswopo10k | weekly, Monkey compilations |
 
 Costs: videos.insert 1600, writes 50, reads 1. Rumble: BinScripts, uncensored. IG/FB via Graph API, X and
 TikTok via Buffer (caps: Shorts 5, TikTok 6, IG 8, X 8 a day; FB every 80 min). Upload speed is ~3 Mbps:
@@ -78,7 +77,7 @@ a 4.4 GB full stream takes ~3 h to YouTube.
 
 ## Browser work
 
-- 9222 Chrome = wopovod Studio/YouTube, IG, FB, Rumble. Brave = STACKSWOPO GAMES. Device ids change.
+- 9222 Chrome = wopovod Studio/YouTube, STACKSWOPO CLIPS Studio (10-22), IG, FB, Rumble. Brave = STACKSWOPO GAMES. Device ids change.
 - 10-18 05:45 that Chrome restarted and came back signed in as "glorybinn" (ZB_Benji@icloud.com); the
   STACKSWOPO VODS account was not in Switch account any more. Posts, collabs and Studio work need it -
   only the owner can sign it in (never type passwords). The post tool switches channel when it can and
@@ -112,19 +111,24 @@ a 4.4 GB full stream takes ~3 h to YouTube.
   `python -X utf8 tools/held_review.py --post N` (kids/gambling holds never lift).
 - View learning runs after each recap (every 2 days); `main.py --learn` by hand.
 
-## Open items (10-18)
+## Open items (10-22)
 
-- 10-18 ~23:00 YouTube REMOVED STACKSWOPO CLIPS (@wopoclipper) for impersonation (his name + "Clips",
-  his picture, no "fan" in the name). Owner is a fan clipper with Stackswopo's OK, not his team.
-  YouTube Shorts uploads are OFF in config. NEVER make a new clips channel or re-post its clips
-  elsewhere - that is circumvention and can take down VODS/GAMES too. Appeal from the CLIPS account.
+- 10-22: the CLIPS channel came BACK (UCMeMDcCirQBxkhH3vuFgliA, @WOPOCLIPPER). It was renamed in
+  Studio to "STACKSWOPO CLIPS (Fan Channel)" and its About now carries the fan + actors notice; Shorts
+  uploads are ON again (`posting.platforms.youtube_shorts.enabled`, cap 5/day, 60 min apart). The handle
+  @WOPOCLIPPER was left alone - it does not look like Stacks' own names, and changing it would break
+  links. Do not create a second clips channel or re-post removed clips anywhere.
+- Disclaimers (owner, 10-22): every channel says it is fan-run AND that the people are actors. The About
+  is applied by `tools/funnel_setup.py` (DISCLOSURE/CLIPS_ABOUT); every description, Short, recap,
+  weekly, Rumble upload, social caption and link comment gets the same line from
+  `auto_uploader/utils/disclosure.py`. Do not build a new description path without calling it.
 - Impersonation rules (support.google.com/youtube/answer/2801947): a fan channel must say "fan" in its
   NAME or HANDLE; no copying his picture/banner; no "Clips/Shorts/Live/Backup/Official" + his name.
-  Done: every About starts with the fan notice (tools/funnel_setup.py), the wopovod description
-  template has the fan line. All three renamed "(Fan Channel)" 10-19 in Studio (the API cannot
-  rename - tools/fan_names.py). Browsers: wopovod = Chrome, GAMES = Brave, STACKSWOPOVODS = the
-  Claude desktop app's own browser pane (Claude_Browser tools). Its handle @STACKSWOPO10K looks like
-  Stacks' own names - owner to decide on a fan handle. CLIPS appeal sent 10-19.
+  All four names now end in "(Fan Channel)" (the API cannot rename - use Studio; see
+  `tools/fan_names.py`). The clips channel is in the 9222 Chrome as of 10-22, so Studio work there is
+  possible without the owner.
+- The owner's earlier caption-sync report (recap burned captions picking the wrong line) is still open:
+  see `utils/recap_edit.py` / `utils/recap.py`; no change made on 10-22.
 
 - H5-UgZr8OD0 (10-17 stream): the 25 kid-talk parts were cut in the Studio editor 10-18 ~15:05 (3:18:21 ->
   2:57:39, processing). Once it shows 2:57:39: add the GAMES collab and the channel post (both held till then).

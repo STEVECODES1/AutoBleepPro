@@ -31,7 +31,7 @@ SECRETS = os.path.join(UPLOADER, "client_secrets.json")
 LOG = os.path.join(UPLOADER, "logs", "rumble_cta_backfill.jsonl")
 CHANNELS = [
     ("STACKSWOPO VODS", "youtube_token.json"),
-    ("STACKSWOPO CLIPS", "youtube_shorts_token.json"),
+    ("STACKSWOPO CLIPS (Fan Channel)", "youtube_shorts_token.json"),
     ("STACKSWOPO GAMES", "youtube_games_token.json"),
     ("STACKSWOPOVODS", "youtube_compilation_token.json"),
 ]

@@ -420,7 +420,9 @@ def build_description(template: str, date_str: str, stream_title: str) -> str:
     if len(description) > 5000:
         # YouTube hard-caps descriptions at 5000 characters.
         description = description[:5000]
-    return description
+    from utils.disclosure import for_description
+
+    return for_description(description)
 
 
 # Hashtags that describe a full replay - wrong on a clip.
@@ -459,4 +461,6 @@ def build_clip_description(template: str, source_title: str,
         parts.append("Watch the full stream on the channel.")
     if tags:
         parts.append(tags)
-    return "\n\n".join(parts)[:5000]
+    from utils.disclosure import for_description
+
+    return for_description("\n\n".join(parts)[:5000])

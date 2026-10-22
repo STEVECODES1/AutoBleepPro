@@ -53,14 +53,17 @@ def test_the_start_time_leaves_a_description_but_never_a_title():
 
 
 def test_the_description_template_drops_the_start_time_at_the_source():
+    from utils.disclosure import ACTORS_LINE
     from utils.templating import build_description
     tpl = 'with the title "[STREAM TITLE]" on [DATE]'
-    assert build_description(tpl, "10/3/26", "FREEEEEE 2026-10-03 18:06") == \
-        'with the title "FREEEEEE" on 10/3/26'
-    assert build_description(tpl, "10/5/26", "FINGER 2026-10-05") == \
-        'with the title "FINGER" on 10/5/26'
-    assert build_description(tpl, "10/5/26", "2026-10-05 18:06") == \
-        'with the title "2026-10-05 18:06" on 10/5/26'
+    built = build_description(tpl, "10/3/26", "FREEEEEE 2026-10-03 18:06")
+    assert built.startswith('with the title "FREEEEEE" on 10/3/26')
+    assert ACTORS_LINE in built
+    assert 'with the title "FREEEEEE 2026-10-03 18:06"' not in built
+    finger = build_description(tpl, "10/5/26", "FINGER 2026-10-05")
+    assert finger.startswith('with the title "FINGER" on 10/5/26')
+    unstamped = build_description(tpl, "10/5/26", "2026-10-05 18:06")
+    assert unstamped.startswith('with the title "2026-10-05 18:06" on 10/5/26')
 
 
 def test_a_title_is_cut_at_a_word_and_never_left_empty():

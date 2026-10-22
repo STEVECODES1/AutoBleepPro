@@ -18,8 +18,10 @@ def test_every_about_says_fan_run_once():
     assert fs.GAMES_ABOUT.startswith(fs.DISCLOSURE) and "@stackswopo_" in fs.DISCLOSURE
 
 
-def test_no_link_to_the_removed_clips_channel():
-    assert "WOPOCLIPPER" not in fs.GAMES_ABOUT.upper()
+def test_the_restored_clips_channel_is_in_the_funnel():
+    # 10-22: @WOPOCLIPPER was restored, so the GAMES funnel names it again.
+    assert fs.CLIPS in fs.GAMES_ABOUT
+    assert fs.CLIPS_ABOUT.startswith(fs.DISCLOSURE)
 
 
 def test_only_missing_recaps_are_added_up_to_cap():

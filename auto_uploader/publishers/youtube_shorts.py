@@ -178,7 +178,9 @@ class YouTubeShortsPublisher:
             body = f"{head}\n\n" + "\n".join(lines) + (f"\n\n{rest}" if sep else "")
         if SHORTS_TAG.lower() not in body.lower():
             body = f"{body}\n\n{SHORTS_TAG}".strip()
-        return body
+        from utils.disclosure import for_description
+
+        return for_description(body, short=True)
 
     def safe_fallback(self, video_path: str) -> str:
         """What to title a clip whose spoken line cannot be published.
@@ -286,6 +288,10 @@ def link_comment_for(config: dict, video_path: str = "") -> str:
         lines.append(f"\u25b6 Full video: {full}")
     lines.append(template.replace("{rumble}", rumble_stream or rumble).strip())
     lines.append("\u25b6 Every full stream: https://www.youtube.com/@wopovod")
+    from utils.disclosure import SHORT_ACTORS_LINE
+
+    if SHORT_ACTORS_LINE not in "\n".join(lines):
+        lines.append(SHORT_ACTORS_LINE)
     return "\n".join(line for line in lines if line)
 
 

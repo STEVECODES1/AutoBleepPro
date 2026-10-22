@@ -616,7 +616,9 @@ def make_description(series: str, length: str, videos: List[Video],
     parts += ["", "#stackswopo #gta #gtarp #fivem"]
     text = "\n".join(parts)
     # YouTube's limit is 5000; the originals list is what gets cut.
-    return text[:4900]
+    from utils.disclosure import for_description
+
+    return for_description(text[:4900])
 
 
 # ── building ────────────────────────────────────────────────────────────────

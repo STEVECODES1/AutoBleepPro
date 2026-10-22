@@ -328,9 +328,14 @@ def upload(token_path: str, path: str, title: str, description: str,
     video_id = response["id"]
     if full_stream:
         try:
+            from utils.disclosure import SHORT_ACTORS_LINE
+
+            said = comment or f"Full stream, every minute of it: {full_stream}"
+            if SHORT_ACTORS_LINE not in said:
+                said = f"{said}\n{SHORT_ACTORS_LINE}"
             yt.commentThreads().insert(part="snippet", body={"snippet": {
                 "videoId": video_id, "topLevelComment": {"snippet": {
-                    "textOriginal": comment or f"Full stream, every minute of it: {full_stream}"
+                    "textOriginal": said
                 }}}}).execute()
         except Exception as exc:
             print(f"[Recap] Uploaded, but the comment did not post ({exc}).")
@@ -453,7 +458,9 @@ def recap_description(cfg, shown_title: str, stream_date: str, full: str, uncut:
     if block:
         lines += ["", block]
     lines += ["", "#Stackswopo #GTARP #FunnyMoments"]
-    return "\n".join(lines)
+    from utils.disclosure import for_description
+
+    return for_description("\n".join(lines))
 
 
 def make(cfg, source: str, stream_title: str, stream_date: str,

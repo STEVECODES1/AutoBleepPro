@@ -290,15 +290,18 @@ def maybe_make(cfg, now: Optional[dt.datetime] = None) -> str:
             if links:
                 lines += ["", links]
             lines += ["", "#Stackswopo #GTARP #FunnyMoments"]
+            from utils.disclosure import for_description, SHORT_ACTORS_LINE
+
             privacy = s["privacy"]
             if any(risky(r.get("stream_title", "")) for r in streams):
                 privacy = "private"
                 print("[Weekly] Strangers-on-camera stream in this week - uploading "
                       "PRIVATE for you to check before it goes public.")
-            url = upload(s["token_path"], out, title, "\n".join(lines),
+            url = upload(s["token_path"], out, title,
+                         for_description("\n".join(lines)),
                          ["Stackswopo", "GTA RP", "best of the week", "funny moments",
                           "Stackswopo stream", "GTA 5"], privacy, WOPOVOD,
-                         comment="Every full stream, uncut: " + WOPOVOD)
+                         comment="Every full stream, uncut: " + WOPOVOD + "\n" + SHORT_ACTORS_LINE)
             print(f"[Weekly] Uploaded to STACKSWOPOVODS ({privacy}): {url}")
             _mark_used(cfg, window, {"url": url, "privacy": privacy, "title": title,
                                      "streams": [r["video"] for r in streams]}, now)

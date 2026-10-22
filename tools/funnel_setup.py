@@ -25,27 +25,42 @@ GAMES = "https://www.youtube.com/@StackswopoGames"
 CLIPS = "https://www.youtube.com/@WOPOCLIPPER"
 PLAYLIST_TITLE = "Stackswopo Best Moments - every stream"
 # 10-18: YouTube removed @WOPOCLIPPER for impersonation - it looked like
-# Stackswopo's own channel. Every channel we keep says up top that it is
-# fan-run, posted with his permission, and links his real channel.
+# Stackswopo's own channel. It was restored on 10-22, so the clips channel
+# is back in the funnel - but every channel we keep says up top that it is
+# fan-run, that the people on screen are actors, and links his real channel.
 DISCLOSURE = ("Fan channel - not Stackswopo's own channel. "
-              "His channel: https://www.youtube.com/@stackswopo_\n\n")
+              "His channel: https://www.youtube.com/@stackswopo_\n\n"
+              "⚠️ DISCLAIMER: All people in these videos are actors. "
+              "GTA content is GTA roleplay; anything else still features actors. "
+              "Nothing shown is real.\n\n")
 OLD_DISCLOSURES = ("Fan-run channel - not Stackswopo's own channel. Clips and VODs are posted with "
                    "his permission. His official channel: https://www.youtube.com/@stackswopo_\n\n",)
 GAMES_ABOUT = DISCLOSURE + (
     "Stackswopo's best moments from every stream - the funniest parts, cut down for you.\n\n"
     f"▶ Full streams, every minute: {WOPOVOD}\n"
-    f"▶ Uncut & uncensored on Rumble: {RUMBLE}\n\n"
+    f"▶ Uncut & uncensored on Rumble: {RUMBLE}\n"
+    f"▶ Daily clips & Shorts: {CLIPS}\n\n"
+    "Subscribe - Onna Bros! 🔔")
+CLIPS_ABOUT = DISCLOSURE + (
+    "Stackswopo's funniest moments, stream clips and Shorts - cut down for you.\n\n"
+    f"▶ Full streams, every minute: {WOPOVOD}\n"
+    f"▶ Uncut & uncensored on Rumble: {RUMBLE}\n"
+    f"▶ Best moments of every stream: {GAMES}\n\n"
     "Subscribe - Onna Bros! 🔔")
 
 
 def disclosed(existing):
-    """The About with the fan-channel notice on top (unchanged if there)."""
+    """The About with the fan + actors notice on top (unchanged if there)."""
     existing = existing or ""
     for old in OLD_DISCLOSURES:
         existing = existing.replace(old.strip(), "").strip()
     if existing.startswith(DISCLOSURE.strip()):
         return existing
-    return (DISCLOSURE + existing.strip())[:5000]
+    # A fan-only notice from 10-19: replace it rather than stack a second.
+    from utils.disclosure import FAN_LINE, ACTORS_LINE
+
+    existing = existing.replace(FAN_LINE, "").replace(ACTORS_LINE, "").strip()
+    return (DISCLOSURE + existing)[:1000]
 
 
 def fixed_title(title):
@@ -164,6 +179,8 @@ def main():
         print("titles fixed:", fix_titles(games, vids, a.cap, a.dry_run))
         for tok in ("youtube_token.json", "youtube_compilation_token.json"):
             print(tok, "about changed:", set_about(service(tok), disclosed, a.dry_run))
+        print("CLIPS about changed:", set_about(
+            service("youtube_shorts_token.json"), lambda old: CLIPS_ABOUT, a.dry_run))
     playlist(games, vids, a.cap, a.dry_run)
 
 

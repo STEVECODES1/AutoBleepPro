@@ -568,12 +568,16 @@ def caption_for(platform: str, video_path: str, fallback: str,
         except Exception:
             full = ""
         if full:
-            return f"{caption.rstrip()}\n\n▶ Full stream: {full}"
+            from utils.disclosure import for_caption
+
+            return for_caption(f"{caption.rstrip()}\n\n▶ Full stream: {full}")
 
     # Last, so the pointer survives the cleaner and the tag builder and
     # is measured against what actually gets posted.
-    return with_promo(caption, platform, config,
-                      limit=_char_limit(platform))
+    from utils.disclosure import for_caption
+
+    return for_caption(with_promo(caption, platform, config,
+                                  limit=_char_limit(platform)))
 
 
 def _char_limit(platform: str) -> int:

@@ -10,7 +10,8 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-TOKENS = ("youtube_compilation_token.json", "youtube_games_token.json", "youtube_token.json")
+TOKENS = ("youtube_compilation_token.json", "youtube_games_token.json",
+          "youtube_token.json", "youtube_shorts_token.json")
 SUFFIX = " (Fan Channel)"
 
 

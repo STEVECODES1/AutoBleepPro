@@ -1204,7 +1204,12 @@ def link_comment_text(cfg) -> str:
     # comment: it posts "Full stream: " and reads as broken.
     if "{rumble}" in template and not rumble:
         return ""
-    return text.strip()
+    from utils.disclosure import SHORT_ACTORS_LINE
+
+    text = text.strip()
+    if SHORT_ACTORS_LINE not in text:
+        text = f"{text}\n\n{SHORT_ACTORS_LINE}"
+    return text
 
 
 def _leave_link_comment(cfg, uploader, url: str) -> bool:

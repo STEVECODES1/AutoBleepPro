@@ -65,7 +65,8 @@ def test_the_rumble_link_goes_under_every_short(tmp_path, monkeypatch):
     # clip's stream is known).
     assert seen["text"].splitlines() == [
         "Uncut here: https://rumble.com/user/BinScripts",
-        "▶ Every full stream: https://www.youtube.com/@wopovod"]
+        "▶ Every full stream: https://www.youtube.com/@wopovod",
+        "⚠️ Everyone in this video is an actor. GTA RP - not real."]
 
 
 def test_no_template_means_no_comment_but_no_crash(tmp_path, monkeypatch):

@@ -31,8 +31,8 @@ def test_the_fallback_names_every_channel():
                    "https://rumble.com/user/BinScripts",
                    "https://www.youtube.com/@stackswopo_"):
         assert needle in block
-    # YouTube removed @wopoclipper on 10-18 (impersonation): no dead link.
-    assert "@wopoclipper" not in block
+    # YouTube removed @wopoclipper on 10-18, then restored it on 10-22.
+    assert "@wopoclipper" in block.lower()
 
 
 def test_the_fallback_follows_the_configured_rumble_channel():
@@ -83,8 +83,9 @@ def test_postproxy_shorts_carry_the_full_stream_link(tmp_path, monkeypatch):
     pub = postproxy.PostproxyPublisher(cfg, "postproxy_youtube")
     fields = dict(pub._form("A funny line", str(clip)))
     body = fields["post[body]"]
-    assert "▶ Full stream: https://www.youtube.com/watch?v=full" in body
+    assert "▶ Full video: https://www.youtube.com/watch?v=full" in body
     assert "https://rumble.com/user/BinScripts" in body
+    assert "Everyone in this video is an actor" in body
 
 
 def test_recap_links_fall_back_when_the_template_loses_its_header():

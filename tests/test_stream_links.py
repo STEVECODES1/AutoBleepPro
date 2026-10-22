@@ -85,5 +85,6 @@ def test_a_short_carries_the_full_stream_under_its_caption(monkeypatch):
         youtube_shorts.YouTubeShortsPublisher)
     pub.settings = {"description_template": "[CAPTION]\n\nMore: https://x"}
     body = pub.description_for("He calls her bluff", "clip.mp4")
-    assert body.startswith(f"He calls her bluff\n\n▶ Full stream: {YT}")
+    assert body.startswith(f"He calls her bluff\n\n▶ Full video: {YT}")
     assert "More: https://x" in body
+    assert "Everyone in this video is an actor" in body
