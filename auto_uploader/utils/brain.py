@@ -70,6 +70,17 @@ STUCK_STREAM_HOURS = 6
 STUCK_CLIP_HOURS = 2
 BIG_VIDEO_BYTES = 500 * 1024 * 1024
 DIGEST_HOUR = 10
+# The four channels we run, and the token that can read each one. The
+# guard is a read (1 unit), once a day: if YouTube strips a "(Fan
+# Channel)" name or the About notice again, the next tick says so
+# instead of waiting for another removal.
+CHANNEL_GUARD_HOURS = 24
+CHANNEL_GUARD_TOKENS = (
+    ("wopovod", "youtube_token.json"),
+    ("clips", "youtube_shorts_token.json"),
+    ("games", "youtube_games_token.json"),
+    ("compilations", "youtube_compilation_token.json"),
+)
 _VIDEO_EXTS = (".ts", ".mp4", ".mkv", ".flv", ".mov", ".webm")
 
 HEARTBEAT_DIR = ".heartbeat"     # matches tools/record_stream.py
@@ -182,6 +193,88 @@ def _default_chrome_check(cfg) -> Optional[Callable]:
     return lambda: is_listening(port)
 
 
+def _channel_service(secrets_path: str, token_path: str):
+    """A read-only YouTube service that never opens a browser.
+
+    YouTubeUploader is the normal route, but on a dead refresh token it
+    falls through to an interactive OAuth flow - and a watchdog with
+    nobody at the keyboard must not sit there. This refreshes what it
+    can and raises a short, reportable error otherwise.
+    """
+    from google.auth.transport.requests import Request
+    from google.oauth2.credentials import Credentials
+    from googleapiclient.discovery import build
+
+    creds = Credentials.from_authorized_user_file(token_path)
+    if not creds.valid:
+        if not (creds.expired and creds.refresh_token):
+            raise RuntimeError("sign-in expired")
+        creds.refresh(Request())
+    return build("youtube", "v3", credentials=creds, cache_discovery=False)
+
+
+def channel_problems(cfg) -> Problems:
+    """The four channel names/Abouts, as problems. Empty when all good.
+
+    Shared by the watchdog (once a day) and tools/channel_guard.py (a
+    scheduled task, so the check still runs when the uploader is down).
+    """
+    youtube = getattr(cfg, "youtube", None)
+    secrets_path = str(getattr(youtube, "client_secrets_path", "") or "")
+    if not secrets_path or not os.path.isfile(secrets_path):
+        return {}
+    root = getattr(cfg, "project_root", "")
+    from .disclosure import ACTORS_LINE, FAN_LINE
+
+    found: Problems = {}
+    for name, token in CHANNEL_GUARD_TOKENS:
+        token_path = os.path.join(root, token)
+        try:
+            yt = _channel_service(secrets_path, token_path)
+            items = yt.channels().list(
+                part="snippet,brandingSettings", mine=True
+            ).execute().get("items", [])
+            if not items:
+                raise RuntimeError("no channel returned")
+            snippet = items[0].get("snippet", {}) or {}
+            about = (items[0].get("brandingSettings", {}).get("channel", {})
+                     or {}).get("description", "") or ""
+            title = str(snippet.get("title", "") or "")
+            bad = []
+            if "fan" not in title.lower():
+                bad.append(f"the name is now {title!r} (no 'fan')")
+            if FAN_LINE not in about or ACTORS_LINE not in about:
+                bad.append("the About lost the fan/actors notice")
+            if bad:
+                found[f"channel_guard:{name}"] = (
+                    f"{name} no longer says it is a fan channel",
+                    "YouTube's impersonation rules need a fan channel to "
+                    "say so in its name/handle and in its About. Found: "
+                    + "; ".join(bad) + ". Put it back in Studio "
+                    "(Customize channel) or run tools/funnel_setup.py.")
+        except Exception as exc:
+            found[f"channel_guard:{name}"] = (
+                f"Could not check {name}",
+                f"The daily fan-label check failed: {exc}. If this says "
+                f"sign-in expired, run `python main.py --setup-youtube` "
+                f"or --setup-shorts for that channel. Otherwise it will "
+                f"try again in an hour.")
+    return found
+
+
+def _default_channel_check(cfg) -> Optional[Callable]:
+    """The daily watchdog check, or None when no YouTube credentials.
+
+    None when this machine has no YouTube credentials configured, so a
+    unit test (and a fresh install) never touches the network.
+    """
+    youtube = getattr(cfg, "youtube", None)
+    secrets_path = str(getattr(youtube, "client_secrets_path", "") or "")
+    if not secrets_path or not os.path.isfile(secrets_path):
+        return None
+    return lambda: channel_problems(cfg)
+
+
 def _read_json(path: str, default):
     try:
         with open(path, encoding="utf-8") as handle:
@@ -201,6 +294,7 @@ class Brain:
                  send: Optional[Callable] = None,
                  live_check: Optional[Callable] = None,
                  chrome_check: Optional[Callable] = None,
+                 channel_check: Optional[Callable] = None,
                  desktop: bool = False,
                  now: Callable[[], float] = time.time,
                  say: Callable = print):
@@ -247,6 +341,12 @@ class Brain:
         self._chrome_check = chrome_check if chrome_check is not None \
             else _default_chrome_check(cfg)
         self._chrome_down_since: Optional[float] = None
+        # Once a day, four read-only calls: did YouTube strip a fan label
+        # or the About notice? Injectable so tests never touch the API.
+        self._channel_check = channel_check if channel_check is not None \
+            else _default_channel_check(cfg)
+        self._channel_guard_at = 0.0
+        self._channel_guard_problems: Problems = {}
         self.state = self._load()
 
     # ── state ────────────────────────────────────────────────────────────
@@ -400,6 +500,30 @@ class Brain:
             f"until it is back. Its keeper reopens it within a minute - if "
             f"this does not clear, run START.bat.")}
 
+    def _channel_guard(self, now: float) -> Problems:
+        """A daily look at the four channel names and Abouts.
+
+        The 10-18 removal happened with nothing in this process able to
+        notice: every local piece was healthy, and YouTube had already
+        renamed or removed the channel. Four reads a day is 4 quota
+        units against 10,000, and it catches the next one before a
+        removal rather than after.
+        """
+        if self._channel_check is None:
+            return {}
+        if now - self._channel_guard_at < CHANNEL_GUARD_HOURS * 3600:
+            return self._channel_guard_problems
+        self._channel_guard_at = now
+        try:
+            self._channel_guard_problems = dict(self._channel_check() or {})
+        except Exception as exc:
+            self._say(f"[Brain] WARNING: channel check failed: {exc}")
+            # A transient network error is not a reason to wait a full
+            # day; the next tick tries again in an hour.
+            self._channel_guard_at = now - CHANNEL_GUARD_HOURS * 3600 + 3600
+            self._channel_guard_problems = {}
+        return self._channel_guard_problems
+
     def _youtube_blocked(self, now: float) -> Problems:
         """wopovod refused an upload (a strike or an upload limit)."""
         data = _read_json(os.path.join(self.logs_folder, "youtube_blocked.json"), {})
@@ -484,6 +608,7 @@ class Brain:
         for check in (lambda: self._crash_loop(now), self._disk,
                       lambda: self._recorder(now), lambda: self._chrome(now),
                       lambda: self._youtube_blocked(now),
+                      lambda: self._channel_guard(now),
                       lambda: self._stuck_streams(now),
                       lambda: self._stuck_clips(now)):
             try:

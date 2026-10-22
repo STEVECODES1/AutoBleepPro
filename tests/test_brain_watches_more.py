@@ -78,6 +78,30 @@ def test_youtube_refusing_uploads_is_said(cfg):
     assert "youtube_blocked" not in b.problems()
 
 
+def test_a_channel_that_lost_its_fan_label_is_said(cfg):
+    """The 10-18 removal had no watchdog. Four reads a day is cheap."""
+    clock = Clock()
+    calls = []
+
+    def check():
+        calls.append(1)
+        return {"channel_guard:clips": (
+            "clips no longer says it is a fan channel",
+            "Its name or About changed.")}
+
+    b = Brain(cfg, None, send=lambda *a, **k: ["test"],
+              live_check=lambda url: None, chrome_check=None,
+              channel_check=check, now=clock, say=lambda *_: None)
+    assert "channel_guard:clips" in b.tick()
+    assert len(calls) == 1
+    clock.t += 3600
+    assert "channel_guard:clips" in b.problems()
+    assert len(calls) == 1, "the daily check must not hit the API every minute"
+    clock.t += 25 * 3600
+    b.problems()
+    assert len(calls) == 2
+
+
 def test_a_full_stream_stuck_for_hours_is_said_unless_an_upload_is_moving(cfg, monkeypatch):
     monkeypatch.setattr(brain_mod, "BIG_VIDEO_BYTES", 10)
     video = os.path.join(cfg.general.watch_folder, "STREAM.ts")

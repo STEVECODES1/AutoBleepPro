@@ -72,6 +72,24 @@ OPTIONAL = {
     "psutil": "psutil",         # CPU/RAM in --health
 }
 
+# Packages that were PRESENT but half-deleted on 10-20: find_spec found
+# them, so the old check passed, and the uploader died on import in a
+# keepalive loop for two days. The failure was in a data file inside
+# better_profanity and in pyparsing/numpy/Pillow/googleapiclient. An
+# import probe is the only thing that catches a package that exists but
+# cannot be used.
+#
+# name -> the pip package that puts it back. Pillow is capped below 11
+# because moviepy 2.0 requires it; the requirements file says the same.
+IMPORT_PROBES = {
+    "pyparsing": "pyparsing",
+    "googleapiclient.http": "google-api-python-client",
+    "google.auth": "google-auth",
+    "better_profanity": "better_profanity==0.7.0",
+    "numpy": "numpy",
+    "PIL.Image": "Pillow<11",
+}
+
 COOLDOWN_SECONDS = 30 * 60
 EXIT_MISSING_DEPS = 3
 
@@ -94,6 +112,46 @@ def missing(names: dict) -> list[str]:
         except (ImportError, ValueError):
             absent.append(module)
     return absent
+
+
+def broken_imports() -> dict[str, str]:
+    """Installed modules that cannot actually be imported.
+
+    A package directory can survive a failed update, an antivirus
+    quarantine or a half-finished pip run while its modules are gone.
+    find_spec says "present"; the first real import raises - and the
+    keepalive repeats it every fifteen seconds forever.
+    """
+    broken: dict[str, str] = {}
+    for module in IMPORT_PROBES:
+        try:
+            importlib.import_module(module)
+        except Exception as exc:
+            broken[module] = f"{type(exc).__name__}: {exc}"
+    return broken
+
+
+def repair_command(broken: dict[str, str] | None = None) -> list[str]:
+    """pip command that rebuilds exactly the broken packages."""
+    broken = broken if broken is not None else broken_imports()
+    packages = sorted({IMPORT_PROBES[module] for module in broken})
+    return [sys.executable, "-m", "pip", "install", "--force-reinstall",
+            "--no-cache-dir", *packages]
+
+
+def repair(broken: dict[str, str] | None = None) -> bool:
+    """Force-reinstall the broken packages. True if pip accepted it."""
+    command = repair_command(broken)
+    print(f"[Deps] Repairing: {' '.join(command[4:])}")
+    print("[Deps] This can take a few minutes; it only runs on a broken "
+          "install.")
+    try:
+        result = subprocess.run(command)
+    except Exception as exc:
+        print(f"[Deps] Could not run pip: {exc}")
+        return False
+    importlib.invalidate_caches()
+    return result.returncode == 0
 
 
 def _recently_attempted() -> bool:
@@ -148,7 +206,8 @@ def ensure(auto: bool = True) -> None:
     the broken one.
     """
     absent = missing(REQUIRED)
-    if not absent:
+    broken = broken_imports()
+    if not absent and not broken:
         for module in missing(OPTIONAL):
             print(f"[Deps] {OPTIONAL[module]} is not installed - "
                   f"{'desktop notifications' if module == 'plyer' else 'CPU/RAM in --health'} "
@@ -157,35 +216,59 @@ def ensure(auto: bool = True) -> None:
 
     packages = sorted(REQUIRED[m] for m in absent)
     print("=" * 60)
-    print(f"[Deps] MISSING: {', '.join(packages)}")
+    if absent:
+        print(f"[Deps] MISSING: {', '.join(packages)}")
+    if broken:
+        print(f"[Deps] INSTALLED BUT BROKEN: {', '.join(sorted(broken))}")
+        for module, why in sorted(broken.items()):
+            print(f"        {module}: {why}")
+        print("[Deps] The site-packages copy is incomplete (a failed "
+              "update, a quarantine, a half-finished pip run).")
     print("[Deps] The uploader cannot start without these.")
     print("=" * 60)
 
     if not auto:
-        print(f"[Deps] Install them with:\n    {manual_hint()}")
+        if absent:
+            print(f"[Deps] Install the missing ones with:\n    {manual_hint()}")
+        if broken:
+            print(f"[Deps] Repair the broken ones with:\n    "
+                  f"{' '.join(repair_command(broken))}")
         raise SystemExit(EXIT_MISSING_DEPS)
 
     if _recently_attempted():
         # Installing again inside the cooldown means the last attempt
         # did not work, and a keepalive loop would repeat it forever.
-        print("[Deps] Already tried installing recently and they are still "
-              "missing. Not retrying.")
+        print("[Deps] Already tried installing/repairing recently and they "
+              "are still broken. Not retrying.")
         print(f"[Deps] Run this yourself and read what it says:\n"
               f"    {manual_hint()}")
         raise SystemExit(EXIT_MISSING_DEPS)
 
     _record_attempt()
-    ok = install()
-    importlib.invalidate_caches()
-    still = missing(REQUIRED)
+    ok = True
+    if absent:
+        ok = install()
+        importlib.invalidate_caches()
+        still = missing(REQUIRED)
+        if still:
+            ok = False
+            print(f"[Deps] Still missing after installing: "
+                  f"{', '.join(sorted(REQUIRED[m] for m in still))}")
+    broken = broken_imports()
+    if broken:
+        repaired = repair(broken)
+        if not repaired:
+            ok = False
+        broken = broken_imports()
+        if broken:
+            ok = False
+            print(f"[Deps] Still broken after repairing: "
+                  f"{', '.join(sorted(broken))}")
 
-    if ok and not still:
-        print("[Deps] Installed. Carrying on.")
+    if ok and not broken:
+        print("[Deps] Repaired. Carrying on.")
         return
 
-    if still:
-        print(f"[Deps] Still missing after installing: "
-              f"{', '.join(sorted(REQUIRED[m] for m in still))}")
     print(f"[Deps] Run this yourself and read what it says:\n"
           f"    {manual_hint()}")
     raise SystemExit(EXIT_MISSING_DEPS)
@@ -196,6 +279,7 @@ def _report() -> int:
     to prove the install actually worked, rather than assuming pip's exit
     code covered it."""
     absent = missing(REQUIRED)
+    broken = broken_imports()
     for module, package in sorted(REQUIRED.items()):
         state = "MISSING" if module in absent else "ok"
         print(f"  {state:<14s}{package}")
@@ -203,10 +287,16 @@ def _report() -> int:
     for module, package in sorted(OPTIONAL.items()):
         state = "not installed" if module in absent_optional else "ok"
         print(f"  {state:<14s}{package} (optional)")
-    if absent:
-        print(f"\n{len(absent)} required package(s) missing.")
+    for module, why in sorted(broken.items()):
+        print(f"  BROKEN        {module} ({IMPORT_PROBES[module]}): {why}")
+    if absent or broken:
+        if absent:
+            print(f"\n{len(absent)} required package(s) missing.")
+        if broken:
+            print(f"\n{len(broken)} installed package(s) cannot be imported.")
+        print(f"Repair with:\n    {' '.join(repair_command(broken))}")
         return 1
-    print("\nEverything the uploader imports is installed.")
+    print("\nEverything the uploader imports is installed and imports cleanly.")
     return 0
 
 

@@ -53,11 +53,22 @@ a 4.4 GB full stream takes ~3 h to YouTube.
   by title/caption AND by what they SAY (`clip_queue._spoken_child_risk`: a spoken age or abuse word holds
   everywhere but Rumble; "pedo" holds the Short only). Gambling on screen held too.
 - Rumble: a kids-titled clip uploads PRIVATE; slurs in Rumble titles masked; the video stays uncut.
+- `utils/deps.py` now IMPORTS the critical packages, not just finds them: a present-but-broken install
+  (the 10-20 crash loop: better_profanity data file, pyparsing.core, numpy._core.numeric, PIL.Image)
+  is force-repaired before the program starts, with a 30-minute stamp so a dead network cannot loop
+  pip forever. Exit 3 stops the keepalive for a person, as before.
 - The owner's rule: wopovod must be fully secured; GAMES/recaps matter less.
 
 ## Tools (tools\, all print what they do)
 
 - `health_check.py [HOURS] [--yt]` - queue by platform/state, every not-done job and why, newest uploads.
+- `channel_guard.py` - read-only daily check that all four names still say "(Fan Channel)" and every
+  About still carries the fan + actors notice; alerts Discord/ntfy and exits 1 when one has changed.
+  Windows task "AutoBleepPro Fan Guard" runs it at 09:05, so it also runs when the uploader is dead.
+- `disclaimer_backfill.py [--apply] [--max N] [--all] [--only vods,clips,games,compilations]` - puts the
+  notice into videos already published, preserving title/tags/category/language and logging the old
+  description. Dry-run by default; one update is 50 quota units. Task "AutoBleepPro Disclaimer Backfill"
+  runs `--apply --max 10 --only games,compilations` at 09:30 until none are left.
 - `community_post.py <video> "<stream>" [--dry-run]` - the wopovod Posts-tab post the uploader makes by
   itself after each new full stream (`utils/community_post.post_later`: own process, waits for YouTube to
   finish processing, retries every 20 min for 6 h, one post per video in logs/community_posts.json).
@@ -73,7 +84,8 @@ a 4.4 GB full stream takes ~3 h to YouTube.
   NVIDIA nemotron-3-nano-omni, xKiro qwen3.8-omni-flash:free, Groq gpt-oss-120b. OpenRouter is pinned:
   google/gemma-4-31b-it:free (nex-n2.5-pro lost its free tier 10-18). Cerebras answers 402 (no credit).
   Paid (OpenAI, Anthropic claude-opus-5-5, DeepSeek) only with ALLOW_PAID_AI=1.
-- Whisper large-v3-turbo (faster-whisper 1.1.1, CUDA) for censor + transcripts. yt-dlp 2026.8.19 = latest.
+- Whisper large-v3-turbo (faster-whisper 1.1.1, CUDA) for censor + transcripts. yt-dlp 2026.10.21
+  (updated 10-22) = latest.
 
 ## Browser work
 
@@ -122,6 +134,9 @@ a 4.4 GB full stream takes ~3 h to YouTube.
   is applied by `tools/funnel_setup.py` (DISCLOSURE/CLIPS_ABOUT); every description, Short, recap,
   weekly, Rumble upload, social caption and link comment gets the same line from
   `auto_uploader/utils/disclosure.py`. Do not build a new description path without calling it.
+- Old videos (10-22): every VOD and every CLIPS Short now carries the notice, plus the 10 newest
+  GAMES/compilation videos. 49 old GAMES recaps and 1 compilation are left for the daily 09:30 task
+  (`disclaimer_backfill.py --max 10`). Old descriptions are in logs/disclaimer_backfill.jsonl.
 - Impersonation rules (support.google.com/youtube/answer/2801947): a fan channel must say "fan" in its
   NAME or HANDLE; no copying his picture/banner; no "Clips/Shorts/Live/Backup/Official" + his name.
   All four names now end in "(Fan Channel)" (the API cannot rename - use Studio; see
