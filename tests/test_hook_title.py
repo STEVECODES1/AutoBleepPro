@@ -86,6 +86,19 @@ def test_the_hook_covers_the_clip_it_was_written_for(tmp_path):
     assert "0:00:04.00" in line
 
 
+def test_a_long_hook_is_cut_to_two_lines():
+    """A whole spoken sentence burned at 54px covered the picture and the
+    CTA banner (owner, 10-22). A hook is a label, not the line."""
+    long = ("fine start over but no more the cheap samaritan talk just tell me "
+            "straight how this gift card thing works")
+    out = build_ass([], hook=long, hook_seconds=30.0)
+    line = next(l for l in out.splitlines() if ",Hook,," in l)
+    spoken = line.rsplit(",", 1)[-1]
+    assert len(spoken) <= 64
+    assert spoken.strip() and "…" not in spoken and "..." not in spoken
+    assert spoken == spoken.upper()
+
+
 def test_the_hook_is_escaped_like_any_other_text(tmp_path):
     """A model-written title can contain anything, and a stray brace is
     an ASS override block - which would eat the rest of the line."""

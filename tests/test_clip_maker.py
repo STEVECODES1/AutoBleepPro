@@ -486,29 +486,24 @@ def test_the_stacked_layout_is_still_available():
         {"clips": {"profile": "monkey_stack"}}) == CROP_STACK
 
 
-def test_the_gta_profile_fits_the_whole_frame_and_never_faces():
-    """The standing rule has two halves and only one of them ever moved.
+def test_the_gta_profile_is_full_bleed_and_never_faces():
+    """The standing rule has two halves.
 
     Gameplay must NEVER get face tracking - GTA is full of NPC faces and
     a detector locks onto whichever is nearest the lens. That half is
     permanent and is asserted below and again in the next test.
 
-    The other half went centre -> motion -> fit -> centre -> fit, and
-    this is the end of it: the two versions were looked at side by side
-    on the channel itself. A 16:9 frame centre-cropped to 9:16 keeps 31%
-    of the width, and on gameplay that 31% is whatever the camera
-    happened to be pointing at - grass, a road, a trash bin, someone's
-    leg. The argument for centre was that fit wastes screen on blur. It
-    does. It also keeps the car, the shooting and the person talking
-    inside the frame, and a viewer cannot laugh at a joke whose subject
-    was cropped off the side. Blur is cheaper than a clip about
-    nothing."""
-    from autoreel.crop_strategy import (CROP_FACE, CROP_FACE_PAN, CROP_FIT,
-                                        resolve_crop_strategy)
+    The other half went centre -> motion -> fit -> centre -> fit, then
+    centre again on 10-22: the owner watched the letterboxed clips on the
+    channel and said they "don't look like Shorts". The 9-22 argument for
+    fit was that captions floated in the blur, and captions are on again,
+    so the centre slice is the format the feed is built around."""
+    from autoreel.crop_strategy import (CROP_CENTER, CROP_FACE,
+                                        CROP_FACE_PAN, resolve_crop_strategy)
 
     resolved = resolve_crop_strategy({"clips": {"profile": "gta"}})
 
-    assert resolved == CROP_FIT
+    assert resolved == CROP_CENTER
     # The half that has never changed and must not: no face detector
     # anywhere near gameplay. GTA is full of NPC faces.
     assert resolved not in (CROP_FACE, CROP_FACE_PAN)
@@ -614,7 +609,7 @@ def test_auto_picks_the_framing_from_the_stream_title():
     completely different things - so every GTA stream went through the
     Monkey rectangle, cropped to the left 46% of a gameplay frame for a
     call window that was not there."""
-    from autoreel.crop_strategy import (CROP_FIT, CROP_REGION,
+    from autoreel.crop_strategy import (CROP_CENTER, CROP_REGION,
                                         resolve_crop_strategy)
 
     def framing(title):
@@ -622,7 +617,7 @@ def test_auto_picks_the_framing_from_the_stream_title():
             {"clips": {"profile": "auto", "content_title": title}})
 
     assert framing('"stackswopo + gta D10 johnny cox + Lifestyle RP" 8/12/26') \
-        == CROP_FIT
+        == CROP_CENTER
     assert framing("Stackswopo monkey app trolling pt 1") == CROP_REGION
 
 

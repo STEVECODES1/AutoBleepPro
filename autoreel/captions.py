@@ -71,6 +71,11 @@ DEFAULT_FONT_SIZE = 62
 HOOK_FONT_SIZE = 54
 # Clear of a phone's top UI and of most gameplay HUDs.
 HOOK_MARGIN_V = 150
+# A hook is a LABEL, one idea. The clip title is usually a whole spoken
+# sentence; burned at 54px it wrapped to eight lines, covered the CTA
+# banner and the picture, and read as a wall of text (owner, 10-22).
+# Two lines is the most that fits above the CTA at 22.5% height.
+HOOK_MAX_CHARS = 64
 # A caption may use TWO lines, so a phrase gets roughly twice the room a
 # single line allows before it has to break.
 #
@@ -456,6 +461,19 @@ def _word_lines(phrase: Phrase, uppercase: bool) -> list:
     return lines
 
 
+def _short_hook(text: str) -> str:
+    """A hook that fits two lines at HOOK_FONT_SIZE, cut at a word.
+
+    No "..." - an ellipsis on every long hook is what made these read as
+    machine-made (the same rule as clip titles).
+    """
+    text = " ".join((text or "").split())
+    if len(text) <= HOOK_MAX_CHARS:
+        return text
+    cut = text[:HOOK_MAX_CHARS].rsplit(" ", 1)[0]
+    return cut.rstrip(" ,;:-") or text[:HOOK_MAX_CHARS].rstrip(" ,;:-")
+
+
 def build_ass(phrases: Iterable[Phrase], font: str = DEFAULT_FONT,
               font_size: int = DEFAULT_FONT_SIZE,
               margin_v: int = MARGIN_V,
@@ -490,9 +508,11 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     lines = []
     # First, so it is the bottom layer if anything ever overlaps it.
     if hook.strip() and hook_seconds > 0:
-        lines.append(
-            f"Dialogue: 0,{_ass_time(0.0)},{_ass_time(hook_seconds)},"
-            f"Hook,,0,0,0,,{_ass_escape(hook.strip().upper() if uppercase else hook.strip())}")
+        hook_text = _short_hook(hook)
+        if hook_text:
+            lines.append(
+                f"Dialogue: 0,{_ass_time(0.0)},{_ass_time(hook_seconds)},"
+                f"Hook,,0,0,0,,{_ass_escape(hook_text.upper() if uppercase else hook_text)}")
     for phrase in phrases:
         if phrase.end <= phrase.start:
             continue

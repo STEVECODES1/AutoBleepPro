@@ -56,7 +56,7 @@ def test_gameplay_inside_a_call_stream_gets_the_gameplay_framing(monkeypatch):
         "/v.mp4", ClipSpec(start=4000.0, end=4020.0, index=9),
         CROP_FACE_PAN, {"x": 0.0, "y": 0.0, "width": 0.5, "height": 1.0})
 
-    assert strategy == CROP_FIT
+    assert strategy == CROP_CENTER
 
 
 def test_the_run_s_own_decision_stands_when_nothing_can_be_read(monkeypatch):
@@ -93,7 +93,7 @@ def test_it_says_so_only_when_it_disagrees(monkeypatch, capsys):
     _at(monkeypatch, "gta")
 
     _maker()._framing_at("/v.mp4", ClipSpec(start=0.0, end=10.0, index=3),
-                         CROP_FIT, None)
+                         CROP_CENTER, None)
     assert capsys.readouterr().out == "", "a clip that agrees is not news"
 
     _maker()._framing_at("/v.mp4", ClipSpec(start=0.0, end=10.0, index=4),
@@ -158,17 +158,19 @@ def test_the_upload_paths_ask_rather_than_assume():
         assert "resolve_crop_strategy" in body
 
 
-def test_the_whole_frame_is_what_gameplay_gets_everywhere():
-    """The three lookups that can answer "how do I frame this?" for a
-    gameplay stream with no explicit setting, and they must agree."""
-    from autoreel.crop_strategy import (CROP_FIT, DEFAULT_CROP_STRATEGY,
+def test_the_whole_frame_is_the_bare_default_and_gta_fills_the_screen():
+    """Two separate lookups answer "how do I frame this?" for gameplay:
+    the code default (unknown content -> keep everything) and the named
+    gta profile (full-bleed centre, owner 10-22)."""
+    from autoreel.crop_strategy import (CROP_CENTER, CROP_FIT,
+                                        DEFAULT_CROP_STRATEGY,
                                         default_for_content,
                                         resolve_crop_strategy)
 
     assert DEFAULT_CROP_STRATEGY == CROP_FIT
     assert default_for_content("gameplay") == CROP_FIT
     assert resolve_crop_strategy({}, "gameplay") == CROP_FIT
-    assert resolve_crop_strategy({"clips": {"profile": "gta"}}) == CROP_FIT
+    assert resolve_crop_strategy({"clips": {"profile": "gta"}}) == CROP_CENTER
 
 
 def test_an_explicit_centre_crop_still_wins():

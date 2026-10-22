@@ -205,7 +205,12 @@ PROFILES: Dict[str, Dict[str, Any]] = {
     # the canvas with captions floating in the blur - but captions are
     # off now (clips.burn_captions false), so that cost is not being
     # paid, and it was never worth the whole frame anyway.
-    "gta": {"crop_strategy": CROP_FIT},
+    # CENTRE, full bleed, as short-form is watched. Was FIT; the owner
+    # saw the letterboxed result on 10-22 ("those don't look like Shorts")
+    # and captions are on again, so the 9-22 argument (captions floated
+    # in the blur, so keep the whole frame) no longer holds. Centre keeps
+    # the character, nametags and HUD; FIT is still one config line away.
+    "gta": {"crop_strategy": CROP_CENTER},
     # Layout unknown: keep everything, lose nothing.
     "whole": {"crop_strategy": CROP_FIT},
 }

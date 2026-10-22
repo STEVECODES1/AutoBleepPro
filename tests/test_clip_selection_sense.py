@@ -103,14 +103,16 @@ def test_an_unreadable_length_still_gets_looked_at():
 # fills the screen the format is actually watched on.
 
 def test_gameplay_fills_the_phone_screen():
-    """`fit` kept the whole frame and cost the whole screen: measured on
-    a real posted clip the picture was ~31% of the canvas and the rest
-    was blur, captions included."""
-    from autoreel.crop_strategy import (CROP_FACE, CROP_FIT,
+    """Short-form is watched upright; the picture has to fill the screen.
+
+    It went fit -> centre on 10-22, after the owner watched the
+    letterboxed result on the channel ("those don't look like Shorts").
+    Fit kept the whole 16:9 frame but put it in a ~31% band with blur
+    above and below, and the captions in the blur."""
+    from autoreel.crop_strategy import (CROP_CENTER, CROP_FACE,
                                         resolve_crop_strategy)
 
-    # FIT, not centre. Changed on 2026-09-22 after the channel owner saw both on the real channel: a page of centre-cropped clips came out as grass, a road, a trash bin and somebody's leg, because a 16:9 frame cropped to 9:16 keeps 31% of the width and discards the rest. Fit keeps the WHOLE screen with a blurred copy filling top and bottom. The permanent rule - gameplay NEVER gets face tracking - is unchanged and asserted below.
-    assert resolve_crop_strategy({"clips": {"profile": "gta"}}) == CROP_FIT
+    assert resolve_crop_strategy({"clips": {"profile": "gta"}}) == CROP_CENTER
     assert resolve_crop_strategy({"clips": {"profile": "gta"}}) != CROP_FACE
 
 
