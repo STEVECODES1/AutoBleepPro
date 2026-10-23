@@ -9,6 +9,11 @@ away from the PC: it must work by itself after one START, and say plainly when i
   folder's "AutoBleep Autostart.cmd" (at login, after a reboot) start each piece once, each with a keepalive
   window: Rumble Chrome + keeper (`_RUN_RUMBLE_CHROME.bat`, every 60 s), recorder, uploader
   (`main.py --batch` then `--watch`), Rumble live relay, Rumble recorder. Ollama starts at login too.
+- The Rumble recorder (`tools/rumble_watch.py`) runs on the same Python312 as everything else - the bats
+  used to call `C:\Python314`, which does not exist, so from 10-20 to 10-22 it printed "stopped,
+  restarting" every 30 s and never polled. Rumble refuses plain HTTP with 403 (Cloudflare); the watcher
+  now falls back to fetch() inside the 9222 Chrome's own Rumble tab. Never point it at another
+  interpreter.
 - The uploader picks up new code only on restart: `tools\quiet_restart.ps1` stops it ONLY when idle - no
   `logs\processing.json` naming any main.py, no in_progress clip job, no ffmpeg/python/node child, and no
   upload heartbeat (`logs\uploading.json`, touched every 15 s by every YouTube chunk / Rumble poll -
