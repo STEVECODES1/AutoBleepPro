@@ -38,7 +38,10 @@ WATCH = os.path.join(UPLOADER, "watch_folder")
 LEDGER = os.path.join(UPLOADER, "logs", "rumble_watch.json")
 LOG = os.path.join(UPLOADER, "logs", "rumble_watch.log")
 CHANNELS = ["stackswopo10k"]
-PY = r"C:\Python314\python.exe"
+# The interpreter running this file. It was hardcoded to C:\Python314,
+# which no longer exists on this machine, so every stream this recorder
+# tried to start died before yt-dlp ran.
+PY = sys.executable
 POLL_S = 60
 END_CONFIRM_S = 180          # off air this long (and yt-dlp gone) = ended
 VOD_WAIT_S = 1800            # how long to wait for Rumble's replay to appear
@@ -80,15 +83,58 @@ def discord(text):
         pass
 
 
+def cdp_page_html(url):
+    """The page's HTML fetched from inside the signed-in Rumble Chrome.
+
+    Rumble answers a plain request with HTTP 403 (Cloudflare) since
+    10-19, which is why the recorder went blind. The Chrome on 9222 is
+    already logged in and has a Rumble tab open; fetch() from that tab's
+    own origin carries the cookies and the browser fingerprint, so the
+    page comes back. No navigation when a Rumble tab exists, so the
+    owner's browser does not flash a new tab every minute.
+    """
+    try:
+        from playwright.sync_api import sync_playwright
+    except Exception as exc:
+        log(f"CDP fallback unavailable ({type(exc).__name__})")
+        return ""
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.connect_over_cdp("http://127.0.0.1:9222")
+            ctx = browser.contexts[0]
+            page = next((pg for pg in ctx.pages
+                         if "rumble.com" in (pg.url or "")), None)
+            opened = False
+            if page is None:
+                page = ctx.new_page()
+                page.goto("https://rumble.com/", wait_until="domcontentloaded",
+                          timeout=60000)
+                opened = True
+            try:
+                return page.evaluate(
+                    "async (u) => { const r = await fetch(u, {credentials:'include'});"
+                    " return r.ok ? await r.text() : ''; }", url) or ""
+            finally:
+                if opened:
+                    page.close()
+    except Exception as exc:
+        log(f"CDP fetch failed ({type(exc).__name__}: {str(exc)[:120]})")
+        return ""
+
+
 def channel_items(slug):
     """The channel's video grid, newest first ([] when it cannot be read)."""
-    req = urllib.request.Request(f"https://rumble.com/user/{slug}",
+    url = f"https://rumble.com/user/{slug}"
+    req = urllib.request.Request(url,
                                  headers={"User-Agent": UA, "Accept-Language": "en-US,en;q=0.9"})
     try:
         html = urllib.request.urlopen(req, timeout=30).read().decode("utf-8", "replace")
     except Exception as exc:
-        log(f"could not read the {slug} page ({type(exc).__name__})")
-        return []
+        log(f"could not read the {slug} page ({type(exc).__name__}) - trying the Rumble Chrome")
+        html = cdp_page_html(url)
+        if not html:
+            return []
+        log(f"read the {slug} page through the Rumble Chrome ({len(html)} chars)")
     m = re.search(r"<rum-videos-grid>\s*<script type=\"application/json\">\s*(\{.*?\})\s*</script>",
                   html, flags=re.S)
     if not m:

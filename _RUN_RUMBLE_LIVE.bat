@@ -5,7 +5,7 @@ REM the live to the BinScripts Rumble channel and ends it when he ends.
 title AutoBleep RUMBLE LIVE
 cd /d "%~dp0tools"
 :loop
-C:\Python314\python.exe -X utf8 rumble_live.py
+C:\Users\Omert\AppData\Local\Programs\Python\Python312\python.exe -X utf8 rumble_live.py
 echo [Keepalive] Rumble live relay stopped at %TIME% - restarting in 30 seconds.
 timeout /t 30 /nobreak >nul
 goto loop
