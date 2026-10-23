@@ -2326,9 +2326,26 @@ class Recorder:
                 break
 
             resumes += 1
-            self.say(f"Recording dropped after "
-                     f"{(ended - recorded_from) / 60:.0f} min of recording "
-                     f"- reconnecting (resume {resumes}/{MAX_RESUMES})...")
+            # Only say "recording" when bytes actually exist. A DNS drop
+            # while yt-dlp was still waiting for the stream printed
+            # "Recording dropped after 590 min of recording", which reads
+            # as a lost 10-hour VOD that never existed (10-22).
+            try:
+                had_bytes = any(
+                    name.startswith(base) and os.path.getsize(
+                        os.path.join(self.staging, name)) > 1_000_000
+                    for name in os.listdir(self.staging))
+            except OSError:
+                had_bytes = bool(existing_segments(self.staging, base))
+            minutes = (ended - recorded_from) / 60
+            if had_bytes:
+                self.say(f"Recording dropped after "
+                         f"{minutes:.0f} min of recording "
+                         f"- reconnecting (resume {resumes}/{MAX_RESUMES})...")
+            else:
+                self.say(f"Watch ended after {minutes:.0f} min - nothing was "
+                         f"being recorded (the channel was not live). "
+                         f"Reconnecting (resume {resumes}/{MAX_RESUMES})...")
             self.say(f"Full yt-dlp output: {log_path}")
             time.sleep(3)
 
