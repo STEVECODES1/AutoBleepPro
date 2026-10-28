@@ -323,3 +323,38 @@ def test_clip_files_are_named_after_the_stream(tmp_path):
     src = str(tmp_path / "Stackswopo youtube live 2026-10-27 11_32.ts")
     assert clip_basename("i got mail 2026-10-27 11:32", src) == "Stackswopo - i got mail 10-27"
     assert clip_basename("", src) == "Stackswopo youtube live 2026-10-27 11_32"
+
+
+@needs_ffmpeg
+@pytest.mark.parametrize("vcodec", ["libx264", "libsvtav1", "libaom-av1"])
+def test_joining_resume_pieces_keeps_the_picture(tmp_path, vcodec):
+    """10-28: an AV1 recording joined through MPEG-TS came out sound-only."""
+    import record_stream
+
+    have = subprocess.run(["ffmpeg", "-hide_banner", "-encoders"], capture_output=True,
+                          text=True).stdout
+    if vcodec not in have:
+        pytest.skip(f"no {vcodec}")
+    parts = []
+    for i in (1, 2):
+        part = tmp_path / f"rec.part0{i}.ts.mp4"
+        extra = ["-cpu-used", "8"] if vcodec == "libaom-av1" else []
+        subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i",
+                        "testsrc=size=320x240:rate=30:duration=4", "-f", "lavfi", "-i",
+                        "sine=duration=4", "-c:v", vcodec, *extra, "-c:a", "aac", "-shortest",
+                        str(part)], check=True)
+        parts.append(str(part))
+    rec = record_stream.Recorder(url="https://www.youtube.com/@x/live", staging=str(tmp_path),
+                                 watch_folder=str(tmp_path / "w"))
+    out = str(tmp_path / "joined.mp4")
+    assert rec._concat(parts, out)
+    assert record_stream.video_seconds(out) > 7
+
+
+def test_youtube_recordings_ask_for_h264():
+    import record_stream
+
+    rec = record_stream.Recorder(url="https://www.youtube.com/@x/live", staging=".",
+                                 watch_folder=".")
+    args = rec.download_args("out.ts")
+    assert "-S" in args and args[args.index("-S") + 1].startswith("vcodec:h264")

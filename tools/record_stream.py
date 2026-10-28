@@ -1018,6 +1018,38 @@ JOIN_TOLERANCE_S = 2.0
 REPEAT_AFTER_S = 30 * 60
 
 
+def video_seconds(path: str) -> float:
+    """Seconds of VIDEO stream in a file; 0.0 when it has no video."""
+    try:
+        completed = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "v:0",
+             "-show_entries", "stream=duration:format=duration", "-of", "json", path],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=120)
+        data = json.loads(completed.stdout.decode() or "{}")
+    except (FileNotFoundError, subprocess.TimeoutExpired, ValueError):
+        return 0.0
+    streams = data.get("streams") or []
+    if not streams:
+        return 0.0
+    try:
+        return float(streams[0].get("duration") or (data.get("format") or {}).get("duration") or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _alert_lost_picture(name: str, staging: str) -> None:
+    try:
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        sys.path.insert(0, os.path.join(root, "auto_uploader"))
+        from utils.brain import send_alert
+
+        send_alert("Recording join lost the picture",
+                   f"{name}: the joined file had no (or too little) video. Nothing "
+                   f"was delivered or deleted - the segments are in {staging}.")
+    except Exception:
+        pass
+
+
 def join_lost_material(joined: Optional[float], parts: list,
                        tolerance_s: float = JOIN_TOLERANCE_S) -> bool:
     """True when the joined file is materially shorter than its parts.
@@ -1532,6 +1564,12 @@ class Recorder:
             "--newline",
             "-o", output_path,
         ]
+        if platform_of(self.url) == PLATFORM_YOUTUBE:
+            # H.264, not YouTube's AV1 (format 399). 10-28: a 3.4 h stream
+            # came out sound-only - the AV1 picture did not survive the
+            # MPEG-TS join - and everything after it (intro, kid cuts,
+            # YouTube's own processing) expects H.264 anyway.
+            args += ["-S", "vcodec:h264,res,fps"]
         if (platform_of(self.url) in (PLATFORM_YOUTUBE, PLATFORM_TWITCH)
                 and not self.from_live_edge):
             # YouTube walks back through the DASH manifest's sequence
@@ -1924,6 +1962,21 @@ class Recorder:
         # Measured BEFORE the segments are gone, because this is the only
         # moment both the parts and the whole exist to compare.
         part_lengths = [probe_duration(p) for p in segments]
+        # The PICTURE, not just the length (10-28: the joined file was 3.4 h
+        # of sound with no video at all, its length matched, and the
+        # segments - the only copy of the picture - were deleted). A joined
+        # file with less picture than its parts is never delivered and the
+        # segments are never removed.
+        part_pictures = [video_seconds(p) for p in segments]
+        joined_picture = video_seconds(final)
+        if sum(part_pictures) > 60 and joined_picture < 0.9 * sum(part_pictures):
+            self.say(f"STOP: the joined file has {joined_picture / 60:.0f} min of "
+                     f"picture but the segments have {sum(part_pictures) / 60:.0f} "
+                     f"min - not delivering it and KEEPING the segments in "
+                     f"{self.staging}.")
+            _remove(final)
+            _alert_lost_picture(self.name, self.staging)
+            return None
 
         destination = os.path.join(self.watch_folder, os.path.basename(final))
         os.makedirs(self.watch_folder, exist_ok=True)
@@ -2164,15 +2217,19 @@ class Recorder:
         audio is, because that is the only way to fill the holes a live
         recording leaves - see _SYNC_AUDIO.
         """
-        return self._ffmpeg(["-fflags", "+genpts", "-i", source]
+        return self._ffmpeg(["-fflags", "+genpts", "-i", source,
+                             "-map", "0:v:0", "-map", "0:a:0"]
                             + _SYNC_AUDIO + _SYNC_MUX
                             + ["-movflags", "+faststart", target])
 
     def _normalise(self, source: str, target: str) -> bool:
         """One segment, audio realigned, still MPEG-TS so it can be joined."""
-        return self._ffmpeg(["-fflags", "+genpts", "-i", source]
+        # Matroska, not MPEG-TS: it carries every codec yt-dlp can hand us
+        # (AV1 and VP9 included), where MPEG-TS silently lost the picture.
+        return self._ffmpeg(["-fflags", "+genpts", "-i", source,
+                             "-map", "0:v:0", "-map", "0:a:0"]
                             + _SYNC_AUDIO + _SYNC_MUX
-                            + ["-f", "mpegts", target])
+                            + ["-f", "matroska", target])
 
     def _concat(self, segments: list, target: str) -> bool:
         """Join the segments into one file.
@@ -2185,7 +2242,7 @@ class Recorder:
         """
         joinable, temporary = [], []
         for index, segment in enumerate(segments):
-            fixed = os.path.join(self.staging, f"_sync{index:03d}.ts")
+            fixed = os.path.join(self.staging, f"_sync{index:03d}.mkv")
             if self._normalise(segment, fixed):
                 joinable.append(fixed)
                 temporary.append(fixed)
