@@ -229,9 +229,13 @@ class Push:
                                      creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         threading.Thread(target=self._drain, daemon=True).start()
 
+    key_rejected = False
+
     def _drain(self):
         for line in self.proc.stderr:
             line = line.rstrip().replace(self.key, "<key>")
+            if "invalid stream key" in line.lower():
+                self.key_rejected = True
             if line:
                 log(f"[ffmpeg] {line[:300]}")
 
@@ -255,7 +259,18 @@ class StudioMissing(RuntimeError):
 class Studio:
     def __init__(self):
         from playwright.sync_api import sync_playwright
+        self.page, self.opened = None, False
         self.pw = sync_playwright().start()
+        try:
+            self._open()
+        except BaseException:
+            # A half-built Studio left Playwright running in this thread,
+            # and every retry after it died with "Sync API inside the
+            # asyncio loop" (10-28).
+            self.close()
+            raise
+
+    def _open(self):
         self.browser = self.pw.chromium.connect_over_cdp(CDP)
         ctx = self.browser.contexts[0]
         # ONE studio tab, ever. "/studio/" alone missed Rumble's own
@@ -356,6 +371,22 @@ def relay(video_id, cfg):
                 off_since = off_since or time.time()
                 if time.time() - off_since > END_GRACE_S:
                     break
+            if push is not None and getattr(push, "key_rejected", False):
+                # Rumble refused the key: every restart is refused the same
+                # way (10-28: one every 12 s). Stop for this stream and say so.
+                pushed += push.stop()
+                push = None
+                entry["key_rejected"] = True
+                log("Rumble says the stream key is invalid - not pushing again for "
+                    "this stream. Copy the key from Rumble Studio into "
+                    "RUMBLE_STREAM_KEY in auto_uploader/.env.")
+                _alert_once("Rumble live relay: stream key rejected",
+                            "Rumble Studio says RUMBLE_STREAM_KEY is invalid. Copy the "
+                            "current key from Rumble Studio into auto_uploader/.env. The "
+                            "full stream still uploads to Rumble after it ends.")
+            if entry.get("key_rejected"):
+                time.sleep(POLL_S)
+                continue
             if (push is None or not push.alive()) and still_live:
                 if push is not None:
                     pushed += push.stop()
