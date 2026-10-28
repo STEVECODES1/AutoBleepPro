@@ -29,8 +29,15 @@ DEFAULT_STORE = os.path.join(_ROOT, "logs", "stream_links.json")
 MAX_AGE_S = 14 * 86400
 
 
+# A recorder start time on a stored title ("i got mail 2026-10-27 11:32").
+# The clip's note says just "i got mail", so every Rumble short of that
+# stream waited for a link that was there all along (10-28).
+_STAMP = re.compile(r"\b\d{4}-\d{2}-\d{2}(?:[ _T]\d{1,2}[-:_.]\d{2}(?:[-:_.]\d{2})?)?")
+
+
 def _normal(text: str) -> str:
-    return re.sub(r"[^a-z0-9]+", "", (text or "").lower())
+    text = _STAMP.sub(" ", text or "")
+    return re.sub(r"[^a-z0-9]+", "", text.lower())
 
 
 def _same_day(a, b) -> bool:

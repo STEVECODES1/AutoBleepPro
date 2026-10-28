@@ -1488,6 +1488,8 @@ def _rumble_full_stream_for(video_path: str, cfg=None) -> str:
 # up without the Related Video link (a stream that never reaches Rumble
 # must not hold its clips forever).
 RUMBLE_RELATED_WAIT_HOURS = 12
+# A stream's clips wait for both full uploads at most this long.
+CLIPS_WAIT_FOR_UPLOADS_H = 24
 RUMBLE_WAIT_RESULT = "FAILED: waiting for the full stream on Rumble (Related Video)"
 
 
@@ -3880,7 +3882,24 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
                       f"full stream.")
         except Exception as exc:
             print(f"[Clips] could not note the stream's links: {exc}")
-    if not dry_run:
+    # Clips only once the full stream is up on BOTH YouTube and Rumble
+    # (owner, 10-28): every clip links its full stream, and cutting while an
+    # upload is still failing/retrying spends the GPU and the day's Gemini
+    # quota on a stream that is not out yet. The watcher offers the VOD
+    # again on its retry pass and the clips are cut then. After a day they
+    # are cut anyway, so one platform that never recovers cannot hold
+    # them back for good.
+    wait_for_uploads = False
+    if not dry_run and not is_clip and not fully_uploaded:
+        try:
+            age_h = (time.time() - os.path.getmtime(video_path)) / 3600
+        except OSError:
+            age_h = 0.0
+        wait_for_uploads = age_h < CLIPS_WAIT_FOR_UPLOADS_H
+        if wait_for_uploads:
+            print("[Clips] Not cutting clips yet - the full stream is not up on "
+                  "both YouTube and Rumble. They are cut once it is.")
+    if not dry_run and not wait_for_uploads:
         clips_delivered = cut_clips_from_stream(
             cfg, video_path, is_clip, title=stream_title,
             content_hash=file_hash) or 0

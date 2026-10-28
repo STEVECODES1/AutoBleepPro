@@ -56,6 +56,31 @@ DESCRIPTION = (
 )
 
 
+def _alert_once(title, message):
+    """Discord/ntfy once a day per title - never every poll."""
+    stamp = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "auto_uploader",
+                         "logs", "rumble_live_alert.json")
+    today = time.strftime("%Y-%m-%d")
+    try:
+        with open(stamp, encoding="utf-8") as f:
+            sent = json.load(f)
+    except (OSError, ValueError):
+        sent = {}
+    if sent.get(title) == today:
+        return
+    sent[title] = today
+    try:
+        with open(stamp, "w", encoding="utf-8") as f:
+            json.dump(sent, f)
+        sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..",
+                                        "auto_uploader"))
+        from utils.brain import send_alert
+
+        send_alert(title, message, urgent=False)
+    except Exception:
+        pass
+
+
 def log(msg):
     line = f"{time.strftime('%Y-%m-%d %H:%M:%S')} {msg}"
     print(line, flush=True)
@@ -223,16 +248,36 @@ class Push:
         return time.time() - self.started
 
 
+class StudioMissing(RuntimeError):
+    """The studio room is not there for this account - retrying cannot help."""
+
+
 class Studio:
     def __init__(self):
         from playwright.sync_api import sync_playwright
         self.pw = sync_playwright().start()
         self.browser = self.pw.chromium.connect_over_cdp(CDP)
         ctx = self.browser.contexts[0]
-        self.page = next((p for p in ctx.pages if "/studio/" in p.url), None) or ctx.new_page()
+        # ONE studio tab, ever. "/studio/" alone missed Rumble's own
+        # "studio-not-found" notice page, so every 15-second retry opened a
+        # fresh tab and the window filled with 30 Rumble tabs (10-28).
+        mine = [p for p in ctx.pages if "studio.rumble.com" in (p.url or "")]
+        for extra in mine[1:]:
+            try:
+                extra.close()
+            except Exception:
+                pass
+        self.opened = not mine
+        self.page = mine[0] if mine else ctx.new_page()
         if ROOM not in self.page.url:
             self.page.goto(ROOM, wait_until="domcontentloaded", timeout=60000)
         self.page.wait_for_timeout(4000)
+        if "studio-not-found" in (self.page.url or ""):
+            self.close()
+            raise StudioMissing(
+                "Rumble says the live studio room does not exist for the account "
+                "signed in to the 9222 browser (studio-not-found). Sign in there as "
+                "BinScripts, or put the room's new address in ROOM.")
 
     def _button(self, pattern):
         return self.page.get_by_role("button", name=re.compile(pattern, re.I)).first
@@ -282,6 +327,11 @@ class Studio:
 
     def close(self):
         try:
+            if getattr(self, "opened", False) and self.page is not None:
+                self.page.close()
+        except Exception:
+            pass
+        try:
             self.pw.stop()
         except Exception:
             pass
@@ -325,13 +375,19 @@ def relay(video_id, cfg):
                         entry["no_feed"] = True
                         break
                     log("No live feed URL yet - trying again")
-            if push is not None and not entry["went_live"]:
+            if push is not None and not entry["went_live"] and not entry.get("studio_missing"):
                 try:
                     studio = studio or Studio()
                     studio.details(title)
                     entry["went_live"] = studio.start()
                     log("Rumble live STARTED" if entry["went_live"]
                         else "Rumble never offered Start stream - will retry")
+                except StudioMissing as exc:
+                    # Once per stream, not every 15 s.
+                    log(f"Studio: {exc} Not trying again for this stream.")
+                    entry["studio_missing"] = True
+                    _alert_once("Rumble live relay: studio room not found", str(exc))
+                    studio = None
                 except Exception as exc:
                     log(f"Studio error: {exc}")
                     if studio:

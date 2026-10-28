@@ -288,3 +288,18 @@ def test_a_second_channel_records_nothing_while_the_main_one_does(monkeypatch, t
         record_stream.MAIN_RECORDING.clear()
     monkeypatch.setattr(record_stream, "channel_is_live", lambda url: False)
     assert rec.record_one_stream() is None
+
+
+def test_a_clip_finds_its_stream_when_the_stored_title_carries_the_recorder_time(tmp_path):
+    import json
+    import time as _t
+
+    from utils.stream_links import link_for
+
+    store = tmp_path / "links.json"
+    store.write_text(json.dumps([{"title": "i got mail 2026-10-27 11:32", "date": "10-27-26",
+                                  "rumble": "https://rumble.com/v7hh9ba-x.html",
+                                  "youtube": "https://www.youtube.com/watch?v=a0wMh3oXGOQ",
+                                  "at": _t.time()}]))
+    assert link_for("i got mail", "10-27-26", "rumble", store=str(store)) == \
+        "https://rumble.com/v7hh9ba-x.html"
