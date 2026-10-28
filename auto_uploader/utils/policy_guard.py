@@ -95,7 +95,16 @@ def _askers():
     except Exception:
         return []
     out = []
-    for provider, key in llm.all_available():
+    # Gemini's free tier is 20 requests a day (10-28), and the clip watch
+    # pass - the only judge that WATCHES and LISTENS for the funny part -
+    # needs them. A 3-hour stream is ~36 policy pieces, which used to spend
+    # the whole day's Gemini quota before a single clip was judged. So the
+    # policy read uses every other model first and Gemini only as the last
+    # resort when nothing else is configured.
+    available = list(llm.all_available())
+    others = [(p, k) for p, k in available if p != "gemini"]
+    available = others if others else available
+    for provider, key in available:
         try:
             model = llm.resolve_model(provider, key, "")
         except Exception:
