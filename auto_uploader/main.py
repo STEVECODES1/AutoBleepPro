@@ -1472,15 +1472,157 @@ def _already_on_youtube(title: str, service, default_title: str = "") -> str:
     return ""
 
 
-def _rumble_full_stream_for(video_path: str) -> str:
+def _rumble_full_stream_for(video_path: str, cfg=None) -> str:
     """The Rumble URL of the full stream a clip came from, or "" (not up yet)."""
     try:
         from utils.stream_links import link_for_clip
 
-        url = link_for_clip(video_path, "rumble")
+        folders = _clip_note_folders(cfg) if cfg is not None else ()
+        url = link_for_clip(video_path, "rumble", folders=folders)
     except Exception:
         return ""
     return url if str(url).startswith("https://rumble.com/v") else ""
+
+
+# How long a clip waits for its full stream to be on Rumble before it goes
+# up without the Related Video link (a stream that never reaches Rumble
+# must not hold its clips forever).
+RUMBLE_RELATED_WAIT_HOURS = 12
+RUMBLE_WAIT_RESULT = "FAILED: waiting for the full stream on Rumble (Related Video)"
+
+
+def _rumble_waits_for_stream(video_path: str, cfg=None) -> bool:
+    """True while this clip should wait for its full stream's Rumble URL:
+    it knows which stream it is from, and is younger than the wait."""
+    try:
+        from utils.stream_links import source_of
+
+        folders = _clip_note_folders(cfg) if cfg is not None else ()
+        note = source_of(video_path, folders)
+    except Exception:
+        return False
+    if not str(note.get("stream_title", "") or "").strip():
+        return False                      # a clip dropped in by hand
+    try:
+        age_h = (time.time() - os.path.getmtime(video_path)) / 3600
+    except OSError:
+        return False
+    if age_h >= RUMBLE_RELATED_WAIT_HOURS:
+        print(f"[Rumble] The full stream is still not on Rumble after "
+              f"{RUMBLE_RELATED_WAIT_HOURS} h - uploading this clip without "
+              f"the Related Video link.")
+        return False
+    return True
+
+
+def _clip_note_folders(cfg) -> tuple:
+    root = getattr(cfg, "project_root", "") or ""
+    folders = [getattr(cfg.general, name, "") for name in
+               ("watch_folder", "uploaded_folder", "censored_folder")]
+    if root:
+        folders += [os.path.join(root, "clips"),
+                    os.path.join(root, "clip_queue_files")]
+    return tuple(f for f in folders if f)
+
+
+def _clip_line_anywhere(cfg, video_path: str) -> str:
+    """The clip's spoken line / headline from its notes in any folder,
+    cleaned for a title. "" when there is none that is safe."""
+    try:
+        from utils.social_promoter import spoken_line
+        from autoreel.safe_text import clean_title
+
+        line = spoken_line(video_path, _clip_note_folders(cfg))
+        if not line:
+            return ""
+        unusable = "\x00-no-safe-title-\x00"
+        safe = clean_title(line, fallback=unusable)
+        return "" if safe == unusable else safe
+    except Exception:
+        return ""
+
+
+def _clip_title_without_filename(video_path: str) -> str:
+    """A title for a clip with no usable line, built from its STREAM's
+    name (the _source.json note) - never from the clip's file name."""
+    match = re.search(r"clip\s*(\d+)", os.path.basename(video_path or ""), re.I)
+    number = int(match.group(1)) if match else 1
+    try:
+        from utils.stream_links import source_of
+        from utils.templating import strip_trailing_stamp
+
+        parent = strip_trailing_stamp(
+            str(source_of(video_path).get("stream_title", "") or ""))
+    except Exception:
+        parent = ""
+    from utils.text_guard import looks_like_machine_name
+
+    if parent and not looks_like_machine_name(parent):
+        return f"{parent} (Clip {number})"
+    return f"Stackswopo moment (Clip {number})"
+
+
+# Where the YouTube intro may be. The configured path pointed into CapCut's
+# own folder on C:, which a fresh Windows wiped (10-28) - and before that a
+# missing file was one print line nobody saw. The repo copy on D: survives.
+INTRO_HOME = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                          "assets", "intro.mp4")
+
+
+def find_intro(cfg) -> str:
+    """The intro to prepend, "" when there is none. A copy found outside
+    the repo is kept at INTRO_HOME so the next reset cannot lose it."""
+    if str(getattr(cfg.youtube, "intro_path", "") or "").strip().lower() in (
+            "none", "off", "no", "false"):
+        return ""          # switched off on purpose
+    here = os.path.dirname(os.path.abspath(__file__))
+    local = os.environ.get("LOCALAPPDATA", "")
+    candidates = [getattr(cfg.youtube, "intro_path", "") or "",
+                  os.environ.get("YOUTUBE_INTRO_PATH", ""),
+                  INTRO_HOME,
+                  os.path.join(here, "intro.mp4"),
+                  os.path.join(os.path.dirname(here), "intro.mp4")]
+    if local:
+        candidates.append(os.path.join(local, "CapCut", "Videos", "intro.mp4"))
+    for path in candidates:
+        if path and os.path.isfile(path) and os.path.getsize(path) > 0:
+            path = os.path.abspath(path)
+            if os.path.normcase(path) != os.path.normcase(INTRO_HOME) \
+                    and not os.path.isfile(INTRO_HOME):
+                try:
+                    import shutil as _sh
+
+                    os.makedirs(os.path.dirname(INTRO_HOME), exist_ok=True)
+                    _sh.copy2(path, INTRO_HOME)
+                except OSError:
+                    pass
+            return path
+    return ""
+
+
+def _say_intro_missing(cfg) -> None:
+    """Say it where the owner sees it - once a day, not once per upload."""
+    print(f"[YouTube] WARNING: no intro.mp4 found - put it at {INTRO_HOME}. "
+          f"Uploading without the intro.")
+    try:
+        stamp = os.path.join(cfg.general.logs_folder, "intro_missing.txt")
+        today = datetime.now().strftime("%Y-%m-%d")
+        try:
+            with open(stamp, encoding="utf-8") as handle:
+                if handle.read().strip() == today:
+                    return
+        except OSError:
+            pass
+        os.makedirs(cfg.general.logs_folder, exist_ok=True)
+        with open(stamp, "w", encoding="utf-8") as handle:
+            handle.write(today)
+        from utils.brain import send_alert
+
+        send_alert("YouTube intro missing",
+                   f"No intro.mp4 found, so full streams go up without it. "
+                   f"Put the intro at {INTRO_HOME}.", urgent=False)
+    except Exception:
+        pass
 
 
 def _generic_clip_title(title: str, video_path: str = "") -> bool:
@@ -2495,11 +2637,19 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
                 print(f"       not used: {spoken[:80]}")
                 spoken = ""
 
+        if not spoken:
+            # The cutter writes each clip's line into clips/ (and the
+            # queue copies live in clip_queue_files/), not beside the
+            # video - so this path never saw "Call a EMS!" and a Rumble
+            # short went out titled "Stackswopo Youtube Live
+            # Stackswopoman10K 14 32 Live 13 (Clip 1)" (owner, 10-28).
+            spoken = _clip_line_anywhere(cfg, video_path)
         if spoken:
             stream_title = spoken
             print(f"[Clip] Title from the clip itself: {stream_title}")
         else:
-            stream_title = _clip_title(video_path)
+            # Clip titles never come from file names (owner, 10-28).
+            stream_title = _clip_title_without_filename(video_path)
             # clip_title() strips "- Clip NN" for readability, which is
             # right for a caption someone will read. It is wrong here:
             # this string becomes the video's own upload TITLE and the
@@ -3012,7 +3162,7 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
                     # no character to carry the picture, and a bare frame
                     # of strangers is not clickable - thumbnail.make drops
                     # the text itself whenever the frames are the game.
-                    text="" if is_clip else stream_title,
+                    text="" if is_clip else youtube_safe_title(stream_title),
                     badge="" if (is_clip or thumb_mode == 'monkey')
                     else 'GTA RP',
                     mode=thumb_mode)
@@ -3160,12 +3310,7 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
             # --- Prepend intro (YouTube VOD only — never clips, never Rumble) ---
             # Looks for cfg.youtube.intro_path, then YOUTUBE_INTRO_PATH env var,
             # then ./intro.mp4 next to main.py.  The intro file is NEVER deleted.
-            _intro_file = (
-                getattr(cfg.youtube, "intro_path", None)
-                or os.environ.get("YOUTUBE_INTRO_PATH", "")
-                or os.path.join(os.path.dirname(os.path.abspath(__file__)), "intro.mp4")
-            )
-            _intro_abs = os.path.abspath(_intro_file) if _intro_file else ""
+            _intro_abs = find_intro(cfg)
             if _intro_abs and os.path.isfile(_intro_abs):
                 # Old version stream-copied intro + VOD with mismatched frame
                 # rates/timebases and produced a "28 hour" file YouTube
@@ -3175,7 +3320,13 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
                 from utils.ffmpeg_tools import prepend_intro as _prepend_intro
                 _intro_tmp = None
                 try:
-                    _tmp_fd, _intro_tmp = _tf.mkstemp(suffix=".mp4")
+                    # On D: beside the censored copy, not C:'s temp: the
+                    # joined stream is as big as the stream.
+                    _tmp_dir = getattr(cfg.general, "censored_folder", "") or None
+                    if _tmp_dir and not os.path.isdir(_tmp_dir):
+                        _tmp_dir = None
+                    _tmp_fd, _intro_tmp = _tf.mkstemp(suffix="_intro.mp4",
+                                                       dir=_tmp_dir)
                     os.close(_tmp_fd)
                     if _prepend_intro(_intro_abs, yt_source, _intro_tmp):
                         print("[YouTube] Intro prepended — uploading with intro")
@@ -3195,8 +3346,8 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
                         except OSError:
                             pass
                         _intro_tmp = None
-            elif _intro_abs:
-                print(f"[YouTube] intro.mp4 not found at {_intro_abs!r} — uploading without intro")
+            else:
+                _say_intro_missing(cfg)
 
             if parallel and rumble_will_run:
                 got_going = rumble_upload_started.wait(
@@ -3316,6 +3467,20 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
 
     def do_rumble(parallel: bool) -> None:
         try:
+            # Every Rumble short carries "Related Video" = its full stream
+            # (owner, 10-28). A clip cut while the stream is still uploading
+            # has no URL to point at yet, so it WAITS (the retry sweep
+            # offers it again) instead of going up without the link.
+            clip_related = (_rumble_full_stream_for(video_path, cfg)
+                            if is_clip else "")
+            if is_clip and not clip_related and _rumble_waits_for_stream(video_path, cfg):
+                print(f"[Rumble] Waiting: the full stream for this clip is not on "
+                      f"Rumble yet, and every short links it as its Related "
+                      f"Video. Tried again on the next pass.")
+                with upload_lock:
+                    results["rumble"] = RUMBLE_WAIT_RESULT
+                rumble_upload_started.set()
+                return
             base_progress = progress_reporter("Rumble", parallel)
 
             def rb_progress(pct: int) -> None:
@@ -3370,7 +3535,7 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
                     thumbnail_path=lambda: thumbnail_path_for(
                         cfg.rumble.thumbnail_path) or None,
                     progress_callback=rb_progress,
-                    related_url=_rumble_full_stream_for(video_path) if is_clip else "",
+                    related_url=clip_related,
                     promote=not is_clip,
                 )
 
@@ -3798,6 +3963,9 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
 
         if waiting_only_on_block:
             raise _QuietPass
+        if (str(results.get("rumble", "")) == RUMBLE_WAIT_RESULT
+                and not newly_uploaded and not clips_delivered):
+            raise _QuietPass       # a clip waiting for its stream is not news
         report_job(cfg, JobReport(
             title=yt_title or filename,
             filename=filename,

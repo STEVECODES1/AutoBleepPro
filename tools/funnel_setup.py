@@ -30,9 +30,8 @@ PLAYLIST_TITLE = "Stackswopo Best Moments - every stream"
 # fan-run, that the people on screen are actors, and links his real channel.
 DISCLOSURE = ("Fan channel - not Stackswopo's own channel. "
               "His channel: https://www.youtube.com/@stackswopo_\n\n"
-              "⚠️ DISCLAIMER: All people in these videos are actors. "
-              "GTA content is GTA roleplay; anything else still features actors. "
-              "Nothing shown is real.\n\n")
+              "⚠️ DISCLAIMER: GTA RP is role-play - everyone in it is acting. "
+              "The non-GTA parts feature actors too. Nothing shown is real.\n\n")
 OLD_DISCLOSURES = ("Fan-run channel - not Stackswopo's own channel. Clips and VODs are posted with "
                    "his permission. His official channel: https://www.youtube.com/@stackswopo_\n\n",)
 GAMES_ABOUT = DISCLOSURE + (
@@ -57,9 +56,12 @@ def disclosed(existing):
     if existing.startswith(DISCLOSURE.strip()):
         return existing
     # A fan-only notice from 10-19: replace it rather than stack a second.
-    from utils.disclosure import FAN_LINE, ACTORS_LINE
+    from utils.disclosure import FAN_LINE, ACTORS_LINE, OLD_ACTORS_LINES
 
-    existing = existing.replace(FAN_LINE, "").replace(ACTORS_LINE, "").strip()
+    existing = existing.replace(FAN_LINE, "").replace(ACTORS_LINE, "")
+    for old in OLD_ACTORS_LINES:
+        existing = existing.replace(old, "")
+    existing = existing.strip()
     return (DISCLOSURE + existing)[:1000]
 
 

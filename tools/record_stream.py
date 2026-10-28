@@ -55,7 +55,20 @@ from typing import Optional
 RESUME_WINDOW_S = 90
 # Give up resuming after this many consecutive restarts; past this it is
 # not a blip, and spinning forever would fill the disk with fragments.
-MAX_RESUMES = 20
+MAX_RESUMES = 100
+
+# After yt-dlp says the stream ended, keep watching this long before the
+# recording is delivered: a stream that drops and comes back (or a quick
+# restart by the streamer) joins the SAME recording instead of going up
+# as its own 0.18 h "full stream" (owner, 10-28).
+REJOIN_GRACE_S = 15 * 60
+REJOIN_POLL_S = 60
+
+# Set while the MAIN (first) channel is recording. A second channel only
+# records while this is clear and stops when it is set, so there are never
+# two yt-dlp recordings at once (owner, 10-28: a stackswopoman10k download
+# ran beside the main one - the same stream twice, half the bandwidth each).
+MAIN_RECORDING = threading.Event()
 
 # A stream that was FOUND and produced nothing gets this many quick
 # retries before the channel is written off as offline. A 503 or a dead
@@ -1454,6 +1467,11 @@ class Recorder:
     # stream is over and what is on disk is all there is. See
     # _PRIVATE_MARKERS.
     went_private: bool = field(default=False, repr=False)
+    # The first channel given is the main one; the rest only record while
+    # it is not (see MAIN_RECORDING).
+    primary: bool = True
+    _process: object = field(default=None, repr=False)
+    yielded_to_main: bool = field(default=False, repr=False)
 
     def say(self, message: str) -> None:
         print(f"[{time.strftime('%H:%M:%S')}] {message}", flush=True)
@@ -1596,6 +1614,7 @@ class Recorder:
             waiting_since = last_heartbeat = 0.0
             output_path = args[args.index("-o") + 1] if "-o" in args else ""
             self._active_output = output_path
+            self._process = process
             clock = threading.Thread(
                 target=self._recording_clock, args=(clock_stop, output_path),
                 daemon=True)
@@ -1714,6 +1733,8 @@ class Recorder:
                         # them. With --wait-for-video those can be
                         # eleven hours apart. See recording_started_at.
                         self.recording_started_at = time.time()
+                        if self.primary:
+                            MAIN_RECORDING.set()
                         self.say("Live - recording started.")
                         awake = getattr(self, "_awake", None)
                         if awake is not None and awake.hold():
@@ -1783,6 +1804,7 @@ class Recorder:
             return 130
         finally:
             self._active_output = ""
+            self._process = None
             clock_stop.set()
             if clock:
                 clock.join(timeout=10)
@@ -2201,7 +2223,84 @@ class Recorder:
 
     def record_one_stream(self) -> Optional[str]:
         """Wait for the channel to go live, record it, deliver it."""
+        if not self.primary:
+            # A second channel never runs a second yt-dlp beside the main
+            # one: no waiting process of its own, and nothing at all while
+            # the main channel is recording.
+            if MAIN_RECORDING.is_set():
+                self.say_once("main-busy", f"{self.name}: the main channel is "
+                              f"recording - not recording a second copy.",
+                              every_seconds=3600)
+                return None
+            if channel_is_live(self.url) is not True:
+                return None
+        watchdog = None
+        stop_watch = threading.Event()
+        if not self.primary:
+            watchdog = threading.Thread(target=self._yield_to_main,
+                                        args=(stop_watch,), daemon=True,
+                                        name="yield-to-main")
+            watchdog.start()
+        try:
+            return self._record_one_stream()
+        finally:
+            stop_watch.set()
+            if self.primary:
+                MAIN_RECORDING.clear()
+
+    def _yield_to_main(self, stop: threading.Event) -> None:
+        """Stop this (second) channel's download when the main one starts."""
+        while not stop.wait(5):
+            process = self._process
+            if MAIN_RECORDING.is_set() and process is not None:
+                self.yielded_to_main = True
+                self.say(f"{self.name}: the main channel went live - stopping "
+                         f"this one so only one recording runs.")
+                try:
+                    process.terminate()
+                except Exception:
+                    pass
+                return
+
+    def _wait_for_return(self, grace_s: float = None) -> bool:
+        """True when the channel comes back live within the grace window -
+        the recording then continues as the next part of the SAME file."""
+        grace_s = REJOIN_GRACE_S if grace_s is None else grace_s
+        if grace_s <= 0:
+            return False
+        url = resolved_watch_url(self.url, self.video_id)
+        self.say(f"Holding the recording {grace_s / 60:.0f} min in case the "
+                 f"stream comes back (so it is not split in two)...")
+        deadline = time.time() + grace_s
+        while time.time() < deadline:
+            if channel_is_live(url) or (url != self.url and channel_is_live(self.url)):
+                self.say("The stream is back - joining it to the same recording.")
+                return True
+            time.sleep(min(REJOIN_POLL_S, max(1.0, deadline - time.time())))
+        return False
+
+    def _adoptable_orphan(self, bases: list) -> str:
+        """An unfinished recording from just before a restart, while the
+        channel is still live: continue it instead of delivering it alone."""
+        if not bases:
+            return ""
+        newest, newest_at = "", 0.0
+        for base in bases:
+            for name in os.listdir(self.staging):
+                if name.startswith(base):
+                    try:
+                        at = os.path.getmtime(os.path.join(self.staging, name))
+                    except OSError:
+                        continue
+                    if at > newest_at:
+                        newest, newest_at = base, at
+        if not newest or time.time() - newest_at > REJOIN_GRACE_S:
+            return ""
+        return newest if channel_is_live(self.url) else ""
+
+    def _record_one_stream(self) -> Optional[str]:
         os.makedirs(self.staging, exist_ok=True)
+        adopted = ""
 
         if not self._swept_orphans:
             # Once per process, not once per poll: a recovery that keeps
@@ -2210,7 +2309,16 @@ class Recorder:
             # forever. The common case - recovering after a crash or a
             # restart - only ever needs to happen once anyway.
             self._swept_orphans = True
-            for orphan_base in sweep_abandoned_recordings(self.staging, self.name):
+            orphans = sweep_abandoned_recordings(self.staging, self.name)
+            adopted = self._adoptable_orphan(orphans)
+            if adopted:
+                recover_abandoned_parts(self.staging, adopted)
+                self._merge_fragments(adopted)
+                self.say(f"The recorder restarted mid-stream - continuing "
+                         f"{adopted} instead of delivering it on its own.")
+            for orphan_base in orphans:
+                if orphan_base == adopted:
+                    continue
                 self.say(f"Found a recording that never finished from an "
                          f"earlier run ({orphan_base}) - recovering it "
                          f"before waiting for the next stream.")
@@ -2219,7 +2327,7 @@ class Recorder:
                     self.say(f"Recovered and delivered: "
                              f"{os.path.basename(recovered_path)}")
 
-        base = f"{safe_name(self.name)} {time.strftime('%Y-%m-%d %H_%M')}"
+        base = adopted or f"{safe_name(self.name)} {time.strftime('%Y-%m-%d %H_%M')}"
         log_path = os.path.join(self.staging, f"{base}.log")
 
         warning = disk_warning(self.staging)
@@ -2229,7 +2337,8 @@ class Recorder:
         self.say(f"Waiting for {self.name} to go live...")
         self.from_live_edge = False
         self.went_private = False
-        resumes = 0
+        self.yielded_to_main = False
+        resumes = len(existing_segments(self.staging, base)) if adopted else 0
         missed_tries = 0
         while True:
             target = segment_path(self.staging, base, resumes + 1)
@@ -2251,8 +2360,8 @@ class Recorder:
             # is mid-stream already and holds from the start.
             with KeepAwake(start_held=(resumes > 0)) as awake:
                 self._awake = awake
-                code = self._run(self.download_args(target, wait=(resumes == 0)),
-                                 log_path)
+                code = self._run(self.download_args(
+                    target, wait=(resumes == 0 and self.primary)), log_path)
                 self._awake = None
             ended = time.time()
             # Fall back to `started` when the download never began -
@@ -2262,6 +2371,8 @@ class Recorder:
 
             if code in (127, 130):
                 return None
+            if self.yielded_to_main:
+                break
             if self.went_private:
                 # No reconnect, no "still live?" check: a private video
                 # cannot be resumed, and the upload should start now.
@@ -2297,6 +2408,9 @@ class Recorder:
                              f"{resumes}/{MAX_RESUMES})...")
                     time.sleep(3)
                     continue
+                if resumes < MAX_RESUMES and self._wait_for_return():
+                    resumes += 1
+                    continue
                 self.say("Stream ended.")
                 break
             if not should_resume(recorded_from, ended, resumes):
@@ -2323,6 +2437,9 @@ class Recorder:
                 if resumes == 0:
                     self.say("Channel is not live (or the recording never started).")
                     return None
+                if resumes < MAX_RESUMES and self._wait_for_return():
+                    resumes += 1
+                    continue
                 break
 
             resumes += 1
@@ -2542,6 +2659,31 @@ def configured_staging(root: str) -> str:
     return os.path.normpath(folder)
 
 
+def single_instance_lock(folder: str):
+    """An open, locked file while this is the only recorder; None when
+    another recorder process already holds it. Released when the process
+    ends, however it ends."""
+    try:
+        os.makedirs(folder, exist_ok=True)
+        handle = open(os.path.join(folder, "recorder.lock"), "a+")
+    except OSError:
+        return object()          # cannot tell - never block recording on it
+    try:
+        if os.name == "nt":
+            import msvcrt
+
+            handle.seek(0)
+            msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        handle.close()
+        return None
+    return handle
+
+
 def main(argv: Optional[list] = None) -> int:
     import argparse
     import threading
@@ -2632,11 +2774,17 @@ def main(argv: Optional[list] = None) -> int:
     stop = threading.Event()
     threads = []
     recorders = []
-    for url in streams:
+    lock = single_instance_lock(args.staging)
+    if lock is None:
+        print("Another recorder is already running on this PC - not starting "
+              "a second one (two would record every stream twice).")
+        return 3
+    for index, url in enumerate(streams):
         recorder = Recorder(url=url, staging=args.staging,
                             watch_folder=args.watch_folder, name=label(url),
                             poll_seconds=args.poll_seconds,
-                            fill_gaps=not args.no_fill_gaps)
+                            fill_gaps=not args.no_fill_gaps,
+                            primary=(index == 0))
         recorders.append(recorder)
         thread = threading.Thread(target=_source_loop,
                                   args=(recorder, args.once, stop),

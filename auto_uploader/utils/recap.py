@@ -115,19 +115,99 @@ def stranger_spans(source: str, look=None) -> List[Tuple[float, float]]:
     return spans
 
 
-def transcript_of(cfg, source: str) -> list:
-    """The stream's transcript segments (from the censor's words cache),
-    or [] - never raises."""
+def audio_lead(path: str) -> float:
+    """Seconds the audio starts after the picture/container does.
+
+    The transcript is made from a WAV that starts at the FIRST AUDIO
+    SAMPLE, while every `-ss` cut counts from the container's start - so a
+    recording whose audio starts 1.4 s late had every burned caption 1.4 s
+    early, the "wrong line" the owner saw on recaps. 0.0 when unknown."""
     try:
-        from utils.censor import words_cache_path
+        out = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "stream=codec_type,start_time",
+             "-show_entries", "format=start_time", "-of", "json", path],
+            capture_output=True, text=True, timeout=120).stdout
+        data = json.loads(out or "{}")
+        fmt = float((data.get("format") or {}).get("start_time") or 0.0)
+        audio = [float(st.get("start_time") or fmt) for st in data.get("streams", [])
+                 if st.get("codec_type") == "audio"]
+        lead = (audio[0] - fmt) if audio else 0.0
+        return lead if 0.0 < lead < 30.0 else 0.0
+    except Exception:
+        return 0.0
+
+
+def shifted(segments: list, by: float) -> list:
+    """Segments (and their words) moved `by` seconds later."""
+    if not by:
+        return list(segments or [])
+    out = []
+    for seg in segments or []:
+        seg = dict(seg)
+        for key in ("start", "end"):
+            if seg.get(key) is not None:
+                seg[key] = float(seg[key]) + by
+        if isinstance(seg.get("words"), list):
+            seg["words"] = [dict(w, **{k: float(w[k]) + by for k in ("start", "end")
+                                       if w.get(k) is not None})
+                            for w in seg["words"] if isinstance(w, dict)]
+        out.append(seg)
+    return out
+
+
+def transcript_of(cfg, source: str, align: bool = True) -> list:
+    """The stream's transcript segments (from the censor's words cache) on
+    the SAME clock `-ss` cuts the video by, or [] - never raises.
+
+    Stale-checked (10-28): a cache made from a different video under the
+    same name (a re-recording, a re-download, a renamed re-upload) is not
+    used - its words would be burned onto the wrong moments."""
+    try:
+        from utils.censor import _load_cached_words, words_cache_path
 
         path = words_cache_path(cfg.general.censored_folder,
                                 os.path.splitext(os.path.basename(source))[0])
-        with open(path, encoding="utf-8") as f:
-            data = json.load(f)
-        return list(data.get("segments") if isinstance(data, dict) else data)
+        if not os.path.isfile(path):
+            return []
+        data = _load_cached_words(path, source)
+        if data is None:
+            print(f"[Recap] The transcript cache for {os.path.basename(source)} "
+                  f"is stale (made from a different video) or empty - not using it.")
+            return []
+        segments = list(data)
     except Exception:
         return []
+    if align and segments:
+        lead = audio_lead(source)
+        if lead:
+            print(f"[Recap] Audio starts {lead:.2f}s into the video - captions "
+                  f"moved to match.")
+            segments = shifted(segments, lead)
+    return segments
+
+
+def seekable_copy(source: str, work: str) -> str:
+    """An .mp4 remux (stream copy, seconds per GB) of a .ts, with the
+    timestamps rebuilt the way the transcript's WAV saw them; the source
+    itself when it is not a .ts or the remux fails."""
+    if not source.lower().endswith(".ts"):
+        return source
+    out = os.path.join(work, "seekable.mp4")
+    try:
+        done = subprocess.run(
+            ["ffmpeg", "-y", "-v", "error", "-fflags", "+genpts", "-i", source,
+             "-map", "0:v:0", "-map", "0:a:0", "-c", "copy",
+             "-bsf:a", "aac_adtstoasc", "-movflags", "+faststart", out],
+            capture_output=True, text=True, timeout=3600)
+        if done.returncode == 0 and os.path.getsize(out) > 0:
+            return out
+    except Exception:
+        pass
+    try:
+        os.remove(out)
+    except OSError:
+        pass
+    return source
 
 
 def said(transcript, start: float, end: float) -> str:
@@ -375,15 +455,12 @@ def _edit_plan(cfg, source: str, segments, shown_title: str, stream_date: str,
     the recap is then cut plain, never skipped."""
     try:
         from utils import recap_edit
-        from utils.censor import words_cache_path
-
-        words_path = words_cache_path(cfg.general.censored_folder,
-                                      os.path.splitext(os.path.basename(source))[0])
-        with open(words_path, encoding="utf-8") as f:
-            data = json.load(f)
-        transcript = list(data.get("segments") if isinstance(data, dict) else data)
     except Exception as exc:
-        print(f"[Recap] No transcript for the edit ({exc}) - cutting it plain.")
+        print(f"[Recap] No edit ({exc}) - cutting it plain.")
+        return None, None, []
+    transcript = transcript_of(cfg, source)
+    if not transcript:
+        print("[Recap] No usable transcript for the edit - cutting it plain.")
         return None, None, []
     texts = [" ".join(str(seg.get("text", "")) for seg in transcript
                       if st <= float(seg.get("start", 0)) < e) for st, e, _ in segments]
@@ -529,7 +606,14 @@ def make(cfg, source: str, stream_title: str, stream_date: str,
     shown_title = strip_trailing_stamp(stream_title) or stream_title
     edit_dir = tempfile.mkdtemp(prefix="recap_edit_", dir=cfg.general.censored_folder)
     decor, card, topics = _edit_plan(cfg, source, segments, shown_title, stream_date, edit_dir)
-    placed = build_from([(source, st, e) for st, e, _ in segments], raw,
+    # Cut from an indexed copy, not the raw .ts: a recording joined from
+    # resume pieces has timestamp jumps, and -ss on MPEG-TS seeks by those
+    # timestamps while the transcript counts decoded time - the burned
+    # captions then belong to another moment (owner, 10-28).
+    cut_from = seekable_copy(source, edit_dir)
+    if card and cut_from != source:
+        card["still"] = (cut_from, card["still"][1])
+    placed = build_from([(cut_from, st, e) for st, e, _ in segments], raw,
                         str(speed.get("video_filter", "") or ""), decor=decor, card=card)
     shutil.rmtree(edit_dir, ignore_errors=True)
     if not placed:

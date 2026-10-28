@@ -1348,7 +1348,8 @@ class ClipMaker:
             # stands.
             region = self.region
             clip_strategy = strategy
-            if self.per_clip_framing:
+            from autoreel.crop_strategy import layout_locked
+            if self.per_clip_framing and not layout_locked(self.config):
                 strategy, region = self._framing_at(
                     source_path, spec, strategy, self.region)
             strategy = normalise_strategy(strategy)

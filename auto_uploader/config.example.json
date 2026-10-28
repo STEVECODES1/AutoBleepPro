@@ -7,7 +7,7 @@
     "category_id": "20",
     "made_for_kids": false,
     "title_format": "Stackswopo - {TITLE} - {date} (FULL STREAM)",
-    "description_template": "This stream first aired on [DATE] with the title \"[STREAM TITLE]\" on the Stackswopo channel.\n\n\ud83d\udccc Also on Rumble (BinScripts): https://rumble.com/user/BinScripts\n\ud83c\udfae Main channel: https://www.youtube.com/@stackswopo_\n\ud83d\udcfa Twitch: https://www.twitch.tv/stackswopo\n\nFan channel - not Stackswopo's own channel. His channel: https://www.youtube.com/@stackswopo_\n\n⚠️ DISCLAIMER: All people in these videos are actors. GTA content is GTA roleplay; anything else still features actors. Nothing shown is real.\n\nThe stream contains live reactions, jokes, and real-life conversations in my usual unfiltered style.\n\n\ud83d\udd25 Missed the original broadcast? Enjoy the full replay with every moment, from the funny bits to the wild reactions.\n\ud83c\udfa5 Want more? Check the channel for additional past streams, full VODs, and highlights.\n\n\ud83d\udc4d If you enjoy these replays, consider subscribing!\n\nTags: #StacksWopo #StreamReplay #FullVOD #GamingHighlights #FunnyMoments #GTA5 #GTAOnline #Roleplay #StreamerMoments #UncutReplay #Entertainment",
+    "description_template": "This stream first aired on [DATE] with the title \"[STREAM TITLE]\" on the Stackswopo channel.\n\n\ud83d\udccc Also on Rumble (BinScripts): https://rumble.com/user/BinScripts\n\ud83c\udfae Main channel: https://www.youtube.com/@stackswopo_\n\ud83d\udcfa Twitch: https://www.twitch.tv/stackswopo\n\nFan channel - not Stackswopo's own channel. His channel: https://www.youtube.com/@stackswopo_\n\n⚠️ DISCLAIMER: GTA RP is role-play - everyone in it is acting. The non-GTA parts feature actors too. Nothing shown is real.\n\nThe stream contains live reactions, jokes, and real-life conversations in my usual unfiltered style.\n\n\ud83d\udd25 Missed the original broadcast? Enjoy the full replay with every moment, from the funny bits to the wild reactions.\n\ud83c\udfa5 Want more? Check the channel for additional past streams, full VODs, and highlights.\n\n\ud83d\udc4d If you enjoy these replays, consider subscribing!\n\nTags: #StacksWopo #StreamReplay #FullVOD #GamingHighlights #FunnyMoments #GTA5 #GTAOnline #Roleplay #StreamerMoments #UncutReplay #Entertainment",
     "tags": [
       "Stackswopo",
       "Stackswopo Stream",
@@ -41,7 +41,7 @@
     "primary_category": "Gaming",
     "secondary_category": "Grand Theft Auto V",
     "title_format": "Stackswopo - {TITLE} - {date} (FULL STREAM)",
-    "description_template": "My YouTube Channel: https://www.youtube.com/@StackswopoGames\nInstagram: https://www.instagram.com/stackswopomanz/\nMonkeyAPP Content: https://www.youtube.com/@BinScript\nStack's Channel: https://www.youtube.com/@stackswopo_\nStack's Twitch Channel: https://www.twitch.tv/stackswopo\nOnlyThaGuys Channel: https://www.youtube.com/@OnlyThaGuys26\n\nThis stream first aired on [DATE] with the title \"[STREAM TITLE]\" on the Stackswopo channel.\n\nFan channel - not Stackswopo's own channel. His channel: https://www.youtube.com/@stackswopo_\n\n⚠️ DISCLAIMER: All people in these videos are actors. GTA content is GTA roleplay; anything else still features actors. Nothing shown is real.\n\nThe stream contains live reactions, jokes, and real-life conversations in my usual unfiltered style.\n\n\ud83d\udd25 Missed the original broadcast? Enjoy the full replay with every moment, from the funny bits to the wild reactions.\n\ud83c\udfa5 Want more? Check the channel for additional past streams, full VODs, and highlights.\n\n\ud83d\udc4d If you enjoy these replays, consider subscribing!\n\nTags: #StacksWopo #StreamReplay #FullVOD #GamingHighlights #FunnyMoments #GTA5 #GTAOnline #Roleplay #StreamerMoments #UncutReplay #Entertainment",
+    "description_template": "My YouTube Channel: https://www.youtube.com/@StackswopoGames\nInstagram: https://www.instagram.com/stackswopomanz/\nMonkeyAPP Content: https://www.youtube.com/@BinScript\nStack's Channel: https://www.youtube.com/@stackswopo_\nStack's Twitch Channel: https://www.twitch.tv/stackswopo\nOnlyThaGuys Channel: https://www.youtube.com/@OnlyThaGuys26\n\nThis stream first aired on [DATE] with the title \"[STREAM TITLE]\" on the Stackswopo channel.\n\nFan channel - not Stackswopo's own channel. His channel: https://www.youtube.com/@stackswopo_\n\n⚠️ DISCLAIMER: GTA RP is role-play - everyone in it is acting. The non-GTA parts feature actors too. Nothing shown is real.\n\nThe stream contains live reactions, jokes, and real-life conversations in my usual unfiltered style.\n\n\ud83d\udd25 Missed the original broadcast? Enjoy the full replay with every moment, from the funny bits to the wild reactions.\n\ud83c\udfa5 Want more? Check the channel for additional past streams, full VODs, and highlights.\n\n\ud83d\udc4d If you enjoy these replays, consider subscribing!\n\nTags: #StacksWopo #StreamReplay #FullVOD #GamingHighlights #FunnyMoments #GTA5 #GTAOnline #Roleplay #StreamerMoments #UncutReplay #Entertainment",
     "tags": [
       "Stackswopo",
       "Stackswopo Stream",
@@ -192,10 +192,10 @@
         "manual_approval_only": true
       },
       "youtube_shorts": {
-        "_comment": "OFF until you have reviewed a private batch. Caps are deliberately low: twenty clips from one VOD posted in an afternoon is what 'repetitious content' means in YouTube's policy, whoever made them.",
+        "_comment": "OFF in the shipped file (nobody's channel gets posted to because they cloned a repo); ON in the live config since 2026-10-28. Caps kept low (3 a day, 2 h apart): many near-identical uploads a day is what YouTube's repetitious-content policy describes.",
         "enabled": false,
         "daily_cap": 3,
-        "min_minutes_between": 180
+        "min_minutes_between": 120
       },
       "zernio_twitter": {
         "_comment": "DISABLED: replaced by x_webhost (Puter bridge). X's free API tier is read-only; Basic is $200/mo.",
@@ -384,7 +384,7 @@
     "category_id": "20",
     "made_for_kids": false,
     "max_title_chars": 90,
-    "description_template": "[CAPTION]\n\nFan channel - not Stackswopo's own channel. His channel: https://www.youtube.com/@stackswopo_\n\n⚠️ Everyone in this video is an actor. GTA RP - not real.\n\nFull streams: https://rumble.com/user/BinScripts\nMain channel: https://www.youtube.com/@stackswopo_",
+    "description_template": "[CAPTION]\n\nFan channel - not Stackswopo's own channel. His channel: https://www.youtube.com/@stackswopo_\n\n⚠️ GTA RP is role-play - everyone is acting. Nothing is real.\n\nFull streams: https://rumble.com/user/BinScripts\nMain channel: https://www.youtube.com/@stackswopo_",
     "tags": [
       "stackswopo",
       "shorts",

@@ -96,7 +96,7 @@ def test_the_retry_only_fires_on_a_found_stream():
 
     from record_stream import Recorder
 
-    body = inspect.getsource(Recorder.record_one_stream)
+    body = inspect.getsource(Recorder._record_one_stream)
 
     assert "self.last_missed" in body, "it retries whatever the reason"
     assert "missed_tries" in body

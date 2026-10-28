@@ -339,7 +339,8 @@ def make_clips(cfg, source_path: str, title: str,
         return ClipRun([], [], output_dir, reason)
 
     speed = dict(getattr(cfg.general, "speed", {}) or {})
-    from autoreel.crop_strategy import resolve_crop_strategy, resolve_profile
+    from autoreel.crop_strategy import (layout_locked, resolve_crop_strategy,
+                                        resolve_profile)
 
     # Remembered before the auto branch overwrites it: by the time
     # ClipMaker is built, clips_cfg["profile"] holds the resolved name and
@@ -369,12 +370,15 @@ def make_clips(cfg, source_path: str, title: str,
         output_dir=output_dir,
         config={"clips": clips_cfg},
         content_kind=clips_cfg.get("content_kind", "gameplay"),
-        captions=bool(clips_cfg.get("burn_captions", True)),
+        # Locked layout (10-28): title on top, captions at the bottom.
+        captions=(True if layout_locked({"clips": clips_cfg})
+                  else bool(clips_cfg.get("burn_captions", True))),
         # Word-by-word highlighting rather than a static white slab -
         # see autoreel/captions for why that is the difference between
         # captions people read and captions people turn off.
         caption_style=str(clips_cfg.get("caption_style", "word")),
-        burn_hook=bool(clips_cfg.get("burn_hook", False)),
+        burn_hook=(True if layout_locked({"clips": clips_cfg})
+                   else bool(clips_cfg.get("burn_hook", False))),
         # "auto" already means "work it out from the video". Working it
         # out per clip is the same instruction, followed properly: a
         # profile named explicitly in config is a decision someone made

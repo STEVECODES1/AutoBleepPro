@@ -132,3 +132,4 @@ models/speaker/
 
 # Moved here instead of deleted - empty it by hand when sure.
 _to_delete/
+/assets/*.mp4

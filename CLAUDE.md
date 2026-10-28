@@ -39,7 +39,7 @@ away from the PC: it must work by itself after one START, and say plainly when i
 | token (auto_uploader\) | channel | role |
 |---|---|---|
 | youtube_token.json | STACKSWOPO VODS @WOPOVOD (UCbS-_v6Y9AZmAAU3EpzLsvA) | full streams - THE money channel |
-| youtube_shorts_token.json | STACKSWOPO CLIPS (Fan Channel) @WOPOCLIPPER (UCMeMDcCirQBxkhH3vuFgliA) | Shorts - RESTORED 10-22 |
+| youtube_shorts_token.json | STACKSWOPO CLIPS (Fan Channel) @WOPOCLIPPER (UCMeMDcCirQBxkhH3vuFgliA) | Shorts - ON, 3/day (10-28) |
 | youtube_games_token.json | STACKSWOPO GAMES (UCKj0xrFqNNXpBCl_B1shckA) | recaps (has a strike) |
 | youtube_compilation_token.json | STACKSWOPOVODS (Fan Channel) @stackswopo10k | weekly, Monkey compilations |
 
@@ -127,6 +127,50 @@ a 4.4 GB full stream takes ~3 h to YouTube.
 - A clip held for slurs goes to Discord as a playable preview, numbered; "post held N" =
   `python -X utf8 tools/held_review.py --post N` (kids/gambling holds never lift).
 - View learning runs after each recap (every 2 days); `main.py --learn` by hand.
+
+## 10-28: fresh Windows + the owner's list
+
+- The PC was reset; D: kept the repo, `.env`, tokens and config. Rebuild with
+  `tools\reinstall_pc.ps1` (Python 3.12 per-user, Git, FFmpeg, Deno, pip both requirement
+  files, CUDA torch + cuBLAS/cuDNN, Whisper models, C:\AutoBleep\recording, the logon task
+  "AutoBleepPro Autostart" and the two daily tasks). `tools\check_packages.py [--repair]`
+  imports every package and checks better_profanity's data files, ffmpeg/ffprobe/deno/git, GPU.
+- INSTALLERS FROM THE CLAUDE APP: the desktop app is a packaged app, so a process it starts
+  sees a private copy of AppData that msiexec cannot reach (Python setup failed 0x80070003).
+  Run installers/START through a one-shot scheduled task (`schtasks /Create ... /SC ONCE` +
+  `/Run`), which runs outside that sandbox. The same goes for the Startup folder - a logon
+  scheduled task is used instead.
+- Lost with C: (owner must redo): the Rumble/YouTube Chrome profile `C:\RumbleChromeProfile`
+  (sign in again: Studio as wopovod, CLIPS Studio, Rumble, IG, FB), Brave with GAMES, the
+  CapCut intro (now looked for at `assets\intro.mp4` first - put it there once; an alert goes
+  to Discord once a day while it is missing), sleep = Never.
+- Clips: layout LOCKED to the blurred whole-frame look (`crop_strategy.layout_locked`; only
+  `clips.unlock_layout: true` opens it). Title on top + CTA, captions at the bottom, always.
+- Titles: a stream name that already carries "- date (FULL STREAM)" is framed once
+  (`templating.strip_full_stream_frame`); thumbnail text is the clean title only. Clip titles
+  come from the clip's notes in clips/ (`main._clip_line_anywhere`), never its file name
+  (`_clip_title_without_filename`). YouTube titles (every channel, via
+  `text_guard.title(youtube=True)`) block animal comparisons about people and crude
+  sexual/incest wording (`youtube_title_risk`); "Monkey App"/"MONKEY COMPILATION" pass.
+- Intro: joined as MPEG-TS byte-for-byte (`ffmpeg_tools.prepend_intro`) - the stream is never
+  re-encoded. The old concat of an .mp4 intro onto a .ts failed its own length check every time.
+- Policy: `kid_guard.make_safe` cuts every category the policy read calls a clear break, plus
+  spoken patterns (`spoken_risks`: animal comparisons, "kys", a phone number, incest). A LOCAL
+  model's harassment/threat calls are GTA game noise and only reported. Over MAX_CUT_S /
+  MAX_SHARE -> PRIVATE.
+- Disclaimer wording is now "GTA RP is role-play - everyone in it is acting. The non-GTA parts
+  feature actors too. Nothing shown is real." (`disclosure.ACTORS_LINE`); older wordings are
+  swapped in place (`disclosure.upgraded`). Abouts: `tools/funnel_setup.py` (run it to push).
+- Shorts to @WOPOCLIPPER ON in the live config, 3/day, 2 h apart (shipped example stays off).
+- Rumble shorts wait (FAILED "waiting for the full stream", quiet, retried each pass) until the
+  full stream's Rumble URL exists, so Related Video is always set; after 12 h they go without.
+- Recaps cut from an indexed .mp4 remux of the .ts (`recap.seekable_copy`), captions shifted by
+  the audio's start offset (`recap.audio_lead`), and a transcript cache made from a different
+  video is refused (`recap.transcript_of`). Weekly is built from recaps, so it inherits this.
+- Recorder: one recording at a time - the first URL is the main channel, later ones only record
+  while it is not and stop when it goes live (`MAIN_RECORDING`); one recorder process
+  (`recorder.lock`); a stream that ends and comes back within 15 min (`REJOIN_GRACE_S`) or a
+  recorder restarted mid-stream continues the SAME recording instead of a short separate one.
 
 ## Open items (10-22)
 

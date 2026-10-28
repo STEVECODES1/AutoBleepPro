@@ -1352,9 +1352,22 @@ class RumbleUploader:
             if related:
                 try:
                     box = page.get_by_placeholder(re.compile(r"related video", re.I))
+                    if box.count() == 0:
+                        box = page.get_by_label(re.compile(r"related video", re.I))
                     if box.count() > 0:
                         box.first.fill(related)
+                        got = ""
+                        try:
+                            got = box.first.input_value()
+                        except Exception:
+                            pass
+                        if got and got.strip() != related:
+                            box.first.fill("")
+                            box.first.type(related, delay=20)
                         print(f"[Rumble] Related video (shown on the Short): {related}")
+                    else:
+                        print("[Rumble] WARNING: no Related Video box on the form - "
+                              "this short goes up without its full-stream link.")
                 except Exception as exc:
                     print(f"[Rumble] Could not set the related video ({exc})")
 

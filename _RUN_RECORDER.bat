@@ -52,6 +52,12 @@ REM  the GPU overloaded this drive's write throughput and cost real
 REM  recording time. Two is fine. Past that, open a SECOND copy of this
 REM  window for the extra channel (copy this file, change the URL) so a
 REM  stall on one drive's worth of writes cannot take the main one down.
+REM
+REM  ONE RECORDING AT A TIME (10-28). The FIRST URL is the main channel.
+REM  Any later one (@stackswopoman10k) only records while the main one is
+REM  not, and stops the moment the main one goes live - so two yt-dlp
+REM  downloads never run at once. A second recorder window cannot start
+REM  either (recorder.lock in the recording folder).
 REM ──────────────────────────────────────────────────────────────────
 :loop
 python record_stream.py "https://www.youtube.com/@stackswopo_/live" "https://www.youtube.com/@stackswopoman10k/live" --name "Stackswopo"

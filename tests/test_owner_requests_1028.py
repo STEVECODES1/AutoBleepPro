@@ -1,0 +1,290 @@
+"""The owner's 10-28 list: clip layout, titles, intro, policy, Rumble link,
+recap captions, recorder."""
+import os
+import shutil
+import subprocess
+import sys
+import time
+
+import pytest
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+for extra in (os.path.join(ROOT, "auto_uploader"), os.path.join(ROOT, "tools"), ROOT):
+    if extra not in sys.path:
+        sys.path.insert(0, extra)
+
+
+# ── 3. clip layout is locked ─────────────────────────────────────────────
+
+@pytest.mark.parametrize("clips", [
+    {"profile": "monkey"}, {"profile": "monkey_stack"}, {"profile": "gta"},
+    {"crop_strategy": "face"}, {"crop_strategy": "center"}, {"profile": "auto"}, {}])
+def test_every_clip_is_the_blurred_whole_frame(clips):
+    from autoreel.crop_strategy import CROP_FIT, resolve_crop_strategy
+
+    assert resolve_crop_strategy({"clips": clips}) == CROP_FIT
+
+
+def test_only_an_explicit_unlock_changes_the_layout():
+    from autoreel.crop_strategy import resolve_crop_strategy
+
+    assert resolve_crop_strategy({"clips": {"unlock_layout": True,
+                                            "profile": "monkey"}}) == "region"
+
+
+# ── 4. titles ────────────────────────────────────────────────────────────
+
+FORMAT = "Stackswopo - {TITLE} - {date} (FULL STREAM)"
+
+
+@pytest.mark.parametrize("name", [
+    "Stackswopo - STIZZ SHOW - 10-25-26 (FULL STREAM)",
+    "STIZZ SHOW (FULL STREAM)",
+    "STIZZ SHOW - 10-25-26",
+    "Stackswopo - STIZZ SHOW - 10-25-26 (FULL STREAM) - 10-25-26 (FULL STREAM)",
+    "STIZZ SHOW"])
+def test_the_full_stream_frame_is_said_once(name):
+    from utils.templating import build_title
+
+    assert build_title(name, "10-25-26", FORMAT) == \
+        "Stackswopo - STIZZ SHOW - 10-25-26 (FULL STREAM)"
+
+
+def test_thumbnail_text_is_the_clean_title_only():
+    from autoreel.thumbnail import thumb_words
+
+    assert thumb_words("Stackswopo - STIZZ SHOW - 10-25-26 (FULL STREAM)") == "STIZZ SHOW"
+    assert thumb_words("THE RETURN 2026-10-09 14:55") == "THE RETURN"
+
+
+def test_a_recorder_name_is_recognised():
+    from utils.text_guard import looks_like_machine_name
+
+    assert looks_like_machine_name(
+        "Stackswopo Youtube Live Stackswopoman10K 14 32 Live 13 (Clip 1)")
+    assert not looks_like_machine_name("Somebody call an EMS!")
+
+
+def test_a_clip_without_a_line_is_never_titled_from_its_file_name(tmp_path):
+    import main
+
+    clip = tmp_path / "Stackswopo Youtube Live Stackswopoman10K 14 32 Live 13 - Clip 01.mp4"
+    clip.write_bytes(b"x")
+    title = main._clip_title_without_filename(str(clip))
+    assert "Stackswopoman10K" not in title and "Youtube Live" not in title
+    assert title == "Stackswopo moment (Clip 1)"
+
+
+def test_the_clip_line_is_found_in_the_clips_folder(tmp_path):
+    import main
+
+    class G:
+        watch_folder = str(tmp_path / "watch")
+        uploaded_folder = ""
+        censored_folder = ""
+
+    class C:
+        general = G()
+        project_root = str(tmp_path)
+
+    (tmp_path / "clips").mkdir()
+    (tmp_path / "watch").mkdir()
+    stem = "Stackswopo Youtube Live Stackswopoman10K 14 32 Live 13 - Clip 01"
+    (tmp_path / "clips" / f"{stem}_line.txt").write_text("Call a EMS!", encoding="utf-8")
+    clip = tmp_path / "watch" / f"{stem}.mp4"
+    clip.write_bytes(b"x")
+    assert main._clip_line_anywhere(C(), str(clip)) == "Call a EMS!"
+
+
+# ── 6. the YouTube title guard ───────────────────────────────────────────
+
+@pytest.mark.parametrize("title", [
+    "Locked in a cage with the gorillas and monkeys",
+    "he look like a monkey fr",
+    "Stackswopo - HE SMASHED HIS OWN COUSIN - 10-25-26 (FULL STREAM)",
+    "incest stories with chat"])
+def test_youtube_never_gets_these_titles(title):
+    from utils import text_guard
+
+    assert text_guard.youtube_title_risk(title)
+    assert text_guard.youtube_title_risk(text_guard.title(title)) == ""
+
+
+@pytest.mark.parametrize("title", [
+    "MONKEY APP TROLLING", "MONKEY COMPILATION #12 | Stackswopo",
+    "Somebody call an EMS!", "Stackswopo - STIZZ SHOW - 10-25-26 (FULL STREAM)"])
+def test_ordinary_titles_pass(title):
+    from utils import text_guard
+
+    assert text_guard.youtube_title_risk(title) == ""
+
+
+def test_a_blocked_full_stream_keeps_its_date_frame():
+    from utils import text_guard
+
+    assert text_guard.title("Stackswopo - THE APE SHOW - 10-25-26 (FULL STREAM)") == \
+        "Stackswopo - 10-25-26 (FULL STREAM)"
+
+
+def test_rumble_titles_are_not_changed_by_the_youtube_rule():
+    from utils import text_guard
+
+    title = "Locked in a cage with the gorillas"
+    assert text_guard.title(title, youtube=False) == title
+
+
+# ── 7. disclaimer wording ────────────────────────────────────────────────
+
+def test_old_disclaimers_are_upgraded_not_doubled():
+    from utils import disclosure
+
+    old = "Stream.\n\n" + disclosure.OLD_ACTORS_LINES[0] + "\n\n#tags"
+    out = disclosure.for_description(old)
+    assert disclosure.ACTORS_LINE in out and disclosure.OLD_ACTORS_LINES[0] not in out
+    assert out.count("Nothing shown is real") == 1
+    assert "GTA RP is role-play" in disclosure.for_about("About text")
+
+
+# ── 5. intro ─────────────────────────────────────────────────────────────
+
+needs_ffmpeg = pytest.mark.skipif(not shutil.which("ffmpeg"), reason="no ffmpeg")
+
+
+@needs_ffmpeg
+@pytest.mark.parametrize("main_ext", [".ts", ".mp4"])
+def test_the_intro_joins_a_stream_without_re_encoding_it(tmp_path, main_ext):
+    from utils.ffmpeg_tools import media_duration, prepend_intro
+
+    intro, main_ts = str(tmp_path / "intro.mp4"), str(tmp_path / "main.ts")
+    run = lambda *a: subprocess.run(["ffmpeg", "-v", "error", "-y", *a], check=True)
+    run("-f", "lavfi", "-i", "testsrc=size=640x360:rate=60:duration=3",
+        "-f", "lavfi", "-i", "sine=f=300:duration=3:sample_rate=44100", "-ac", "2",
+        "-c:v", "libx264", "-preset", "ultrafast", "-c:a", "aac", "-shortest", intro)
+    run("-f", "lavfi", "-i", "testsrc2=size=1280x720:rate=30:duration=12",
+        "-f", "lavfi", "-i", "sine=f=500:duration=12:sample_rate=48000", "-ac", "2",
+        "-c:v", "libx264", "-preset", "ultrafast", "-c:a", "aac", "-shortest",
+        "-f", "mpegts", main_ts)
+    source = main_ts
+    if main_ext == ".mp4":
+        source = str(tmp_path / "main.mp4")
+        run("-i", main_ts, "-c", "copy", "-bsf:a", "aac_adtstoasc", source)
+    out = str(tmp_path / "out.mp4")
+    assert prepend_intro(intro, source, out)
+    assert abs((media_duration(out) or 0) - 15) < 1.5
+
+
+def test_the_intro_is_found_in_the_repo_when_the_configured_path_is_gone(tmp_path, monkeypatch):
+    import main
+
+    home = tmp_path / "assets" / "intro.mp4"
+    monkeypatch.setattr(main, "INTRO_HOME", str(home))
+
+    class Y:
+        intro_path = r"C:/Users/Omert/AppData/Local/CapCut/Videos/intro.mp4"
+
+    class C:
+        youtube = Y()
+
+    monkeypatch.delenv("YOUTUBE_INTRO_PATH", raising=False)
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "nowhere"))
+    assert main.find_intro(C()) in ("", os.path.join(os.path.dirname(main.__file__), "intro.mp4"))
+    home.parent.mkdir(parents=True)
+    home.write_bytes(b"video")
+    assert main.find_intro(C()) == os.path.abspath(str(home))
+
+
+# ── 10. Rumble Related Video ─────────────────────────────────────────────
+
+def test_a_new_clip_waits_for_its_full_stream_on_rumble(tmp_path, monkeypatch):
+    import main
+    from utils import stream_links
+
+    clip = tmp_path / "x - Clip 01.mp4"
+    clip.write_bytes(b"x")
+    monkeypatch.setattr(stream_links, "source_of",
+                        lambda path, folders=(): {"stream_title": "STIZZ SHOW"})
+    assert main._rumble_waits_for_stream(str(clip))
+    old = time.time() - (main.RUMBLE_RELATED_WAIT_HOURS + 1) * 3600
+    os.utime(clip, (old, old))
+    assert not main._rumble_waits_for_stream(str(clip))
+    monkeypatch.setattr(stream_links, "source_of", lambda path, folders=(): {})
+    assert not main._rumble_waits_for_stream(str(clip))
+
+
+# ── 9. recap captions on the video's clock, stale caches refused ────────
+
+def test_captions_move_by_the_audio_lead():
+    from utils.recap import shifted
+
+    seg = [{"start": 1.0, "end": 2.0, "words": [{"start": 1.0, "end": 1.5, "word": "a"}]}]
+    out = shifted(seg, 1.4)
+    assert out[0]["start"] == pytest.approx(2.4)
+    assert out[0]["words"][0]["end"] == pytest.approx(2.9)
+    assert seg[0]["start"] == 1.0
+
+
+def test_a_stale_transcript_cache_is_not_used(tmp_path):
+    import json
+
+    from utils.recap import transcript_of
+
+    class G:
+        censored_folder = str(tmp_path)
+
+    class C:
+        general = G()
+
+    video = tmp_path / "stream.ts"
+    video.write_bytes(b"x" * 100)
+    cache = tmp_path / "stream_transcript_words.json"
+    cache.write_text(json.dumps({"segments": [{"start": 0, "end": 1, "text": "hi",
+                                               "words": [{"start": 0, "end": 1, "word": "hi"}]}],
+                                 "source_size": 100}))
+    assert transcript_of(C(), str(video), align=False)
+    video.write_bytes(b"x" * 200)          # a different recording, same name
+    assert transcript_of(C(), str(video), align=False) == []
+
+
+# ── 2. recorder ──────────────────────────────────────────────────────────
+
+def test_only_one_recorder_process_can_hold_the_lock(tmp_path):
+    import record_stream
+
+    first = record_stream.single_instance_lock(str(tmp_path))
+    assert first is not None
+    code = subprocess.run(
+        [sys.executable, "-c",
+         "import sys; sys.path.insert(0, %r); import record_stream as r; "
+         "sys.exit(0 if r.single_instance_lock(%r) is None else 1)"
+         % (os.path.join(ROOT, "tools"), str(tmp_path))]).returncode
+    assert code == 0
+    first.close()
+
+
+def test_a_stream_that_comes_back_joins_the_same_recording(monkeypatch, tmp_path):
+    import record_stream
+
+    rec = record_stream.Recorder(url="https://www.youtube.com/@x/live",
+                                 staging=str(tmp_path), watch_folder=str(tmp_path))
+    answers = iter([False, True])
+    monkeypatch.setattr(record_stream, "channel_is_live", lambda url: next(answers, True))
+    monkeypatch.setattr(record_stream, "REJOIN_POLL_S", 0)
+    monkeypatch.setattr(record_stream.time, "sleep", lambda s: None)
+    assert rec._wait_for_return(grace_s=60)
+
+
+def test_a_second_channel_records_nothing_while_the_main_one_does(monkeypatch, tmp_path):
+    import record_stream
+
+    rec = record_stream.Recorder(url="https://www.youtube.com/@b/live",
+                                 staging=str(tmp_path), watch_folder=str(tmp_path),
+                                 primary=False)
+    monkeypatch.setattr(rec, "_record_one_stream",
+                        lambda: pytest.fail("must not start a second recording"))
+    record_stream.MAIN_RECORDING.set()
+    try:
+        assert rec.record_one_stream() is None
+    finally:
+        record_stream.MAIN_RECORDING.clear()
+    monkeypatch.setattr(record_stream, "channel_is_live", lambda url: False)
+    assert rec.record_one_stream() is None

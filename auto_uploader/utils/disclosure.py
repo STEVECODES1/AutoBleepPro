@@ -21,16 +21,33 @@ from __future__ import annotations
 FAN_LINE = ("Fan channel - not Stackswopo's own channel. "
             "His channel: https://www.youtube.com/@stackswopo_")
 
-ACTORS_LINE = ("⚠️ DISCLAIMER: All people in these videos are actors. "
-               "GTA content is GTA roleplay; anything else still features actors. "
-               "Nothing shown is real.")
+# The owner's wording, 10-28 (Rumble's About already says it).
+ACTORS_LINE = ("⚠️ DISCLAIMER: GTA RP is role-play - everyone in it is acting. "
+               "The non-GTA parts feature actors too. Nothing shown is real.")
 
-SHORT_ACTORS_LINE = "⚠️ Everyone in this video is an actor. GTA RP - not real."
+SHORT_ACTORS_LINE = "⚠️ GTA RP is role-play - everyone is acting. Nothing is real."
+
+# Earlier wordings, replaced in place wherever they are found.
+OLD_ACTORS_LINES = (
+    "⚠️ DISCLAIMER: All people in these videos are actors. "
+    "GTA content is GTA roleplay; anything else still features actors. "
+    "Nothing shown is real.",
+    "⚠️ Everyone in this video is an actor. GTA RP - not real.",
+)
 
 ABOUT_NOTICE = FAN_LINE + "\n\n" + ACTORS_LINE
 
-_ACTORS_MARKERS = ("all people in these videos are actors",
-                   "everyone in this video is an actor")
+_ACTORS_MARKERS = ("everyone in it is acting", "everyone is acting")
+
+
+def upgraded(text: str) -> str:
+    """`text` with an older disclaimer wording swapped for today's."""
+    out = text or ""
+    for old in OLD_ACTORS_LINES:
+        if old in out:
+            new = SHORT_ACTORS_LINE if old.startswith("⚠️ Everyone") else ACTORS_LINE
+            out = out.replace(old, new)
+    return out
 
 
 def has_disclaimer(text: str) -> bool:
@@ -61,6 +78,7 @@ def for_description(text: str, short: bool = False) -> str:
     Idempotent, and safe on empty text (returns just the disclaimer).
     """
     line = SHORT_ACTORS_LINE if short else ACTORS_LINE
+    text = upgraded(text)
     if has_disclaimer(text):
         return text
     return _insert_before_tags(text, line)
@@ -72,6 +90,7 @@ def for_caption(text: str) -> str:
     Placed before the hashtags rather than at the end so X's 280-character
     cut cannot take the disclosure out while keeping the tags.
     """
+    text = upgraded(text)
     if has_disclaimer(text):
         return text
     parts = (text or "").split("\n\n")
@@ -92,6 +111,6 @@ def for_about(existing: str) -> str:
         return text
     old_legacy = ("Fan-run channel - not Stackswopo's own channel. Clips and VODs are posted with "
                   "his permission. His official channel: https://www.youtube.com/@stackswopo_")
-    for old in (FAN_LINE, old_legacy, ACTORS_LINE):
+    for old in (FAN_LINE, old_legacy, ACTORS_LINE) + OLD_ACTORS_LINES:
         text = text.replace(old, "").strip()
     return (ABOUT_NOTICE + ("\n\n" + text if text else ""))[:1000]

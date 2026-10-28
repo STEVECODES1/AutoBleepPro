@@ -1,4 +1,11 @@
-"""Cut the parts of a full stream that talk about kids in a sexual way.
+"""Cut what YouTube could strike out of a full stream's YouTube copy.
+
+10-28 (owner): every category, not only kid talk - the policy AI read
+(utils/policy_guard) plus spoken patterns (animal comparisons about people,
+"kill yourself", a phone number read out, incest talk). Too much to cut
+(MAX_CUT_S / MAX_SHARE) or a failed cut -> PRIVATE. Rumble keeps it all.
+
+Originally: cut the parts of a full stream that talk about kids in a sexual way.
 
 10-17: a stream about a predator case went up on wopovod and 25 parts
 (21 min) had to be cut by hand in Studio. That talk is a channel strike,
@@ -51,6 +58,48 @@ def ranges(segments, pad=PAD, join=JOIN):
         else:
             merged.append([a, b, [t]])
     return [(a, b, ts) for a, b, ts in merged]
+
+
+# Spoken lines YouTube strikes whatever the game is, found without a model.
+_APP = re.compile(r"monkey[\s.-]*app|monkeyapp", re.I)
+# Dehumanising animal comparison aimed at people (hate speech policy).
+_ANIMAL_AT_PEOPLE = re.compile(
+    r"\b(?:you|ya|he|she|they|them|y'?all|these|those|this|that|his|her|"
+    r"their|your|look(?:s|ing)?\s+like|acting\s+like|bunch\s+of|nothing\s+but)\b"
+    r"[\w\s']{0,25}?\b(?:monkeys?|apes?|gorillas?|baboons?|chimps?|"
+    r"chimpanzees?|primates?|orangutans?|animals?\s+in\s+a\s+zoo)\b", re.I)
+# Telling someone to kill themselves (harassment / self-harm policy).
+_SELF_HARM = re.compile(
+    r"\b(?:kill\s+your\s*self|kys|go\s+(?:hang|kill|shoot)\s+your\s*self|"
+    r"neck\s+your\s*self|slit\s+your\s+wrists?|end\s+your\s+life)\b", re.I)
+# A phone number read out (doxxing).
+_PHONE = re.compile(r"\b\d{3}[\s.-]?\d{3}[\s.-]?\d{4}\b")
+# Graphic sex / incest talk (sexual content policy).
+_INCEST = re.compile(
+    r"\b(?:incest\w*|(?:fuck(?:ed|ing)?|smash(?:ed)?|slept\s+with|sleeping\s+with|"
+    r"had\s+sex\s+with)\s+(?:his|her|my|your|their|ya)\s+(?:own\s+)?"
+    r"(?:mom|mama|momma|mother|sister|sis|daughter|son|brother|aunt|cousin|grandma))\b",
+    re.I)
+_SPOKEN_RULES = (("hate: animal comparison", _ANIMAL_AT_PEOPLE),
+                 ("harassment: told to kill themselves", _SELF_HARM),
+                 ("doxxing: phone number", _PHONE),
+                 ("sexual: incest", _INCEST))
+
+
+def spoken_risks(segments, pad=PAD):
+    """[(start, end, why)] for lines that break YouTube's rules as said."""
+    out = []
+    for s in segments or []:
+        text = str(s.get("text") or "")
+        if not text.strip():
+            continue
+        plain = _APP.sub(" ", text)
+        for why, rule in _SPOKEN_RULES:
+            if rule.search(plain):
+                out.append((max(0.0, float(s["start"]) - pad),
+                            float(s["end"]) + pad, why))
+                break
+    return out
 
 
 def keep_spans(duration, cuts):
@@ -145,17 +194,24 @@ def make_safe(cfg, video_path, yt_source, out_dir, alert=None):
     # Kid talk by pattern, plus the whole-policy AI read (utils/policy_guard).
     found = [(a, min(b, duration), "kid talk") for a, b, _ in ranges(segs) if a < duration]
     flags, note = _policy(segs)
-    # The AI read only CUTS child-safety calls from a strong (cloud) model.
-    # 10-19 test: the small local model called a phone-call GAME's threats
-    # "harassment" a dozen times in 15 minutes - cutting on that would gut
-    # the stream. Everything else is reported, for a person to judge.
-    strong = [f for f in flags if f["severity"] == "cut" and f["category"] == "child_safety"
-              and not str(f.get("model", "")).startswith("local")]
+    # Everything YouTube could strike is cut (owner, 10-28): every category
+    # the policy read calls a clear break, plus the spoken patterns below.
+    # GTA-RP aware: a small LOCAL model's harassment / threat calls are what
+    # it says about GAME threats (10-19: a dozen in 15 minutes of a phone-
+    # call game), so those - and every "warn" - are reported, not cut.
+    strong, report = [], []
+    for f in flags:
+        if f["start"] >= duration:
+            continue
+        local = str(f.get("model", "")).startswith("local")
+        game_noise = local and f["category"] in ("harassment", "violent_threat")
+        (strong if f["severity"] == "cut" and not game_noise else report).append(f)
     found += [(f["start"], min(f["end"], duration), f["category"] + ": " + f["why"])
-              for f in strong if f["start"] < duration]
+              for f in strong]
+    found += [(a, min(b, duration), why) for a, b, why in spoken_risks(segs) if a < duration]
     found = merged(found)
     warns = "\n".join([f"{hms(f['start'])} {f['category']}: {f['why']}"
-                       for f in flags if f not in strong][:15])
+                       for f in report][:15])
     extra = (f"\n\nWorth a look (not cut):\n{warns}" if warns else "") + (f"\n({note})" if note else "")
     if not found:
         if warns:

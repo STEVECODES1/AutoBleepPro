@@ -212,7 +212,7 @@ def test_the_channel_goes_into_the_comment():
         _cfg("Full stream on Rumble: {rumble}", "https://rumble.com/c/BinScripts"))
 
     assert said.startswith("Full stream on Rumble: https://rumble.com/c/BinScripts")
-    assert "Everyone in this video is an actor" in said
+    assert "everyone is acting" in said
 
 
 def test_no_template_means_off():
@@ -230,7 +230,7 @@ def test_a_template_with_no_placeholder_still_posts():
     said = _main().link_comment_text(_cfg("New video up", ""))
 
     assert said.startswith("New video up")
-    assert "Everyone in this video is an actor" in said
+    assert "everyone is acting" in said
 
 
 def test_a_failed_upload_gets_no_comment():

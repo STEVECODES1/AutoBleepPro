@@ -210,7 +210,7 @@ PROFILES: Dict[str, Dict[str, Any]] = {
     # and captions are on again, so the 9-22 argument (captions floated
     # in the blur, so keep the whole frame) no longer holds. Centre keeps
     # the character, nametags and HUD; FIT is still one config line away.
-    "gta": {"crop_strategy": CROP_CENTER},
+    "gta": {"crop_strategy": CROP_CENTER},   # behind the lock; the lock says FIT
     # Layout unknown: keep everything, lose nothing.
     "whole": {"crop_strategy": CROP_FIT},
 }
@@ -308,6 +308,27 @@ _CONTENT_DEFAULTS = {
 }
 
 
+# THE LAYOUT IS LOCKED (owner, 10-28). Every clip is the
+# rumble.com/shorts/v7hh7s0 look: the whole 16:9 frame in the middle on a
+# blurred copy of itself, the title + "FULL STREAMS UNCUT ON RUMBLE" on
+# top, captions at the bottom. No face tracking, no Monkey-app rectangle,
+# no stacked halves - whatever config.json, a .bat or --profile says.
+# The live config still said profile "monkey" and create_monkey.bat /
+# create_gta.bat rewrite it, which is how the wrong layouts kept coming
+# back. Only clips.unlock_layout: true (a person, on purpose) opens it.
+LOCKED_STRATEGY = CROP_FIT
+# The tests of the framing machinery behind the lock turn this off.
+LAYOUT_LOCK = True
+
+
+def layout_locked(config: Optional[Dict[str, Any]] = None) -> bool:
+    if not LAYOUT_LOCK:
+        return False
+    config = config or {}
+    clips = config.get("clips", config) if isinstance(config, dict) else {}
+    return not bool((clips or {}).get("unlock_layout", False))
+
+
 class CropStrategyError(ValueError):
     """An unrecognised crop strategy was configured."""
 
@@ -321,6 +342,8 @@ def resolve_profile(config: Optional[Dict[str, Any]] = None) -> dict:
     """
     config = config or {}
     clips = config.get("clips", config) if isinstance(config, dict) else {}
+    if layout_locked(config):
+        return dict(PROFILES["whole"])
     name = str(clips.get("profile") or DEFAULT_PROFILE).strip().lower()
     if name == AUTO_PROFILE:
         # Chosen from the title the caller put in the config it passed
@@ -429,6 +452,8 @@ def resolve_crop_strategy(config: Optional[Dict[str, Any]] = None,
     """
     config = config or {}
     clips = config.get("clips", config) if isinstance(config, dict) else {}
+    if layout_locked(config):
+        return LOCKED_STRATEGY
     configured = (clips.get("crop_strategy") or "").strip().lower()
     if not configured or configured == "auto":
         # A profile is a fuller answer than a content kind, so it wins

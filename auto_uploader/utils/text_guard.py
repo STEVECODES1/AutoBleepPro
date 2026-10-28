@@ -50,6 +50,85 @@ _FILE_EXT = re.compile(r"(?<=\w)\.(?:mp4|mkv|ts|flv|mov|webm)$", re.I)
 _LINK_LABEL = re.compile(r"(?i)(rumble|full stream|watch|uncut|links?)\b[^\n]*:[ \t]*$")
 
 
+# ── Policy words a YouTube title must never carry (owner, 10-28) ─────────
+# Animal words next to people read as the dehumanising comparison YouTube's
+# hate speech policy names outright ("...cage with the gorillas and
+# monkeys" went up on Rumble). "Monkey App" is the name of the app the
+# streams use, so that phrase alone is allowed.
+_APP_NAME = re.compile(r"monkey[\s._-]*app\b|monkeyapp|monkey\.cool", re.I)
+_ANIMAL = re.compile(
+    r"\b(?:apes?|gorillas?|baboons?|chimps?|chimpanzees?|primates?|orangutans?|"
+    r"silverbacks?|jungle\s+bunn\w*|porch\s+monkey\w*)\b", re.I)
+# "Monkey" alone is the app's own shorthand ("MONKEY COMPILATION #12"); it
+# is only the slur-shaped comparison when it is said about people or a cage.
+_MONKEY_AT_PEOPLE = re.compile(
+    r"\b(?:you|ya|he|she|they|them|y'?all|these|those|his|her|their|your|"
+    r"looks?\s+like|acting\s+like|like\s+(?:a|some)|bunch\s+of|cage|zoo|"
+    r"nothing\s+but)\b[\w\s']{0,25}?\bmonk(?:ey|eys|ies)\b"
+    r"|\bmonk(?:ey|eys|ies)\s+(?:in\s+a\s+(?:cage|zoo)|ass)\b", re.I)
+# Crude sexual or incest titles: limited ads at best, removal at worst.
+_CRUDE = re.compile(
+    r"\b(?:incest\w*|step[\s-]?(?:mom|mommy|sis|sister|bro|brother|dad|daughter|son)s?|"
+    r"porn\w*|p[o0]rnhub|onlyfans|nudes?|naked|blow\s?jobs?|bj\b|handjob\w*|"
+    r"cum(?:ming|shot|s)?\b|creampie\w*|dick(?:s|ed)?\b|cock\w*|pussy|pussies|"
+    r"tit(?:s|ties)\b|titty|boobs?|horny|thot\w*|hoe(?:s)?\b|hooker\w*|"
+    r"sex(?:ual|ually|ing)?\b|f[u*]ck(?:ed|ing|s)?\s+(?:his|her|my|your|their|ya)\s+"
+    r"(?:mom|mama|momma|mother|sister|sis|aunt|cousin|daughter|grandma)|"
+    r"(?:smash|smashed|slept\s+with|sleeping\s+with|hooked\s+up\s+with)\s+"
+    r"(?:his|her|my|your|their|ya)\s+(?:own\s+)?(?:mom|mama|momma|mother|sister|sis|"
+    r"aunt|cousin|daughter|grandma))", re.I)
+
+
+def youtube_title_risk(s):
+    """Why this title must not go to YouTube, or "" when it may."""
+    if not isinstance(s, str) or not s.strip():
+        return ""
+    plain = _APP_NAME.sub(" ", s)
+    if _ANIMAL.search(plain) or _MONKEY_AT_PEOPLE.search(plain):
+        return "animal word about people"
+    if _CRUDE.search(s):
+        return "crude sexual / incest wording"
+    return ""
+
+
+_FULL_STREAM_SHAPE = re.compile(
+    r"^(?P<lead>.*?\s-\s)?(?P<name>.+?)(?P<tail>\s-\s\d{1,2}[-/]\d{1,2}[-/]\d{2,4}"
+    r"\s*\((?:FULL STREAM|LIVE UNCUT)\))\s*$", re.I)
+
+
+def policy_safe_title(s, fallback="Stackswopo Stream"):
+    """`s` when YouTube may show it; otherwise the stream's frame
+    ("Stackswopo - 10-25-26 (FULL STREAM)") or `fallback`."""
+    why = youtube_title_risk(s)
+    if not why:
+        return s
+    m = _FULL_STREAM_SHAPE.match(s.strip())
+    if m:
+        out = ((m.group("lead") or "") + m.group("tail").lstrip(" -")).strip()
+    else:
+        out = fallback
+    if youtube_title_risk(out):
+        out = "Stackswopo Stream"
+    try:
+        print(f"[TextGuard] title blocked for YouTube ({why}): "
+              f"{ascii(s[:120])} -> {ascii(out)}")
+    except Exception:
+        pass
+    return out
+
+
+# A recorder's or yt-dlp's name for a file, never a title a person wrote:
+# "Stackswopo Youtube Live Stackswopoman10K 14 32 Live 13".
+_MACHINE = re.compile(
+    r"\b(?:youtube|twitch|kick|rumble)\s+live\b|stackswopoman10k|"
+    r"\b\d{1,2}\s\d{2}\s+live\s+\d{1,2}\b|\blive\s+\d{2}\b(?:\s*-\s*clip)?|"
+    r"[-\s]clip\s*\d{2}\b|_CENSORED_|\bvertical_|\[[a-z0-9_-]{8,}\]", re.I)
+
+
+def looks_like_machine_name(s):
+    return bool(isinstance(s, str) and _MACHINE.search(s))
+
+
 def _keep(m):
     return "(" + (m.group(1) or m.group(2)) + ")"
 
@@ -133,6 +212,7 @@ def title(s, fallback="", limit=100, youtube=True):
         out = _one_line(_apply(s, _NOT_IN_TITLES))
         if youtube:
             out = out.replace("<", "‹").replace(">", "›")
+            out = policy_safe_title(out, fallback or "Stackswopo Stream")
         if limit and len(out) > limit:
             cut = out[:limit + 1].rsplit(" ", 1)[0] if " " in out[:limit + 1] else out[:limit]
             out = cut[:limit].rstrip(" \t" + _SEP + ":,/")

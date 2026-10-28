@@ -289,3 +289,36 @@ def _real_chrome_never_closed(monkeypatch):
                         lambda port: None)
     rumble_uploader._LAST_HEAL[0] = _time.time()
     rumble_uploader._ACTIVE[0] = 0
+
+
+@pytest.fixture(autouse=True)
+def _recorder_does_not_hold_for_a_rejoin(monkeypatch):
+    """The 15-minute "is the stream coming back?" hold is real time; tests
+    that end a recording must not sit through it. A test of the hold sets
+    REJOIN_GRACE_S itself."""
+    import sys as _sys
+
+    module = _sys.modules.get("record_stream")
+    if module is not None:
+        monkeypatch.setattr(module, "REJOIN_GRACE_S", 0, raising=False)
+        event = getattr(module, "MAIN_RECORDING", None)
+        if event is not None:
+            event.clear()
+    yield
+
+
+# Tests of the framing machinery that the 10-28 layout lock sits in front
+# of (profiles, region/stack/face crops). The lock itself is pinned by
+# tests/test_owner_requests_1028.py, which keeps it on.
+_FRAMING_MACHINERY_TESTS = {
+    "test_clip_maker.py", "test_per_clip_framing.py", "test_clip_selection_sense.py",
+    "test_face_pan.py", "test_publishers.py", "test_channel_vods.py"}
+
+
+@pytest.fixture(autouse=True)
+def _framing_unlocked_for_machinery_tests(monkeypatch, request):
+    if os.path.basename(str(request.fspath)) in _FRAMING_MACHINERY_TESTS:
+        from autoreel import crop_strategy
+
+        monkeypatch.setattr(crop_strategy, "LAYOUT_LOCK", False)
+    yield

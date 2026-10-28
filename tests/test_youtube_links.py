@@ -85,7 +85,7 @@ def test_postproxy_shorts_carry_the_full_stream_link(tmp_path, monkeypatch):
     body = fields["post[body]"]
     assert "▶ Full video: https://www.youtube.com/watch?v=full" in body
     assert "https://rumble.com/user/BinScripts" in body
-    assert "Everyone in this video is an actor" in body
+    assert "everyone is acting" in body
 
 
 def test_recap_links_fall_back_when_the_template_loses_its_header():

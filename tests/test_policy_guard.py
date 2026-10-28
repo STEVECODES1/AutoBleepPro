@@ -60,13 +60,20 @@ def test_a_cloud_child_safety_call_is_cut(monkeypatch):
     assert "child_safety: minor" in said[0][1]
 
 
-def test_other_ai_calls_and_local_model_calls_are_only_reported(monkeypatch):
+def test_every_category_is_cut_but_local_game_threats_are_only_reported(monkeypatch):
+    # 10-28: every clear break is cut, whatever the category - but a small
+    # local model's harassment/threat call is GTA-RP game noise (10-19).
     flags = [{"category": "harassment", "severity": "cut", "start": 100, "end": 130,
-              "why": "game threat", "model": "gemini:flash"},
-             {"category": "child_safety", "severity": "cut", "start": 300, "end": 320,
-              "why": "unsure", "model": "local:qwen"}]
+              "why": "game threat", "model": "local:qwen"},
+             {"category": "hate", "severity": "cut", "start": 300, "end": 320,
+              "why": "dehumanizing", "model": "gemini:flash"},
+             {"category": "child_safety", "severity": "cut", "start": 600, "end": 620,
+              "why": "minor", "model": "local:qwen"}]
     (path, why), said, cuts = _run(monkeypatch, flags)
-    assert (path, why, cuts) == (None, "", []) and "game threat" in said[0][1]
+    assert why == "" and path
+    starts = [round(a) for a, b, *_ in cuts[0]]
+    assert 300 in starts and 600 in starts and 100 not in starts
+    assert "game threat" in said[0][1]
 
 
 def test_warn_only_is_reported_not_cut(monkeypatch):
@@ -88,3 +95,12 @@ def test_keeper_is_busy_only_while_work_runs(tmp_path, monkeypatch):
                           alive=lambda pid: False) == ""
     (logs / "uploading.json").write_text("{}")
     assert sa.busy_reason(ffmpeg=lambda: False, recording=lambda: False) == "uploading"
+
+
+def test_spoken_strike_lines_are_found_without_a_model():
+    found = kg.spoken_risks([seg(10, "bro you look like a monkey"),
+                             seg(20, "we on monkey app tonight"),
+                             seg(30, "just kys"),
+                             seg(40, "shoot him, it's the game")])
+    whys = [w for _a, _b, w in found]
+    assert whys == ["hate: animal comparison", "harassment: told to kill themselves"]

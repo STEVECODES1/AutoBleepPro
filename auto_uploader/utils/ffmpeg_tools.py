@@ -398,7 +398,7 @@ def _probe_json(path: str) -> dict:
     try:
         r = subprocess.run(
             ["ffprobe", "-v", "error", "-show_entries",
-             "format=duration:stream=codec_type,r_frame_rate,time_base,width,height,"
+             "format=duration:stream=codec_type,codec_name,r_frame_rate,time_base,width,height,"
              "sample_rate,channels",
              "-of", "json", path],
             capture_output=True, text=True, timeout=300)
@@ -408,7 +408,17 @@ def _probe_json(path: str) -> dict:
 
 
 def prepend_intro(intro_path: str, main_path: str, out_path: str) -> bool:
-    """Write intro + main to out_path. True only if the result checks out."""
+    """Write intro + main to out_path. True only if the result checks out.
+
+    10-28: the intro had stopped being added. The concat demuxer was
+    stream-copying an .mp4 intro onto an MPEG-TS stream, which fails or
+    breaks the timestamps, so the length check threw it away every time;
+    the local fix (re-encode the WHOLE multi-hour stream with libx264)
+    turned one upload into hours of CPU. Now the 9-second intro is encoded
+    once to match the stream's codec, size, frame rate and audio, as
+    MPEG-TS, and the two are joined byte-for-byte with the concat
+    PROTOCOL - the stream itself is only copied, never re-encoded.
+    """
     import hashlib
     import tempfile
 
@@ -423,49 +433,72 @@ def prepend_intro(intro_path: str, main_path: str, out_path: str) -> bool:
         intro_dur = float(intro["format"]["duration"])
         fps = v["r_frame_rate"]
         w, h = int(v["width"]), int(v["height"])
-        timescale = int(v["time_base"].split("/")[1])
         rate, ch = int(a["sample_rate"]), int(a["channels"])
+        vcodec = str(v.get("codec_name", "h264") or "h264")
+        acodec = str(a.get("codec_name", "aac") or "aac")
     except (KeyError, StopIteration, ValueError, TypeError) as exc:
         print(f"[Intro] could not read stream info ({exc}) - skipping intro")
+        return False
+    if vcodec not in ("h264", "hevc") or acodec != "aac":
+        print(f"[Intro] stream is {vcodec}/{acodec}, not h264|hevc/aac - "
+              f"skipping intro")
         return False
 
     # The matched intro is cached per (intro file, target format), so it is
     # encoded once, not on every upload.
     st = os.stat(intro_path)
     key = hashlib.sha1(f"{os.path.abspath(intro_path)}|{st.st_mtime}|{st.st_size}|"
-                       f"{fps}|{w}x{h}|{timescale}|{rate}|{ch}".encode()).hexdigest()[:12]
-    matched = os.path.join(tempfile.gettempdir(), f"autobleep_intro_{key}.mp4")
+                       f"{fps}|{w}x{h}|{vcodec}|{rate}|{ch}|ts2".encode()).hexdigest()[:12]
+    matched = os.path.join(tempfile.gettempdir(), f"autobleep_intro_{key}.ts")
     if not (os.path.exists(matched) and os.path.getsize(matched) > 0):
-        partial = matched + ".partial.mp4"
+        partial = matched + ".partial.ts"
+        if vcodec == "hevc":
+            venc = (["-c:v", "hevc_nvenc", "-preset", "p5", "-rc", "vbr", "-cq", "21",
+                     "-b:v", "0"] if "hevc_nvenc" in available_encoders()
+                    else ["-c:v", "libx265", "-preset", "medium", "-crf", "20"])
+        else:
+            venc = (["-c:v", "h264_nvenc", "-profile:v", "high", "-preset", "p5",
+                     "-rc", "vbr", "-cq", "19", "-b:v", "0"] if nvenc_works() else
+                    ["-c:v", "libx264", "-profile:v", "high", "-preset", "medium",
+                     "-crf", "18"])
         ok = _run(["ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
                    "-i", intro_path,
                    "-vf", (f"scale={w}:{h}:force_original_aspect_ratio=decrease,"
                            f"pad={w}:{h}:(ow-iw)/2:(oh-ih)/2,fps={fps},format=yuv420p"),
-                   *(["-c:v", "h264_nvenc", "-profile:v", "high", "-preset", "p5",
-                      "-rc", "vbr", "-cq", "19", "-b:v", "0"] if nvenc_works() else
-                     ["-c:v", "libx264", "-profile:v", "high", "-preset", "medium", "-crf", "18"]),
-                   "-video_track_timescale", str(timescale),
+                   *venc, "-g", "60",
                    "-c:a", "aac", "-ar", str(rate), "-ac", str(ch), "-b:a", "192k",
-                   "-movflags", "+faststart", partial], timeout=600)
+                   "-f", "mpegts", partial], timeout=600)
         if not ok:
             _cleanup_partial(partial)
             print("[Intro] could not re-encode the intro to match - skipping intro")
             return False
         os.replace(partial, matched)
 
-    list_fd, list_path = tempfile.mkstemp(suffix="_concat.txt")
+    # The stream as MPEG-TS: already is when it came from the recorder;
+    # otherwise a fast copy-only remux (seconds per GB, no re-encode).
+    main_ts = os.path.abspath(main_path)
+    remuxed = ""
+    if not main_ts.lower().endswith(".ts"):
+        fd, remuxed = tempfile.mkstemp(suffix="_main.ts",
+                                       dir=os.path.dirname(os.path.abspath(out_path)) or None)
+        os.close(fd)
+        bsf = "hevc_mp4toannexb" if vcodec == "hevc" else "h264_mp4toannexb"
+        if not _run(["ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+                     "-i", main_ts, "-map", "0:v:0", "-map", "0:a:0", "-c", "copy",
+                     "-bsf:v", bsf, "-f", "mpegts", remuxed]):
+            _cleanup_partial(remuxed)
+            print("[Intro] could not remux the stream to join it - skipping intro")
+            return False
+        main_ts = remuxed
     try:
-        with os.fdopen(list_fd, "w", encoding="utf-8") as fh:
-            fh.write("file '" + matched.replace(os.sep, "/") + "'\n")
-            fh.write("file '" + os.path.abspath(main_path).replace(os.sep, "/") + "'\n")
         ok = _run(["ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
-                   "-f", "concat", "-safe", "0", "-i", list_path,
-                   "-c", "copy", "-movflags", "+faststart", out_path])
+                   "-fflags", "+genpts+igndts",
+                   "-i", f"concat:{matched}|{main_ts}",
+                   "-map", "0:v:0", "-map", "0:a:0", "-c", "copy",
+                   "-bsf:a", "aac_adtstoasc", "-movflags", "+faststart", out_path])
     finally:
-        try:
-            os.unlink(list_path)
-        except OSError:
-            pass
+        if remuxed:
+            _cleanup_partial(remuxed)
     if not ok:
         _cleanup_partial(out_path)
         print("[Intro] concat failed - skipping intro")

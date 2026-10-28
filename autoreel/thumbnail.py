@@ -818,6 +818,18 @@ def thumb_words(title: str) -> str:
     if quoted:
         title = quoted.group(1)
     title = re.sub(r"\s*\d{1,2}/\d{1,2}/\d{2,4}.*$", "", title)
+    # The clean title only (owner, 10-28): no "Stackswopo - " lead, no
+    # "(FULL STREAM)" / "(LIVE UNCUT)", no date in any shape, no recorder
+    # time stamp.
+    title = re.sub(r"\(?\s*(?:FULL\s+STREAM|LIVE\s+UNCUT|FULL\s+VOD)\s*\)?", " ",
+                   title, flags=re.I)
+    title = re.sub(r"\b\d{4}-\d{2}-\d{2}(?:[ _T]\d{2}[-:_]\d{2}(?:[-:_]\d{2})?)?", " ",
+                   title)
+    title = re.sub(r"\(?\b\d{1,2}[-/.]\d{1,2}[-/.]\d{2,4}\b\)?", " ", title)
+    title = re.sub(r"^\s*stackswopo\s*[-|:–—]\s*", "", title, flags=re.I)
+    title = re.sub(r"\s*[-|:–—]+\s*$", "", " ".join(title.split()))
+    title = re.sub(r"^\s*[-|:–—]+\s*", "", title)
+    title = re.sub(r"\s+[-|–—]\s+[-|–—]\s+", " - ", title)
     return " ".join(title.split()).upper()
 
 

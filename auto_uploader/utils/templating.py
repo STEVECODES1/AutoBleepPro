@@ -340,6 +340,34 @@ def strip_trailing_stamp(stream_title: str) -> str:
     return trimmed.strip(" -|,") or (stream_title or "").strip()
 
 
+_FRAME_TAIL = re.compile(
+    r"(?:\s*[-|–—]\s*)?(?:\(?\b\d{1,2}[-/.]\d{1,2}[-/.]\d{2,4}\b\)?)?\s*"
+    r"\(?\s*(?:FULL\s+STREAM|LIVE\s+UNCUT|FULL\s+VOD)\s*\)?\s*$", re.I)
+_FRAME_DATE = re.compile(r"\s*[-|–—]\s*\(?\d{1,2}[-/.]\d{1,2}[-/.]\d{2,4}\)?\s*$")
+
+
+def strip_full_stream_frame(stream_title: str) -> str:
+    """The stream's own name out of a finished full-stream title.
+
+    "Stackswopo - STIZZ SHOW - 10-25-26 (FULL STREAM)" -> "STIZZ SHOW", so
+    a title format that adds the frame adds it once. A name with no frame
+    is returned as it came."""
+    text = (stream_title or "").strip()
+    stripped = text
+    for _ in range(3):           # "(FULL STREAM) (FULL STREAM)" too
+        new = _FRAME_TAIL.sub("", stripped).strip()
+        if new == stripped:
+            break
+        stripped = new
+    stripped = _FRAME_DATE.sub("", stripped).strip()
+    if True:
+        # The owner's "Stackswopo - " lead comes off too; the format puts
+        # it back once.
+        stripped = re.sub(r"^\s*stackswopo\s*[-|–—:]\s*", "", stripped,
+                          flags=re.I)
+    return stripped.strip(" -|–—") or text
+
+
 def without_doubled_lead(title_format: str, stream_title: str) -> str:
     """The format minus its lead name when the stream's own name starts
     with it.
@@ -374,6 +402,12 @@ def build_title(stream_title: str, date_str: str, title_format: str) -> str:
     the end, on a title that was nothing but the raw stream name.
     """
     stream_title = strip_trailing_stamp(stream_title)
+    if "(FULL STREAM)" in (title_format or "").upper():
+        # The owner names the file the way it should be published -
+        # "Stackswopo - STIZZ SHOW - 10-25-26 (FULL STREAM)" - and that
+        # name came back as the stream name and was framed AGAIN:
+        # "... - 10-25-26 (FULL STREAM) - 10-25-26 (FULL STREAM)" (10-28).
+        stream_title = strip_full_stream_frame(stream_title)
     title_format = without_doubled_lead(title_format, stream_title)
     # The format supplies its own quotes. A name that arrived carrying one
     # - a stream titled '7 DAYS ON YT"' - came out '"7 DAYS ON YT""'.
