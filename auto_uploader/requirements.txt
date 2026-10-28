@@ -37,6 +37,9 @@ python-dotenv==1.0.1
 # toolkit. openai-whisper stays listed as the fallback so existing
 # installs keep working.
 faster-whisper==1.1.1
+# faster-whisper 1.1.1 calls av.open(metadata_errors=...), which PyAV 14+
+# removed: "open() got an unexpected keyword argument" (10-28, fresh PC got av 19).
+av>=12,<14
 openai-whisper
 
 # GPU acceleration for faster-whisper (NVIDIA only). Not installed by

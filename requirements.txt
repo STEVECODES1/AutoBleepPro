@@ -4,6 +4,9 @@
 
 # ── AI Transcription (speed-optimized) ──────────────────────────────────────
 faster-whisper==1.1.1          # 4x faster than openai-whisper
+# faster-whisper 1.1.1 calls av.open(metadata_errors=...), which PyAV 14+
+# removed: "open() got an unexpected keyword argument" (10-28, fresh PC got av 19).
+av>=12,<14
 stable-ts[fw]==2.19.1          # word-level timestamps on top of faster-whisper
 openai-whisper                 # still used directly by AutoReel's transcriber
 

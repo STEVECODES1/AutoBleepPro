@@ -39,6 +39,7 @@ REQUIRED = {
     "psutil": "psutil==7.2.2",
     "faster_whisper": "faster-whisper==1.1.1",
     "ctranslate2": "ctranslate2",
+    "av": "av>=12,<14",
     "stable_whisper": "stable-ts[fw]==2.19.1",
     "whisper": "openai-whisper",
     "moviepy": "moviepy==2.0.0",
@@ -82,6 +83,17 @@ def profanity_data_ok():
     return ("missing " + ", ".join(gone)) if gone else ""
 
 
+def av_ok():
+    """faster-whisper 1.1.1 needs a PyAV that still takes metadata_errors."""
+    try:
+        import av
+
+        major = int(av.__version__.split(".")[0])
+    except Exception as exc:  # noqa: BLE001
+        return f"{type(exc).__name__}: {exc}"
+    return "" if major < 14 else f"PyAV {av.__version__} is too new for faster-whisper (needs <14)"
+
+
 def gpu_report():
     lines = []
     try:
@@ -117,6 +129,10 @@ def main(argv=None):
           + (f"  - {why}" if why else ""))
     if why:
         broken["better_profanity (data)"] = REQUIRED["better_profanity"]
+    why = av_ok()
+    print(f"{'OK  ' if not why else 'BAD '} PyAV version" + (f"  - {why}" if why else ""))
+    if why:
+        broken["av (version)"] = REQUIRED["av"]
     for name, pkg in OPTIONAL.items():
         why = try_import(name)
         print(f"{'OK  ' if not why else 'MISS'} {name} (optional)"
@@ -136,7 +152,9 @@ def main(argv=None):
                         "--no-deps", "--no-cache-dir", *packages])
         subprocess.run([sys.executable, "-m", "pip", "install", *packages])
         importlib.invalidate_caches()
-        still = [n for n in broken if not n.endswith("(data)") and try_import(n)]
+        still = [n for n in broken if not n.endswith(")") and try_import(n)]
+        if av_ok():
+            still.append("av (version)")
         if profanity_data_ok():
             still.append("better_profanity (data)")
         print("Still broken: " + (", ".join(still) if still else "nothing"))
