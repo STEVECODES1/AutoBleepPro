@@ -48,8 +48,9 @@ For each clip, judge it the way a human editor would before posting:
 Then give a score 0-100 for how well it would do as a Reel/Short, and
 keep=true only if you would actually post it.
 
-Also write a title: what happens, in plain words, under 70 characters,
-no hashtags, no emoji. NEVER write a slur, a masked word or profanity in
+Also write a title: what happens, as a hook, under 70 characters, no
+hashtags, no emoji. Call him "Stackswopo" by name (people search it),
+never "the streamer" or "a streamer". NEVER write a slur, a masked word or profanity in
 the title - describe the moment instead.
 
 Reply with JSON only:

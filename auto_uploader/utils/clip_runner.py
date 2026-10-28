@@ -45,6 +45,28 @@ class ClipRun:
     source_title: str = ""
 
 
+def clip_basename(title: str, source_path: str) -> str:
+    """What a stream's clip files are called: the STREAM's name (owner,
+    10-28) - "Stackswopo - i got mail 10-27 - Clip 05", not the recorder's
+    "Stackswopo Youtube Live 11 32 - Clip 05". The recording's date stays
+    so two streams with one name never share files."""
+    import re as _re
+
+    stem = os.path.splitext(os.path.basename(source_path))[0]
+    name = " ".join(str(title or "").split())
+    name = _re.sub(r"\s*\d{4}-\d{2}-\d{2}(?:[ _T]\d{1,2}[-:_.]\d{2}(?:[-:_.]\d{2})?)?\s*", " ",
+                   name).strip(" -")
+    name = _re.sub(r'[<>:"/\\|?*\x00-\x1f]+', "", name).strip(" .")
+    if not name:
+        return stem
+    if not _re.match(r"stackswopo\b", name, _re.I):
+        name = f"Stackswopo - {name}"
+    when = _re.search(r"\d{4}-(\d{2})-(\d{2})", stem)
+    if when and when.group(0) not in name:
+        name = f"{name} {when.group(1)}-{when.group(2)}"
+    return name[:90].rstrip(" .-")
+
+
 def _is_placeholder(title: str, default_title: str) -> bool:
     """True when this title names no particular stream.
 
@@ -486,7 +508,7 @@ def make_clips(cfg, source_path: str, title: str,
                 print(f"[Clips] Twelve Labs picked {len(moments)} moment(s); "
                       f"clips overlapping them score higher.")
 
-    base = os.path.splitext(os.path.basename(source_path))[0]
+    base = clip_basename(title if named else "", source_path)
     try:
         results = maker.make(source_path, segments, basename=base, chat=chat,
                              heat=heat, seen=seen)

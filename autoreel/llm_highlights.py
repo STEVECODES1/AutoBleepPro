@@ -433,9 +433,12 @@ happened - over cramming the batch with one bit's leftovers.
 For each one you pick, write a TITLE. It is also the hook text on
 screen for the first seconds, so it has to make a scroller NEED the rest:
 - a hook, not a summary: a strong verb, a question, or the moment cut
-  off right before it pays off. "He caught a fake idol red-handed..."
-  beats "Stackswopo calling out a phony idol on stream". Built only from
-  what actually happens - never promise what the clip does not deliver
+  off right before it pays off. "Stackswopo catches a fake idol
+  red-handed..." beats "Stackswopo calling out a phony idol on stream".
+  Built only from what actually happens - never promise what the clip
+  does not deliver
+- NAME HIM: say "Stackswopo" (people search his name - that is the
+  traffic), never "the streamer", "a streamer" or a bare "He" at the start
 - NEVER reproduce a slur or a masked word. Some transcripts arrive with
   words starred out; those are censored on purpose. Describe the moment
   instead - "the instant he finds out her age" - and never copy the

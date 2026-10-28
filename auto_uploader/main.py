@@ -1517,6 +1517,21 @@ def _rumble_waits_for_stream(video_path: str, cfg=None) -> bool:
     return True
 
 
+def with_his_name(title: str, limit: int = 100) -> str:
+    """A clip title that says "Stackswopo" - his name is what people search
+    (owner, 10-28). "Streamer reacting to chat..." -> "Stackswopo reacting to
+    chat..."; a title without the name gets " | Stackswopo" when it fits."""
+    text = " ".join(str(title or "").split())
+    if not text:
+        return text
+    text = re.sub(r"^(?:the|a)\s+streamer\b|^streamer\b|^he\b(?=\s)", "Stackswopo",
+                  text, flags=re.I)
+    text = re.sub(r"\b(?:the|a)\s+streamer\b", "Stackswopo", text, flags=re.I)
+    if "stackswopo" not in text.lower() and len(text) + 13 <= limit:
+        text = f"{text} | Stackswopo"
+    return text
+
+
 def _clip_note_folders(cfg) -> tuple:
     root = getattr(cfg, "project_root", "") or ""
     folders = [getattr(cfg.general, name, "") for name in
@@ -2647,7 +2662,7 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
             # Stackswopoman10K 14 32 Live 13 (Clip 1)" (owner, 10-28).
             spoken = _clip_line_anywhere(cfg, video_path)
         if spoken:
-            stream_title = spoken
+            stream_title = with_his_name(spoken)
             print(f"[Clip] Title from the clip itself: {stream_title}")
         else:
             # Clip titles never come from file names (owner, 10-28).

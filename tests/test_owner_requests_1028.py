@@ -303,3 +303,23 @@ def test_a_clip_finds_its_stream_when_the_stored_title_carries_the_recorder_time
                                   "at": _t.time()}]))
     assert link_for("i got mail", "10-27-26", "rumble", store=str(store)) == \
         "https://rumble.com/v7hh9ba-x.html"
+
+
+@pytest.mark.parametrize("raw, out", [
+    ("Streamer reacting to chat comments about knife names",
+     "Stackswopo reacting to chat comments about knife names"),
+    ("He trolls strangers on the Monkey App", "Stackswopo trolls strangers on the Monkey App"),
+    ("Somebody call an EMS!", "Somebody call an EMS! | Stackswopo"),
+    ("Stackswopo roasts the lobby", "Stackswopo roasts the lobby")])
+def test_clip_titles_say_his_name(raw, out):
+    import main
+
+    assert main.with_his_name(raw) == out
+
+
+def test_clip_files_are_named_after_the_stream(tmp_path):
+    from utils.clip_runner import clip_basename
+
+    src = str(tmp_path / "Stackswopo youtube live 2026-10-27 11_32.ts")
+    assert clip_basename("i got mail 2026-10-27 11:32", src) == "Stackswopo - i got mail 10-27"
+    assert clip_basename("", src) == "Stackswopo youtube live 2026-10-27 11_32"

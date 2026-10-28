@@ -244,7 +244,7 @@ def test_a_clip_with_its_own_caption_is_unaffected(scene, tmp_path):
 
     _run(main, cfg, clip, tmp_path)
 
-    assert uploaded_titles == ["Imma switch yo ahh"]
+    assert uploaded_titles == ["Imma switch yo ahh | Stackswopo"]  # his name added, 10-28
 
 
 # ── the log must not blame a flag that was never passed ──────────────────
