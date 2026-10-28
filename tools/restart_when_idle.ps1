@@ -28,7 +28,7 @@ while ((Get-Date) -lt $deadline) {
     $beat = "$root\logs\uploading.json"
     if ((Test-Path $beat) -and (((Get-Date) - (Get-Item $beat).LastWriteTime).TotalMinutes -lt 10)) { $processing = $true }
     if ([int]$busy -eq 0 -and $kids.Count -eq 0 -and -not $processing) {
-        Get-CimInstance Win32_Process -Filter "Name='chrome.exe'" |
+        Get-CimInstance Win32_Process -Filter "Name='chrome.exe' OR Name='msedge.exe'" |
             Where-Object { $_.CommandLine -match 'remote-debugging-port=9222' } |
             ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
         Start-Sleep 4

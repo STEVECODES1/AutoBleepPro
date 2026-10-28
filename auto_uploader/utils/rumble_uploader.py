@@ -173,7 +173,7 @@ def _kill_chrome_on_port(port: int) -> None:
         return
     subprocess.run(
         ["powershell", "-NoProfile", "-Command",
-         "Get-CimInstance Win32_Process -Filter \"Name='chrome.exe'\" | "
+         "Get-CimInstance Win32_Process -Filter \"Name='chrome.exe' OR Name='msedge.exe'\" | "
          f"Where-Object {{ $_.CommandLine -match 'remote-debugging-port={int(port)}' }} | "
          "ForEach-Object { Stop-Process -Id $_.ProcessId -Force }"],
         timeout=60, capture_output=True)

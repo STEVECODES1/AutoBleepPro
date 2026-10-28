@@ -19,10 +19,17 @@ function Running($pattern) {
 # The logged-in Rumble browser: Rumble uploads and the live relay drive it.
 # chrome.exe only: a shell whose own command line mentions the port must not
 # be mistaken for the browser (it hid a closed Chrome on 10-17).
-$chromeUp = [bool](Get-CimInstance Win32_Process -Filter "Name='chrome.exe'" |
+$chromeUp = [bool](Get-CimInstance Win32_Process -Filter "Name='chrome.exe' OR Name='msedge.exe'" |
     Where-Object { $_.CommandLine -match 'RumbleChromeProfile' })
-if (-not $chromeUp) {
-    Start-Process "C:\Program Files\Google\Chrome\Application\chrome.exe" -WindowStyle Minimized `
+# Chrome when it is installed, otherwise Edge (same flags; after the 10-28
+# reset the PC had Edge only).
+$browser = @("C:\Program Files\Google\Chrome\Application\chrome.exe",
+             "$env:LOCALAPPDATA\Google\Chrome\Application\chrome.exe",
+             "C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+             "C:\Program Files\Microsoft\Edge\Application\msedge.exe") |
+    Where-Object { Test-Path $_ } | Select-Object -First 1
+if (-not $chromeUp -and $browser) {
+    Start-Process $browser -WindowStyle Minimized `
         -ArgumentList '--remote-debugging-port=9222', '--user-data-dir=C:\RumbleChromeProfile',
                       '--no-first-run', '--no-default-browser-check', 'https://rumble.com/'
     "started Rumble Chrome"

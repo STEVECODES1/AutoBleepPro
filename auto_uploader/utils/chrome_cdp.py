@@ -36,6 +36,10 @@ WINDOWS_CHROME_PATHS = (
     r"C:\Program Files\Google\Chrome\Application\chrome.exe",
     r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
     os.path.expandvars(r"%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe"),
+    # Microsoft Edge is Chromium with the same debugging port and profile
+    # flags. After the 10-28 Windows reset the PC had Edge and no Chrome.
+    r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+    r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
 )
 
 # Chrome refuses --remote-debugging-port on the default profile, so the
@@ -81,7 +85,7 @@ def is_listening(port: int, host: str = "127.0.0.1", timeout: float = 1.0) -> bo
 
 def find_chrome() -> Optional[str]:
     """Chrome's executable, or None if it cannot be found."""
-    for name in ("chrome", "google-chrome", "chromium"):
+    for name in ("chrome", "google-chrome", "chromium", "msedge"):
         found = shutil.which(name)
         if found:
             return found
