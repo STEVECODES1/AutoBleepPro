@@ -142,6 +142,17 @@ a 4.4 GB full stream takes ~3 h to YouTube.
   went to wopovod as a duplicate (its dedupe used the startup channel list). Now every full stream asks
   the channel for its exact title right before the first upload too (`_already_on_youtube`).
   Never leave a second copy of a stream in watch_folder - move extras to _to_delete.
+  Follow-up the same day: that channel check alone could not close the race under `--watch` - it starts
+  a fresh thread per arriving file, so two files for one stream can both reach `process_file()`'s
+  dispatch before either upload is far enough along for the API to show it. `_title_lock()` now makes a
+  second file for the same stream title WAIT for the first's whole dispatch-and-upload to finish instead
+  of racing it (full streams only; `--batch` already had this for free). That alone still left Rumble
+  exposed - `rb_attempt()` only asked `_already_on_rumble` on a RETRY, never the first attempt, so the
+  second file's own "first" Rumble upload would have gone up anyway, one after the other instead of at
+  the same time. Fixed to match `_already_on_youtube`'s shape: full streams ask before the first attempt
+  too, clips only on a genuine retry as before. Covered by
+  `tests/test_parallel_uploads.py::test_two_files_of_the_same_stream_do_not_race_each_other` and
+  `::test_a_second_file_of_the_same_stream_does_not_reupload_to_rumble`.
 
 ## Held clips and learning
 
