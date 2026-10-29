@@ -33,7 +33,10 @@ UPLOADER = os.path.join(ROOT, "auto_uploader")
 LEDGER = os.path.join(UPLOADER, "logs", "rumble_live.json")
 FFLOG = os.path.join(UPLOADER, "logs", "rumble_live.log")
 HEARTBEAT = r"C:\AutoBleep\recording\.heartbeat\Stackswopo.json"
-ROOM = "https://studio.rumble.com/studio/c5ab9397-d670-4307-9249-6b6615bf1819"
+# The Direct RTMP room in Rumble Studio. Rumble made a new one on 10-29
+# (c5ab9397-... was gone: "studio-not-found"); RUMBLE_STUDIO_ROOM in .env
+# overrides it when Rumble moves it again.
+ROOM = "https://studio.rumble.com/studio/e1183ab2-e023-474e-a68e-19f2782279fe"
 CDP = "http://localhost:9222"
 PY = sys.executable
 
@@ -447,7 +450,9 @@ def relay(video_id, cfg):
 
 
 def main():
+    global ROOM
     cfg = env()
+    ROOM = cfg.get("RUMBLE_STUDIO_ROOM") or ROOM
     if not cfg.get("RUMBLE_STREAM_KEY") or not cfg.get("RUMBLE_RTMP_URL"):
         log("RUMBLE_STREAM_KEY / RUMBLE_RTMP_URL missing in .env - nothing to do")
         return 2
