@@ -2547,6 +2547,47 @@ def _parse_args_helpfully(parser, argv):
     return parser.parse_args(argv)
 
 
+# One lock per stream title, created once and reused after. Guards the
+# dict itself, not the per-title locks it hands out - see _title_lock().
+_TITLE_LOCKS: dict = {}
+_TITLE_LOCKS_GUARD = threading.Lock()
+
+
+def _title_lock(key: str) -> threading.Lock:
+    """A lock scoped to one stream, so a second upload of it WAITS for
+    the first instead of racing it.
+
+    10-29: two different files for the same stream ("hey my babes" and
+    the recorder's own delivery of it) landed in watch_folder close
+    together. --batch is safe from this - it processes one file at a
+    time, so the second file's already-on-channel check always runs
+    against a channel the first file has already finished updating.
+    --watch is not: file_watcher._maybe_watch starts a fresh thread per
+    arriving file, so two files for the same stream can each reach
+    process_file() at nearly the same moment. The already-on-channel
+    check added that day (_already_on_youtube, asked before the first
+    attempt now, not only retries) narrows the window but cannot close
+    it: it can only see a video once YouTube's API reports it, which is
+    not guaranteed the instant an upload starts. Rumble's own retry
+    check (rb_attempt) still only asks on a RETRY, not the first
+    attempt at all - the same gap YouTube had until that day, unnoticed
+    here because this exact incident happened to land on YouTube first.
+
+    Holding this for process_file()'s whole dispatch-and-upload section
+    (see its "--- Dispatch ---" block) makes two same-titled uploads run
+    one after the other instead - the same guarantee --batch already
+    has for free - without serializing anything for two DIFFERENT
+    streams processing at the same time, which still run exactly as
+    before.
+    """
+    with _TITLE_LOCKS_GUARD:
+        lock = _TITLE_LOCKS.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            _TITLE_LOCKS[key] = lock
+        return lock
+
+
 def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChecker,
                   yt_logger, rb_logger, dry_run: bool, existing_youtube_videos: list = None,
                   existing_rumble_videos: list = None, allow_prompt: bool = True,
@@ -3598,15 +3639,23 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
                 # A retry after a failure that came AFTER Rumble accepted
                 # the video (waiting for the published page, reading the
                 # link) used to upload the whole file again - one clip,
-                # two videos on the channel. Look before sending it twice.
-                if rb_attempts[0]:
+                # two videos on the channel. Look before sending it twice -
+                # and, full streams only, before the very FIRST attempt
+                # too, the same way _already_on_youtube does (10-29): the
+                # title-lock above serializes two different files for one
+                # stream rather than letting them race, but once the
+                # second file's own turn comes up, its "first" Rumble
+                # attempt is really a retry of what the first file already
+                # put up moments earlier - nothing upstream of here knows
+                # that unless this asks the channel first.
+                rb_attempts[0] += 1
+                if rb_attempts[0] > 1 or not is_clip:
                     already = _already_on_rumble(rb_title, cfg)
                     if already:
                         print(f"[Rumble] Already on the channel from the "
                               f"last attempt -> {already}. Not uploading "
                               f"it again.")
                         return already
-                rb_attempts[0] += 1
                 return rb.upload(
                     rb_source, rb_title, rb_description, cfg.rumble.tags,
                     privacy=rb_privacy,
@@ -3714,102 +3763,115 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
     # --- Dispatch ---
     # Rumble appended first and submitted first - it wants to be the one
     # already under way, not just the one asked for first.
-    jobs = []
-    if "rumble" not in active_platforms:
-        print("[Rumble] Skipped - --only youtube.")
-    elif existing_rb:
-        print(f"[Rumble] Already on the channel - skipping: {existing_rb}")
-        results["rumble"] = existing_rb
-    else:
-        jobs.append(("rumble", do_rumble))
-
-    if "youtube" not in active_platforms:
-        if routed_as_clip:
-            # Already explained above - repeating it here with the wrong
-            # reason ("--only rumble", a flag that was never passed) is
-            # how a working, deliberate design decision reads as a bug.
-            pass
+    # A second upload of the SAME stream waits here for the first to
+    # finish rather than racing it - see _title_lock()'s own docstring
+    # for the 10-29 incident this closes. Only full streams: a pile of
+    # clips sharing a caption-derived title is normal and unrelated.
+    _stream_lock = (_title_lock(stream_title.strip().lower())
+                    if not is_clip and (stream_title or '').strip()
+                    else None)
+    if _stream_lock is not None:
+        _stream_lock.acquire()
+    try:
+        jobs = []
+        if "rumble" not in active_platforms:
+            print("[Rumble] Skipped - --only youtube.")
+        elif existing_rb:
+            print(f"[Rumble] Already on the channel - skipping: {existing_rb}")
+            results["rumble"] = existing_rb
         else:
-            print("[YouTube] Skipped - --only rumble.")
-    elif existing_yt:
-        results["youtube"] = existing_yt  # already announced above
-    elif _youtube_blocked_until(cfg):
-        # Recorded as a failure, never a success: the file stays put and
-        # the first run after the block lifts uploads it.
-        until = time.strftime("%H:%M", time.localtime(_youtube_blocked_until(cfg)))
-        print(f"[YouTube] Skipped - the channel refused uploads earlier; "
-              f"trying again after {until}.")
-        results["youtube"] = _BLOCKED_RESULT
-    elif _YOUTUBE_WRONG_CHANNEL["why"]:
-        print(f"[YouTube] Skipped - {_YOUTUBE_WRONG_CHANNEL['why']}")
-        results["youtube"] = _WRONG_CHANNEL_RESULT
-    else:
-        jobs.append(("youtube", do_youtube))
+            jobs.append(("rumble", do_rumble))
 
-    parallel = len(jobs) > 1 and bool(
-        (cfg.general.speed or {}).get("parallel_uploads", True))
-    # The thumbnail (frame sampling plus a model call that can sit through
-    # its own 503 retries) is started alongside the uploads, and each
-    # uploader only asks for it once its video is already moving. Made
-    # inline, it held back whichever upload asked first - Rumble's start
-    # waited 20s+ on a Gemini retry in a real run.
-    wanted = {"youtube": cfg.youtube.thumbnail_path,
-              "rumble": cfg.rumble.thumbnail_path}
-    if jobs and cfg.general.auto_thumbnail and any(
-            not (wanted.get(name) and os.path.exists(wanted[name]))
-            for name, _ in jobs):
-        def _warm_thumbnail():
-            # thumbnail_path_for already catches the one call inside it
-            # that is actually likely to fail (autoreel_thumbnail.make,
-            # a model call); this is everything AROUND that - media
-            # probing, folder creation - on a thread nothing joins or
-            # reads a return value from. Uncaught here is a silent
-            # thread death with no [Thumbnail] line to say why, not a
-            # missing thumbnail: do_youtube/do_rumble below still call
-            # thumbnail_path_for() themselves when they need it, so the
-            # only real cost of this thread dying unseen is losing the
-            # overlap it exists to buy.
+        if "youtube" not in active_platforms:
+            if routed_as_clip:
+                # Already explained above - repeating it here with the wrong
+                # reason ("--only rumble", a flag that was never passed) is
+                # how a working, deliberate design decision reads as a bug.
+                pass
+            else:
+                print("[YouTube] Skipped - --only rumble.")
+        elif existing_yt:
+            results["youtube"] = existing_yt  # already announced above
+        elif _youtube_blocked_until(cfg):
+            # Recorded as a failure, never a success: the file stays put and
+            # the first run after the block lifts uploads it.
+            until = time.strftime("%H:%M", time.localtime(_youtube_blocked_until(cfg)))
+            print(f"[YouTube] Skipped - the channel refused uploads earlier; "
+                  f"trying again after {until}.")
+            results["youtube"] = _BLOCKED_RESULT
+        elif _YOUTUBE_WRONG_CHANNEL["why"]:
+            print(f"[YouTube] Skipped - {_YOUTUBE_WRONG_CHANNEL['why']}")
+            results["youtube"] = _WRONG_CHANNEL_RESULT
+        else:
+            jobs.append(("youtube", do_youtube))
+
+        parallel = len(jobs) > 1 and bool(
+            (cfg.general.speed or {}).get("parallel_uploads", True))
+        # The thumbnail (frame sampling plus a model call that can sit through
+        # its own 503 retries) is started alongside the uploads, and each
+        # uploader only asks for it once its video is already moving. Made
+        # inline, it held back whichever upload asked first - Rumble's start
+        # waited 20s+ on a Gemini retry in a real run.
+        wanted = {"youtube": cfg.youtube.thumbnail_path,
+                  "rumble": cfg.rumble.thumbnail_path}
+        if jobs and cfg.general.auto_thumbnail and any(
+                not (wanted.get(name) and os.path.exists(wanted[name]))
+                for name, _ in jobs):
+            def _warm_thumbnail():
+                # thumbnail_path_for already catches the one call inside it
+                # that is actually likely to fail (autoreel_thumbnail.make,
+                # a model call); this is everything AROUND that - media
+                # probing, folder creation - on a thread nothing joins or
+                # reads a return value from. Uncaught here is a silent
+                # thread death with no [Thumbnail] line to say why, not a
+                # missing thumbnail: do_youtube/do_rumble below still call
+                # thumbnail_path_for() themselves when they need it, so the
+                # only real cost of this thread dying unseen is losing the
+                # overlap it exists to buy.
+                try:
+                    thumbnail_path_for("")
+                except Exception as exc:
+                    print(f"[Thumbnail] Warm-up failed ({exc}) - the upload "
+                          f"that needs it will generate it instead.")
+            threading.Thread(target=_warm_thumbnail, daemon=True).start()
+        # Warm the censor import before dispatch. upload_path_for() imports
+        # autoreel.transcription (torch) for the device label the first time
+        # YouTube needs censoring - a ~1s cold cost that otherwise lands
+        # inside do_youtube's thread, after dispatch, and eats Rumble's
+        # whole overlap window on a fast run. Warming it here costs the
+        # same once, on the main thread, before either thread starts, so
+        # the race starts fair. Both the import AND the first
+        # detect_device() call are warmed: the call itself initialises
+        # CUDA and costs real time exactly once per process.
+        if (parallel and any(name == "youtube" for name, _ in jobs)
+                and cfg.youtube.censor_uploads
+                and cfg.general.censor_before_upload):
             try:
-                thumbnail_path_for("")
-            except Exception as exc:
-                print(f"[Thumbnail] Warm-up failed ({exc}) - the upload "
-                      f"that needs it will generate it instead.")
-        threading.Thread(target=_warm_thumbnail, daemon=True).start()
-    # Warm the censor import before dispatch. upload_path_for() imports
-    # autoreel.transcription (torch) for the device label the first time
-    # YouTube needs censoring - a ~1s cold cost that otherwise lands
-    # inside do_youtube's thread, after dispatch, and eats Rumble's
-    # whole overlap window on a fast run. Warming it here costs the
-    # same once, on the main thread, before either thread starts, so
-    # the race starts fair. Both the import AND the first
-    # detect_device() call are warmed: the call itself initialises
-    # CUDA and costs real time exactly once per process.
-    if (parallel and any(name == "youtube" for name, _ in jobs)
-            and cfg.youtube.censor_uploads
-            and cfg.general.censor_before_upload):
-        try:
-            from autoreel.transcription import detect_device as _warm
+                from autoreel.transcription import detect_device as _warm
 
-            _warm()
-        except Exception:
-            pass
-    if parallel:
-        if rumble_will_run:
-            print(f"[Upload] Rumble first - YouTube waits for it to "
-                  f"actually start sending the file before joining in.")
+                _warm()
+            except Exception:
+                pass
+        if parallel:
+            if rumble_will_run:
+                print(f"[Upload] Rumble first - YouTube waits for it to "
+                      f"actually start sending the file before joining in.")
+            else:
+                print(f"[Upload] YouTube and Rumble together - the slower of "
+                      f"the two is the wait, not the sum.")
+            with ThreadPoolExecutor(max_workers=len(jobs)) as pool:
+                futures = [pool.submit(job, True) for _, job in jobs]
+                for future in futures:
+                    # Re-raised here rather than swallowed; each job already
+                    # catches its own failures, so anything reaching this is a
+                    # bug rather than a failed upload.
+                    future.result()
         else:
-            print(f"[Upload] YouTube and Rumble together - the slower of "
-                  f"the two is the wait, not the sum.")
-        with ThreadPoolExecutor(max_workers=len(jobs)) as pool:
-            futures = [pool.submit(job, True) for _, job in jobs]
-            for future in futures:
-                # Re-raised here rather than swallowed; each job already
-                # catches its own failures, so anything reaching this is a
-                # bug rather than a failed upload.
-                future.result()
-    else:
-        for _, job in jobs:
-            job(False)
+            for _, job in jobs:
+                job(False)
+    finally:
+        if _stream_lock is not None:
+            _stream_lock.release()
 
     fully_uploaded = dup_checker.is_fully_uploaded(file_hash, platforms=active_platforms)
 

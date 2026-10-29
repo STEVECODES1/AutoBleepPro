@@ -133,6 +133,14 @@ def scene(tmp_path, monkeypatch):
     monkeypatch.setattr(main, "censor_video", fake_censor)
     # ffprobe is not installed in CI; a stream is anything long.
     monkeypatch.setattr(main, "media_duration", lambda path: 9000.0)
+    # rb_attempt() now asks this before a full stream's FIRST attempt
+    # too (matching _already_on_youtube's own 10-29 fix), and unlike
+    # YouTube's check - which the fake uploader's get_service() -> None
+    # already short-circuits for free - this one takes cfg directly and
+    # would otherwise make a real HTTP fetch of the Rumble channel page
+    # on every single test here. Neutral by default; tests exercising
+    # the duplicate-detection itself override it.
+    monkeypatch.setattr(main, "_already_on_rumble", lambda title, cfg: "")
 
     return main, cfg, video, recorder
 
@@ -159,6 +167,227 @@ def test_both_platforms_upload_at_the_same_time(scene, tmp_path):
     assert results["rumble"].startswith("https://rumble")
     assert recorder.overlapped(), \
         "the two uploads ran one after the other, not together"
+
+
+def test_two_files_of_the_same_stream_do_not_race_each_other(scene, tmp_path,
+                                                             monkeypatch):
+    """10-29: two different files for the SAME stream ("hey my babes" and
+    the recorder's own delivery of it) landed in watch_folder close
+    together and both ended up on the channel. --watch gives each
+    arriving file its own thread, so two for the same stream can each
+    reach process_file() at nearly the same moment - and the
+    already-on-channel check can only see a video once the platform's
+    own API reports it, which a check that races the upload itself
+    cannot rely on. A second file for the same title must wait for the
+    first's whole dispatch-and-upload to finish, not run alongside it -
+    unlike two DIFFERENT streams, which still run together exactly as
+    test_both_platforms_upload_at_the_same_time proves."""
+    main, cfg, _video, _recorder = scene
+
+    second = os.path.join(cfg.general.watch_folder, "Second Copy.mp4")
+    with open(second, "wb") as f:
+        f.write(b"different bytes entirely, same stream" * 100)
+
+    # The shared fixture's fake censor_video hardcodes output_path to
+    # the FIRST file ("A Stream"), since every other test in this file
+    # only ever processes that one file. With two different files now
+    # running through process_file() at once, that same hardcoded
+    # output_path would hand "Second Copy.mp4"'s upload the first
+    # file's path instead of its own - a fixture gap, not anything
+    # process_file() gets wrong. Replaced here with a fake that echoes
+    # back whichever source it was actually given.
+    def fake_censor_per_file(source_path, *args, **kwargs):
+        class R:
+            output_path = source_path
+            violation_count = 0
+            was_censored = False
+            censored_words = []
+        return R()
+
+    monkeypatch.setattr(main, "censor_video", fake_censor_per_file)
+
+    # The lock wraps process_file()'s dispatch-and-upload section only -
+    # censoring, hashing and title resolution are untouched and may
+    # legitimately still overlap between two files. What must NOT
+    # overlap is the actual upload work, so it is measured directly
+    # here (keyed by which video is calling, which the shared fixture's
+    # own per-platform recorder cannot distinguish between two calls to
+    # the same platform) rather than by timing the whole call.
+    spans: list = []
+    spans_lock = threading.Lock()
+
+    def uploader(platform):
+        class Fake:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def upload(self, path, *args, **kwargs):
+                started = time.monotonic()
+                callback = kwargs.get("progress_callback")
+                if callback:
+                    callback(1)
+                time.sleep(UPLOAD_SECONDS)
+                with spans_lock:
+                    spans.append((os.path.basename(path), platform,
+                                 started, time.monotonic()))
+                if callback:
+                    callback(100)
+                return f"https://{platform}.example/watch"
+
+            def get_service(self):
+                return None
+        return Fake
+
+    monkeypatch.setattr(main, "YouTubeUploader", uploader("youtube"))
+    monkeypatch.setattr(main, "RumbleUploader", uploader("rumble"))
+
+    results: dict = {}
+    results_lock = threading.Lock()
+
+    def timed_run(label, path):
+        result = run(main, cfg, path, tmp_path)
+        with results_lock:
+            results[label] = result
+
+    threads = [threading.Thread(target=timed_run, args=("first", _video)),
+              threading.Thread(target=timed_run, args=("second", second))]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=30)
+
+    assert set(results) == {"first", "second"}
+    assert len(spans) == 4, f"expected 4 uploads (2 files x 2 platforms), got {spans}"
+    first_spans = [(s, e) for name, _p, s, e in spans
+                  if name == os.path.basename(_video)]
+    second_spans = [(s, e) for name, _p, s, e in spans
+                    if name == "Second Copy.mp4"]
+    overlapped = any(a_s < b_e and b_s < a_e
+                     for a_s, a_e in first_spans
+                     for b_s, b_e in second_spans)
+    assert not overlapped, \
+        "two files sharing a stream title raced each other's upload " \
+        "instead of one waiting for the other"
+    # Both still succeed - this is ordering, not a second upload refused.
+    assert results["first"]["youtube"].startswith("https://youtube")
+    assert results["second"]["youtube"].startswith("https://youtube")
+
+
+def test_a_second_file_of_the_same_stream_does_not_reupload_to_rumble(
+        scene, tmp_path, monkeypatch):
+    """The lock only makes the second file's dispatch WAIT for the
+    first's to finish - on its own it does not stop the second file's
+    own first Rumble attempt from putting up a second copy once its
+    turn comes. That is rb_attempt()'s job: ask the channel before the
+    very first attempt too, not only on a retry, the same way
+    _already_on_youtube already does for YouTube. Without that fix,
+    the title-lock closes the RACE but the two files would still both
+    land on Rumble, one after the other instead of at the same time -
+    still the exact duplicate the owner reported."""
+    main, cfg, _video, _recorder = scene
+
+    second = os.path.join(cfg.general.watch_folder, "Second Copy.mp4")
+    with open(second, "wb") as f:
+        f.write(b"different bytes entirely, same stream" * 100)
+
+    def fake_censor_per_file(source_path, *args, **kwargs):
+        class R:
+            output_path = source_path
+            violation_count = 0
+            was_censored = False
+            censored_words = []
+        return R()
+
+    monkeypatch.setattr(main, "censor_video", fake_censor_per_file)
+
+    rumble_uploads: list = []
+
+    def fake_already(title, cfg):
+        # Empty channel until the first file's own upload has actually
+        # happened - exactly like the real channel, which has nothing
+        # to find before that.
+        return "https://rumble.com/v7-a-stream.html" if rumble_uploads else ""
+
+    monkeypatch.setattr(main, "_already_on_rumble", fake_already)
+
+    class FakeYouTube:
+        def __init__(self, *a, **k):
+            pass
+
+        def upload(self, *a, **k):
+            return "https://youtube.example/watch"
+
+        def get_service(self):
+            return None
+
+    class FakeRumble:
+        def __init__(self, *a, **k):
+            pass
+
+        def upload(self, *a, **k):
+            rumble_uploads.append(1)
+            return "https://rumble.com/v7-a-stream.html"
+
+        def get_service(self):
+            return None
+
+    monkeypatch.setattr(main, "YouTubeUploader", FakeYouTube)
+    monkeypatch.setattr(main, "RumbleUploader", FakeRumble)
+
+    results: dict = {}
+    results_lock = threading.Lock()
+
+    def timed_run(label, path):
+        result = run(main, cfg, path, tmp_path)
+        with results_lock:
+            results[label] = result
+
+    threads = [threading.Thread(target=timed_run, args=("first", _video)),
+              threading.Thread(target=timed_run, args=("second", second))]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=30)
+
+    assert len(rumble_uploads) == 1, \
+        "the second file uploaded to Rumble again instead of finding " \
+        "the first file's upload already there"
+    assert results["first"]["rumble"].startswith("https://rumble")
+    assert results["second"]["rumble"].startswith("https://rumble")
+
+
+def test_different_streams_still_run_together_despite_the_new_lock(
+        scene, tmp_path):
+    """The lock in the test above is scoped to ONE title - two unrelated
+    streams processing at the same time must still overlap, exactly as
+    before 10-29's fix existed."""
+    import main as main_module
+
+    main, cfg, _video, recorder = scene
+
+    second = os.path.join(cfg.general.watch_folder, "Unrelated Stream.mp4")
+    with open(second, "wb") as f:
+        f.write(b"a completely different broadcast" * 100)
+
+    def run_second():
+        from utils.duplicate_checker import DuplicateChecker
+        from utils.logging_setup import setup_logger
+
+        checker = DuplicateChecker(str(tmp_path / "uploads2.json"))
+        logs = str(tmp_path / "logs2")
+        main_module.process_file(
+            second, cfg, "An Entirely Different Stream", checker,
+            setup_logger("youtube", logs), setup_logger("rumble", logs),
+            False, existing_youtube_videos=[], existing_rumble_videos=[],
+            allow_prompt=False)
+
+    t = threading.Thread(target=run_second)
+    t.start()
+    run(main, cfg, _video, tmp_path)
+    t.join(timeout=30)
+
+    assert recorder.overlapped(), \
+        "two DIFFERENT streams were serialized by a lock meant for one title"
 
 
 def test_the_censor_pass_still_runs_exactly_once(scene, tmp_path):
@@ -559,8 +788,17 @@ def test_a_rumble_retry_finds_the_video_it_already_uploaded(
             raise RuntimeError("timed out waiting for the published page")
 
     monkeypatch.setattr(main, "RumbleUploader", FailsAfterPublishing)
-    monkeypatch.setattr(main, "_already_on_rumble",
-                        lambda title, cfg: "https://rumble.com/v7abc1-a-stream.html")
+    # Full streams now ask before the FIRST attempt too (matching
+    # _already_on_youtube's 10-29 fix), so the mock has to behave like
+    # the real channel would: nothing there yet on the very first ask,
+    # then the video it secretly landed shows up from the retry on.
+    already_calls = []
+
+    def fake_already(title, cfg):
+        already_calls.append(1)
+        return "" if len(already_calls) == 1 else "https://rumble.com/v7abc1-a-stream.html"
+
+    monkeypatch.setattr(main, "_already_on_rumble", fake_already)
     monkeypatch.setattr(main, "_confirm_on_rumble", lambda url, title, cfg: url)
 
     results = run(main, cfg, video, tmp_path)
