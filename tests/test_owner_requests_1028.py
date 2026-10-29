@@ -358,3 +358,22 @@ def test_youtube_recordings_ask_for_h264():
                                  watch_folder=".")
     args = rec.download_args("out.ts")
     assert "-S" in args and args[args.index("-S") + 1].startswith("vcodec:h264")
+
+
+def test_rumble_clips_have_a_daily_cap(tmp_path):
+    import main
+
+    class G:
+        logs_folder = str(tmp_path)
+
+    class R:
+        clips_per_day = 2
+
+    class C:
+        general = G()
+        rumble = R()
+
+    assert not main._rumble_clip_cap_reached(C())
+    main._note_rumble_clip(C())
+    main._note_rumble_clip(C())
+    assert main._rumble_clip_cap_reached(C())

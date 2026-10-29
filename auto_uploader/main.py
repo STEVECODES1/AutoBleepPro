@@ -1488,9 +1488,45 @@ def _rumble_full_stream_for(video_path: str, cfg=None) -> str:
 # up without the Related Video link (a stream that never reaches Rumble
 # must not hold its clips forever).
 RUMBLE_RELATED_WAIT_HOURS = 12
+RUMBLE_CLIPS_PER_DAY = 8
 # A stream's clips wait for both full uploads at most this long.
 CLIPS_WAIT_FOR_UPLOADS_H = 24
 RUMBLE_WAIT_RESULT = "FAILED: waiting for the full stream on Rumble (Related Video)"
+
+
+def _rumble_clip_cap(cfg) -> int:
+    """Rumble shorts a day (owner, 10-29: "don't upload unlimited")."""
+    try:
+        return int(getattr(cfg.rumble, "clips_per_day", 0) or RUMBLE_CLIPS_PER_DAY)
+    except (TypeError, ValueError):
+        return RUMBLE_CLIPS_PER_DAY
+
+
+def _rumble_clip_log(cfg) -> str:
+    return os.path.join(cfg.general.logs_folder, "rumble_clip_posts.json")
+
+
+def _rumble_clip_times(cfg) -> list:
+    try:
+        with open(_rumble_clip_log(cfg), encoding="utf-8") as handle:
+            times = [float(t) for t in json.load(handle)]
+    except (OSError, ValueError, TypeError):
+        times = []
+    return [t for t in times if time.time() - t < 86400]
+
+
+def _rumble_clip_cap_reached(cfg) -> bool:
+    return len(_rumble_clip_times(cfg)) >= _rumble_clip_cap(cfg)
+
+
+def _note_rumble_clip(cfg) -> None:
+    times = _rumble_clip_times(cfg) + [time.time()]
+    try:
+        os.makedirs(cfg.general.logs_folder, exist_ok=True)
+        with open(_rumble_clip_log(cfg), "w", encoding="utf-8") as handle:
+            json.dump(times, handle)
+    except OSError:
+        pass
 
 
 def _rumble_waits_for_stream(video_path: str, cfg=None) -> bool:
@@ -3490,6 +3526,13 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
             # offers it again) instead of going up without the link.
             clip_related = (_rumble_full_stream_for(video_path, cfg)
                             if is_clip else "")
+            if is_clip and _rumble_clip_cap_reached(cfg):
+                print(f"[Rumble] Daily clip cap reached ({_rumble_clip_cap(cfg)} in the last "
+                      f"24 h) - this clip waits for tomorrow's slots.")
+                with upload_lock:
+                    results["rumble"] = RUMBLE_WAIT_RESULT
+                rumble_upload_started.set()
+                return
             if is_clip and not clip_related and _rumble_waits_for_stream(video_path, cfg):
                 print(f"[Rumble] Waiting: the full stream for this clip is not on "
                       f"Rumble yet, and every short links it as its Related "
@@ -3586,6 +3629,8 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
             with upload_lock:
                 results["rumble"] = url
                 newly_uploaded["rumble"] = url
+            if is_clip and _is_link(url):
+                _note_rumble_clip(cfg)
         except Exception as exc:
             if not parallel:
                 print()
