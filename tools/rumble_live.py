@@ -40,7 +40,8 @@ ROOM = "https://studio.rumble.com/studio/e1183ab2-e023-474e-a68e-19f2782279fe"
 CDP = "http://localhost:9222"
 PY = sys.executable
 
-BITRATE = "2200k"
+BITRATE = "1400k"
+HEIGHT = 480
 END_GRACE_S = 150          # recorder not recording this long = stream over
 NO_FEED_GIVE_UP_S = 600    # never got a feed for this id = not the live one
 STALE_HEARTBEAT_S = 240
@@ -189,9 +190,10 @@ def live_title(video_id):
 # those found nothing (caught by the 2026-10-10 test against a real live).
 # So: best H.264 video up to 1080p plus the best audio, as two inputs; the
 # old muxed formats stay as the fallback in case they come back.
-# 720p is all Rumble gets (2.2 Mbps), so 720p is all that is pulled: the
-# 1080p60 feed needed ~8 Mbps down and fell 6 s behind (10-29).
-FEED_FORMAT = "bv*[height<=720][fps<=30][vcodec^=avc1]+ba/bv*[height<=720][vcodec^=avc1]+ba/bv*[height<=720]+ba/300/95/b"
+# 480p (10-29): while he streams, OBS fills this PC's line - the 720p60
+# feed came down at 0.5x (18 fps on Rumble), 480p30 at 1.03x. RUMBLE_LIVE_HEIGHT
+# in .env raises it on a better connection.
+FEED_FORMAT = "bv*[height<=480][vcodec^=avc1]+233/bv*[height<=480][vcodec^=avc1]+ba/bv*[height<=480]+ba/231+233/b"
 
 
 def hls_url(video_id):
@@ -226,9 +228,9 @@ class Push:
                # A steady 30 fps (10-29: the YouTube HLS came out at 59-63 fps
                # with timestamp jumps and Rumble's player stayed on its
                # standby card although Studio showed the feed arriving).
-               "-vf", "scale=-2:720,fps=30" + ("," + overlay if overlay else ""), "-g", "60", "-af", "aresample=async=1",
+               "-vf", f"scale=-2:{HEIGHT},fps=30" + ("," + overlay if overlay else ""), "-g", "60", "-af", "aresample=async=1",
                "-c:v", "h264_nvenc", "-preset", "p4", "-tune", "ll", "-rc", "cbr",
-               "-b:v", BITRATE, "-maxrate", BITRATE, "-bufsize", "4400k",
+               "-b:v", BITRATE, "-maxrate", BITRATE, "-bufsize", "2800k",
                "-profile:v", "high", "-pix_fmt", "yuv420p",
                
                "-c:a", "aac", "-b:a", "128k", "-ar", "48000", "-ac", "2",
