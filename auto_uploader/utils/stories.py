@@ -128,11 +128,13 @@ def condensed(segments, every: float = 20.0, limit: int = 60000) -> str:
 def parse(reply: str, duration: float, lo: float, hi: float) -> List[dict]:
     """The model's stories that make sense: inside the stream, the right
     length, not overlapping, with a title."""
-    m = re.search(r"\{.*\}", reply or "", re.S)
-    if not m:
-        return []
+    # The first JSON object in the reply - models add a stray "}" or
+    # words after it (10-29: NVIDIA's answer ended "}]}}").
+    text = reply or ""
+    i = text.find("{")
     try:
-        raw = json.loads(m.group(0)).get("stories") or []
+        obj, _end = json.JSONDecoder().raw_decode(text[i:]) if i >= 0 else ({}, 0)
+        raw = obj.get("stories") or []
     except (ValueError, AttributeError):
         return []
     out: List[dict] = []
@@ -153,11 +155,31 @@ def parse(reply: str, duration: float, lo: float, hi: float) -> List[dict]:
     return out
 
 
+def _askers():
+    """Best reader first. One request per stream, so Gemini - long
+    context, the best judge of a storyline - goes first here (the policy
+    read keeps it last to save its 20-a-day for the clip watch pass)."""
+    try:
+        from autoreel import llm_highlights as llm
+    except Exception:
+        return []
+    out = []
+    avail = sorted(llm.all_available(), key=lambda pk: pk[0] != "gemini")
+    for provider, key in avail:
+        try:
+            model = llm.resolve_model(provider, key, "")
+        except Exception:
+            continue
+        ask = llm.asker_for(provider)
+        out.append((f"{provider}:{model}",
+                    lambda prompt, ask=ask, key=key, model=model: ask(key, model, prompt)))
+    return out
+
+
 def pick(segments, duration: float, n: int, lo: float, hi: float, askers=None) -> List[dict]:
     if askers is None:
         if os.environ.get("PYTEST_CURRENT_TEST"):
             return []
-        from utils.policy_guard import _askers
         askers = _askers()
     text = condensed(segments)
     if not text or not askers:

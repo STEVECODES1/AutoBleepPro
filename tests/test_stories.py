@@ -62,3 +62,9 @@ def test_it_is_wired_after_the_recap():
                             "main.py"), encoding="utf-8").read()
     i = src.index("make_recap(cfg, source, title, recap_date, moments)")
     assert "stories.make(" in src[i:i + 800]
+
+
+def test_a_stray_brace_after_the_answer_is_fine():
+    reply = ('{"stories": [{"start": 10476, "end": 11197, "title": "Stackswopo Breaks Up '
+             'Before GTA 6", "thumb": "BREAKUP"}]}}')
+    assert stories.parse(reply, 12000, 600, 2700)[0]["start"] == 10476
