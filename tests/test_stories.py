@@ -68,3 +68,8 @@ def test_a_stray_brace_after_the_answer_is_fine():
     reply = ('{"stories": [{"start": 10476, "end": 11197, "title": "Stackswopo Breaks Up '
              'Before GTA 6", "thumb": "BREAKUP"}]}}')
     assert stories.parse(reply, 12000, 600, 2700)[0]["start"] == 10476
+
+
+def test_thumbnail_words_are_never_about_kids():
+    assert "PEDO" not in stories.thumb_text("SHE CALLED ME A PEDO?", "Stackswopo Addresses The Drama").upper()
+    assert stories.thumb_text("YOU'RE JUST A DORK", "x") == "YOU'RE JUST A DORK"

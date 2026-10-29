@@ -154,6 +154,22 @@ a 4.4 GB full stream takes ~3 h to YouTube.
   `tests/test_parallel_uploads.py::test_two_files_of_the_same_stream_do_not_race_each_other` and
   `::test_a_second_file_of_the_same_stream_does_not_reupload_to_rumble`.
 
+## 10-29: story episodes on STACKSWOPOVODS (@stackswopo10k)
+
+- Owner: "one of my channels should upload videos like @innovativestizz" (Innovative Plug: ONE storyline
+  from a stream as a 15-50 min episode, third-person story title - 13k-31k views each). @stackswopo10k
+  was the dead one (778 subs, 198 views on its last 25), so it is the stories channel now.
+- `utils/stories.py`, run after each stream's recap (`main.cut_clips_from_stream`): the AI (Gemini
+  first here - one request per stream - then the free ones) reads the whole transcript and names 1
+  storyline (`stories.per_stream`, default 1: the quota day is shared) of 10-45 min with a title and
+  thumbnail words. Everything YouTube could strike inside it is taken out (kid_guard ranges + spoken
+  risks + policy read, Monkey App strangers, a casino on screen); more than 35% to cut -> not used.
+  Then censored, intro, thumbnail (words through `thumb_text`, never about kids), links to wopovod +
+  Rumble, disclosure line. Ledger logs/stories.json. By hand: `tools/story_episode.py FILE TITLE
+  [DATE] [--dry-run]`.
+- Intro was dropped from kid-cut streams: `prepend_intro`'s length check compared against the cut
+  file's header (17 s short after 32 joins). It now measures the two pieces it joins (fixed 10-29).
+
 ## Held clips and learning
 
 - A clip held for slurs goes to Discord as a playable preview, numbered; "post held N" =

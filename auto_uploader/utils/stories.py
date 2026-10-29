@@ -198,6 +198,26 @@ def pick(segments, duration: float, n: int, lo: float, hi: float, askers=None) -
     return []
 
 
+def thumb_text(words: str, title: str) -> str:
+    """The thumbnail's words, held to the title rules - and never about
+    kids (10-29 dry run: "SHE CALLED ME A PEDO?")."""
+    from utils import text_guard
+
+    w = " ".join(str(words or "").split())
+    bad = not w
+    try:
+        from autoreel.safe_text import child_risk
+        bad = bad or bool(child_risk(w))
+    except Exception:
+        pass
+    bad = bad or bool(re.search(r"pedo|predator|groom|minor|underage|kid", w, re.I))
+    try:
+        bad = bad or bool(text_guard.youtube_title_risk(w))
+    except Exception:
+        pass
+    return text_guard.title(title if bad else w, fallback=title)
+
+
 def story_title(title: str) -> str:
     """His name first, one line, through every YouTube title rule."""
     from utils import text_guard
@@ -407,7 +427,7 @@ def _make(cfg, source, stream_title, stream_date, intro="") -> List[str]:
                 from autoreel import thumbnail
                 thumb = thumbnail.make(final, media_duration(final) or kept,
                                        os.path.join(work, f"story{n}.jpg"),
-                                       style="stream", text=st.get("thumb") or title)
+                                       style="stream", text=thumb_text(st.get("thumb"), title))
             except Exception as exc:
                 print(f"[Stories] thumbnail skipped ({exc})")
             desc = description(title, st.get("why", ""), shown, stream_date, full, uncut)
