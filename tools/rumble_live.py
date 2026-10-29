@@ -213,10 +213,8 @@ class Push:
             # Start at the newest segment: from the default three back,
             # ffmpeg races through the backlog and Rumble saw a 5.8 Mbps,
             # 38 fps burst on the first test - over the 4.5 Mbps cap.
-            # Three segments back plus -re: a few seconds of buffer, read at
-            # real speed, so a slow YouTube segment no longer freezes the
-            # Rumble picture (10-29 "laggy") and nothing bursts.
-            inputs += ["-re", "-live_start_index", "-3",
+            # Newest segment (-re on a live HLS fell 33 s behind, 10-29).
+            inputs += ["-live_start_index", "-1",
                        "-reconnect", "1", "-reconnect_streamed", "1",
                        "-reconnect_delay_max", "5", "-i", url]
         # Separate video and audio feeds: map one of each. One muxed feed:
