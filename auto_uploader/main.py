@@ -3758,8 +3758,23 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
     if jobs and cfg.general.auto_thumbnail and any(
             not (wanted.get(name) and os.path.exists(wanted[name]))
             for name, _ in jobs):
-        threading.Thread(target=thumbnail_path_for, args=("",),
-                         daemon=True).start()
+        def _warm_thumbnail():
+            # thumbnail_path_for already catches the one call inside it
+            # that is actually likely to fail (autoreel_thumbnail.make,
+            # a model call); this is everything AROUND that - media
+            # probing, folder creation - on a thread nothing joins or
+            # reads a return value from. Uncaught here is a silent
+            # thread death with no [Thumbnail] line to say why, not a
+            # missing thumbnail: do_youtube/do_rumble below still call
+            # thumbnail_path_for() themselves when they need it, so the
+            # only real cost of this thread dying unseen is losing the
+            # overlap it exists to buy.
+            try:
+                thumbnail_path_for("")
+            except Exception as exc:
+                print(f"[Thumbnail] Warm-up failed ({exc}) - the upload "
+                      f"that needs it will generate it instead.")
+        threading.Thread(target=_warm_thumbnail, daemon=True).start()
     # Warm the censor import before dispatch. upload_path_for() imports
     # autoreel.transcription (torch) for the device label the first time
     # YouTube needs censoring - a ~1s cold cost that otherwise lands

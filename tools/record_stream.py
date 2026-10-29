@@ -2638,9 +2638,20 @@ def heartbeat_state(recorder: "Recorder") -> dict:
 
 
 def write_heartbeat(recorder: "Recorder") -> None:
-    """Never raises: a heartbeat must not be what stops a recording."""
-    path = heartbeat_path(recorder)
+    """Never raises: a heartbeat must not be what stops a recording.
+
+    heartbeat_path() is inside the try along with everything else - it
+    used to sit before it, which left exactly one line this function's
+    own docstring promised could not happen. _heartbeat_loop() calls
+    this for every recorder in one unguarded loop, so that one line
+    raising (a stray None where safe_name() wants a string, say) would
+    have ended the WHOLE heartbeat thread, for every recorder, for the
+    life of the process - and the brain watchdog this feeds would then
+    report every one of them "down" forever on a recorder that was
+    never actually in trouble.
+    """
     try:
+        path = heartbeat_path(recorder)
         os.makedirs(os.path.dirname(path), exist_ok=True)
         temp = path + ".tmp"
         with open(temp, "w", encoding="utf-8") as handle:
