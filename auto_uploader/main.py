@@ -3452,7 +3452,12 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
                 # asks the channel whether this exact title is already
                 # up, the same way Rumble retries check before re-sending.
                 yt_attempts[0] += 1
-                if yt_attempts[0] > 1:
+                # Full streams ask on the FIRST attempt too, right before
+                # sending (10-29): two copies of "hey my babes" sat in
+                # watch_folder; the second was checked against the channel
+                # list cached at startup, which did not have the first
+                # one's upload, and went up as a duplicate on wopovod.
+                if yt_attempts[0] > 1 or not is_clip:
                     try:
                         already = _already_on_youtube(
                             yt_title, yt.get_service(),
@@ -3460,9 +3465,8 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
                     except Exception:
                         already = ""
                     if already:
-                        print(f"[YouTube] Already on the channel from the "
-                              f"last attempt -> {already}. Not uploading "
-                              f"it again.")
+                        print(f"[YouTube] Already on the channel -> "
+                              f"{already}. Not uploading it again.")
                         return already
                 return yt.upload(
                     yt_source, yt_title, yt_description, cfg.youtube.tags,

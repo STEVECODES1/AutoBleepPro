@@ -394,3 +394,14 @@ def test_a_short_is_never_titled_full_stream():
     assert not_a_full_stream("Stackswopo - Yurrrrrr - Full Stream") == "Stackswopo - Yurrrrrr"
     name = clip_basename("Stackswopo - YURRRRRR - 10-27-26 (FULL STREAM)", "x/rec 2026-10-27 18_55.ts")
     assert "full stream" not in name.lower() and name.startswith("Stackswopo - YURRRRRR")
+
+
+def test_a_full_stream_asks_the_channel_before_its_first_upload():
+    # 10-29: a second copy of "hey my babes" was checked only against the
+    # channel list cached at startup and went up twice on wopovod.
+    import os
+    src = open(os.path.join(os.path.dirname(os.path.dirname(__file__)),
+                            "auto_uploader", "main.py"), encoding="utf-8").read()
+    i = src.index("def yt_attempt():")
+    body = src[i:src.index("return yt.upload(", i)]
+    assert "if yt_attempts[0] > 1 or not is_clip:" in body and "_already_on_youtube(" in body

@@ -121,6 +121,10 @@ a 4.4 GB full stream takes ~3 h to YouTube.
   from startup and still held the stub). Then point old links at the new id (descriptions + the recap's
   comment). 10-17 is now H5-UgZr8OD0.
 - 10-18 02:32: a test of the Chrome self-heal closed the real Chrome (now stubbed in conftest).
+- 10-29: two copies of one stream in watch_folder ("hey my babes" + the recorder's file) -> the second
+  went to wopovod as a duplicate (its dedupe used the startup channel list). Now every full stream asks
+  the channel for its exact title right before the first upload too (`_already_on_youtube`).
+  Never leave a second copy of a stream in watch_folder - move extras to _to_delete.
 
 ## Held clips and learning
 
