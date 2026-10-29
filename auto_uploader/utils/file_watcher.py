@@ -218,6 +218,19 @@ class _NewVideoHandler(FileSystemEventHandler):
                           "it has finished.")
                     return
                 time.sleep(1)
+        except Exception as exc:
+            # Genuinely unexpected - every failure this wait is known to
+            # hit already has its own except above. Left uncaught, this
+            # is a daemon thread dying silently: Python prints it to
+            # stderr once, in a console window nobody watches from a
+            # phone, and nothing else about this file ever happens
+            # again. Printed through the same [Watch] line as everything
+            # else here so it reads like news, not a crash dump; the
+            # finally below still frees the path either way.
+            print(f"[Watch] {os.path.basename(path)}: stopped watching it "
+                  f"- {type(exc).__name__}: {exc}. It will be picked up by "
+                  "--batch once this is fixed.")
+            return
         finally:
             # On EVERY exit - stabilised, vanished, timed out, or crashed
             # on something nobody predicted. A path left in _pending is a
