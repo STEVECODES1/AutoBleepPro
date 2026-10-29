@@ -40,7 +40,7 @@ ROOM = "https://studio.rumble.com/studio/e1183ab2-e023-474e-a68e-19f2782279fe"
 CDP = "http://localhost:9222"
 PY = sys.executable
 
-BITRATE = "4500k"
+BITRATE = "4000k"
 END_GRACE_S = 150          # recorder not recording this long = stream over
 NO_FEED_GIVE_UP_S = 600    # never got a feed for this id = not the live one
 STALE_HEARTBEAT_S = 240
@@ -220,10 +220,14 @@ class Push:
                 else ["-map", "0:v:0", "-map", "0:a:0"])
         cmd = ["ffmpeg", "-hide_banner", "-loglevel", "warning", "-nostdin",
                *inputs, *maps,
+               # A steady 30 fps (10-29: the YouTube HLS came out at 59-63 fps
+               # with timestamp jumps and Rumble's player stayed on its
+               # standby card although Studio showed the feed arriving).
+               "-vf", "fps=30", "-g", "60", "-af", "aresample=async=1",
                "-c:v", "h264_nvenc", "-preset", "p4", "-tune", "ll", "-rc", "cbr",
                "-b:v", BITRATE, "-maxrate", BITRATE, "-bufsize", BITRATE,
                "-profile:v", "high", "-pix_fmt", "yuv420p",
-               "-force_key_frames", "expr:gte(t,n_forced*2)",
+               
                "-c:a", "aac", "-b:a", "160k", "-ar", "48000", "-ac", "2",
                "-f", "flv", target.rstrip("/") + "/" + key]
         self.started = time.time()
