@@ -938,6 +938,15 @@ def cut_clips_from_stream(cfg, video_path: str, is_clip: bool,
         make_recap(cfg, source, title, recap_date, moments)
     except Exception as exc:
         print(f"[Recap] Skipped: {exc}")
+    # One storyline of the stream as its own episode on STACKSWOPOVODS
+    # (owner, 10-29: "like @innovativestizz") - see utils/stories.
+    try:
+        from utils import stories
+
+        stories.make(cfg, source, title, locals().get("recap_date") or "",
+                     intro=find_intro(cfg))
+    except Exception as exc:
+        print(f"[Stories] Skipped: {exc}")
     return delivered
 
 
