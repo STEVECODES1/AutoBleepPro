@@ -188,11 +188,19 @@ def _mute_full_quality(source_path: str, whisper_wav: str, engine, violations,
     try:
         with open(script, "w", encoding="utf-8") as fh:
             fh.write("asetnsamples=n=480:p=0," + ",".join(stages))
-        r = subprocess.run(["ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
-                            "-i", source_path, "-vn", "-map", "0:a:0",
-                            "-filter_script:a", script,
-                            "-c:a", "pcm_s16le", out_wav],
-                           capture_output=True, text=True, timeout=60 * 60 * 2)
+        # FFmpeg 7.1+ reads an option's value from a file with "-/opt";
+        # FFmpeg 9 (the fresh PC, 10-29) removed -filter_script, so the mute
+        # fell back to the 16 kHz path and wopovod got low-quality audio.
+        # The new spelling first, the old one for an older ffmpeg.
+        r = None
+        for flag in ("-/filter:a", "-filter_script:a"):
+            r = subprocess.run(["ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+                                "-i", source_path, "-vn", "-map", "0:a:0",
+                                flag, script,
+                                "-c:a", "pcm_s16le", out_wav],
+                               capture_output=True, text=True, timeout=60 * 60 * 2)
+            if r.returncode == 0:
+                break
         ok = r.returncode == 0 and os.path.exists(out_wav) and os.path.getsize(out_wav) > 0
         if not ok:
             print(f"[Censor] full-quality mute failed - using 16k path: {r.stderr[-300:]}")

@@ -60,9 +60,9 @@ def test_a_cloud_child_safety_call_is_cut(monkeypatch):
     assert "child_safety: minor" in said[0][1]
 
 
-def test_every_category_is_cut_but_local_game_threats_are_only_reported(monkeypatch):
-    # 10-28: every clear break is cut, whatever the category - but a small
-    # local model's harassment/threat call is GTA-RP game noise (10-19).
+def test_every_flag_is_cut_game_threats_and_warns_included(monkeypatch):
+    # Owner, 10-29: "anything that's worth a look just cut it, don't gotta
+    # ask". Nothing flagged stays in the YouTube copy any more.
     flags = [{"category": "harassment", "severity": "cut", "start": 100, "end": 130,
               "why": "game threat", "model": "local:qwen"},
              {"category": "hate", "severity": "cut", "start": 300, "end": 320,
@@ -72,14 +72,16 @@ def test_every_category_is_cut_but_local_game_threats_are_only_reported(monkeypa
     (path, why), said, cuts = _run(monkeypatch, flags)
     assert why == "" and path
     starts = [round(a) for a, b, *_ in cuts[0]]
-    assert 300 in starts and 600 in starts and 100 not in starts
-    assert "game threat" in said[0][1]
+    assert 100 in starts and 300 in starts and 600 in starts
+    assert "Worth a look" not in said[0][1]
 
 
-def test_warn_only_is_reported_not_cut(monkeypatch):
+def test_a_warn_is_cut_too(monkeypatch):
     (path, why), said, cuts = _run(monkeypatch, [{"category": "hate", "severity": "warn",
                                                    "start": 50, "end": 60, "why": "borderline"}])
-    assert (path, why, cuts) == (None, "", []) and "borderline" in said[0][1]
+    assert path and why == ""
+    assert any(a <= 50 and b >= 60 for a, b, *_ in cuts[0])
+    assert "borderline" in said[0][1]
 
 
 def test_keeper_is_busy_only_while_work_runs(tmp_path, monkeypatch):

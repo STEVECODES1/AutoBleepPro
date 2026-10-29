@@ -194,25 +194,19 @@ def make_safe(cfg, video_path, yt_source, out_dir, alert=None):
     # Kid talk by pattern, plus the whole-policy AI read (utils/policy_guard).
     found = [(a, min(b, duration), "kid talk") for a, b, _ in ranges(segs) if a < duration]
     flags, note = _policy(segs)
-    # Everything YouTube could strike is cut (owner, 10-28): every category
-    # the policy read calls a clear break, plus the spoken patterns below.
-    # GTA-RP aware: a small LOCAL model's harassment / threat calls are what
-    # it says about GAME threats (10-19: a dozen in 15 minutes of a phone-
-    # call game), so those - and every "warn" - are reported, not cut.
-    strong, report = [], []
-    for f in flags:
-        if f["start"] >= duration:
-            continue
-        local = str(f.get("model", "")).startswith("local")
-        game_noise = local and f["category"] in ("harassment", "violent_threat")
-        (strong if f["severity"] == "cut" and not game_noise else report).append(f)
+    # Everything the policy read flags is cut (owner, 10-29: "anything
+    # that's worth a look just cut it, don't gotta ask - YouTube don't play").
+    # Clear breaks AND "warn" flags AND a local model's game-threat calls:
+    # nothing is left in as "worth a look" any more. Rumble keeps it all.
+    strong = [f for f in flags if f["start"] < duration]
+    report = []
     found += [(f["start"], min(f["end"], duration), f["category"] + ": " + f["why"])
               for f in strong]
     found += [(a, min(b, duration), why) for a, b, why in spoken_risks(segs) if a < duration]
     found = merged(found)
     warns = "\n".join([f"{hms(f['start'])} {f['category']}: {f['why']}"
                        for f in report][:15])
-    extra = (f"\n\nWorth a look (not cut):\n{warns}" if warns else "") + (f"\n({note})" if note else "")
+    extra = (f"\n\nAlso flagged:\n{warns}" if warns else "") + (f"\n({note})" if note else "")
     if not found:
         if warns:
             say("Check these parts of the new stream",
