@@ -500,6 +500,18 @@ def prepend_intro(intro_path: str, main_path: str, out_path: str) -> bool:
             print(f"[Intro] could not remux the stream to join it - skipping intro ({LAST_ERROR})")
             return False
         main_ts = remuxed
+    # What the join should come to, measured on the two pieces actually
+    # joined. 10-29: a stream with 32 kid-guard cuts said 10253 s in its
+    # .mp4 header, but its timeline ran 10270 s (each stream-copied join
+    # keeps a little extra up to the next keyframe), so the old check
+    # ("header + intro, within 5 s") threw away a good result and the
+    # intro never went on.
+    def _dur(path):
+        try:
+            return float(_probe_json(path)["format"]["duration"])
+        except (KeyError, TypeError, ValueError):
+            return 0.0
+    expected = (_dur(main_ts) or main_dur) + (_dur(matched) or intro_dur)
     try:
         ok = _run(["ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
                    "-fflags", "+genpts+igndts",
@@ -517,8 +529,11 @@ def prepend_intro(intro_path: str, main_path: str, out_path: str) -> bool:
     # Verify before upload. This is the check that would have caught the
     # 28-hour file.
     got = _probe_json(out_path).get("format", {}).get("duration")
-    expected = main_dur + intro_dur
-    if got is None or abs(float(got) - expected) > 5:
+    # Never shorter than the stream itself, never wildly longer (the
+    # "28 hour" file this check exists for).
+    slack = max(5.0, 0.003 * expected)
+    if got is None or abs(float(got) - expected) > slack \
+            or float(got) < main_dur:
         print(f"[Intro] result is {got}s but should be ~{expected:.0f}s - "
               f"discarding it and uploading without intro")
         _cleanup_partial(out_path)
