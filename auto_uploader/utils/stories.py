@@ -103,9 +103,20 @@ def _save(cfg, data: dict) -> None:
 def condensed(segments, every: float = 20.0, limit: int = 60000) -> str:
     """The transcript as "[seconds] text" lines, one per ~20 s, short
     enough for a free model to read whole."""
+    try:
+        # Gemini refuses a transcript full of slurs ("stopped (SAFETY)",
+        # 10-29): the words it will not touch come out, the story stays.
+        from autoreel.llm_highlights import for_the_model as _clean
+    except Exception:
+        _clean = None
     lines, cur, start = [], [], None
     for s in segments or []:
         text = str(s.get("text") or "").strip()
+        if _clean and text:
+            try:
+                text = _clean(text)
+            except Exception:
+                pass
         if not text:
             continue
         t = float(s.get("start") or 0)
@@ -185,16 +196,20 @@ def pick(segments, duration: float, n: int, lo: float, hi: float, askers=None) -
     if not text or not askers:
         return []
     prompt = PROMPT.format(lo=int(lo // 60), hi=int(hi // 60), n=max(1, n)) + text
-    for label, ask in askers:
-        try:
-            reply = ask(prompt)
-        except Exception:
-            reply = ""
-        found = parse(reply, duration, lo, hi)
-        if found:
-            for f in found:
-                f["model"] = label
-            return found[:n]
+    # Every model in turn, twice round: free models refuse, run out of
+    # room or ignore the length now and then (10-29: Gemini SAFETY, NVIDIA
+    # out of tokens, then nothing - and the episode was lost).
+    for _round in range(2):
+        for label, ask in askers:
+            try:
+                reply = ask(prompt)
+            except Exception:
+                reply = ""
+            found = parse(reply, duration, lo, hi)
+            if found:
+                for f in found:
+                    f["model"] = label
+                return found[:n]
     return []
 
 
@@ -366,11 +381,12 @@ def _make(cfg, source, stream_title, stream_date, intro="") -> List[str]:
     if not segments or duration < s["min_s"]:
         print("[Stories] No transcript (or too short a stream) - no story episode.")
         return []
-    stories = pick(segments, duration, s["per_stream"], s["min_s"], s["max_s"])
+    # A spare or two: a story with too much to cut is dropped, the next
+    # one is used instead.
+    stories = pick(segments, duration, s["per_stream"] + 2, s["min_s"], s["max_s"])
     if not stories:
+        # Not written down: the next run asks again (models come and go).
         print("[Stories] The AI found no story worth an episode in this stream.")
-        done[key] = {"urls": [], "why": "no story found"}
-        _save(cfg, done)
         return []
     from utils.stream_links import link_for
     from utils.templating import strip_full_stream_frame, strip_trailing_stamp
@@ -383,6 +399,8 @@ def _make(cfg, source, stream_title, stream_date, intro="") -> List[str]:
     try:
         cut_from = seekable_copy(source, work)
         for n, st in enumerate(stories, 1):
+            if len(urls) >= s["per_stream"]:
+                break
             a, b = st["start"], st["end"]
             cuts = risky_spans(cfg, source, segments, a, b)
             pieces = keep_pieces(a, b, cuts)
