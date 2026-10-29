@@ -54,9 +54,30 @@ def _read(path, default):
 
 
 def _write(path, data):
+    """Write atomically: temp file, then replace.
+
+    A plain open(path, "w") truncates the real file first, so a crash or
+    a full disk mid-write leaves a half-written (or empty) store behind
+    - and this specific store is read by the running uploader while it
+    is also written by hand (`tools/held_review.py --post N`) alongside
+    it, which is exactly the window a truncating write opens. See
+    duplicate_checker.py's own version of this same fix, including why
+    it retries the replace: Windows refuses it while any process has
+    the file open at all (antivirus, OneDrive, even another reader),
+    which cost a finished upload's own record on 2026-10-05.
+    """
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
+    tmp = f"{path}.{os.getpid()}.tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=1, ensure_ascii=False)
+    for attempt in range(20):
+        try:
+            os.replace(tmp, path)
+            return
+        except OSError:
+            if attempt == 19:
+                raise
+            time.sleep(1.5)
 
 
 def approved(video_path: str) -> bool:
