@@ -205,7 +205,7 @@ def hls_url(video_id):
 class Push:
     """One ffmpeg pushing the feed to Rumble. Key never logged."""
 
-    def __init__(self, src, target, key):
+    def __init__(self, src, target, key, overlay=""):
         self.key = key
         sources = [src] if isinstance(src, str) else list(src)
         inputs = []
@@ -226,7 +226,7 @@ class Push:
                # A steady 30 fps (10-29: the YouTube HLS came out at 59-63 fps
                # with timestamp jumps and Rumble's player stayed on its
                # standby card although Studio showed the feed arriving).
-               "-vf", "scale=-2:720,fps=30", "-g", "60", "-af", "aresample=async=1",
+               "-vf", "scale=-2:720,fps=30" + ("," + overlay if overlay else ""), "-g", "60", "-af", "aresample=async=1",
                "-c:v", "h264_nvenc", "-preset", "p4", "-tune", "ll", "-rc", "cbr",
                "-b:v", BITRATE, "-maxrate", BITRATE, "-bufsize", "4400k",
                "-profile:v", "high", "-pix_fmt", "yuv420p",
@@ -372,6 +372,18 @@ def relay(video_id, cfg):
     log(f"Stackswopo is live ({video_id}) - relaying to Rumble as: {title}")
 
     push, pushed, studio, off_since = None, 0.0, None, None
+    # The YouTube chat, top-right on the Rumble picture (owner, 10-29).
+    chat, chat_filter = None, ""
+    if cfg.get("RUMBLE_CHAT_OVERLAY", "1") != "0":
+        try:
+            sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+            from live_chat_overlay import ChatFeed, drawtext
+            chat_file = os.path.join(UPLOADER, "logs", "live_chat_overlay.txt")
+            chat = ChatFeed(video_id, chat_file, PY)
+            chat.start()
+            chat_filter = drawtext(chat_file)
+        except Exception as exc:
+            log(f"Chat overlay off ({exc})")
     try:
         while True:
             still_live = video_id in recording_ids()
@@ -404,7 +416,8 @@ def relay(video_id, cfg):
                     log("Feed dropped - restarting the push")
                 src = hls_url(video_id)
                 if src:
-                    push = Push(src, cfg["RUMBLE_RTMP_URL"], cfg["RUMBLE_STREAM_KEY"])
+                    push = Push(src, cfg["RUMBLE_RTMP_URL"], cfg["RUMBLE_STREAM_KEY"],
+                                overlay=chat_filter)
                 else:
                     push = None
                     if not entry["went_live"] and time.time() - entry["started"] > NO_FEED_GIVE_UP_S:
@@ -437,6 +450,8 @@ def relay(video_id, cfg):
                 ledger_save({**ledger_load(), video_id: entry})
             time.sleep(POLL_S)
     finally:
+        if chat is not None:
+            chat.stop()
         if push is not None:
             pushed += push.stop()
         if entry["went_live"]:
