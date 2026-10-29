@@ -3658,7 +3658,10 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
                 # put up moments earlier - nothing upstream of here knows
                 # that unless this asks the channel first.
                 rb_attempts[0] += 1
-                if rb_attempts[0] > 1 or not is_clip:
+                first_check = (not is_clip and cfg.rumble.skip_if_exists
+                               and not is_placeholder_title(
+                                   stream_title, cfg.general.default_title))
+                if rb_attempts[0] > 1 or first_check:
                     already = _already_on_rumble(rb_title, cfg)
                     if already:
                         print(f"[Rumble] Already on the channel from the "
