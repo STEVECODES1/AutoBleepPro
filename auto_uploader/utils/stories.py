@@ -53,6 +53,7 @@ Each line of the transcript starts with its time in seconds, like [1234].
 Answer with JSON only, best first, at most {n}:
 {{"stories": [{{"start": <seconds>, "end": <seconds>, "title": "<under 80 characters>",
   "thumb": "<2-4 punchy words for the thumbnail>", "why": "<under 15 words>"}}]}}
+Never pick a stretch marked "(not usable ...)" - choose a story outside those parts.
 If nothing in it is a real story, answer {{"stories": []}}.
 
 Transcript:
@@ -100,7 +101,8 @@ def _save(cfg, data: dict) -> None:
 
 # ── picking the story ────────────────────────────────────────────────
 
-def condensed(segments, every: float = 20.0, limit: int = 60000) -> str:
+def condensed(segments, every: float = 20.0, limit: int = 60000,
+              blocked: Sequence[Tuple[float, float]] = ()) -> str:
     """The transcript as "[seconds] text" lines, one per ~20 s, short
     enough for a free model to read whole."""
     try:
@@ -112,6 +114,9 @@ def condensed(segments, every: float = 20.0, limit: int = 60000) -> str:
     lines, cur, start = [], [], None
     for s in segments or []:
         text = str(s.get("text") or "").strip()
+        t0 = float(s.get("start") or 0)
+        if text and any(x <= t0 < y for x, y in blocked):
+            text = "(not usable - strangers on camera)"
         if _clean and text:
             try:
                 text = _clean(text)
@@ -187,12 +192,13 @@ def _askers():
     return out
 
 
-def pick(segments, duration: float, n: int, lo: float, hi: float, askers=None) -> List[dict]:
+def pick(segments, duration: float, n: int, lo: float, hi: float, askers=None,
+         blocked: Sequence[Tuple[float, float]] = ()) -> List[dict]:
     if askers is None:
         if os.environ.get("PYTEST_CURRENT_TEST"):
             return []
         askers = _askers()
-    text = condensed(segments)
+    text = condensed(segments, blocked=blocked)
     if not text or not askers:
         return []
     prompt = PROMPT.format(lo=int(lo // 60), hi=int(hi // 60), n=max(1, n)) + text
@@ -245,7 +251,25 @@ def story_title(title: str) -> str:
 
 # ── what must not be in it ───────────────────────────────────────────
 
-def risky_spans(cfg, source: str, segments, a: float, b: float) -> List[Tuple[float, float]]:
+_SLUR_ONLY = re.compile(r"\bslurs?\b", re.I)
+_MORE_THAN_A_SLUR = re.compile(
+    r"monkey|ape|animal|dehumaniz|threat|kill|sex|rape|minor|kid|child|attack|"
+    r"harass|violen|genocide|lynch|dox", re.I)
+
+
+def muted_already(flag: dict) -> bool:
+    """A policy flag that is only "he said a slur": the censor already
+    silences every slur, so the episode keeps the moment (10-29: 29 such
+    flags turned a 31-minute story into 9 minutes of pieces). A slur WITH
+    something more - an animal comparison, a threat, sexual talk - is still
+    cut."""
+    why = str(flag.get("why") or "")
+    return (flag.get("category") == "hate" and bool(_SLUR_ONLY.search(why))
+            and not _MORE_THAN_A_SLUR.search(why))
+
+
+def risky_spans(cfg, source: str, segments, a: float, b: float,
+                strangers=None) -> List[Tuple[float, float]]:
     """Everything inside [a, b] that stays off YouTube."""
     from utils import kid_guard
 
@@ -254,11 +278,14 @@ def risky_spans(cfg, source: str, segments, a: float, b: float) -> List[Tuple[fl
     spans = [(x, y) for x, y, _ in kid_guard.ranges(inside)]
     spans += [(x, y) for x, y, _ in kid_guard.spoken_risks(inside)]
     flags, _note = kid_guard._policy(inside)
-    spans += [(max(0.0, f["start"] - PAD), f["end"] + PAD) for f in flags]
+    spans += [(max(0.0, f["start"] - PAD), f["end"] + PAD) for f in flags
+              if not muted_already(f)]
     try:
         from utils.recap import stranger_spans, _shows_gambling
 
-        spans += [(x, y) for x, y in stranger_spans(source) if x < b and y > a]
+        if strangers is None:
+            strangers = stranger_spans(source)
+        spans += [(x, y) for x, y in strangers if x < b and y > a]
         step = 300.0
         t = a
         while t < b:
@@ -383,7 +410,13 @@ def _make(cfg, source, stream_title, stream_date, intro="") -> List[str]:
         return []
     # A spare or two: a story with too much to cut is dropped, the next
     # one is used instead.
-    stories = pick(segments, duration, s["per_stream"] + 2, s["min_s"], s["max_s"])
+    try:
+        from utils.recap import stranger_spans
+        strangers = stranger_spans(source)
+    except Exception:
+        strangers = []
+    stories = pick(segments, duration, s["per_stream"] + 2, s["min_s"], s["max_s"],
+                   blocked=strangers)
     if not stories:
         # Not written down: the next run asks again (models come and go).
         print("[Stories] The AI found no story worth an episode in this stream.")
@@ -402,7 +435,7 @@ def _make(cfg, source, stream_title, stream_date, intro="") -> List[str]:
             if len(urls) >= s["per_stream"]:
                 break
             a, b = st["start"], st["end"]
-            cuts = risky_spans(cfg, source, segments, a, b)
+            cuts = risky_spans(cfg, source, segments, a, b, strangers=strangers)
             pieces = keep_pieces(a, b, cuts)
             kept = sum(y - x for x, y in pieces)
             if kept < (b - a) * (1 - MAX_CUT_SHARE) or kept < s["min_s"] * 0.8:

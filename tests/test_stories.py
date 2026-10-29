@@ -73,3 +73,16 @@ def test_a_stray_brace_after_the_answer_is_fine():
 def test_thumbnail_words_are_never_about_kids():
     assert "PEDO" not in stories.thumb_text("SHE CALLED ME A PEDO?", "Stackswopo Addresses The Drama").upper()
     assert stories.thumb_text("YOU'RE JUST A DORK", "x") == "YOU'RE JUST A DORK"
+
+
+def test_a_slur_only_flag_is_left_to_the_bleep_but_more_is_cut():
+    assert stories.muted_already({"category": "hate", "why": "uses racial slur 'n' in chat"})
+    assert not stories.muted_already({"category": "hate", "why": "racial slur comparing to monkey"})
+    assert not stories.muted_already({"category": "sexual", "why": "slur and explicit sexual act"})
+    assert not stories.muted_already({"category": "hate", "why": "Dehumanizing racial attack"})
+
+
+def test_stranger_parts_are_hidden_from_the_picker():
+    text = stories.condensed([seg(10, "hello there"), seg(100, "random stranger on cam")],
+                             blocked=[(90, 200)])
+    assert "hello there" in text and "random stranger" not in text and "not usable" in text
