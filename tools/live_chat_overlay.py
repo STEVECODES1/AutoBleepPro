@@ -98,7 +98,7 @@ def drawtext(text_file: str) -> str:
     """The drawtext filter for the chat box, top-right."""
     font = font_file()
     font_opt = f"fontfile='{ff_path(font)}':" if font else ""
-    return (f"drawtext={font_opt}textfile='{ff_path(text_file)}':reload=1:"
+    return (f"drawtext={font_opt}textfile='{ff_path(text_file)}':reload=15:"
             f"fontsize={FONT_SIZE}:fontcolor=white:line_spacing=6:"
             f"box=1:boxcolor=black@0.55:boxborderw=12:"
             f"x=w-tw-30:y=30")
