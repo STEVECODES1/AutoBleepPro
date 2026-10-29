@@ -189,7 +189,9 @@ def live_title(video_id):
 # those found nothing (caught by the 2026-10-10 test against a real live).
 # So: best H.264 video up to 1080p plus the best audio, as two inputs; the
 # old muxed formats stay as the fallback in case they come back.
-FEED_FORMAT = "bv*[height<=1080][vcodec^=avc1]+ba/bv*[height<=1080]+ba/301/96/300/95/b"
+# 720p is all Rumble gets (2.2 Mbps), so 720p is all that is pulled: the
+# 1080p60 feed needed ~8 Mbps down and fell 6 s behind (10-29).
+FEED_FORMAT = "bv*[height<=720][fps<=30][vcodec^=avc1]+ba/bv*[height<=720][vcodec^=avc1]+ba/bv*[height<=720]+ba/300/95/b"
 
 
 def hls_url(video_id):
