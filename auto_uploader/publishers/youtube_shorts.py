@@ -92,6 +92,30 @@ _DECORATION = r"(?:#\w+|[\U0001F000-\U0001FAFF☀-➿️‍])"
 _TITLE_TAIL = re.compile(rf"(?:\s*{_DECORATION}\s*)*\s*$")
 
 
+_FULL_WORDS = re.compile(
+    r"\s*[-|–—:]?\s*\(?\s*\b(?:full\s+stream|full\s+vod|live\s+uncut)s?\b\s*\)?", re.I)
+_CLIP_NO = re.compile(r"\s*[-|–—]?\s*\(?\bclip\s*\d+\)?\s*$", re.I)
+
+
+def not_a_full_stream(title: str) -> str:
+    """A Short is a clip, never a "Full Stream": that wording, and a bare
+    "Clip 05" counter, come out of its title. "" when nothing is left."""
+    out = _FULL_WORDS.sub(" ", str(title or ""))
+    out = _CLIP_NO.sub("", out)
+    return " ".join(out.split()).strip(" -|–—:")
+
+
+def _notes_line(video_path: str) -> str:
+    """The clip's spoken line / headline from the notes beside it."""
+    try:
+        from utils.social_promoter import spoken_line
+
+        folders = [os.path.dirname(os.path.abspath(video_path))]
+        return _bare_line(str(spoken_line(video_path, tuple(folders)) or "").strip())
+    except Exception:
+        return ""
+
+
 def _bare_line(text: str) -> str:
     """A caption's first line with its trailing emoji and tags removed.
 
@@ -194,6 +218,12 @@ class YouTubeShortsPublisher:
             stream = str(source_of(video_path).get("stream_title", "") or "").strip()
         except Exception:
             stream = ""
+        try:
+            from utils.templating import strip_full_stream_frame
+
+            stream = not_a_full_stream(strip_full_stream_frame(stream))
+        except Exception:
+            stream = not_a_full_stream(stream)
         if stream and not re.search(r"\d{4}-\d{2}-\d{2}|rumble live", stream, re.I):
             return f'Stacks went OFF on "{stream.upper()}"'[:90]
         configured = str(self.settings.get("safe_title", "") or "").strip()
@@ -209,7 +239,10 @@ class YouTubeShortsPublisher:
         line = (caption or "").strip().splitlines()
         title = _bare_line((line[0] if line else "").strip())
         if not title:
-            title = os.path.splitext(os.path.basename(video_path))[0]
+            # Never the file name: 10-28 a Short went up on @WOPOCLIPPER
+            # titled "Stackswopo - Yurrrrrr - Full Stream" - the clip FILE's
+            # name. The clip's own line from its notes, else the fallback.
+            title = _notes_line(video_path) or self.safe_fallback(video_path)
         # YouTube applies its rules to the TEXT as well as the video,
         # and does not care that the words came off the audio. The clip
         # titles this pipeline produces are the line actually spoken -
@@ -218,6 +251,7 @@ class YouTubeShortsPublisher:
         from autoreel.safe_text import clean_title
 
         title = clean_title(title, self.safe_fallback(video_path))
+        title = not_a_full_stream(title) or self.safe_fallback(video_path)
         limit = int(self.settings.get("max_title_chars", 90))
         if len(title) > limit:
             title = title[:limit].rsplit(" ", 1)[0].rstrip(" ,;:-")

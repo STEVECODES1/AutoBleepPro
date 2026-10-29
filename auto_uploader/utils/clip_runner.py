@@ -56,6 +56,18 @@ def clip_basename(title: str, source_path: str) -> str:
     name = " ".join(str(title or "").split())
     name = _re.sub(r"\s*\d{4}-\d{2}-\d{2}(?:[ _T]\d{1,2}[-:_.]\d{2}(?:[-:_.]\d{2})?)?\s*", " ",
                    name).strip(" -")
+    # The STREAM's name, not its full-stream frame: 10-28 clips were filed
+    # as "Stackswopo - Yurrrrrr - Full Stream - Clip 01" and one went to
+    # the Shorts channel under that name.
+    try:
+        from utils.templating import strip_full_stream_frame
+
+        name = strip_full_stream_frame(name)
+    except Exception:
+        pass
+    name = _re.sub(r"\s*[-|–—]?\s*\(?\b(?:full\s+stream|full\s+vod|live\s+uncut)\b\)?", " ",
+                   name, flags=_re.I)
+    name = " ".join(name.split()).strip(" -")
     name = _re.sub(r'[<>:"/\\|?*\x00-\x1f]+', "", name).strip(" .")
     if not name:
         return stem

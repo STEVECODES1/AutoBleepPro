@@ -150,7 +150,9 @@ def test_a_long_title_is_cut_on_a_word(tmp_path):
 def test_an_empty_caption_still_produces_a_title(tmp_path):
     publisher = YouTubeShortsPublisher(_config(tmp_path))
 
-    assert publisher.title_for("", "/x/my great clip.mp4") == "my great clip"
+    # Never the file name (10-28 "Stackswopo - Yurrrrrr - Full Stream").
+    title = publisher.title_for("", "/x/my great clip.mp4")
+    assert title and title != "my great clip"
 
 
 def test_the_shorts_tag_is_added_once(tmp_path):

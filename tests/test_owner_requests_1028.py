@@ -377,3 +377,20 @@ def test_rumble_clips_have_a_daily_cap(tmp_path):
     main._note_rumble_clip(C())
     main._note_rumble_clip(C())
     assert main._rumble_clip_cap_reached(C())
+
+
+def test_a_short_is_never_titled_full_stream():
+    # 10-28: a Short went to @WOPOCLIPPER titled "Stackswopo - Yurrrrrr -
+    # Full Stream" - the clip file's name. A clip is never a full stream.
+    import sys, os
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(__file__)), "auto_uploader"))
+    from publishers.youtube_shorts import YouTubeShortsPublisher, not_a_full_stream
+    from utils.clip_runner import clip_basename
+
+    t = YouTubeShortsPublisher({}).title_for("", "x/Stackswopo - Yurrrrrr - Full Stream - Clip 01.mp4")
+    assert "full stream" not in t.lower() and "clip 01" not in t.lower()
+    assert "full stream" not in YouTubeShortsPublisher({}).title_for(
+        "he trolls strangers (FULL STREAM)", "x/a.mp4").lower()
+    assert not_a_full_stream("Stackswopo - Yurrrrrr - Full Stream") == "Stackswopo - Yurrrrrr"
+    name = clip_basename("Stackswopo - YURRRRRR - 10-27-26 (FULL STREAM)", "x/rec 2026-10-27 18_55.ts")
+    assert "full stream" not in name.lower() and name.startswith("Stackswopo - YURRRRRR")
