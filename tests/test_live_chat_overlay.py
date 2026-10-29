@@ -28,3 +28,10 @@ def test_the_filter_parses_in_ffmpeg(tmp_path):
                         "-vf", "fps=30," + o.drawtext(str(f)), "-f", "null", "-"],
                        capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
+
+
+def test_the_chat_file_has_plain_newlines(tmp_path):
+    feed = o.ChatFeed.__new__(o.ChatFeed)
+    feed.text_file = str(tmp_path / "c.txt")
+    feed._write("a\nb")
+    assert open(feed.text_file, "rb").read() == b"a\nb"

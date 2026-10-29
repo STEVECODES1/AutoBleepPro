@@ -170,6 +170,17 @@ a 4.4 GB full stream takes ~3 h to YouTube.
 - Intro was dropped from kid-cut streams: `prepend_intro`'s length check compared against the cut
   file's header (17 s short after 32 joins). It now measures the two pieces it joins (fixed 10-29).
 
+## 10-29: Rumble live relay limits
+
+- The relay (`tools/rumble_live.py`) pulls the YouTube live and re-uploads it to Rumble FROM THIS PC.
+  While OBS streams, the line cannot carry it: 720p60 came down at 0.5x, 480p still reached Rumble at
+  ~18 fps, and the extra upload competes with OBS -> YouTube (wopovod). Owner ended it that night
+  ("just recording"). Real fix = Restream (OBS -> Restream -> YouTube + Rumble, one upload) - the owner
+  makes that account. Studio room is `ROOM` / RUMBLE_STUDIO_ROOM; a stale Studio preview needs a reload.
+- Chat overlay (`tools/live_chat_overlay.py`) exists but is OFF unless RUMBLE_CHAT_OVERLAY=1.
+- To stop the relay for one stream: kill rumble_live + its ffmpeg, and put the video id in
+  logs/rumble_live.json with ok:false (it is then never relayed again; the full upload still runs).
+
 ## Held clips and learning
 
 - A clip held for slurs goes to Discord as a playable preview, numbered; "post held N" =

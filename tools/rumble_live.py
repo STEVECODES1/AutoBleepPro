@@ -376,7 +376,9 @@ def relay(video_id, cfg):
     push, pushed, studio, off_since = None, 0.0, None, None
     # The YouTube chat, top-right on the Rumble picture (owner, 10-29).
     chat, chat_filter = None, ""
-    if cfg.get("RUMBLE_CHAT_OVERLAY", "1") != "0":
+    # OFF unless RUMBLE_CHAT_OVERLAY=1: on 10-29 it looked bad (owner) and
+    # the relay itself lags on this PC's line while OBS streams.
+    if cfg.get("RUMBLE_CHAT_OVERLAY", "0") == "1":
         try:
             sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
             from live_chat_overlay import ChatFeed, drawtext

@@ -21,7 +21,7 @@ import textwrap
 import threading
 import time
 
-LINES = 8          # messages shown
+LINES = 5          # messages shown
 WIDTH = 34         # characters per line before wrapping
 FONT_SIZE = 14     # at 480p (the relay height, 10-29)
 
@@ -121,7 +121,10 @@ class ChatFeed(threading.Thread):
     def _write(self, text: str) -> None:
         tmp = self.text_file + ".tmp"
         try:
-            with open(tmp, "w", encoding="utf-8") as f:
+            # newline="\n": Windows text mode wrote "\r\n" and drawtext drew
+            # every "\r" as an extra blank line - the box filled the screen
+            # (10-29).
+            with open(tmp, "w", encoding="utf-8", newline="\n") as f:
                 f.write(text)
             os.replace(tmp, self.text_file)
         except OSError:
