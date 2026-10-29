@@ -151,8 +151,6 @@ def transcribe_for_clips(cfg, source_path: str) -> Optional[list]:
     The source file is only ever READ. Nothing here writes to, moves or
     deletes it.
     """
-    import json
-
     from utils.censor import _get_transcriber, words_cache_path
     from utils.ffmpeg_tools import extract_audio
 

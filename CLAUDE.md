@@ -229,8 +229,13 @@ a 4.4 GB full stream takes ~3 h to YouTube.
   All four names now end in "(Fan Channel)" (the API cannot rename - use Studio; see
   `tools/fan_names.py`). The clips channel is in the 9222 Chrome as of 10-22, so Studio work there is
   possible without the owner.
-- The owner's earlier caption-sync report (recap burned captions picking the wrong line) is still open:
-  see `utils/recap_edit.py` / `utils/recap.py`; no change made on 10-22.
+- RESOLVED 10-28 (this note said "still open" until 10-29 - the fix landed after the note was last
+  written, and nobody came back to update it): the caption-sync report (recap burned captions picking the
+  wrong line) was the transcript being made from a WAV that starts at the first AUDIO sample while every
+  `-ss` cut counts from the container's start - so a recording whose audio starts late had every burned
+  caption early by that same amount. `utils/recap.py`'s `audio_lead()` measures the gap and `shifted()`
+  moves every transcript word by it before `transcript_of(align=True)` hands segments to
+  `recap_edit.piece_ass()`. Covered by `tests/test_owner_requests_1028.py::test_captions_move_by_the_audio_lead`.
 
 - H5-UgZr8OD0 (10-17 stream): the 25 kid-talk parts were cut in the Studio editor 10-18 ~15:05 (3:18:21 ->
   2:57:39, processing). Once it shows 2:57:39: add the GAMES collab and the channel post (both held till then).
