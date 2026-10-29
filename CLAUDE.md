@@ -177,6 +177,11 @@ a 4.4 GB full stream takes ~3 h to YouTube.
   C:\RumbleEdgeProfile. A profile is always reopened by the browser that made it
   (`chrome_cdp._profile_is_edge`, ensure_rumble_chrome.ps1) - the other one loses its logins.
   Rumble's login only survives a restart with "Remember me" ticked.
+  ONE Chrome holds every Google account (10-29): STACKSWOPO VODS (indexscript00), STACKSWOPO GAMES
+  (dieujustebindjy), glorybinn. Brave is gone - switch with profile picture -> Switch account and
+  always switch BACK to STACKSWOPO VODS (community_post._switch_to does this for posts). The daily
+  "Wopovod collab invites" scheduled task still says Brave and is disabled - its prompt needs the
+  owner's OK to change.
 - Rumble clips capped at 8 a day (`main._rumble_clip_cap`, rumble.clips_per_day). Live clipping
   OFF; clips.count 10. Gemini free tier is 20 requests/day (3.8-flash) - keep it for watch_pass.
 
