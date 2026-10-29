@@ -23,7 +23,7 @@ import time
 
 LINES = 8          # messages shown
 WIDTH = 34         # characters per line before wrapping
-FONT_SIZE = 20     # at 720p
+FONT_SIZE = 14     # at 480p (the relay height, 10-29)
 
 
 def _text_of(runs) -> str:
@@ -99,9 +99,9 @@ def drawtext(text_file: str) -> str:
     font = font_file()
     font_opt = f"fontfile='{ff_path(font)}':" if font else ""
     return (f"drawtext={font_opt}textfile='{ff_path(text_file)}':reload=15:"
-            f"fontsize={FONT_SIZE}:fontcolor=white:line_spacing=6:"
-            f"box=1:boxcolor=black@0.55:boxborderw=12:"
-            f"x=w-tw-30:y=30")
+            f"fontsize={FONT_SIZE}:fontcolor=white:line_spacing=4:"
+            f"box=1:boxcolor=black@0.55:boxborderw=8:"
+            f"x=w-tw-18:y=18")
 
 
 class ChatFeed(threading.Thread):

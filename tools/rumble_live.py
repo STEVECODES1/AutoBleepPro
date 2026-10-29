@@ -191,8 +191,8 @@ def live_title(video_id):
 # So: best H.264 video up to 1080p plus the best audio, as two inputs; the
 # old muxed formats stay as the fallback in case they come back.
 # 480p (10-29): while he streams, OBS fills this PC's line - the 720p60
-# feed came down at 0.5x (18 fps on Rumble), 480p30 at 1.03x. RUMBLE_LIVE_HEIGHT
-# in .env raises it on a better connection.
+# feed came down at 0.5x (18 fps on Rumble), 480p30 at 1.03x.
+# HEIGHT/BITRATE above can go back up on a faster connection.
 FEED_FORMAT = "bv*[height<=480][vcodec^=avc1]+233/bv*[height<=480][vcodec^=avc1]+ba/bv*[height<=480]+ba/231+233/b"
 
 
