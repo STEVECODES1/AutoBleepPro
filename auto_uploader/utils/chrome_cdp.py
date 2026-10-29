@@ -22,6 +22,7 @@ that is already signed in and no password is ever needed.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import socket
 import subprocess
@@ -83,8 +84,23 @@ def is_listening(port: int, host: str = "127.0.0.1", timeout: float = 1.0) -> bo
         return False
 
 
+def _profile_is_edge(profile_dir: str = DEFAULT_PROFILE_DIR) -> bool:
+    try:
+        with open(os.path.join(profile_dir, "Local State"), encoding="utf-8",
+                  errors="replace") as handle:
+            text = handle.read()
+    except OSError:
+        return False
+    return bool(re.search(r'"edge|microsoft_edge|edge_', text))
+
+
 def find_chrome() -> Optional[str]:
-    """Chrome's executable, or None if it cannot be found."""
+    """Chrome's executable, or None if it cannot be found. A profile Edge
+    made is reopened by Edge (its logins do not survive Chrome)."""
+    if sys.platform == "win32" and _profile_is_edge():
+        for path in WINDOWS_CHROME_PATHS:
+            if path and "msedge" in path and os.path.isfile(path):
+                return path
     for name in ("chrome", "google-chrome", "chromium", "msedge"):
         found = shutil.which(name)
         if found:
