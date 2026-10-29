@@ -103,7 +103,7 @@ def test_a_missing_chrome_reports_rather_than_raises(monkeypatch, tmp_path):
     import utils.chrome_cdp as mod
 
     monkeypatch.setattr(mod, "is_listening", lambda *a, **k: False)
-    monkeypatch.setattr(mod, "find_chrome", lambda: None)
+    monkeypatch.setattr(mod, "find_chrome", lambda *a, **k: None)
     ready, detail = ensure_chrome("http://localhost:9222")
     assert ready is False
     assert "9222" in detail, "the message must name the port to start it on"

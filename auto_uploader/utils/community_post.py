@@ -365,8 +365,11 @@ def post_later(cfg, video_url: str, title: str, wait_s: float = 90,
     youtube = getattr(cfg, "youtube", None)
     if youtube is not None and getattr(youtube, "channel_posts", True) is False:
         return False
+    # One browser for everything: the 9222 Chrome. youtube.studio_cdp_url can
+    # point Studio work at another window (e.g. an Edge on 9223) if ever needed.
     rumble = getattr(cfg, "rumble", None)
-    cdp_url = getattr(rumble, "cdp_url", "") or "http://localhost:9222"
+    cdp_url = str(getattr(youtube, "studio_cdp_url", "")
+                  or getattr(rumble, "cdp_url", "") or "http://localhost:9222")
     import subprocess
     import sys
 

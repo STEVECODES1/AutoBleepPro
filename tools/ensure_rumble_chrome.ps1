@@ -29,3 +29,4 @@ if (-not $up -and $browser) {
                       '--no-first-run', '--no-default-browser-check', 'https://rumble.com/'
     "$(Get-Date -Format 'HH:mm:ss') started Rumble Chrome"
 }
+

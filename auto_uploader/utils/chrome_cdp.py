@@ -48,6 +48,18 @@ WINDOWS_CHROME_PATHS = (
 # what remembers the Rumble login between runs.
 DEFAULT_PROFILE_DIR = r"C:\RumbleChromeProfile"
 
+# YouTube Studio browser work (the Posts tab, collaborations) runs in the
+# owner's signed-in EDGE profile on its own port (owner, 10-29: "youtube you
+# will use edge"); Rumble stays in Chrome on 9222.
+YOUTUBE_CDP_URL = "http://localhost:9223"
+YOUTUBE_PROFILE_DIR = r"C:\RumbleEdgeProfile"
+
+
+def profile_for(cdp_url: str) -> str:
+    """The profile a CDP port belongs to."""
+    return YOUTUBE_PROFILE_DIR if cdp_port(cdp_url) == cdp_port(YOUTUBE_CDP_URL) \
+        else DEFAULT_PROFILE_DIR
+
 STARTUP_TIMEOUT_S = 30
 
 
@@ -94,10 +106,10 @@ def _profile_is_edge(profile_dir: str = DEFAULT_PROFILE_DIR) -> bool:
     return bool(re.search(r'"edge|microsoft_edge|edge_', text))
 
 
-def find_chrome() -> Optional[str]:
+def find_chrome(profile_dir: str = DEFAULT_PROFILE_DIR) -> Optional[str]:
     """Chrome's executable, or None if it cannot be found. A profile Edge
     made is reopened by Edge (its logins do not survive Chrome)."""
-    if sys.platform == "win32" and _profile_is_edge():
+    if sys.platform == "win32" and _profile_is_edge(profile_dir):
         for path in WINDOWS_CHROME_PATHS:
             if path and "msedge" in path and os.path.isfile(path):
                 return path
@@ -141,7 +153,8 @@ def ensure_chrome(cdp_url: str, profile_dir: str = "",
     if is_listening(port):
         return True, f"Chrome already listening on {port}"
 
-    chrome = find_chrome()
+    profile_dir = profile_dir or profile_for(cdp_url)
+    chrome = find_chrome(profile_dir)
     if not chrome:
         return False, ("Chrome is not installed where this can find it - "
                        "start it yourself with "
