@@ -40,7 +40,7 @@ ROOM = "https://studio.rumble.com/studio/e1183ab2-e023-474e-a68e-19f2782279fe"
 CDP = "http://localhost:9222"
 PY = sys.executable
 
-BITRATE = "4000k"
+BITRATE = "2200k"
 END_GRACE_S = 150          # recorder not recording this long = stream over
 NO_FEED_GIVE_UP_S = 600    # never got a feed for this id = not the live one
 STALE_HEARTBEAT_S = 240
@@ -211,7 +211,10 @@ class Push:
             # Start at the newest segment: from the default three back,
             # ffmpeg races through the backlog and Rumble saw a 5.8 Mbps,
             # 38 fps burst on the first test - over the 4.5 Mbps cap.
-            inputs += ["-live_start_index", "-1",
+            # Three segments back plus -re: a few seconds of buffer, read at
+            # real speed, so a slow YouTube segment no longer freezes the
+            # Rumble picture (10-29 "laggy") and nothing bursts.
+            inputs += ["-re", "-live_start_index", "-3",
                        "-reconnect", "1", "-reconnect_streamed", "1",
                        "-reconnect_delay_max", "5", "-i", url]
         # Separate video and audio feeds: map one of each. One muxed feed:
@@ -223,12 +226,12 @@ class Push:
                # A steady 30 fps (10-29: the YouTube HLS came out at 59-63 fps
                # with timestamp jumps and Rumble's player stayed on its
                # standby card although Studio showed the feed arriving).
-               "-vf", "fps=30", "-g", "60", "-af", "aresample=async=1",
+               "-vf", "scale=-2:720,fps=30", "-g", "60", "-af", "aresample=async=1",
                "-c:v", "h264_nvenc", "-preset", "p4", "-tune", "ll", "-rc", "cbr",
-               "-b:v", BITRATE, "-maxrate", BITRATE, "-bufsize", BITRATE,
+               "-b:v", BITRATE, "-maxrate", BITRATE, "-bufsize", "4400k",
                "-profile:v", "high", "-pix_fmt", "yuv420p",
                
-               "-c:a", "aac", "-b:a", "160k", "-ar", "48000", "-ac", "2",
+               "-c:a", "aac", "-b:a", "128k", "-ar", "48000", "-ac", "2",
                "-f", "flv", target.rstrip("/") + "/" + key]
         self.started = time.time()
         self.proc = subprocess.Popen(cmd, stderr=subprocess.PIPE, stdout=subprocess.DEVNULL,
