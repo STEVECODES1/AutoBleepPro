@@ -177,8 +177,9 @@ a 4.4 GB full stream takes ~3 h to YouTube.
   C:\RumbleEdgeProfile. A profile is always reopened by the browser that made it
   (`chrome_cdp._profile_is_edge`, ensure_rumble_chrome.ps1) - the other one loses its logins.
   Rumble's login only survives a restart with "Remember me" ticked.
-  ONE Chrome holds every Google account (10-29): STACKSWOPO VODS (indexscript00), STACKSWOPO GAMES
-  (dieujustebindjy), glorybinn. Brave is gone - switch with profile picture -> Switch account and
+  ONE Chrome holds the two YouTube accounts this project uses (10-29): STACKSWOPO VODS
+  (indexscript00) and STACKSWOPO GAMES (dieujustebindjy). glorybinn is also signed in there but is
+  NOT part of this project - never switch to it or post/upload as it. Brave is gone - switch with profile picture -> Switch account and
   always switch BACK to STACKSWOPO VODS (community_post._switch_to does this for posts). The daily
   "Wopovod collab invites" scheduled task still says Brave and is disabled - its prompt needs the
   owner's OK to change.
