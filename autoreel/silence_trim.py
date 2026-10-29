@@ -200,7 +200,21 @@ def quiet_enough(levels: Sequence, start: float, end: float,
     inside = levels[first:last]
     if not inside:
         return True
-    return max(inside) <= baseline - quiet_below_db
+    # A whole window right against the word boundary can still carry
+    # the tail of speech that ran a touch past its transcribed end -
+    # a breath, an echo, a consonant Whisper cut short. That is not
+    # what this is trying to catch, and one loud boundary second was
+    # vetoing gaps that were silent everywhere else: a stream's real
+    # 7-second dead-air stretch measured quiet from second 2 to second
+    # 6 of it and loud only in second 1 (still-decaying speech) and
+    # read as "not quiet" on max() over the whole interior - while
+    # the ordinary one-second gaps between words, nowhere near long
+    # enough to have an interior window at all, passed by the "no
+    # whole window to judge" rule below and got cut regardless of
+    # their own loudness. Judge a long-enough gap by its established
+    # core instead of its edges; a short one is judged on what it has.
+    core = inside[1:-1] if len(inside) > 2 else inside
+    return max(core) <= baseline - quiet_below_db
 
 
 def find_dead_air(words: Iterable[dict], duration: float,

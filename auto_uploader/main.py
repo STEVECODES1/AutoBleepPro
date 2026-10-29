@@ -50,6 +50,7 @@ os.environ.setdefault("GRPC_VERBOSITY", "ERROR")
 os.environ.setdefault("ABSL_MIN_LOG_LEVEL", "2")
 
 import argparse
+import functools
 import json
 import platform
 import re
@@ -5967,6 +5968,7 @@ def _busy_marker_path() -> str:
 _process_file_unmarked = process_file
 
 
+@functools.wraps(_process_file_unmarked)
 def process_file(*args, **kwargs):  # noqa: F811 - the marked version
     path = args[0] if args else kwargs.get("video_path", "")
     marker = _busy_marker_path()
@@ -5984,9 +5986,6 @@ def process_file(*args, **kwargs):  # noqa: F811 - the marked version
             os.remove(marker)
         except OSError:
             pass
-
-
-process_file.__doc__ = _process_file_unmarked.__doc__
 
 
 if __name__ == "__main__":

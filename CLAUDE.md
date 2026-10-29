@@ -28,9 +28,26 @@ away from the PC: it must work by itself after one START, and say plainly when i
   answering 5 min, YouTube refusing uploads, a big video stuck 6 h in watch_folder with no upload moving,
   a clip post in_progress > 2 h. Daily report after 10:00: full streams + links, clips per platform,
   held/waiting/failed, disk, what needs the owner.
-- Tests: `python -X utf8 -m pytest tests -q -p no:cacheprovider` (~11 min). Known stale failures (not
-  regressions): test_cap_keys shorts cap, test_clip_offer_parallel overlap, test_jump_cuts silent pause,
-  test_parallel_uploads (1-2, flaky), test_job_report end-of-process_file.
+- Tests: `python -X utf8 -m pytest tests -q -p no:cacheprovider` (~11 min). The suite is clean - 3443
+  passed, 0 failed (10-29, Linux, fresh venv from both requirements.txt). The four entries once listed
+  here as "known stale" were real bugs, not flakiness, and are fixed:
+  - `held_review.approved()` used the host OS's `os.path.basename`, so an approval never matched a clip
+    path written with the other slash - added `_basename()` (same fix `job_queue.py` already has).
+  - `process_file`'s "busy marker" wrapper shadowed the real function under its name with a bare
+    reassignment; `inspect.getsource(main.process_file)` then read the wrapper, not the function the
+    test was checking. Now `functools.wraps`, and the test calls `inspect.unwrap()`.
+  - `silence_trim.quiet_enough()` judged a gap's loudness by `max()` over its WHOLE interior, including
+    the one second right against the transcript boundary - which routinely still carries the tail of
+    speech (a breath, an echo, a consonant Whisper cut short) even though the gap itself is real dead
+    air. One loud boundary second vetoed an otherwise-silent multi-second pause, while genuinely loud
+    one-second word-gaps elsewhere passed BY THE SAME EDGE RULE because they had no interior window
+    left to judge at all. Now a gap with an interior judges on its core (edges trimmed first), so a
+    real 6-second silence gets caught instead of being skipped in favor of noise.
+  - `test_clip_offer_parallel.py`'s fake Rumble returned a bare `/watch` URL that `_confirm_on_rumble`'s
+    slug-vs-title check (added after this test was written) was always going to reject, failing the
+    test on a check unrelated to what it verifies. Fixed to return a URL with a real slug.
+  test_cap_keys did not reproduce here across three runs - if it still fails on the PC, suspect the
+  environment (GPU/Whisper nondeterminism) over the test itself.
 - Always `python -X utf8`. In PowerShell: .NET file calls use the process cwd; `Start-Process
   -ArgumentList` does not quote - wrap an argument with spaces in '"..."'.
 

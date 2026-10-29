@@ -221,7 +221,11 @@ def test_it_is_sent_from_the_end_of_process_file():
 
     import main
 
-    body = inspect.getsource(main.process_file)
+    # process_file is wrapped by the "busy" marker (functools.wraps, so
+    # __wrapped__ chains back to the real implementation) - unwrap it or
+    # this inspects the wrapper's own source, which has neither
+    # report_job( nor clip_reels in it.
+    body = inspect.getsource(inspect.unwrap(main.process_file))
     spot = body.index("report_job(")
 
     assert "clip_reels" in body[spot:spot + 400], \

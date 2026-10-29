@@ -88,7 +88,14 @@ def scene(tmp_path, monkeypatch):
             recorder.span("rumble", started, time.monotonic())
             if callback:
                 callback(100)
-            return "https://rumble.example/watch"
+            # A real Rumble slug, not a bare placeholder: _confirm_on_rumble
+            # (auto_uploader/main.py) checks the returned link's slug
+            # against the title that was sent
+            # (channel_vods.slug_matches_title) and falls back to
+            # scraping the channel page when it does not match - which a
+            # bare "/watch" never will, failing this on a check that has
+            # nothing to do with what this test is for.
+            return "https://rumble.example/v1abcde-stackswopo-moment-clip-1.html"
 
     monkeypatch.setattr(main, "RumbleUploader", FakeRumble)
     # media_duration is read directly by process_file's clip-routing

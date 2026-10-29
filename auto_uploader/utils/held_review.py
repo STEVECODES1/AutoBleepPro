@@ -32,6 +32,19 @@ KEEP = os.path.join(UPLOADER, "logs", "held_clips")
 KEEP_DAYS = 14
 
 
+def _basename(path) -> str:
+    """os.path.basename, but on either separator regardless of host OS.
+
+    Clip paths in the queue are written on the machine that is running
+    (Windows, backslashes) and this module is also imported by the test
+    suite on Linux - os.path.basename there leaves a Windows path whole,
+    so an approval for "c1.mp4" never matched "D:\\x\\c1.mp4" and the
+    slur hold never lifted. See job_queue.py's own stem/ext split, which
+    already does this for the same reason.
+    """
+    return os.path.basename(str(path or "").replace("\\", "/"))
+
+
 def _read(path, default):
     try:
         with open(path, encoding="utf-8") as f:
@@ -48,7 +61,7 @@ def _write(path, data):
 
 def approved(video_path: str) -> bool:
     """Has a person cleared this clip's slur hold? (clip_queue asks this.)"""
-    return os.path.basename(video_path or "") in set(_read(APPROVED, []))
+    return _basename(video_path) in set(_read(APPROVED, []))
 
 
 def _queue():
@@ -70,12 +83,12 @@ def held_clips(queue=None):
             continue
         if not os.path.isfile(job.clip_path):
             continue
-        name = os.path.basename(job.clip_path)
+        name = _basename(job.clip_path)
         entry = out.setdefault(name, {"path": job.clip_path, "caption": job.caption or "",
                                       "why": err[len("held:"):].strip(), "jobs": [], "rumble": ""})
         entry["jobs"].append(job.id)
     for job in jobs:
-        name = os.path.basename(job.clip_path or "")
+        name = _basename(job.clip_path)
         if name in out and "rumble" in job.platform and job.state == "done" and job.result_url:
             out[name]["rumble"] = job.result_url
     return out
@@ -177,7 +190,7 @@ def post(numbers, say=print):
         _write(APPROVED, sorted(ok))       # before the retry, so the hold is lifted
         for job in queue.list_jobs():
             err = str(getattr(job, "last_error", "") or "")
-            if (job.state != "failed" or os.path.basename(job.clip_path or "") != name
+            if (job.state != "failed" or _basename(job.clip_path) != name
                     or not err.startswith("held:") or "slur" not in err):
                 continue
             kept = os.path.join(KEEP, name)
@@ -201,7 +214,7 @@ def send_at_hold(video_path: str, why: str) -> None:
     import shutil
     import threading
 
-    name = os.path.basename(video_path or "")
+    name = _basename(video_path)
     if not name or name in _SENDING or not os.path.isfile(video_path):
         return
     if name in _read(STATE, {"sent": {}}).get("sent", {}):
