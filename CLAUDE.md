@@ -156,8 +156,8 @@ a 4.4 GB full stream takes ~3 h to YouTube.
   re-encoded. The old concat of an .mp4 intro onto a .ts failed its own length check every time.
 - Policy: `kid_guard.make_safe` cuts every category the policy read calls a clear break, plus
   spoken patterns (`spoken_risks`: animal comparisons, "kys", a phone number, incest). A LOCAL
-  model's harassment/threat calls are GTA game noise and only reported. Over MAX_CUT_S /
-  MAX_SHARE -> PRIVATE.
+  model's harassment/threat calls are GTA game noise and only reported. No size limit (10-29): it is
+  all cut and stays PUBLIC; only a failed cut goes private.
 - Disclaimer wording is now "GTA RP is role-play - everyone in it is acting. The non-GTA parts
   feature actors too. Nothing shown is real." (`disclosure.ACTORS_LINE`); older wordings are
   swapped in place (`disclosure.upgraded`). Abouts: `tools/funnel_setup.py` (run it to push).

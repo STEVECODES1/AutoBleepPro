@@ -222,11 +222,12 @@ def make_safe(cfg, video_path, yt_source, out_dir, alert=None):
     total = sum(b - a for a, b, _ in found)
     times = "\n".join(f"{hms(a)} - {hms(b)}  {why}" for a, b, why in found)
     print(f"[Kids] {len(found)} risky part(s), {total / 60:.1f} min")
+    # No size limit (owner, 10-29: "never too much cutting - keep YouTube
+    # friendly"). However much breaks the rules is cut and the rest goes up
+    # PUBLIC; only a cut that FAILS sends the stream up private. The whole
+    # thing stays on Rumble.
     if total > MAX_CUT_S or total > MAX_SHARE * max(duration, 1):
-        say("Too much to cut - YouTube upload PRIVATE",
-            f"{name}: {len(found)} parts, {total / 60:.0f} min break YouTube's rules - too much "
-            f"to cut. It goes up PRIVATE; check it in Studio. Times in the stream:\n{times}{extra}")
-        return None, "too much to cut"
+        print(f"[Kids] {total / 60:.0f} min to cut - a lot, cutting all of it anyway.")
     out = os.path.join(out_dir, os.path.splitext(os.path.basename(yt_source))[0] + "_KIDSAFE.mp4")
     if cut(yt_source, found, out, duration):
         say(f"Cut {len(found)} risky part(s) out of the YouTube upload",

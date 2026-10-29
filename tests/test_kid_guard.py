@@ -52,10 +52,11 @@ def test_parts_are_cut_and_said(monkeypatch):
     assert said and "Cut" in said[0]
 
 
-def test_too_much_goes_private(monkeypatch):
+def test_a_lot_to_cut_is_still_cut_and_stays_public(monkeypatch):
+    # 10-29 (owner): never too much cutting - cut it all, keep it public.
     segs = [seg(t, "pedo talk") for t in range(0, 1800, 25)]
     (path, why), said, cuts = _run(monkeypatch, segs, 3600)
-    assert path is None and why and not cuts and "PRIVATE" in said[0]
+    assert path and why == "" and cuts and "PRIVATE" not in said[0][0]
 
 
 def test_failed_cut_goes_private(monkeypatch):
