@@ -34,13 +34,23 @@ def have_ffmpeg() -> bool:
     return shutil.which("ffmpeg") is not None
 
 
+LAST_ERROR = ""   # ffmpeg's own words when the last _run failed
+
+
 def _run(args: list, timeout: int = _TIMEOUT) -> bool:
+    global LAST_ERROR
     try:
-        subprocess.run(args, check=True, timeout=timeout,
-                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        return True
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired,
-            FileNotFoundError, OSError):
+        r = subprocess.run(args, timeout=timeout, stdout=subprocess.DEVNULL,
+                           stderr=subprocess.PIPE, text=True, errors="replace")
+        if r.returncode == 0:
+            return True
+        LAST_ERROR = (r.stderr or "").strip()[-400:] or f"exit {r.returncode}"
+        return False
+    except subprocess.TimeoutExpired:
+        LAST_ERROR = f"timed out after {timeout}s"
+        return False
+    except (FileNotFoundError, OSError) as exc:
+        LAST_ERROR = f"{type(exc).__name__}: {exc}"
         return False
 
 
@@ -470,7 +480,7 @@ def prepend_intro(intro_path: str, main_path: str, out_path: str) -> bool:
                    "-f", "mpegts", partial], timeout=600)
         if not ok:
             _cleanup_partial(partial)
-            print("[Intro] could not re-encode the intro to match - skipping intro")
+            print(f"[Intro] could not re-encode the intro to match - skipping intro ({LAST_ERROR})")
             return False
         os.replace(partial, matched)
 
@@ -487,7 +497,7 @@ def prepend_intro(intro_path: str, main_path: str, out_path: str) -> bool:
                      "-i", main_ts, "-map", "0:v:0", "-map", "0:a:0", "-c", "copy",
                      "-bsf:v", bsf, "-f", "mpegts", remuxed]):
             _cleanup_partial(remuxed)
-            print("[Intro] could not remux the stream to join it - skipping intro")
+            print(f"[Intro] could not remux the stream to join it - skipping intro ({LAST_ERROR})")
             return False
         main_ts = remuxed
     try:
@@ -501,7 +511,7 @@ def prepend_intro(intro_path: str, main_path: str, out_path: str) -> bool:
             _cleanup_partial(remuxed)
     if not ok:
         _cleanup_partial(out_path)
-        print("[Intro] concat failed - skipping intro")
+        print(f"[Intro] concat failed - skipping intro ({LAST_ERROR})")
         return False
 
     # Verify before upload. This is the check that would have caught the

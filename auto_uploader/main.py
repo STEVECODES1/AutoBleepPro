@@ -3386,6 +3386,19 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
                         yt_source = _intro_tmp
                     else:
                         print("[YouTube] WARNING: intro skipped — uploading without it")
+                        # 10-29: the intro silently did not go on "hey my
+                        # babes" - the reason only reached a console window.
+                        try:
+                            from utils.brain import send_alert
+                            from utils import ffmpeg_tools as _fft
+
+                            send_alert("Intro NOT added to the full stream",
+                                       f"{os.path.basename(video_path)} goes to YouTube "
+                                       f"without the intro. ffmpeg said: "
+                                       f"{_fft.LAST_ERROR or 'see the uploader window'}",
+                                       urgent=False)
+                        except Exception:
+                            pass
                         try:
                             os.unlink(_intro_tmp)
                         except OSError:
