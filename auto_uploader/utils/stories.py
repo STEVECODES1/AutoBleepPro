@@ -350,6 +350,13 @@ def _upload(token_path: str, path: str, title: str, desc: str, privacy: str,
                                  "GTA RP", "Stackswopo reacts", "Stackswopo funny"],
                         "categoryId": "20"},
             "status": {"privacyStatus": privacy, "selfDeclaredMadeForKids": False}}
+    from utils import quota as _quota
+    if not _quota.allow_extra():
+        # 10-30: the day's quota is shared by all four channels; the last
+        # {_quota.RESERVE} units are kept for a full stream on wopovod.
+        raise RuntimeError("today's YouTube quota is kept for wopovod - "
+                           "try again after midnight Pacific")
+    _quota.record(_quota.INSERT, "story")
     req = yt.videos().insert(part="snippet,status", body=body,
                              media_body=MediaFileUpload(path, chunksize=8 * 1024 * 1024,
                                                         resumable=True))

@@ -1021,23 +1021,37 @@ REPEAT_AFTER_S = 30 * 60
 _STAMP = re.compile(r"(\d{4}-\d{2}-\d{2}) (\d{2})_(\d{2})")
 
 
-def delivered_name(name: str, segments) -> str:
+def _note_start(segment: str) -> None:
+    """Write <base>.started (once) the moment bytes first arrive - the
+    stream's real start, which delivered_name() names the file by."""
+    try:
+        m = re.match(r"(.*)\.part\d+\.ts", segment or "")
+        if not m:
+            return
+        marker = m.group(1) + ".started"
+        if not os.path.exists(marker):
+            with open(marker, "w", encoding="utf-8") as f:
+                f.write(str(time.time()))
+    except OSError:
+        pass
+
+
+def delivered_name(name: str, started_marker: str) -> str:
     """The finished file named for when the stream STARTED, not when the
     recorder began waiting for it. 10-29: the recorder had been waiting
     since 10-28 18:55, so the 10-29 stream went up as "... 10-28-26 (FULL
-    STREAM)". The stamp is moved to the first segment's creation time when
-    that is more than an hour later."""
+    STREAM)". The stamp moves to the time in <base>.started (written when
+    bytes first arrived) when that is more than an hour later. No marker
+    (an old or recovered recording) = the name as it was."""
     m = _STAMP.search(name)
-    if not m or not segments:
+    if not m:
         return name
     try:
-        first = min(os.path.getctime(p) for p in segments if os.path.exists(p))
-    except (OSError, ValueError):
-        return name
-    try:
+        with open(started_marker, encoding="utf-8") as f:
+            first = float(f.read().strip())
         stamped = time.mktime(time.strptime(f"{m.group(1)} {m.group(2)}:{m.group(3)}",
                                             "%Y-%m-%d %H:%M"))
-    except ValueError:
+    except (OSError, ValueError):
         return name
     if first - stamped < 3600:
         return name
@@ -1797,6 +1811,7 @@ class Recorder:
                         # them. With --wait-for-video those can be
                         # eleven hours apart. See recording_started_at.
                         self.recording_started_at = time.time()
+                        _note_start(getattr(self, "_active_output", "") or "")
                         if self.primary:
                             MAIN_RECORDING.set()
                         self.say("Live - recording started.")
@@ -2005,7 +2020,8 @@ class Recorder:
             return None
 
         destination = os.path.join(self.watch_folder,
-                                   delivered_name(os.path.basename(final), segments))
+                                   delivered_name(os.path.basename(final),
+                                                  os.path.join(self.staging, f"{base}.started")))
         os.makedirs(self.watch_folder, exist_ok=True)
         try:
             shutil.move(final, destination)
@@ -2015,6 +2031,7 @@ class Recorder:
 
         remember_source(destination,
                         resolved_watch_url(self.url, self.video_id))
+        _remove(os.path.join(self.staging, f"{base}.started"))
 
         if join_lost_material(probe_duration(destination), part_lengths):
             # Nothing is deleted on this path. The joined file is still

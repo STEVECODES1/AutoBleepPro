@@ -1321,12 +1321,28 @@ def youtube_hold_s(config: dict, now: Optional[float] = None) -> float:
 def _youtube_waits(platform: str, config: dict):
     """A guard-style "not yet" for a YouTube route while YouTube is
     blocked, or None."""
+    from publish_guard import Decision
+    try:
+        from utils.live_now import is_live
+        if is_live():
+            # 10-30: every clip post is an upload from the PC OBS streams
+            # from - they wait until the stream ends.
+            return Decision(False, "he is live - posts wait until the stream ends",
+                            retry_after_s=600)
+    except Exception:
+        pass
     if platform not in YOUTUBE_ROUTES:
         return None
+    try:
+        from utils import quota
+        if not quota.allow_extra():
+            return Decision(False, "today's YouTube quota is kept for wopovod",
+                            retry_after_s=quota.seconds_to_reset())
+    except Exception:
+        pass
     wait = youtube_hold_s(config)
     if not wait:
         return None
-    from publish_guard import Decision
 
     return Decision(False, "YouTube is refusing uploads on the main "
                     "channel - clips wait until it accepts them again",

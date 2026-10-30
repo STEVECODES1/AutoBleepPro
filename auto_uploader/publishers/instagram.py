@@ -76,6 +76,36 @@ def _why(response) -> str:
     return said or str(payload)[:400]
 
 
+def reel_spec_copy(video_path: str) -> str:
+    """A copy in exactly what Instagram documents for Reels: H.264 High,
+    yuv420p, 30 fps, 1080x1920 (padded), AAC 48 kHz stereo 128k, moov at
+    the front, max 90 s. "" when it cannot be made."""
+    import subprocess
+    import tempfile
+
+    fd, out = tempfile.mkstemp(suffix="_reel.mp4")
+    os.close(fd)
+    vf = ("scale=1080:1920:force_original_aspect_ratio=decrease,"
+          "pad=1080:1920:(ow-iw)/2:(oh-ih)/2,fps=30,format=yuv420p")
+    try:
+        r = subprocess.run(
+            ["ffmpeg", "-y", "-v", "error", "-i", video_path, "-t", "90",
+             "-vf", vf, "-c:v", "libx264", "-profile:v", "high", "-preset", "medium",
+             "-crf", "21", "-maxrate", "8M", "-bufsize", "16M", "-g", "60",
+             "-c:a", "aac", "-ar", "48000", "-ac", "2", "-b:a", "128k",
+             "-movflags", "+faststart", out],
+            capture_output=True, text=True, timeout=900)
+        if r.returncode == 0 and os.path.getsize(out) > 0:
+            return out
+    except Exception:
+        pass
+    try:
+        os.remove(out)
+    except OSError:
+        pass
+    return ""
+
+
 class InstagramPublisher:
     # Instagram has NO text or link post. Every Content Publishing call
     # builds a media container - IMAGE, VIDEO, REELS, CAROUSEL, STORIES -
@@ -156,7 +186,27 @@ class InstagramPublisher:
         container_id = self._create_resumable_container(caption, share_to_feed)
         if not container_id:
             return False
-        if not self._upload_bytes(container_id, video_path, size):
+        try:
+            uploaded = self._upload_bytes(container_id, video_path, size)
+        except PermanentlyRejected:
+            # 10-30: 15 Reels a week came back ProcessingFailedError. Most
+            # are a codec/frame-rate detail; one re-encode to Instagram's own
+            # spec, then one more try - and only then give up for good.
+            fixed = reel_spec_copy(video_path)
+            if not fixed:
+                raise
+            log.info("Instagram: re-encoded to Reel spec, trying once more")
+            container_id = self._create_resumable_container(caption, share_to_feed)
+            if not container_id:
+                return False
+            try:
+                uploaded = self._upload_bytes(container_id, fixed, os.path.getsize(fixed))
+            finally:
+                try:
+                    os.remove(fixed)
+                except OSError:
+                    pass
+        if not uploaded:
             return False
 
         log.info("Instagram: waiting for container %s to be ready ...", container_id)

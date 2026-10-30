@@ -65,6 +65,7 @@ MUTE_HOURS = 6
 CRASH_LOOP_STARTS = 5
 CRASH_LOOP_MINUTES = 30
 
+CHROME_CRASHES_15MIN = 5
 CHROME_DOWN_MINUTES = 5
 STUCK_STREAM_HOURS = 6
 STUCK_CLIP_HOURS = 2
@@ -500,6 +501,26 @@ class Brain:
             f"until it is back. Its keeper reopens it within a minute - if "
             f"this does not clear, run START.bat.")}
 
+    def _chrome_crashing(self, now: float) -> Problems:
+        """10-30: the AutoBleep Chrome's profile cache went bad and every
+        page crashed ("Aw, Snap!" STATUS_ACCESS_VIOLATION) about once a
+        minute - Rumble could not upload. Crash dumps pile up in the
+        profile's Crashpad folder; many in a short time = that."""
+        folder = os.environ.get("AUTOBLEEP_CHROME_CRASHES",
+                                r"C:\RumbleChromeProfile\Crashpad\reports")
+        try:
+            recent = [f for f in os.listdir(folder)
+                      if now - os.path.getmtime(os.path.join(folder, f)) < 15 * 60]
+        except OSError:
+            return {}
+        if len(recent) < CHROME_CRASHES_15MIN:
+            return {}
+        return {"chrome_crashing": (
+            "AutoBleep Chrome keeps crashing",
+            f"{len(recent)} crashes in 15 min - its cache is probably corrupt. Close that "
+            f"Chrome window, then run tools\\fix_chrome_cache.ps1 (moves the caches to "
+            f"_to_delete; logins stay). Rumble uploads fail until then.")}
+
     def _channel_guard(self, now: float) -> Problems:
         """A daily look at the four channel names and Abouts.
 
@@ -607,6 +628,7 @@ class Brain:
         found: Problems = {}
         for check in (lambda: self._crash_loop(now), self._disk,
                       lambda: self._recorder(now), lambda: self._chrome(now),
+                      lambda: self._chrome_crashing(now),
                       lambda: self._youtube_blocked(now),
                       lambda: self._channel_guard(now),
                       lambda: self._stuck_streams(now),

@@ -279,6 +279,11 @@ class YouTubeUploader:
             raise RuntimeError(f"YouTube upload failed: {exc}") from exc
 
         video_id = response["id"]
+        try:
+            from utils import quota
+            quota.record(quota.INSERT, f"upload {title[:60]}")
+        except Exception:
+            pass
 
         if callable(thumbnail_path):
             # Made while the video was uploading, and only needed now.

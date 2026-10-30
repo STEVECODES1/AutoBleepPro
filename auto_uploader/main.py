@@ -935,6 +935,11 @@ def cut_clips_from_stream(cfg, video_path: str, is_clip: bool,
                 recap_date = ""
             recap_date = recap_date or format_date(datetime.now(),
                                                    cfg.general.date_style)
+        try:
+            from utils.live_now import wait_until_off_air
+            wait_until_off_air("the recap and story episode")
+        except Exception:
+            pass
         make_recap(cfg, source, title, recap_date, moments)
     except Exception as exc:
         print(f"[Recap] Skipped: {exc}")
@@ -6060,6 +6065,14 @@ _process_file_unmarked = process_file
 @functools.wraps(_process_file_unmarked)
 def process_file(*args, **kwargs):  # noqa: F811 - the marked version
     path = args[0] if args else kwargs.get("video_path", "")
+    try:
+        # 10-30: nothing uploads from this PC while he streams (OBS needs
+        # the whole ~3 Mbps). Waits before the busy marker, so a quiet
+        # restart can still happen meanwhile.
+        from utils.live_now import wait_until_off_air
+        wait_until_off_air(os.path.basename(str(path)))
+    except Exception:
+        pass
     marker = _busy_marker_path()
     try:
         os.makedirs(os.path.dirname(marker), exist_ok=True)

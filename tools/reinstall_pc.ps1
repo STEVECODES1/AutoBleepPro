@@ -102,5 +102,10 @@ function Daily($name, $at, $script, $extra) {
 }
 Daily "AutoBleepPro Fan Guard" "09:05" "channel_guard.py" ""
 Daily "AutoBleepPro Disclaimer Backfill" "09:30" "disclaimer_backfill.py" "--apply --max 10 --only games,compilations"
+# Weekly copy of the Chrome profile to D: (10-30: a corrupt cache crashed every page).
+$bk = New-ScheduledTaskAction -Execute $ps -Argument "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$root\tools\backup_chrome_profile.ps1`"" -WorkingDirectory $root
+$bt = New-ScheduledTaskTrigger -Weekly -DaysOfWeek Sunday -At "05:10"
+Register-ScheduledTask -TaskName "AutoBleepPro Chrome Backup" -Action $bk -Trigger $bt -Settings $settings -Force | Out-Null
+Say "weekly task 'AutoBleepPro Chrome Backup' (Sunday 05:10)"
 
 Say "=== reinstall done ==="
