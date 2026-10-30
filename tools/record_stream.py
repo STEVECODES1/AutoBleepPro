@@ -1018,6 +1018,32 @@ JOIN_TOLERANCE_S = 2.0
 REPEAT_AFTER_S = 30 * 60
 
 
+_STAMP = re.compile(r"(\d{4}-\d{2}-\d{2}) (\d{2})_(\d{2})")
+
+
+def delivered_name(name: str, segments) -> str:
+    """The finished file named for when the stream STARTED, not when the
+    recorder began waiting for it. 10-29: the recorder had been waiting
+    since 10-28 18:55, so the 10-29 stream went up as "... 10-28-26 (FULL
+    STREAM)". The stamp is moved to the first segment's creation time when
+    that is more than an hour later."""
+    m = _STAMP.search(name)
+    if not m or not segments:
+        return name
+    try:
+        first = min(os.path.getctime(p) for p in segments if os.path.exists(p))
+    except (OSError, ValueError):
+        return name
+    try:
+        stamped = time.mktime(time.strptime(f"{m.group(1)} {m.group(2)}:{m.group(3)}",
+                                            "%Y-%m-%d %H:%M"))
+    except ValueError:
+        return name
+    if first - stamped < 3600:
+        return name
+    return name[:m.start()] + time.strftime("%Y-%m-%d %H_%M", time.localtime(first)) + name[m.end():]
+
+
 def video_seconds(path: str) -> float:
     """Seconds of VIDEO stream in a file; 0.0 when it has no video."""
     try:
@@ -1978,7 +2004,8 @@ class Recorder:
             _alert_lost_picture(self.name, self.staging)
             return None
 
-        destination = os.path.join(self.watch_folder, os.path.basename(final))
+        destination = os.path.join(self.watch_folder,
+                                   delivered_name(os.path.basename(final), segments))
         os.makedirs(self.watch_folder, exist_ok=True)
         try:
             shutil.move(final, destination)

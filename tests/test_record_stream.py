@@ -261,3 +261,19 @@ def test_a_real_miss_after_an_earlier_merge_is_still_reported():
 
     assert _missed_stream(tail), \
         "a miss that happens AFTER an earlier merge is a real miss"
+
+
+def test_the_file_is_named_for_when_the_stream_started(tmp_path, monkeypatch):
+    import time as _t
+    import record_stream as rs
+    seg = tmp_path / "x.part.ts"
+    seg.write_bytes(b"x")
+    started = _t.mktime(_t.strptime("2026-10-29 18:33", "%Y-%m-%d %H:%M"))
+    monkeypatch.setattr(rs.os.path, "getctime", lambda p: started)
+    assert rs.delivered_name("Stackswopo 2026-10-28 18_55.mp4", [str(seg)]) == \
+        "Stackswopo 2026-10-29 18_33.mp4"
+    soon = _t.mktime(_t.strptime("2026-10-28 19:10", "%Y-%m-%d %H:%M"))
+    monkeypatch.setattr(rs.os.path, "getctime", lambda p: soon)
+    assert rs.delivered_name("Stackswopo 2026-10-28 18_55.mp4", [str(seg)]) == \
+        "Stackswopo 2026-10-28 18_55.mp4"
+    assert rs.delivered_name("Stackswopo 2026-10-28 18_55.mp4", []) == "Stackswopo 2026-10-28 18_55.mp4"
