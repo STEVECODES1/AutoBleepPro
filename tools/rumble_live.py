@@ -478,6 +478,17 @@ def relay(video_id, cfg):
 def main():
     global ROOM
     cfg = env()
+    # OFF unless RUMBLE_LIVE_RELAY=1 in .env (10-30). The PC's line cannot
+    # carry the relay next to OBS (10-29: laggy, owner ended it - "just
+    # recording"), and Rumble's new Direct RTMP rooms and keys only live for
+    # one stream, so every stream would start with "key invalid" anyway.
+    # Restream is the way to go live on Rumble; the full stream still
+    # uploads to Rumble after every stream.
+    if cfg.get("RUMBLE_LIVE_RELAY", "0") != "1":
+        log("Rumble live relay is off (RUMBLE_LIVE_RELAY=1 in .env turns it on) - "
+            "the full stream still uploads to Rumble after it ends.")
+        while True:          # stay up quietly so the keepalive does not loop
+            time.sleep(3600)
     ROOM = cfg.get("RUMBLE_STUDIO_ROOM") or ROOM
     if not cfg.get("RUMBLE_STREAM_KEY") or not cfg.get("RUMBLE_RTMP_URL"):
         log("RUMBLE_STREAM_KEY / RUMBLE_RTMP_URL missing in .env - nothing to do")

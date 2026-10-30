@@ -177,7 +177,9 @@ a 4.4 GB full stream takes ~3 h to YouTube.
   ~18 fps, and the extra upload competes with OBS -> YouTube (wopovod). Owner ended it that night
   ("just recording"). Real fix = Restream (OBS -> Restream -> YouTube + Rumble, one upload) - the owner
   makes that account. Studio room is `ROOM` / RUMBLE_STUDIO_ROOM; a stale Studio preview needs a reload.
-- Chat overlay (`tools/live_chat_overlay.py`) exists but is OFF unless RUMBLE_CHAT_OVERLAY=1.
+- 10-30: the relay itself is OFF unless RUMBLE_LIVE_RELAY=1 (Rumble's Direct RTMP rooms/keys are per
+  stream - the next day's stream got "key invalid" again). Chat overlay (`tools/live_chat_overlay.py`) is
+  OFF unless RUMBLE_CHAT_OVERLAY=1.
 - To stop the relay for one stream: kill rumble_live + its ffmpeg, and put the video id in
   logs/rumble_live.json with ok:false (it is then never relayed again; the full upload still runs).
 
