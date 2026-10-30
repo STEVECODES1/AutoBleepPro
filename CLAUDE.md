@@ -183,6 +183,21 @@ a 4.4 GB full stream takes ~3 h to YouTube.
 - To stop the relay for one stream: kill rumble_live + its ffmpeg, and put the video id in
   logs/rumble_live.json with ok:false (it is then never relayed again; the full upload still runs).
 
+## 10-30: built from the "What Can Go Wrong" doc (owner: "it's your full responsibility now")
+
+- Nothing uploads while he is live: `utils/live_now.is_live()` reads the recorder heartbeat
+  (state "recording", fresher than 3 min). `process_file` waits before its busy marker; the clip queue
+  defers every platform; recap + story wait too. OBS keeps the whole ~3 Mbps.
+- YouTube quota is counted in logs/quota.json (`utils/quota.py`, Pacific day). Every insert records 1,600;
+  Shorts, recaps, weekly and stories go only while 1,600 is still left for a wopovod full stream.
+- Instagram: a ProcessingFailedError upload is re-encoded once to Reel spec (`reel_spec_copy`) and retried.
+- Chrome: the brain alerts on 5+ crash dumps in 15 min; `tools/fix_chrome_cache.ps1` (Chrome closed first)
+  moves the caches to _to_delete; `tools/backup_chrome_profile.ps1` runs weekly (task "AutoBleepPro Chrome
+  Backup", Sunday 05:10) to D:\AutoBleepPro-git\_backups. Logins in a copy only work for this Windows user.
+- Recorder writes <base>.started when bytes first arrive; the delivered file is named by it
+  (`delivered_name`). The recorder process loads this on its next restart - never restart it mid-stream.
+- The risk register lives in the owner's doc "AutoBleepPro - What Can Go Wrong".
+
 ## Held clips and learning
 
 - A clip held for slurs goes to Discord as a playable preview, numbered; "post held N" =
