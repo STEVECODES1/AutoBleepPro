@@ -336,6 +336,19 @@ def description(title: str, why: str, stream_title: str, stream_date: str,
     return for_description("\n".join(lines))
 
 
+def _tags() -> list:
+    """Story tags; "Johnny Cox" when the stream was mostly GTA RP (10-31)."""
+    base = ["Stackswopo", "Stackswopo stream", "Stackswopo full stream",
+            "GTA RP", "Stackswopo reacts", "Stackswopo funny"]
+    try:
+        from utils import series
+        from utils.recap import LAST_KINDS
+        gta = any(series.is_gta(k) for k in LAST_KINDS.values())
+        return series.tags(gta, base)
+    except Exception:
+        return base
+
+
 def _upload(token_path: str, path: str, title: str, desc: str, privacy: str,
             thumb: str, comment: str) -> str:
     from googleapiclient.http import MediaFileUpload
@@ -346,8 +359,7 @@ def _upload(token_path: str, path: str, title: str, desc: str, privacy: str,
     yt = _youtube(token_path)
     body = {"snippet": {"title": title,
                         "description": text_guard.youtube_description(desc, limit_bytes=4900),
-                        "tags": ["Stackswopo", "Stackswopo stream", "Stackswopo full stream",
-                                 "GTA RP", "Stackswopo reacts", "Stackswopo funny"],
+                        "tags": _tags(),
                         "categoryId": "20"},
             "status": {"privacyStatus": privacy, "selfDeclaredMadeForKids": False}}
     from utils import quota as _quota

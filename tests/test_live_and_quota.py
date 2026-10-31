@@ -77,3 +77,14 @@ def test_the_brain_says_when_chrome_keeps_crashing(tmp_path, monkeypatch):
     assert "chrome_crashing" in got
     monkeypatch.setenv("AUTOBLEEP_CHROME_CRASHES", str(tmp_path / "none"))
     assert brain.Brain._chrome_crashing(b, time.time()) == {}
+
+
+def test_series_titles_number_up_and_name_johnny_cox_for_gta(tmp_path):
+    from utils import series
+    path = str(tmp_path / "s.json")
+    assert series.next_number("recap", start=12, path=path) == 12
+    assert series.next_number("recap", start=12, path=path) == 13
+    assert series.is_gta(["gta", "gta", "monkey", ""]) and not series.is_gta(["monkey", "gta", "monkey"])
+    assert series.recap_title(13, True, "Roasts The Cops") == "Johnny Cox GTA RP Funny Moments #13 - Roasts The Cops"
+    assert series.recap_title(13, False) == "Stackswopo Funny Moments #13"
+    assert "Johnny Cox" in series.tags(True) and "Johnny Cox" not in series.tags(False)

@@ -62,6 +62,8 @@ def spent(path: str = LEDGER) -> int:
 
 def record(units: int, what: str = "", path: str = LEDGER) -> None:
     """Write down units spent today. Never raises."""
+    if path == LEDGER and os.environ.get("PYTEST_CURRENT_TEST"):
+        return          # tests never touch the real ledger
     try:
         with _LOCK:
             data = _load(path)

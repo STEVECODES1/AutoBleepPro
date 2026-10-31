@@ -90,6 +90,11 @@ def _shows_gambling(source: str, start: float, end: float) -> bool:
         return False
 
 
+# What each sampled minute looked like ("gta", "monkey", ""), by source -
+# kept from the one pass stranger_spans makes, for utils/series (10-31).
+LAST_KINDS: dict = {}
+
+
 def stranger_spans(source: str, look=None) -> List[Tuple[float, float]]:
     """Where the stream is on Monkey App / random video chat, by looking at
     it once a minute. Every single reading counts, with a minute either
@@ -100,6 +105,7 @@ def stranger_spans(source: str, look=None) -> List[Tuple[float, float]]:
 
         span = _seconds_long(source)
         marks = read_kinds(source, span, SAMPLE_EVERY, look)
+        LAST_KINDS[source] = [k for _at, k in marks]
     except Exception as exc:
         print(f"[Recap] Could not check for Monkey App parts ({exc}).")
         return []
@@ -656,8 +662,15 @@ def make(cfg, source: str, stream_title: str, stream_date: str,
 
         full = link_for(stream_title, stream_date, "youtube")
         uncut = link_for(stream_title, stream_date, "rumble")
-        title = build_title(stream_title, stream_date,
-                            "Stackswopo - {TITLE} - {date} (BEST MOMENTS)")
+        # A numbered series, named the way the Stackswopo videos that get
+        # views are (utils/series, 10-31): "Stackswopo Funny Moments #N",
+        # "Johnny Cox GTA RP Funny Moments #N" when the stream is mostly GTA.
+        from utils import series
+        gta = series.is_gta(LAST_KINDS.get(source))
+        hook = next((t for t in topics if t), "")
+        number = series.next_number("recap", start=len(_done(cfg)) + 1,
+                                    path=os.path.join(cfg.general.logs_folder, "series.json"))
+        title = series.recap_title(number, gta, hook.title() if hook.isupper() else hook)
         # The intro goes on the uploaded copy only: the kept recap (for
         # the weekly) stays without it, so its moment times stay right.
         upload_path, intro_s = _with_intro(cfg, final)
@@ -676,8 +689,9 @@ def make(cfg, source: str, stream_title: str, stream_date: str,
             f"▶ Full stream on YouTube: {full}" if full else "",
             f"▶ Uncut & uncensored on Rumble: {uncut}" if uncut else "") if line)
         url = upload(s["token_path"], upload_path, title, description,
-                     ["Stackswopo", "GTA RP", "Stackswopo stream", "best moments",
-                      "funny moments", "GTA 5"], privacy, full or uncut, comment=comment)
+                     series.tags(gta, ["Stackswopo", "GTA RP", "Stackswopo stream", "best moments",
+                                       "funny moments", "GTA 5"]), privacy, full or uncut,
+                     comment=comment)
         print(f"[Recap] Uploaded to STACKSWOPO GAMES ({privacy}): {url}")
         done = _done(cfg)
         done[key] = url
@@ -688,7 +702,7 @@ def make(cfg, source: str, stream_title: str, stream_date: str,
             from utils import weekly
             # Only the pieces that were actually cut, with their scores.
             # With what was said, so the weekly can check each moment again.
-            weekly.keep(cfg, final, stream_title, stream_date, url, full,
+            weekly.keep(cfg, final, stream_title, stream_date, url, full, gta=gta, moments=
                         [(a, b, segments[i][2], said(transcript, segments[i][0], segments[i][1]))
                          for a, b, i in placed])
             cleanup.remove(final)

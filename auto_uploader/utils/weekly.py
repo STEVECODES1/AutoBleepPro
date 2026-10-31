@@ -94,7 +94,7 @@ def _age_days(made: str, now: dt.datetime) -> float:
 
 
 def keep(cfg, path: str, stream_title: str, stream_date: str, recap_url: str,
-         full_url: str, moments, now: Optional[dt.datetime] = None) -> str:
+         full_url: str, moments, now: Optional[dt.datetime] = None, gta: bool = False) -> str:
     """Move a finished recap into the recaps folder with its sidecar."""
     os.makedirs(folder(cfg), exist_ok=True)
     dest = os.path.join(folder(cfg), os.path.basename(path))
@@ -104,6 +104,7 @@ def keep(cfg, path: str, stream_title: str, stream_date: str, recap_url: str,
         json.dump({"video": os.path.basename(dest), "stream_title": stream_title,
                    "stream_date": stream_date, "recap": recap_url,
                    "full_stream": full_url, "made": _now(now).isoformat(timespec="seconds"),
+                   "gta": bool(gta),
                    # [start, end, score] or [start, end, score, what was said]
                    "moments": [[round(float(m[0]), 3), round(float(m[1]), 3), float(m[2] or 0)]
                                + ([str(m[3])] if len(m) > 3 else [])
@@ -276,7 +277,11 @@ def maybe_make(cfg, now: Optional[dt.datetime] = None) -> str:
             streams = [r for r in window if any(p[0] is r for p in picks)]
             groups = [(start, shown(picks[i][0]).upper()) for start, _, i in placed]
             span = span_of(streams)
-            title = f"Stackswopo - BEST OF THE WEEK ({span})" if span else "Stackswopo - BEST OF THE WEEK"
+            # Numbered, like the videos that get views (utils/series, 10-31).
+            from utils import series
+            gta = sum(1 for r in streams if r.get("gta")) * 2 >= max(1, len(streams))
+            title = series.weekly_title(series.next_number(
+                "weekly", start=4, path=os.path.join(cfg.general.logs_folder, "series.json")), gta)
             lines = [f"▶ Every full stream: {WOPOVOD}", "",
                      "This week's streams:"]
             for r in streams:
@@ -299,8 +304,9 @@ def maybe_make(cfg, now: Optional[dt.datetime] = None) -> str:
                       "PRIVATE for you to check before it goes public.")
             url = upload(s["token_path"], out, title,
                          for_description("\n".join(lines)),
-                         ["Stackswopo", "GTA RP", "best of the week", "funny moments",
-                          "Stackswopo stream", "GTA 5"], privacy, WOPOVOD,
+                         series.tags(gta, ["Stackswopo", "GTA RP", "best of the week",
+                                           "funny moments", "Stackswopo stream", "GTA 5"]),
+                         privacy, WOPOVOD,
                          comment="Every full stream, uncut: " + WOPOVOD + "\n" + SHORT_ACTORS_LINE)
             print(f"[Weekly] Uploaded to STACKSWOPOVODS ({privacy}): {url}")
             _mark_used(cfg, window, {"url": url, "privacy": privacy, "title": title,

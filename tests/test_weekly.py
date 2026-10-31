@@ -103,7 +103,7 @@ def test_weekly_uploads_private_when_a_stream_had_strangers(tmp_path, monkeypatc
     monkeypatch.setattr(recap, "upload", lambda *a, **k: sent.update(args=a) or "https://y/1")
     assert weekly.maybe_make(cfg, NOW) == "https://y/1"
     title, description, privacy = sent["args"][2], sent["args"][3], sent["args"][5]
-    assert title == "Stackswopo - BEST OF THE WEEK (10-08-26)"
+    assert title.startswith("Stackswopo Best of the Week #") and "Funny Moments" in title
     assert privacy == "private"
     assert "https://www.youtube.com/@wopovod" in description
     led = json.load(open(tmp_path / "logs" / "weekly.json", encoding="utf-8"))
