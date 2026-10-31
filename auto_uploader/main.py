@@ -4104,6 +4104,14 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
             if remember_links(stream_title, date_str, results or {}):
                 print(f"[Clips] Clips of \"{stream_title}\" will link to its "
                       f"full stream.")
+                # Shorts that went up before it (clips post right after the
+                # censor pass now, 10-31) get the link added afterwards.
+                from utils.short_links import run as _short_links
+
+                threading.Thread(
+                    target=_short_links,
+                    args=(cfg, _clip_note_folders(cfg)),
+                    name="short-links", daemon=True).start()
         except Exception as exc:
             print(f"[Clips] could not note the stream's links: {exc}")
     # Clips only once the full stream is up on BOTH YouTube and Rumble

@@ -203,7 +203,12 @@ a 4.4 GB full stream takes ~3 h to YouTube.
 - Clips are cut right after the censor pass (`main._start_early_clips`, `CLIPS_RIGHT_AFTER_STREAM`), beside
   the 3-6 h full uploads, and joined before the source is retired. Still nothing while live. Clips posted
   before the full stream is up carry no full-stream link (links are read at post time); Rumble clips still
-  wait for the Related Video URL.
+  wait for the Related Video URL. Once the full stream's links are noted, `utils/short_links.run` adds
+  "Full video:" (+ Rumble) to Shorts of the last 4 days that lack it (URLs from clip_memory.json; title/tags
+  kept; once each, logs/short_links.json). Facebook posts store no id, so they are not backfilled.
+- 10-31: Rumble "That One Dude That Canceled Culture" retitled 10-28-26 -> 10-29-26 (title + description).
+  Rumble edits: account/content -> the article's `a.activate-dd` -> `a.action#edit` -> #title/#description
+  -> the visible "Save" link (Delete sits in the same menu - always scope to the article).
 - wopovod titles get a story hook: "Stackswopo Gets EXPOSED By His Ex | TOPIC BOUL - 10-30-26 (FULL STREAM)"
   (`utils/title_hook.py`, one model request after the censor pass). Kept per file hash in
   logs/title_hooks.json so a retry has the SAME title; the duplicate check asks for both the hooked and the

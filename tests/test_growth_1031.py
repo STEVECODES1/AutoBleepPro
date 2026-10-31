@@ -120,3 +120,62 @@ def test_a_second_google_project_has_its_own_day(tmp_path):
     assert quota.allow_extra(path=led, project=pid) is False
     quota.record(1600, "vod", path=led)
     assert quota.spent(led) == 1600
+
+
+def test_short_link_lines_go_under_the_first_paragraph():
+    from utils import short_links
+    old = "Bro said WHAT\n\n#Shorts\n\nfan channel notice"
+    new = short_links.with_links(old, "https://www.youtube.com/watch?v=AAAAAAAAAAA",
+                                 "https://rumble.com/v123-x.html")
+    assert new.split("\n\n")[0] == "Bro said WHAT"
+    assert "▶ Full video: https://www.youtube.com/watch?v=AAAAAAAAAAA" in new
+    assert "Uncut & uncensored on Rumble: https://rumble.com/v123" in new
+    assert short_links.with_links(new, "https://www.youtube.com/watch?v=AAAAAAAAAAA") == new
+
+
+class _Svc:
+    def __init__(self, desc):
+        self.desc, self.updates = desc, []
+
+    def videos(self):
+        svc = self
+
+        class V:
+            def list(self, part, id):
+                return SimpleNamespace(execute=lambda: {"items": [{"snippet": {
+                    "title": "T", "description": svc.desc, "categoryId": "20", "tags": ["a"]}}]})
+
+            def update(self, part, body):
+                svc.updates.append(body)
+                return SimpleNamespace(execute=lambda: {})
+        return V()
+
+
+def test_backfill_updates_once_and_keeps_title_and_tags(tmp_path, monkeypatch):
+    import time as _t
+    from utils import short_links
+    rec = SimpleNamespace(posted={"youtube_shorts": "https://www.youtube.com/watch?v=CY5CG_z5-YU"},
+                          created=_t.time(), path="clip1.mp4")
+    links = {"youtube": "https://www.youtube.com/watch?v=FULLSTREAM1", "rumble": ""}
+    monkeypatch.setattr("utils.stream_links.link_for_clip",
+                        lambda p, plat="", folders=(), store="": links[plat])
+    cfg = _cfg(tmp_path)
+    svc = _Svc("line\n\n#Shorts")
+    assert short_links.run(cfg, service=svc, records=[rec], say=lambda *a: None) == 1
+    body = svc.updates[0]
+    assert body["id"] == "CY5CG_z5-YU"
+    assert body["snippet"]["title"] == "T" and body["snippet"]["tags"] == ["a"]
+    assert "FULLSTREAM1" in body["snippet"]["description"]
+    assert short_links.run(cfg, service=svc, records=[rec], say=lambda *a: None) == 0
+    assert len(svc.updates) == 1
+
+
+def test_no_full_link_yet_means_no_change(tmp_path, monkeypatch):
+    import time as _t
+    from utils import short_links
+    rec = SimpleNamespace(posted={"youtube_shorts": "https://www.youtube.com/watch?v=CY5CG_z5-YU"},
+                          created=_t.time(), path="clip1.mp4")
+    monkeypatch.setattr("utils.stream_links.link_for_clip", lambda *a, **k: "")
+    svc = _Svc("x")
+    assert short_links.run(_cfg(tmp_path), service=svc, records=[rec], say=lambda *a: None) == 0
+    assert not svc.updates
