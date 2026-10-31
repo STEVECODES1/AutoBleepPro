@@ -64,6 +64,14 @@ def weekly_title(n: int, gta: bool) -> str:
             else f"Stackswopo Best of the Week #{n} | Funny Moments")
 
 
+HOUR_S = 50 * 60      # this long or more -> "1 Hour of ..." (the format that gets views)
+
+
+def hour_title(n: int, gta: bool) -> str:
+    return (f"1 Hour of Stackswopo Funny Moments #{n} | Johnny Cox GTA RP" if gta
+            else f"1 Hour of Stackswopo Funny Moments #{n}")
+
+
 def tags(gta: bool, base=()) -> list:
     out = list(base)
     for t in (["Johnny Cox", "Johnny Cox GTA RP", "Stackswopo Johnny Cox"] if gta else []) + \

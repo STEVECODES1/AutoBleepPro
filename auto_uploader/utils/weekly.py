@@ -9,7 +9,7 @@ Each stream's recap (utils/recap.py) is kept - already censored and
 music-checked - with a sidecar of where each moment sits in it and how it
 scored. About a week after the oldest recap not yet used, the best-scoring
 moments from that week's recaps are cut, put in stream order and joined
-into one ~18 minute video with chapters, and uploaded. Recaps older than
+into one ~1 hour video with chapters, and uploaded. Recaps older than
 KEEP_DAYS are then deleted (they are copies; the uploads stay up).
 
 Settings (config.json "weekly"): enabled, token_path, max_minutes, privacy.
@@ -23,7 +23,9 @@ import re
 import shutil
 from typing import List, Optional
 
-WEEKLY_MAX_S = 18 * 60
+# One hour (owner, 10-31): "1 hour of stackswopo funniest moments" videos
+# get 100k-400k views; our 18-minute "best of the week" got a few hundred.
+WEEKLY_MAX_S = 60 * 60
 WEEKLY_MIN_S = 8 * 60
 MIN_STREAMS = 2
 WAIT_DAYS = 6.0        # oldest unused recap must be this old before a weekly
@@ -280,8 +282,12 @@ def maybe_make(cfg, now: Optional[dt.datetime] = None) -> str:
             # Numbered, like the videos that get views (utils/series, 10-31).
             from utils import series
             gta = sum(1 for r in streams if r.get("gta")) * 2 >= max(1, len(streams))
-            title = series.weekly_title(series.next_number(
-                "weekly", start=4, path=os.path.join(cfg.general.logs_folder, "series.json")), gta)
+            _spath = os.path.join(cfg.general.logs_folder, "series.json")
+            if total >= series.HOUR_S:
+                title = series.hour_title(series.next_number("hour", start=1, path=_spath), gta)
+            else:
+                title = series.weekly_title(series.next_number(
+                    "weekly", start=4, path=_spath), gta)
             lines = [f"▶ Every full stream: {WOPOVOD}", "",
                      "This week's streams:"]
             for r in streams:
@@ -305,6 +311,7 @@ def maybe_make(cfg, now: Optional[dt.datetime] = None) -> str:
             url = upload(s["token_path"], out, title,
                          for_description("\n".join(lines)),
                          series.tags(gta, ["Stackswopo", "GTA RP", "best of the week",
+                                           "1 hour of Stackswopo",
                                            "funny moments", "Stackswopo stream", "GTA 5"]),
                          privacy, WOPOVOD,
                          comment="Every full stream, uncut: " + WOPOVOD + "\n" + SHORT_ACTORS_LINE)

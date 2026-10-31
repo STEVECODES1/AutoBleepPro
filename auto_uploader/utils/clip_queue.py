@@ -1335,7 +1335,7 @@ def _youtube_waits(platform: str, config: dict):
         return None
     try:
         from utils import quota
-        if not quota.allow_extra():
+        if not quota.allow_extra(project=quota.project_for_route(platform)):
             return Decision(False, "today's YouTube quota is kept for wopovod",
                             retry_after_s=quota.seconds_to_reset())
     except Exception:

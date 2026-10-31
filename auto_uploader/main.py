@@ -1504,8 +1504,12 @@ def _rumble_full_stream_for(video_path: str, cfg=None) -> str:
 # must not hold its clips forever).
 RUMBLE_RELATED_WAIT_HOURS = 12
 RUMBLE_CLIPS_PER_DAY = 8
-# A stream's clips wait for both full uploads at most this long.
+# A stream's clips wait for both full uploads at most this long - only
+# when CLIPS_RIGHT_AFTER_STREAM is off. On (10-31), clips are cut as soon
+# as the censor pass has the transcript and post while the full uploads
+# run; Rumble clips still wait for the full stream's URL (Related Video).
 CLIPS_WAIT_FOR_UPLOADS_H = 24
+CLIPS_RIGHT_AFTER_STREAM = True
 RUMBLE_WAIT_RESULT = "FAILED: waiting for the full stream on Rumble (Related Video)"
 
 
@@ -3086,6 +3090,35 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
         # almost no audio while the Rumble copy of it was fine.
         return vertical_path(video_path)
 
+    # Clips right after the stream (owner, 10-31): the transcript exists
+    # once the censor pass is done, so the clips are cut then, beside the
+    # 3-6 h full uploads, instead of after them. A moment posted the night
+    # of the stream is what gets the views; the next afternoon it is old.
+    # Joined below before the source is retired.
+    _early = {}
+
+    def _start_early_clips() -> None:
+        if (dry_run or is_clip or _early
+                or not CLIPS_RIGHT_AFTER_STREAM
+                or not (cfg.clips or {}).get("auto_from_streams")
+                or (cfg.clips or {}).get("right_after_stream") is False):
+            return
+
+        def _run():
+            try:
+                _early["count"] = cut_clips_from_stream(
+                    cfg, video_path, is_clip, title=stream_title,
+                    content_hash=file_hash) or 0
+            except Exception as exc:
+                print(f"[Clips] Early clips failed ({exc}) - they are cut "
+                      f"again after the uploads.")
+                _early["failed"] = True
+
+        print("[Clips] Cutting clips now, beside the full uploads.")
+        _early["thread"] = threading.Thread(target=_run, name="early-clips",
+                                            daemon=True)
+        _early["thread"].start()
+
     def upload_path_for(platform_wants_censoring: bool) -> str:
         if not (platform_wants_censoring and cfg.general.censor_before_upload):
             return vertical_path(video_path)
@@ -3181,6 +3214,7 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
                     getattr(censor_result, "words", None))
             if (cfg.clips or {}).get("cut_adbreaks"):
                 _censored["path"] = _cut_adbreaks(_censored["path"], cfg)
+            _start_early_clips()
 
         return vertical_path(_censored["path"])
 
@@ -3371,6 +3405,7 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
     kid_private = [False]  # set when kid talk sends the YouTube copy up private
 
     def do_youtube(parallel: bool) -> None:
+        nonlocal yt_title
         _intro_tmp = None  # temp concat file (with intro); cleaned up in finally
         _kidcut = None  # copy with the kid talk cut out; cleaned up in finally
         try:
@@ -3383,6 +3418,21 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
             # way, so the head-start wait below is usually an instant
             # pass rather than an actual delay.
             yt_source = upload_path_for(cfg.youtube.censor_uploads)
+
+            # A story hook in front of the full stream's title (10-31):
+            # "Stackswopo Gets EXPOSED By His Ex | TOPIC BOUL - date (FULL
+            # STREAM)". Saved per file, so a retry keeps the same title.
+            plain_yt_title = yt_title
+            if (not is_clip and not dry_run
+                    and getattr(cfg.youtube, "title_hook", True) is not False
+                    and not is_placeholder_title(stream_title, cfg.general.default_title)):
+                try:
+                    from utils.title_hook import for_stream as _hook_title
+
+                    yt_title = _hook_title(cfg, file_hash, video_path, yt_title,
+                                           yt_stream_title, clean=youtube_safe_title)
+                except Exception as exc:
+                    print(f"[Title] Hook skipped ({exc}).")
 
             # --- Songs out (YouTube VOD only - never Rumble, never clips) ---
             # Content ID claims on a stream are almost all background music.
@@ -3514,12 +3564,14 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
                 # list cached at startup, which did not have the first
                 # one's upload, and went up as a duplicate on wopovod.
                 if yt_attempts[0] > 1 or not is_clip:
-                    try:
-                        already = _already_on_youtube(
-                            yt_title, yt.get_service(),
-                            cfg.general.default_title)
-                    except Exception:
-                        already = ""
+                    already = ""
+                    for _t in dict.fromkeys((yt_title, plain_yt_title)):
+                        try:
+                            already = already or _already_on_youtube(
+                                _t, yt.get_service(),
+                                cfg.general.default_title)
+                        except Exception:
+                            pass
                     if already:
                         print(f"[YouTube] Already on the channel -> "
                               f"{already}. Not uploading it again.")
@@ -4062,7 +4114,14 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
     # are cut anyway, so one platform that never recovers cannot hold
     # them back for good.
     wait_for_uploads = False
-    if not dry_run and not is_clip and not fully_uploaded:
+    early_done = False
+    if _early.get("thread") is not None:
+        _early["thread"].join()
+        early_done = not _early.get("failed")
+        clips_delivered = _early.get("count", 0)
+    if early_done:
+        pass
+    elif not dry_run and not is_clip and not fully_uploaded and not CLIPS_RIGHT_AFTER_STREAM:
         try:
             age_h = (time.time() - os.path.getmtime(video_path)) / 3600
         except OSError:
@@ -4071,7 +4130,7 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
         if wait_for_uploads:
             print("[Clips] Not cutting clips yet - the full stream is not up on "
                   "both YouTube and Rumble. They are cut once it is.")
-    if not dry_run and not wait_for_uploads:
+    if not dry_run and not wait_for_uploads and not early_done:
         clips_delivered = cut_clips_from_stream(
             cfg, video_path, is_clip, title=stream_title,
             content_hash=file_hash) or 0

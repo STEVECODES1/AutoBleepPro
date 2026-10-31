@@ -56,11 +56,11 @@ away from the PC: it must work by itself after one START, and say plainly when i
 | token (auto_uploader\) | channel | role |
 |---|---|---|
 | youtube_token.json | STACKSWOPO VODS @WOPOVOD (UCbS-_v6Y9AZmAAU3EpzLsvA) | full streams - THE money channel |
-| youtube_shorts_token.json | STACKSWOPO CLIPS (Fan Channel) @WOPOCLIPPER (UCMeMDcCirQBxkhH3vuFgliA) | Shorts - ON, 3/day (10-28) |
+| youtube_shorts_token.json | STACKSWOPO CLIPS (Fan Channel) @WOPOCLIPPER (UCMeMDcCirQBxkhH3vuFgliA) | Shorts - ON, 5/day, 90 min apart (10-31) |
 | youtube_games_token.json | STACKSWOPO GAMES (UCKj0xrFqNNXpBCl_B1shckA) | recaps (has a strike) |
 | youtube_compilation_token.json | STACKSWOPOVODS (Fan Channel) @stackswopo10k | weekly, Monkey compilations |
 
-Costs: videos.insert 1600, writes 50, reads 1. Rumble: BinScripts, uncensored. IG/FB via Graph API, X and
+Costs: videos.insert ~100 (since 2025-12-04; own bucket since 2026-06-01 - ~100 uploads/day, not 6), writes 50, reads 1. Rumble: BinScripts, uncensored. IG/FB via Graph API, X and
 TikTok via Buffer (caps: Shorts 5, TikTok 6, IG 8, X 8 a day; FB every 80 min). Upload speed is ~3 Mbps:
 a 4.4 GB full stream takes ~3 h to YouTube.
 
@@ -198,6 +198,23 @@ a 4.4 GB full stream takes ~3 h to YouTube.
   (`delivered_name`). The recorder process loads this on its next restart - never restart it mid-stream.
 - The risk register lives in the owner's doc "AutoBleepPro - What Can Go Wrong".
 
+## 10-31: growth (owner approved all four)
+
+- Clips are cut right after the censor pass (`main._start_early_clips`, `CLIPS_RIGHT_AFTER_STREAM`), beside
+  the 3-6 h full uploads, and joined before the source is retired. Still nothing while live. Clips posted
+  before the full stream is up carry no full-stream link (links are read at post time); Rumble clips still
+  wait for the Related Video URL.
+- wopovod titles get a story hook: "Stackswopo Gets EXPOSED By His Ex | TOPIC BOUL - 10-30-26 (FULL STREAM)"
+  (`utils/title_hook.py`, one model request after the censor pass). Kept per file hash in
+  logs/title_hooks.json so a retry has the SAME title; the duplicate check asks for both the hooked and the
+  plain title. Kid/age words, YouTube title risks, a hook the title cleaner changes, >100 chars -> plain
+  title. `youtube.title_hook: false` turns it off.
+- Weekly is one hour now (`WEEKLY_MAX_S`): 50+ min -> "1 Hour of Stackswopo Funny Moments #N"
+  (series "hour"), shorter -> the "Best of the Week #N" title.
+- More Shorts: quota was never the limit any more (see Costs). A second Google project was NOT made: an
+  unaudited project created after 2020-07-28 uploads everything PRIVATE. `quota.project_of` still counts a
+  second project on its own day if one is ever audited.
+
 ## Held clips and learning
 
 - A clip held for slurs goes to Discord as a playable preview, numbered; "post held N" =
@@ -238,7 +255,7 @@ a 4.4 GB full stream takes ~3 h to YouTube.
 - Disclaimer wording is now "GTA RP is role-play - everyone in it is acting. The non-GTA parts
   feature actors too. Nothing shown is real." (`disclosure.ACTORS_LINE`); older wordings are
   swapped in place (`disclosure.upgraded`). Abouts: `tools/funnel_setup.py` (run it to push).
-- Shorts to @WOPOCLIPPER ON in the live config, 3/day, 2 h apart (shipped example stays off).
+- Shorts to @WOPOCLIPPER ON in the live config, 5/day, 90 min apart since 10-31 (shipped example stays off).
 - Rumble shorts wait (FAILED "waiting for the full stream", quiet, retried each pass) until the
   full stream's Rumble URL exists, so Related Video is always set; after 12 h they go without.
 - Recaps cut from an indexed .mp4 remux of the .ts (`recap.seekable_copy`), captions shifted by

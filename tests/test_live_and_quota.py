@@ -34,12 +34,13 @@ def test_work_waits_until_the_stream_ends():
 
 def test_extras_stop_while_wopovod_still_has_its_upload(tmp_path):
     path = str(tmp_path / "q.json")
-    for _ in range(4):
-        quota.record(quota.INSERT, "short", path=path)       # 6,400
-    assert quota.allow_extra(path=path)                       # 6,400+1,600+1,600 = 9,600
-    quota.record(quota.INSERT, "recap", path=path)            # 8,000
-    assert not quota.allow_extra(path=path)                   # would leave < 1,600
-    assert quota.spent(path=path) == 8000
+    n = (quota.DAY_LIMIT - quota.RESERVE) // quota.INSERT - 1
+    for _ in range(n):
+        quota.record(quota.INSERT, "short", path=path)
+    assert quota.allow_extra(path=path)                       # one more still fits
+    quota.record(quota.INSERT, "recap", path=path)
+    assert not quota.allow_extra(path=path)                   # would eat the reserve
+    assert quota.spent(path=path) == (n + 1) * quota.INSERT
 
 
 def test_every_extra_upload_path_asks_the_quota_first():
@@ -49,7 +50,7 @@ def test_every_extra_upload_path_asks_the_quota_first():
         i = src.index("videos().insert(")
         assert "allow_extra()" in src[i - 600:i], name
     src = open(os.path.join(root, "clip_queue.py"), encoding="utf-8").read()
-    assert "allow_extra()" in src and "is_live()" in src
+    assert "allow_extra(" in src and "is_live()" in src
 
 
 def test_a_reel_copy_is_made_to_instagram_spec(tmp_path):

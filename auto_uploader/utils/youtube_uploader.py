@@ -281,7 +281,8 @@ class YouTubeUploader:
         video_id = response["id"]
         try:
             from utils import quota
-            quota.record(quota.INSERT, f"upload {title[:60]}")
+            quota.record(quota.INSERT, f"upload {title[:60]}",
+                         project=quota.project_of(self.client_secrets_path))
         except Exception:
             pass
 
