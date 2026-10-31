@@ -14,6 +14,7 @@ from __future__ import annotations
 import glob
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -172,3 +173,8 @@ class ChatFeed(threading.Thread):
                 self.proc.terminate()
         except Exception:
             pass
+        # One mkdtemp() per stream (relay() makes a fresh ChatFeed every
+        # time), never reused and never removed otherwise - a stream every
+        # day for months leaves that many live_chat JSON dumps sitting in
+        # the temp folder forever.
+        shutil.rmtree(self.work, ignore_errors=True)
