@@ -100,6 +100,10 @@ DEFAULT_PLATFORMS = {
                     "min_minutes_between": 5},
     "postproxy_youtube": {"enabled": True, "daily_cap": 6,
                           "min_minutes_between": 10},
+    # New-full-stream Story on @stackswopomanz (utils/ig_story). Its own
+    # key so it never eats a Reel slot.
+    "instagram_story": {"enabled": True, "daily_cap": 3,
+                        "min_minutes_between": 30},
 }
 
 

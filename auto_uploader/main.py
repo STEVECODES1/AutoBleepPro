@@ -4056,6 +4056,14 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
                 post_later(cfg, newly_uploaded["youtube"], yt_stream_title)
             except Exception as exc:
                 print(f"[Post] could not start the channel post: {exc}")
+            # And an Instagram Story saying it is out (11-02) - IG has no
+            # link post, so the Story is the IG version of the X post.
+            try:
+                from utils import ig_story
+
+                ig_story.post_later(cfg, _thumbnail.get("path", ""), yt_stream_title)
+            except Exception as exc:
+                print(f"[IG Story] could not start: {exc}")
 
         try:
             optimizer_cfg = cfg.features.get("content_optimizer", {})

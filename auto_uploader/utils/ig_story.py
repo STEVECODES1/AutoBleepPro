@@ -1,0 +1,135 @@
+"""Instagram Story for each new full stream - the IG side of the X
+"New upload" post (owner, 11-02: "why you don't do it on Instagram too").
+
+Instagram has no link/text post through the API, but a Story is a video
+and goes up through the same resumable upload as a Reel. So: the
+stream's own YouTube thumbnail, made into an 8-second 9:16 card - "NEW
+FULL STREAM", the title, "OUT NOW ON YOUTUBE - LINK IN BIO" - posted as
+a Story. Stories do not use a Reel slot (own guard key `instagram_story`).
+
+The thumbnail, never a random frame: it was already picked and checked
+for the upload (a random frame landed on a kid on screen in testing).
+No thumbnail -> no Story.
+
+Best-effort and off the upload path: render + post run on a thread. A
+failure here never touches the upload.
+"""
+
+import os
+import subprocess
+import tempfile
+import textwrap
+import threading
+
+FONT = "C\\:/Windows/Fonts/arialbd.ttf"
+HEAVY = "C\\:/Windows/Fonts/impact.ttf"
+SECONDS = 8
+
+
+def wrap_title(title: str, width: int = 26, lines: int = 3) -> str:
+    """The title as up to three lines that fit 1080 px at 60 px."""
+    from utils import text_guard
+
+    clean = text_guard.text(" ".join(str(title or "").split()), "post")
+    rows = textwrap.wrap(clean, width) or ["Stackswopo"]
+    if len(rows) > lines:
+        rows = rows[:lines]
+        rows[-1] = rows[-1].rstrip(" .,-|") + "…"
+    return "\n".join(rows)
+
+
+def render_story(image_path: str, title: str, out_mp4: str) -> bool:
+    """1080x1920, 8 s: blurred background, the thumbnail in the middle,
+    text above and below. Text goes through a file so no title can break
+    the filter string."""
+    folder = os.path.dirname(out_mp4)
+    title_file = os.path.join(folder, "story_title.txt")
+    # newline="": a Windows \r\n is a second line break to drawtext.
+    with open(title_file, "w", encoding="utf-8", newline="") as handle:
+        handle.write(wrap_title(title))
+    tf = title_file.replace("\\", "/").replace(":", "\\:")
+    graph = (
+        "[0:v]scale=1080:1920:force_original_aspect_ratio=increase,"
+        "crop=1080:1920,boxblur=30:5,eq=brightness=-0.25[bg];"
+        "[0:v]scale=1000:-2[fg];"
+        "[bg][fg]overlay=(W-w)/2:(H-h)/2+40,"
+        f"drawtext=fontfile='{HEAVY}':text='NEW FULL STREAM':fontsize=110:"
+        "fontcolor=yellow:borderw=6:bordercolor=black:x=(w-tw)/2:y=200,"
+        # expansion=none: a % in a title ("100%") is text, not a code.
+        f"drawtext=fontfile='{FONT}':textfile='{tf}':expansion=none:fontsize=60:"
+        "line_spacing=12:fontcolor=white:borderw=4:bordercolor=black:"
+        "x=(w-tw)/2:y=350,"
+        f"drawtext=fontfile='{HEAVY}':text='OUT NOW ON YOUTUBE':fontsize=84:"
+        "fontcolor=white:borderw=5:bordercolor=black:x=(w-tw)/2:y=h-470,"
+        f"drawtext=fontfile='{HEAVY}':text='LINK IN BIO':fontsize=96:"
+        "fontcolor=yellow:borderw=6:bordercolor=black:x=(w-tw)/2:y=h-360,"
+        "format=yuv420p[v]"
+    )
+    cmd = ["ffmpeg", "-y", "-v", "error", "-loop", "1", "-t", str(SECONDS),
+           "-i", image_path, "-f", "lavfi", "-t", str(SECONDS),
+           "-i", "anullsrc=r=44100:cl=stereo", "-filter_complex", graph,
+           "-map", "[v]", "-map", "1:a", "-r", "30", "-c:v", "libx264",
+           "-preset", "veryfast", "-crf", "20", "-c:a", "aac", "-b:a", "128k",
+           "-movflags", "+faststart", "-shortest", out_mp4]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+    except Exception as exc:
+        print(f"[IG Story] render failed: {exc}")
+        return False
+    if result.returncode != 0:
+        print(f"[IG Story] render failed: {result.stderr.strip()[-300:]}")
+        return False
+    return os.path.isfile(out_mp4)
+
+
+def post_story(posting: dict, story_mp4: str, config: dict = None) -> bool:
+    """Behind the guard (kill switch, cap, spacing, breaker) like every post."""
+    from publish_guard import PublishGuard
+    from publishers.instagram import InstagramPublisher
+
+    guard = PublishGuard(posting or {}, (posting or {}).get("state_path"))
+    allowed, reason = guard.can_post("instagram_story")
+    if not allowed:
+        print(f"[IG Story] skipped - {reason}")
+        return False
+    publisher = InstagramPublisher(config or {})
+    if not publisher.ready():
+        print("[IG Story] skipped - Instagram not configured")
+        return False
+    try:
+        ok = publisher.post_story_from_file(story_mp4)
+    except Exception as exc:
+        print(f"[IG Story] upload raised {exc}")
+        ok = False
+    guard.record_result("instagram_story", ok)
+    print(f"[IG Story] {'posted the new-stream Story' if ok else 'failed'}.")
+    return ok
+
+
+def post_later(cfg, thumbnail_path: str, title: str) -> None:
+    """Render + post on a thread. Never raises."""
+    posting = getattr(cfg, "posting", None) or {}
+    if not posting or not thumbnail_path or not os.path.isfile(thumbnail_path):
+        print("[IG Story] no thumbnail for this stream - skipped")
+        return
+    folder = tempfile.mkdtemp(prefix="ig_story_")
+
+    def run():
+        out = os.path.join(folder, "story.mp4")
+        try:
+            if render_story(thumbnail_path, title, out):
+                post_story(posting, out, {"posting": posting})
+        except Exception as exc:
+            print(f"[IG Story] failed: {exc}")
+        finally:
+            for name in ("story.mp4", "story_title.txt"):
+                try:
+                    os.remove(os.path.join(folder, name))
+                except OSError:
+                    pass
+            try:
+                os.rmdir(folder)
+            except OSError:
+                pass
+
+    threading.Thread(target=run, name="ig-story", daemon=True).start()

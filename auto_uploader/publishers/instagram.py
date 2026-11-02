@@ -214,15 +214,34 @@ class InstagramPublisher:
             return False
         return self._publish_container(container_id)
 
+    def post_story_from_file(self, video_path: str) -> bool:
+        """Publish a short local video as a Story (no hosting, same upload
+        route as a Reel). Stories carry no caption and do not use a Reel
+        slot - this is the new-full-stream announcement (utils/ig_story)."""
+        if not self._ready() or not os.path.isfile(video_path):
+            return False
+        container_id = self._create_resumable_container(
+            "", False, media_type="STORIES")
+        if not container_id:
+            return False
+        if not self._upload_bytes(container_id, video_path,
+                                  os.path.getsize(video_path)):
+            return False
+        if not self._wait_for_container(container_id):
+            return False
+        return self._publish_container(container_id)
+
     def _create_resumable_container(self, caption: str,
-                                    share_to_feed: bool) -> Optional[str]:
+                                    share_to_feed: bool,
+                                    media_type: str = "REELS") -> Optional[str]:
         params = {
-            "media_type": "REELS",
+            "media_type": media_type,
             "upload_type": "resumable",
-            "caption": caption,
-            "share_to_feed": str(share_to_feed).lower(),
             "access_token": self._token,
         }
+        if media_type == "REELS":
+            params["caption"] = caption
+            params["share_to_feed"] = str(share_to_feed).lower()
         try:
             r = requests.post(f"{GRAPH_API}/{self._account_id}/media",
                               data=params, timeout=30)

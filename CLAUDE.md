@@ -220,6 +220,17 @@ a 4.4 GB full stream takes ~3 h to YouTube.
   unaudited project created after 2020-07-28 uploads everything PRIVATE. `quota.project_of` still counts a
   second project on its own day if one is ever audited.
 
+## 11-02: Instagram Story for each new full stream
+
+- Owner: "why you don't do it on Instagram too" (the X "New upload" post). IG's API has no link/text
+  post, so each new wopovod full stream gets an 8 s 9:16 Story on @stackswopomanz built from the
+  stream's own YouTube thumbnail: "NEW FULL STREAM" + title + "OUT NOW ON YOUTUBE / LINK IN BIO"
+  (`utils/ig_story.py`, `InstagramPublisher.post_story_from_file`, resumable upload, media_type STORIES).
+- Same gate as the Posts-tab post (full stream, not kid-private, real YouTube URL); runs on a thread.
+  Guard key `instagram_story` (3/day, 30 min apart) - never uses a Reel slot. No thumbnail -> no Story
+  (a random frame landed on a kid on screen in testing). Test: tests/test_ig_story.py.
+- Stories can't carry a clickable link via the API: the IG bio link must point at @WOPOVOD.
+
 ## Held clips and learning
 
 - A clip held for slurs goes to Discord as a playable preview, numbered; "post held N" =
