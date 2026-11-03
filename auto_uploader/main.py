@@ -4064,6 +4064,15 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
                 ig_story.post_later(cfg, _thumbnail.get("path", ""), yt_stream_title)
             except Exception as exc:
                 print(f"[IG Story] could not start: {exc}")
+            # Collab with STACKSWOPO GAMES, on its own (11-03) - the Claude
+            # task that used to do it was off. Off with youtube.collab: false.
+            try:
+                if getattr(cfg.youtube, "collab", True) is not False:
+                    from utils import collab
+
+                    collab.post_later(newly_uploaded["youtube"])
+            except Exception as exc:
+                print(f"[Collab] could not start: {exc}")
 
         try:
             optimizer_cfg = cfg.features.get("content_optimizer", {})

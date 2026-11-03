@@ -119,7 +119,10 @@ a 4.4 GB full stream takes ~3 h to YouTube.
 - Collaborations (no API): Studio video edit -> Show more -> Collaboration -> Invite -> "StackswopoGames"
   -> Create link -> close popup -> Save; accept all in Brave at
   https://studio.youtube.com/channel/UCKj0xrFqNNXpBCl_B1shckA/collaboration/UCbS-_v6Y9AZmAAU3EpzLsvA .
-  A daily scheduled task does this for new wopovod uploads.
+  11-03: the uploader does it itself after every new full stream (`utils/collab.py`, own process,
+  logs/collab.log, ledger logs/collabs.json; off with youtube.collab: false). The link opens a request
+  dialog in GAMES' Content page (Decline | Accept). Picking the channel pops 'Copy and share your invite
+  link' - closed with its X before Save. By hand: `cd auto_uploader; python -X utf8 -m utils.collab URL 0 1`.
 - Posts tab: composer `#placeholder-area` -> `#contenteditable-root`; "Add an existing YouTube video" is a
   Google Picker iframe (docs.google.com/picker): `[role=option]` with the title -> Insert -> Post.
 - Instagram caption edits only persist with real key events and a real click on Done.
