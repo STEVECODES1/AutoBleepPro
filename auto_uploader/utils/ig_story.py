@@ -11,15 +11,15 @@ The thumbnail, never a random frame: it was already picked and checked
 for the upload (a random frame landed on a kid on screen in testing).
 No thumbnail -> no Story.
 
-Best-effort and off the upload path: render + post run on a thread. A
-failure here never touches the upload.
+Best-effort and off the upload path: render + post run in a process of
+their own (logs/ig_story.log), so an uploader restart can't kill them.
+A failure here never touches the upload.
 """
 
 import os
 import subprocess
 import tempfile
 import textwrap
-import threading
 
 FONT = "C\\:/Windows/Fonts/arialbd.ttf"
 HEAVY = "C\\:/Windows/Fonts/impact.ttf"
@@ -107,29 +107,64 @@ def post_story(posting: dict, story_mp4: str, config: dict = None) -> bool:
 
 
 def post_later(cfg, thumbnail_path: str, title: str) -> None:
-    """Render + post on a thread. Never raises."""
+    """Render + post from a process of its own. Never raises."""
     posting = getattr(cfg, "posting", None) or {}
     if not posting or not thumbnail_path or not os.path.isfile(thumbnail_path):
         print("[IG Story] no thumbnail for this stream - skipped")
         return
-    folder = tempfile.mkdtemp(prefix="ig_story_")
+    if os.environ.get("PYTEST_CURRENT_TEST"):
+        return
+    # A process of its own, like the Posts-tab post: a thread died with
+    # the uploader when it restarted 6 s after the 11-02 stream (11-03).
+    import subprocess
+    import sys
 
-    def run():
-        out = os.path.join(folder, "story.mp4")
-        try:
-            if render_story(thumbnail_path, title, out):
-                post_story(posting, out, {"posting": posting})
-        except Exception as exc:
-            print(f"[IG Story] failed: {exc}")
-        finally:
-            for name in ("story.mp4", "story_title.txt"):
-                try:
-                    os.remove(os.path.join(folder, name))
-                except OSError:
-                    pass
+    os.makedirs(os.path.dirname(LOG), exist_ok=True)
+    with open(LOG, "a", encoding="utf-8") as log:
+        subprocess.Popen(
+            [sys.executable, "-X", "utf8", "-m", "utils.ig_story",
+             thumbnail_path, title or ""],
+            stdout=log, stderr=subprocess.STDOUT, cwd=_APP,
+            creationflags=getattr(subprocess, "DETACHED_PROCESS", 0)
+            | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0))
+    print("[IG Story] the new-stream Story goes up in a minute "
+          "(logs/ig_story.log).")
+
+
+def run_once(thumbnail_path: str, title: str, posting: dict) -> bool:
+    folder = tempfile.mkdtemp(prefix="ig_story_")
+    out = os.path.join(folder, "story.mp4")
+    try:
+        return bool(render_story(thumbnail_path, title, out)
+                    and post_story(posting, out, {"posting": posting}))
+    except Exception as exc:
+        print(f"[IG Story] failed: {exc}")
+        return False
+    finally:
+        for name in ("story.mp4", "story_title.txt"):
             try:
-                os.rmdir(folder)
+                os.remove(os.path.join(folder, name))
             except OSError:
                 pass
+        try:
+            os.rmdir(folder)
+        except OSError:
+            pass
 
-    threading.Thread(target=run, name="ig-story", daemon=True).start()
+
+_APP = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+LOG = os.path.join(_APP, "logs", "ig_story.log")
+
+
+if __name__ == "__main__":
+    import sys
+    import time
+
+    sys.path.insert(0, _APP)
+    os.chdir(_APP)
+    from utils.config import load_config
+
+    print(f"{time.strftime('%m-%d %H:%M:%S')} story for {sys.argv[2]!r}",
+          flush=True)
+    app_cfg = load_config("config.json")
+    run_once(sys.argv[1], sys.argv[2], app_cfg.posting or {})
