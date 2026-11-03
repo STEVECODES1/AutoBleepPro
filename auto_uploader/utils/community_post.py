@@ -240,6 +240,8 @@ def _switch_to(page, name: str = CHANNEL_NAME) -> bool:
 
 def _make(page, vid, title, text, posts_url, ledger, dry_run, say) -> str:
     page.goto(posts_url, wait_until="domcontentloaded", timeout=60_000)
+    # A background tab is throttled; the Post click then never lands (11-03).
+    page.bring_to_front()
     if not _post_box(page):
         if _switch_to(page):
             say(f"[Post] Switched the window to {CHANNEL_NAME}.")
@@ -274,12 +276,26 @@ def _make(page, vid, title, text, posts_url, ledger, dry_run, say) -> str:
     if dry_run:
         say(f"[Post] Dry run - ready to post: {text}")
         return "dry run"
-    page.locator("ytd-backstage-post-dialog-renderer "
-                 "button[aria-label='Post']:visible").first.click(timeout=15_000)
+    post_button = page.locator("ytd-backstage-post-dialog-renderer "
+                               "button[aria-label='Post']:visible").first
+    page.bring_to_front()
+    post_button.click(timeout=15_000)
     thread = _post_of(page, vid)
     try:
         thread.wait_for(timeout=45_000)
     except Exception:
+        # 10-30..11-03: every night run ended "Clicked Post, but the post is
+        # not on the channel" while a run with the window in front posted at
+        # once. If the box is still open with Post live, the click did not
+        # land - press it once more before giving up.
+        try:
+            if post_button.is_visible() and post_button.is_enabled():
+                page.bring_to_front()
+                post_button.click(timeout=15_000)
+                thread.wait_for(timeout=45_000)
+        except Exception:
+            pass
+    if not thread.count():
         page.reload(wait_until="domcontentloaded", timeout=60_000)
         page.wait_for_timeout(8_000)
         thread = _post_of(page, vid)
