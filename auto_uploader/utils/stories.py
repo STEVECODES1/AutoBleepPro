@@ -471,14 +471,20 @@ def _make(cfg, source, stream_title, stream_date, intro="") -> List[str]:
                 notes.append(f"build failed: {st['title']}")
                 continue
             from utils.censor import censor_video
+            from utils.clip_queue import scope_allow, scope_categories
 
+            # Same words as the full stream, no second listen (11-03: it
+            # doubled the muting off wopovod - see recap.make).
             final = censor_video(raw, work, model_name=cfg.general.censor_model,
                                  bleep_method=cfg.general.censor_bleep_method,
                                  custom_words=cfg.general.censor_custom_words,
                                  device=cfg.general.censor_device,
-                                 speed={**speed, "stream_copy_video": True, "video_filter": ""},
+                                 speed={**speed, "stream_copy_video": True, "video_filter": "",
+                                        "second_listen": False},
                                  padding_ms=cfg.general.censor_padding_ms,
-                                 mute_whole_segment=cfg.general.censor_mute_whole_segment
+                                 mute_whole_segment=cfg.general.censor_mute_whole_segment,
+                                 only_categories=scope_categories("ad_safe"),
+                                 allow_words=scope_allow("ad_safe")
                                  ).output_path
             if getattr(cfg.youtube, "music_guard", False):
                 from autoreel.music_guard import guard

@@ -567,6 +567,34 @@ def remember_title(log_path: str, title: str) -> str:
     return sidecar
 
 
+_TRAILING_STAMP = re.compile(r"\s+\d{4}-\d{2}-\d{2} \d{2}:\d{2}$")
+
+
+def saved_title(staging: str, base: str) -> str:
+    """The title remember_title wrote beside <base>.log, or "". yt-dlp's
+    live title ends in the time it was read ("its time 2026-11-02 17:49")
+    - that stamp is dropped."""
+    try:
+        with open(os.path.join(staging, f"{base}.txt"), encoding="utf-8") as f:
+            line = (f.readline() or "").strip()
+    except OSError:
+        return ""
+    return _TRAILING_STAMP.sub("", line).strip()
+
+
+def saved_video_id(staging: str, base: str) -> str:
+    """The last video id yt-dlp named in <base>.log, or ""."""
+    found = ""
+    try:
+        with open(os.path.join(staging, f"{base}.log"), encoding="utf-8",
+                  errors="replace") as f:
+            for line in f:
+                found = youtube_id_in(line) or found
+    except OSError:
+        return ""
+    return found
+
+
 def source_sidecar(video_path: str) -> str:
     """Where a recording notes the stream it came from."""
     return os.path.splitext(video_path or "")[0] + ".source.txt"
@@ -1966,6 +1994,26 @@ class Recorder:
 
     def finalise(self, base: str) -> Optional[str]:
         """Join the segments and move the result into the watch folder."""
+        # A recording finished by a LATER run (recorder restarted, orphan
+        # recovered) has no title or video id in memory - 11-02 "its time"
+        # went up as "STACKSWOPO YOUTUBE LIVE". Both were saved on disk by
+        # the run that recorded it; read them back - only for this file,
+        # so they never carry over to the next stream.
+        had_title = getattr(self, "title", "")
+        had_id = getattr(self, "video_id", "")
+        if not had_title:
+            self.title = saved_title(self.staging, base)
+        if not had_id:
+            self.video_id = saved_video_id(self.staging, base)
+        try:
+            return self._finalise(base)
+        finally:
+            if not had_title:
+                self.title = had_title
+            if not had_id:
+                self.video_id = had_id
+
+    def _finalise(self, base: str) -> Optional[str]:
         pieced = assemble_fragment_files(self.staging, base)
         if pieced:
             self.say(f"Put back together {len(pieced)} stream(s) yt-dlp had "

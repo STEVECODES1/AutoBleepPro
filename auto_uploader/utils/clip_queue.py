@@ -915,7 +915,11 @@ def _censored_clip(platform: str, video_path: str, config: dict) -> tuple:
             mute_whole_segment=bool(
                 general.get("censor_mute_whole_segment", False)),
             only_categories=scope,
-            allow_words=allow)
+            allow_words=allow,
+            # No second listen on clips (11-03): re-transcribing the muted
+            # audio makes Whisper "hear" swears in the gaps and roughly
+            # doubled the muting - "most of the time is mute".
+            speed={"second_listen": False})
     except Exception as exc:
         # A clip that cannot be censored must not go out UNcensored to a
         # platform that asked for it - that is the one failure worth

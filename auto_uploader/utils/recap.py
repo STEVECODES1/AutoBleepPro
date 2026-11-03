@@ -44,9 +44,10 @@ def settings(cfg) -> dict:
             "token_path": token,
             "max_s": float(raw.get("max_minutes", RECAP_MAX_S / 60)) * 60,
             "privacy": str(raw.get("privacy", "public")),
-            # Both channels this feeds already carry a strike: every swear is
-            # bleeped, not only the ad-unsafe ones the VOD scope covers.
-            "censor": str(raw.get("censor", "all"))}
+            # 11-03: the same words as the full stream (ad_safe: strong
+            # profanity + slurs). "all" plus the second listen left a recap
+            # 21 % silent - viewers: "most of the time is mute".
+            "censor": str(raw.get("censor", "ad_safe"))}
 
 
 def pick_moments(ranges: Sequence[Tuple[float, float, float]], duration: float,
@@ -643,7 +644,11 @@ def make(cfg, source: str, stream_title: str, stream_date: str,
                               bleep_method=cfg.general.censor_bleep_method,
                               custom_words=cfg.general.censor_custom_words,
                               device=cfg.general.censor_device,
-                              speed={**speed, "stream_copy_video": True, "video_filter": ""},
+                              # No second listen off wopovod: re-transcribing the
+                              # muted audio makes Whisper "hear" swears in the gaps
+                              # and roughly doubled the muting (11-03).
+                              speed={**speed, "stream_copy_video": True, "video_filter": "",
+                                     "second_listen": False},
                               padding_ms=cfg.general.censor_padding_ms,
                               mute_whole_segment=cfg.general.censor_mute_whole_segment,
                               only_categories=scope_categories(scope),

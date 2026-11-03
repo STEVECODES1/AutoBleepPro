@@ -231,6 +231,18 @@ a 4.4 GB full stream takes ~3 h to YouTube.
   (a random frame landed on a kid on screen in testing). Test: tests/test_ig_story.py.
 - Stories can't carry a clickable link via the API: the IG bio link must point at @WOPOVOD.
 
+## 11-03: less muting off wopovod + recorder title fix
+
+- Viewers on recaps/Shorts: "most of the time is mute". Measured: 11-02 recap 21 % silent (raw stream ~5 %);
+  word mutes alone explain ~9 %. The second listen re-transcribes the MUTED audio, Whisper "hears" swears in
+  the gaps, mutes more, twice. Off for recaps, story episodes and every clip platform (`second_listen: False`);
+  kept on the wopovod full stream. Recap + stories now use ad_safe (same words as the full stream), not "all".
+  A/B on 11-02 Clip 01: 17 % -> 11 % silent, same words removed.
+- 11-02 "its time" went up as "STACKSWOPO YOUTUBE LIVE": the recorder restarted at 23:05 and finished the
+  recording as an orphan, with no title/video id in memory. `finalise` now reads them back from <base>.txt /
+  <base>.log (`saved_title`, `saved_video_id`), only for that file. Test: tests/test_recorder_saved_title.py.
+  The live 11-02 YouTube title still says YOUTUBE LIVE (rename needs the owner's OK; Rumble too).
+
 ## Held clips and learning
 
 - A clip held for slurs goes to Discord as a playable preview, numbered; "post held N" =
