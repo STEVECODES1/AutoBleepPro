@@ -19,6 +19,15 @@ from utils import brain as brain_mod  # noqa: E402
 from utils.brain import Brain, send_alert  # noqa: E402
 
 
+@pytest.fixture(autouse=True)
+def _no_real_chrome_crash_dumps(tmp_path, monkeypatch):
+    """The fake clock is in 1970, so every real crash dump on the PC looked
+    'recent' and these tests failed on any machine that ever had one."""
+    folder = tmp_path / "crashpad_reports"
+    folder.mkdir()
+    monkeypatch.setenv("AUTOBLEEP_CHROME_CRASHES", str(folder))
+
+
 class Clock:
     def __init__(self, t=1_000_000.0):
         self.t = t

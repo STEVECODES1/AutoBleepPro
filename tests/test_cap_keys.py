@@ -77,7 +77,11 @@ def test_the_shipped_shorts_cap_is_actually_in_effect():
     raw = json.load(open(os.path.join(ROOT, "auto_uploader", "config.json"),
                          encoding="utf-8"))
     shorts = raw["posting"]["platforms"]["youtube_shorts"]
-    assert daily_cap_of({**shorts, "enabled": True}) == 3
+    # Whatever the config says (3 until 10-31, 5 since) is what the guard
+    # enforces - the bug was the guard reading it as unlimited.
+    configured = shorts.get("daily_cap", shorts.get("max_per_day"))
+    assert configured
+    assert daily_cap_of({**shorts, "enabled": True}) == int(configured)
 
 
 def test_every_shipped_platform_has_a_real_cap():

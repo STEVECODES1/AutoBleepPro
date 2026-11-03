@@ -134,3 +134,5 @@ models/speaker/
 _to_delete/
 /assets/*.mp4
 /_backups/
+
+content_type_corrections.json

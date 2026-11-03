@@ -246,6 +246,18 @@ a 4.4 GB full stream takes ~3 h to YouTube.
   <base>.log (`saved_title`, `saved_video_id`), only for that file. Test: tests/test_recorder_saved_title.py.
   The live 11-02 YouTube title still says YOUTUBE LIVE (rename needs the owner's OK; Rumble too).
 
+## 11-03: sturdiness pass
+
+- Ollama was GONE since the 10-28 reset (gambling check + local AI fallback had no model). Reinstalled (winget
+  Ollama.Ollama, Startup folder Ollama.lnk) + qwen3-vl:4b. Ollama's cloud account / API key is NOT needed.
+- Windows now signs itself in after a restart (owner ran netplwiz, AutoAdminLogon=1). Before: 11-02 21:08 power
+  loss -> PC sat at the sign-in screen until 22:46, nothing ran, the recorder restarted mid-stream.
+- Collab catch-up: `tools/collab_catchup.py`, task 'AutoBleepPro Collab Catchup' (09:40 daily + 25 min after
+  sign-in). Accept opens `studio.youtube.com/channel/<GAMES>/videos/upload?d=acd&v=<vid>` (per video); the
+  bare invite link only opens the newest request. A video already showing both channels is just noted.
+- 07:35 the 9222 Chrome stopped answering CDP (connect hung) - restarted it; keeper brought it back signed in.
+- Tests: test_brain read the REAL Crashpad folder (fake 1970 clock) - isolated; Shorts cap test reads config.
+
 ## Held clips and learning
 
 - A clip held for slurs goes to Discord as a playable preview, numbered; "post held N" =

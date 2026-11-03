@@ -134,9 +134,13 @@ def invite(page, vid: str, say=print) -> bool:
     return True
 
 
-def accept(page, say=print) -> bool:
-    """Step 2, as STACKSWOPO GAMES. Accepts what is waiting from wopovod."""
-    page.goto(REQUESTS_URL, wait_until="domcontentloaded", timeout=60_000)
+def accept(page, say=print, vid: str = "") -> bool:
+    """Step 2, as STACKSWOPO GAMES. Accepts what is waiting from wopovod.
+    With a video id the request for THAT video opens directly (the invite
+    link only opens the newest one)."""
+    url = (f"https://studio.youtube.com/channel/{GAMES_ID}/videos/upload?d=acd&v={vid}"
+           if vid else REQUESTS_URL)
+    page.goto(url, wait_until="domcontentloaded", timeout=60_000)
     page.bring_to_front()
     # The link redirects to Content and opens the request as a dialog
     # (Decline | Accept) - that takes 10+ s.
@@ -188,10 +192,25 @@ def run(video_url: str, cdp_url: str = "http://localhost:9222",
         say(f"[Collab] Chrome is not up ({detail}).")
         return False
     with sync_playwright() as p:
-        browser = p.chromium.connect_over_cdp(cdp_url, timeout=45_000)
+        browser = None
+        for attempt in range(3):
+            try:
+                browser = p.chromium.connect_over_cdp(cdp_url, timeout=90_000)
+                break
+            except Exception as exc:
+                say(f"[Collab] Chrome did not answer ({str(exc).splitlines()[0][:80]}) - "
+                    f"try {attempt + 1} of 3.")
+                time.sleep(60)
+        if browser is None:
+            return False
         context = browser.contexts[0] if browser.contexts else browser.new_context()
         page = context.new_page()
         try:
+            # Already collabbed (by hand, or the old Claude task): just note it.
+            if shown_on_watch_page(page, vid):
+                _note(vid, {"accepted": time.time(), "found": True}, ledger)
+                say(f"[Collab] {vid} already shows both channels.")
+                return True
             if not (_load(ledger).get(vid) or {}).get("invited"):
                 _switch_to(page, VODS_NAME)
                 if invite(page, vid, say):
@@ -199,7 +218,8 @@ def run(video_url: str, cdp_url: str = "http://localhost:9222",
             if not _switch_to(page, GAMES_NAME):
                 say("[Collab] Could not switch the window to STACKSWOPO GAMES.")
                 return False
-            accept(page, say)
+            if not accept(page, say, vid):
+                accept(page, say)
             _switch_to(page, VODS_NAME)
             if shown_on_watch_page(page, vid):
                 _note(vid, {"accepted": time.time()}, ledger)
