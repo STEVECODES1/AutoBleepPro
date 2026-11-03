@@ -54,6 +54,18 @@ def test_story_container_sends_no_caption(monkeypatch):
     assert "caption" not in sent and "share_to_feed" not in sent
 
 
+def test_font_falls_back_when_the_windows_fonts_are_missing(tmp_path):
+    """A fresh Windows install does not ship every font back (10-28 lost
+    the CapCut intro the same way), and most Windows ffmpeg builds have
+    no fontconfig to paper over a bad fontfile path - drawtext would
+    just fail there, taking the whole Story render down silently."""
+    missing = str(tmp_path / "does-not-exist.ttf")
+    real = str(tmp_path / "real.ttf")
+    open(real, "w").close()
+    assert ig_story._font(missing, missing) == ""
+    assert ig_story._font(missing, real) == real.replace(":", "\\:")
+
+
 @pytest.mark.skipif(not shutil.which("ffmpeg"), reason="ffmpeg not installed")
 def test_render_survives_quotes_and_colons(tmp_path):
     img = tmp_path / "t.png"

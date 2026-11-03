@@ -21,9 +21,24 @@ import subprocess
 import tempfile
 import textwrap
 
-FONT = "C\\:/Windows/Fonts/arialbd.ttf"
-HEAVY = "C\\:/Windows/Fonts/impact.ttf"
 SECONDS = 8
+
+
+def _font(*candidates: str) -> str:
+    """The first font file that exists, escaped for an ffmpeg filter
+    argument - or "" (ffmpeg's own default) if none of them do.
+
+    A fresh Windows install does not ship every font back (10-28 lost
+    the CapCut intro the same way), and unlike this box's ffmpeg,
+    typical Windows ffmpeg builds have no fontconfig to fall back to on
+    a bad fontfile path - drawtext just fails, silently taking the
+    whole Story render down with it. Same reasoning as
+    live_chat_overlay.font_file(), which exists for the same risk.
+    """
+    for path in candidates:
+        if path and os.path.isfile(path):
+            return path.replace("\\", "/").replace(":", "\\:")
+    return ""
 
 
 def wrap_title(title: str, width: int = 26, lines: int = 3) -> str:
@@ -48,20 +63,25 @@ def render_story(image_path: str, title: str, out_mp4: str) -> bool:
     with open(title_file, "w", encoding="utf-8", newline="") as handle:
         handle.write(wrap_title(title))
     tf = title_file.replace("\\", "/").replace(":", "\\:")
+    dejavu = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+    heavy = _font(r"C:\Windows\Fonts\impact.ttf", r"C:\Windows\Fonts\arialbd.ttf", dejavu)
+    heavy_opt = f"fontfile='{heavy}':" if heavy else ""
+    font = _font(r"C:\Windows\Fonts\arialbd.ttf", dejavu)
+    font_opt = f"fontfile='{font}':" if font else ""
     graph = (
         "[0:v]scale=1080:1920:force_original_aspect_ratio=increase,"
         "crop=1080:1920,boxblur=30:5,eq=brightness=-0.25[bg];"
         "[0:v]scale=1000:-2[fg];"
         "[bg][fg]overlay=(W-w)/2:(H-h)/2+40,"
-        f"drawtext=fontfile='{HEAVY}':text='NEW FULL STREAM':fontsize=110:"
+        f"drawtext={heavy_opt}text='NEW FULL STREAM':fontsize=110:"
         "fontcolor=yellow:borderw=6:bordercolor=black:x=(w-tw)/2:y=200,"
         # expansion=none: a % in a title ("100%") is text, not a code.
-        f"drawtext=fontfile='{FONT}':textfile='{tf}':expansion=none:fontsize=60:"
+        f"drawtext={font_opt}textfile='{tf}':expansion=none:fontsize=60:"
         "line_spacing=12:fontcolor=white:borderw=4:bordercolor=black:"
         "x=(w-tw)/2:y=350,"
-        f"drawtext=fontfile='{HEAVY}':text='OUT NOW ON YOUTUBE':fontsize=84:"
+        f"drawtext={heavy_opt}text='OUT NOW ON YOUTUBE':fontsize=84:"
         "fontcolor=white:borderw=5:bordercolor=black:x=(w-tw)/2:y=h-470,"
-        f"drawtext=fontfile='{HEAVY}':text='LINK IN BIO':fontsize=96:"
+        f"drawtext={heavy_opt}text='LINK IN BIO':fontsize=96:"
         "fontcolor=yellow:borderw=6:bordercolor=black:x=(w-tw)/2:y=h-360,"
         "format=yuv420p[v]"
     )
