@@ -290,14 +290,18 @@ def test_instagram_bleeps_slurs_and_keeps_the_swearing():
     from autoreel.compliance import ComplianceEngine
     from utils.clip_queue import CENSOR_AUDIO_DEFAULTS, _CENSOR_SCOPES
 
-    assert CENSOR_AUDIO_DEFAULTS["instagram"] == "slurs"
+    # 11-04: Instagram's recommendation feed is strict -> "watchable".
+    from utils.clip_queue import scope_allow
+
+    assert CENSOR_AUDIO_DEFAULTS["instagram"] == "watchable"
     engine = ComplianceEngine(
-        only_categories=_CENSOR_SCOPES[CENSOR_AUDIO_DEFAULTS["instagram"]])
+        only_categories=_CENSOR_SCOPES[CENSOR_AUDIO_DEFAULTS["instagram"]],
+        allow_words=scope_allow("watchable"))
 
     assert engine._flag_reason("nigga") == "hate_speech"
     assert engine._flag_reason("faggot") == "hate_speech"
     assert engine._flag_reason("shit") is None
-    assert engine._flag_reason("fuck") is None
+    assert engine._flag_reason("fuck")
 
 
 def test_every_platform_bleeps_slurs_and_leaves_the_swearing():
@@ -314,11 +318,13 @@ def test_every_platform_bleeps_slurs_and_leaves_the_swearing():
     from utils.clip_queue import CENSOR_AUDIO_DEFAULTS, _CENSOR_SCOPES
 
     for platform, mode in CENSOR_AUDIO_DEFAULTS.items():
-        if platform == "youtube_shorts":
-            # YouTube: slurs + strong words muted, moderate ones heard
-            # (owner 11-03, "watchable") - see test_watchable_scope below.
-            assert mode == "watchable"
+        if mode == "watchable":
+            # Strict recommendation feeds (YouTube, TikTok, Instagram,
+            # Facebook) - owner 11-03/11-04, see test_watchable_scope below.
+            assert platform in ("youtube_shorts", "instagram", "facebook",
+                                "tiktok", "zernio_tiktok"), platform
             continue
+        # X allows swearing: slurs only.
         assert mode == "slurs", f"{platform} is back to muting everything"
         engine = ComplianceEngine(only_categories=_CENSOR_SCOPES[mode])
         assert engine._flag_reason("nigga") == "hate_speech", platform

@@ -401,8 +401,33 @@ def test_instagram_bleeps_slurs_but_not_ordinary_swearing(publisher):
     account - so slurs are a different question from swearing."""
     from utils.clip_queue import CENSOR_AUDIO_DEFAULTS, _CENSOR_SCOPES
 
-    assert CENSOR_AUDIO_DEFAULTS["instagram"] == "slurs"
+    assert CENSOR_AUDIO_DEFAULTS["instagram"] == "watchable"  # 11-04
+    assert CENSOR_AUDIO_DEFAULTS["x"] == "slurs"
     assert _CENSOR_SCOPES["slurs"] == ("hate_speech",)
+
+
+def test_a_mostly_muted_clip_is_held_back_on_strict_platforms(tmp_path, monkeypatch):
+    """11-04: the right clip for the right platform - one that would be
+    mostly holes on TikTok/Instagram/Facebook/Shorts is held there, and
+    still goes to X and Rumble."""
+    from utils import clip_queue
+
+    monkeypatch.setattr(clip_queue, "_muted_share", lambda count, path: 0.4)
+    assert clip_queue.MAX_MUTED_SHARE["tiktok"] == 0.15
+    assert "x" not in clip_queue.MAX_MUTED_SHARE
+    assert clip_queue._muted_share.__name__ == "<lambda>"
+
+
+def test_muted_share_is_words_times_half_a_second(monkeypatch):
+    from utils import clip_queue
+    import subprocess
+
+    class R:
+        stdout = "50.0\n"
+
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: R())
+    assert abs(clip_queue._muted_share(20, "x.mp4") - 0.2) < 1e-9
+    assert clip_queue._muted_share(0, "x.mp4") == 0.0
 
 
 def test_rumble_audio_is_never_touched(publisher):

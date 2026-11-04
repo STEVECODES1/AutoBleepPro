@@ -632,10 +632,10 @@ def _char_limit(platform: str) -> int:
 CENSOR_AUDIO_DEFAULTS = {
     # Shorts earn from the Shorts ad pool on the same guidelines.
     "youtube_shorts": "watchable",
-    "instagram": "slurs",
-    "facebook": "slurs",
+    "instagram": "watchable",  # 11-04: recommendation feeds are strict
+    "facebook": "watchable",  # 11-04: recommendation feeds are strict
     "zernio_twitter": "slurs",
-    "zernio_tiktok": "slurs",
+    "zernio_tiktok": "watchable",  # 11-04: recommendation feeds are strict
     # X through Postproxy (postproxy_x). The Postproxy routes take their
     # platform's entry here - see base_platform.
     "x": "slurs",
@@ -644,7 +644,7 @@ CENSOR_AUDIO_DEFAULTS = {
     # caller reaches for by name when wiring it up. "slurs" here matches
     # the rest of the short-form table rather than letting a future call
     # site inherit False and ship the original to TikTok uncensored.
-    "tiktok": "slurs",
+    "tiktok": "watchable",
 }
 
 # Which compliance categories each mode bleeps. Empty tuple = all.
@@ -946,9 +946,46 @@ def _censored_clip(platform: str, video_path: str, config: dict) -> tuple:
     made = getattr(result, "output_path", "") or video_path
     if made != video_path:
         count = getattr(result, "violation_count", 0)
+        limit = settings.get("max_muted_share", MAX_MUTED_SHARE.get(platform))
+        share = _muted_share(count, video_path)
+        if limit is not None and share > float(limit):
+            # 11-04 owner: the right clip for the right platform. A clip that
+            # is mostly holes here still plays fine on X and Rumble.
+            try:
+                os.remove(made)
+            except OSError:
+                pass
+            from publishers.errors import HeldBack
+
+            print(f"[Clips] {platform}: held back - about {share:.0%} of it would be "
+                  f"muted here ({count} words); it still goes where the swearing can stay.")
+            raise HeldBack(f"held: {share:.0%} muted on {platform}")
         print(f"[Clips] {platform}: bleeped {count} word(s) before posting.")
         return made, made
     return video_path, ""
+
+
+# Most a clip may be muted on a platform before it is held back there
+# (11-04). Strict feeds only; X and Rumble take the swearing.
+MAX_MUTED_SHARE = {"youtube_shorts": 0.15, "tiktok": 0.15,
+                   "instagram": 0.15, "facebook": 0.15}
+SECONDS_PER_MUTE = 0.5      # a padded word mute, measured 11-03 (0.48 s)
+
+
+def _muted_share(count: int, video_path: str) -> float:
+    """Rough share of the clip that the mutes cover. 0.0 if unknown."""
+    if not count:
+        return 0.0
+    try:
+        import subprocess as _sp
+
+        length = float(_sp.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+             "-of", "csv=p=0", video_path],
+            capture_output=True, text=True, timeout=60).stdout.strip() or 0)
+    except Exception:
+        return 0.0
+    return (count * SECONDS_PER_MUTE / length) if length > 0 else 0.0
 
 
 def _posted_summary(posted) -> str:
