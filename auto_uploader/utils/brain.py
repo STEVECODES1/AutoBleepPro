@@ -133,22 +133,14 @@ def send_alert(title: str, message: str, urgent: bool = True,
     url = _env("DISCORD_ALERT_WEBHOOK_URL") or _job_webhook_url()
     if url:
         user = _env("DISCORD_ALERT_USER_ID")
-        mention = f"<@{user}> " if urgent and user.isdigit() else ""
-        payload = {
-            "username": "AutoBleep brain",
-            "content": f"{mention}**{title}**\n{message}"[:2000],
-            # Only the operator is ever pinged - never @everyone from a
-            # log line that happened to contain it.
-            "allowed_mentions": ({"users": [user]} if mention
-                                 else {"parse": []}),
-        }
-        try:
-            if post(url, json.dumps(payload).encode("utf-8"),
-                    {"Content-Type": "application/json",
-                     "User-Agent": "AutoBleep"}):
-                reached.append("discord")
-        except Exception:
-            pass
+        # 11-04: through discord_safe - bad words starred out, long lists
+        # (cut lists name slurs) go as an attached .txt, never in the chat.
+        from utils.discord_safe import send as safe_send
+
+        if safe_send(url, title, message, username="AutoBleep brain",
+                     filename="alert.txt", mention_user=user if urgent else "",
+                     post=post):
+            reached.append("discord")
 
     topic = _env("NTFY_TOPIC")
     if topic:

@@ -18,7 +18,11 @@ import urllib.request
 
 
 def _post_discord(webhook_url: str, message: str) -> None:
-    payload = json.dumps({"content": message}).encode("utf-8")
+    # 11-04: bad words starred out - Discord can ban a server over them.
+    from utils.discord_safe import clean
+
+    payload = json.dumps({"content": clean(message)[:1990],
+                          "allowed_mentions": {"parse": []}}).encode("utf-8")
     request = urllib.request.Request(
         webhook_url, data=payload,
         headers={"Content-Type": "application/json", "User-Agent": "AutoUploader"},
@@ -186,7 +190,7 @@ def manual_post_text(platform: str, title: str, new_uploads: dict) -> str:
 
 
 def queue_manual_post(platform: str, title: str, new_uploads: dict,
-                      queue_path: str = "", notify_discord: bool = True) -> str:
+                      queue_path: str = "", notify_discord: bool = False) -> str:
     """Park an announcement for a human to post. Returns the text.
 
     Platforms end up here for two different reasons and the handling is

@@ -284,6 +284,19 @@ a 4.4 GB full stream takes ~3 h to YouTube.
   `chrome_cdp.keep_awake(page)` (CDP focus emulation - page acts focused, desktop untouched). Checked: signed in,
   hasFocus true, visible. SHOW_AUTOBLEEP_CHROME.bat / HIDE_AUTOBLEEP_CHROME.bat move it on/off screen.
 
+## 11-04: platform rules, link cards, safe Discord
+
+- Per platform (owner: 'X allows cusses, others not so much'): x = 'slurs'; tiktok/instagram/facebook/Shorts =
+  'watchable'. A clip over 15 % muted (words x 0.5 s / length) is HELD from the strict feeds
+  (clip_queue.MAX_MUTED_SHARE, max_muted_share per platform block) and still goes to X + Rumble.
+- Every post is recorded at post time (utils/post_refs.py -> logs/post_refs.jsonl; IG/FB publishers keep
+  last_post_id). tools/post_links.py (run every 15 min by the uploader, utils/link_cards.py) resolves ids to
+  links (Buffer externalLink, IG permalink, facebook.com/reel/<id>, Shorts URL, Rumble from rumble.log) and keeps
+  ONE Discord card per clip, edited in place. Clip receipts only when something failed.
+- Every Discord message goes through utils/discord_safe.py: slurs/strong words starred ('n****'); long text
+  (brain cut lists) attached as .txt. FB-group paste text no longer pinged to Discord (still in manual_posts.txt).
+- A Windows task for post_links was refused by the safety check - it runs inside the uploader instead.
+
 ## Held clips and learning
 
 - A clip held for slurs goes to Discord as a playable preview, numbered; "post held N" =

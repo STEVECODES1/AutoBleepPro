@@ -153,6 +153,8 @@ class FacebookFreePublisher:
 
         log.info("Facebook: posted video %s (%s)", video_id,
                  os.path.basename(video_path))
+        # Kept so the post's link can be shown (tools/post_links.py).
+        self.last_post_id = str(video_id)
         return True
 
     # ── link post (the announcer path) ─────────────────────────────────

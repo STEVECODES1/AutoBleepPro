@@ -1098,6 +1098,9 @@ def publish(platform: str, video_path: str, caption: str,
             from autoreel.memory import remember_post
 
             remember_post(config, video_path, platform, str(posted))
+            from utils.post_refs import record
+
+            record(video_path, platform, posted if isinstance(posted, str) else "", caption)
         return bool(posted)
 
     if not getattr(publisher, "supports_reels", False):
@@ -1165,6 +1168,10 @@ def publish(platform: str, video_path: str, caption: str,
                     os.remove(leftover)
                 except OSError:
                     pass
+    if ok:
+        from utils.post_refs import record
+
+        record(video_path, platform, getattr(publisher, "last_post_id", ""), caption)
     return ok
 
 

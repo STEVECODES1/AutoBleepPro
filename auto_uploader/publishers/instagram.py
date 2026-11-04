@@ -396,6 +396,8 @@ class InstagramPublisher:
             media_id = data.get("id")
             if media_id:
                 log.info("Instagram: published Reel, media_id=%s", media_id)
+                # Kept so the post's link can be shown (tools/post_links.py).
+                self.last_post_id = str(media_id)
                 return True
             log.error("Instagram: publish response missing id: %s", data)
             return False

@@ -207,7 +207,7 @@ def _alert(text: str, key: str) -> None:
     import urllib.request
 
     request = urllib.request.Request(
-        url, data=json.dumps({"content": text}).encode("utf-8"),
+        url, data=json.dumps({"content": __import__("utils.discord_safe", fromlist=["clean"]).clean(text)}).encode("utf-8"),
         headers={"Content-Type": "application/json", "User-Agent": "AutoBleep"})
     try:
         urllib.request.urlopen(request, timeout=20).read()

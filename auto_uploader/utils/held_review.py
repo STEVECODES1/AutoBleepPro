@@ -168,9 +168,10 @@ def send_new(say=print, limit=25):
         except OSError:
             pass
         preview = _preview(info["path"])
-        line = info["caption"].strip().split("\n")[0][:180]
+        from utils.discord_safe import clean
+        line = clean(info["caption"].strip().split("\n")[0][:180])
         text = (f"**HELD CLIP #{number}** - {line}\n"
-                f"Held from YouTube/IG/TikTok/FB/X: {info['why']}\n"
+                f"Held from YouTube/IG/TikTok/FB/X: {clean(info['why'])}\n"
                 + (f"Already on Rumble: {info['rumble']}\n" if info["rumble"] else "")
                 + f"Worth posting? Tell Claude **post held {number}** "
                   f"(or run `tools/held_review.py --post {number}`). Ignore it to keep it held.")
@@ -264,8 +265,10 @@ def send_at_hold(video_path: str, why: str) -> None:
             preview = _preview(copy)
             state = _read(STATE, {"next": 1, "sent": {}})
             number = state.get("next", 1)
-            _post(webhook, f"**HELD CLIP #{number}** - {os.path.splitext(name)[0]}\n"
-                           f"Held from YouTube/IG/TikTok/FB/X: {why}\n"
+            from utils.discord_safe import clean
+
+            _post(webhook, f"**HELD CLIP #{number}** - {clean(os.path.splitext(name)[0])}\n"
+                           f"Held from YouTube/IG/TikTok/FB/X: {clean(why)}\n"
                            f"Worth posting? Tell Claude **post held {number}** "
                            f"(or run `tools/held_review.py --post {number}`). "
                            f"Ignore it to keep it held.", preview)

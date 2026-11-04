@@ -5725,6 +5725,13 @@ def main(argv=None) -> int:
             drive_guard.start("exit")
         except Exception:
             pass
+        # 11-04: one Discord card per clip with every platform's link -
+        # tools/post_links.py, its own process every 15 min.
+        try:
+            from utils import link_cards
+            link_cards.start()
+        except Exception:
+            pass
     if args.watch is not None and args.watch:
         watch_folder = os.path.abspath(os.path.expanduser(args.watch))
         if not os.path.isdir(watch_folder):

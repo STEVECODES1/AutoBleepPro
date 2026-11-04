@@ -294,8 +294,13 @@ def build_embed(report: JobReport) -> dict:
         report.censor_note,
         report.filename) if p)
 
+    try:
+        from utils.discord_safe import clean
+    except Exception:  # pragma: no cover
+        def clean(text):
+            return text
     embed = {
-        "title": _clip(report.title or report.filename or "Untitled", MAX_TITLE),
+        "title": _clip(clean(report.title or report.filename or "Untitled"), MAX_TITLE),
         "description": _clip(description, MAX_DESCRIPTION),
         "color": report.colour(),
         "fields": fields[:MAX_FIELDS],
@@ -359,6 +364,12 @@ def report_job(cfg, report: JobReport, say=print) -> bool:
         if not enabled:
             return False
         if not webhook_url(explicit):
+            return False
+        # 11-04 owner: tidy channel. A clip that went fine shows up on the
+        # link card (tools/post_links.py); its receipt only comes when
+        # something FAILED. Full streams always get one.
+        if report.is_clip and not report.failed() and setting is not True and \
+                not (isinstance(setting, dict) and setting.get("every_clip")):
             return False
         sent = send(report, explicit)
         if sent:
