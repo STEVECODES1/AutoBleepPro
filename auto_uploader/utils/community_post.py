@@ -19,6 +19,8 @@ import re
 import threading
 import time
 
+from utils.chrome_cdp import keep_awake  # noqa: E402
+
 WOPOVOD_POSTS = "https://www.youtube.com/channel/UCbS-_v6Y9AZmAAU3EpzLsvA/posts"
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LEDGER = os.path.join(_ROOT, "logs", "community_posts.json")
@@ -241,7 +243,7 @@ def _switch_to(page, name: str = CHANNEL_NAME) -> bool:
 def _make(page, vid, title, text, posts_url, ledger, dry_run, say) -> str:
     page.goto(posts_url, wait_until="domcontentloaded", timeout=60_000)
     # A background tab is throttled; the Post click then never lands (11-03).
-    page.bring_to_front()
+    keep_awake(page)
     if not _post_box(page):
         if _switch_to(page):
             say(f"[Post] Switched the window to {CHANNEL_NAME}.")
@@ -278,7 +280,7 @@ def _make(page, vid, title, text, posts_url, ledger, dry_run, say) -> str:
         return "dry run"
     post_button = page.locator("ytd-backstage-post-dialog-renderer "
                                "button[aria-label='Post']:visible").first
-    page.bring_to_front()
+    keep_awake(page)
     post_button.click(timeout=15_000)
     thread = _post_of(page, vid)
     try:
@@ -290,7 +292,7 @@ def _make(page, vid, title, text, posts_url, ledger, dry_run, say) -> str:
         # land - press it once more before giving up.
         try:
             if post_button.is_visible() and post_button.is_enabled():
-                page.bring_to_front()
+                keep_awake(page)
                 post_button.click(timeout=15_000)
                 thread.wait_for(timeout=45_000)
         except Exception:

@@ -22,6 +22,8 @@ import os
 import threading
 import time
 
+from utils.chrome_cdp import keep_awake  # noqa: E402
+
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LEDGER = os.path.join(_ROOT, "logs", "collabs.json")
 LOG = os.path.join(_ROOT, "logs", "collab.log")
@@ -67,7 +69,7 @@ def invite(page, vid: str, say=print) -> bool:
     already there)."""
     page.goto(f"https://studio.youtube.com/video/{vid}/edit",
               wait_until="domcontentloaded", timeout=60_000)
-    page.bring_to_front()
+    keep_awake(page)
     page.wait_for_selector("ytcp-button#toggle-button", timeout=60_000)
     page.wait_for_timeout(2_000)
     page.evaluate("() => document.querySelector('ytcp-button#toggle-button').click()")
@@ -141,7 +143,7 @@ def accept(page, say=print, vid: str = "") -> bool:
     url = (f"https://studio.youtube.com/channel/{GAMES_ID}/videos/upload?d=acd&v={vid}"
            if vid else REQUESTS_URL)
     page.goto(url, wait_until="domcontentloaded", timeout=60_000)
-    page.bring_to_front()
+    keep_awake(page)
     # The link redirects to Content and opens the request as a dialog
     # (Decline | Accept) - that takes 10+ s.
     try:

@@ -24,9 +24,17 @@ $edgeProfile = (Test-Path "C:\RumbleChromeProfile\Local State") -and
 $order = if ($edgeProfile) { $edges + $chromes } else { $chromes + $edges }
 $browser = $order | Where-Object { Test-Path $_ } | Select-Object -First 1
 if (-not $up -and $browser) {
-    Start-Process $browser -WindowStyle Minimized `
+    # 11-03 owner: "don't mess up my screen". Opened OFF-SCREEN (left of the
+    # 1920x1080 monitor) and told never to slow itself down while out of
+    # sight, so uploads/posts work without the window ever showing.
+    # SHOW_AUTOBLEEP_CHROME.bat brings it back when a login is needed.
+    Start-Process $browser `
         -ArgumentList '--remote-debugging-port=9222', '--user-data-dir=C:\RumbleChromeProfile',
-                      '--no-first-run', '--no-default-browser-check', 'https://rumble.com/'
+                      '--no-first-run', '--no-default-browser-check',
+                      '--window-position=-2600,0', '--window-size=1600,1000',
+                      '--disable-background-timer-throttling',
+                      '--disable-backgrounding-occluded-windows',
+                      '--disable-renderer-backgrounding', 'https://rumble.com/'
     "$(Get-Date -Format 'HH:mm:ss') started Rumble Chrome"
 }
 

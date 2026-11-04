@@ -133,10 +133,31 @@ def launch_args(chrome: str, port: int, profile_dir: str) -> list:
         f"--user-data-dir={profile_dir}",
         "--no-first-run",
         "--no-default-browser-check",
+        # Off-screen and never throttled (11-03, owner: don't take over my
+        # screen) - see tools/ensure_rumble_chrome.ps1.
+        "--window-position=-2600,0",
+        "--window-size=1600,1000",
+        "--disable-background-timer-throttling",
+        "--disable-backgrounding-occluded-windows",
+        "--disable-renderer-backgrounding",
         # Opened on the site we need, so logging in the first time is
         # obvious rather than a blank window with no explanation.
         "https://rumble.com/",
     ]
+
+
+def keep_awake(page) -> None:
+    """Make a background tab act focused WITHOUT taking the screen.
+
+    bring_to_front() raised the window over whatever the owner was doing.
+    Focus emulation gives the page what it needs (clicks land, timers run)
+    and leaves the desktop alone. Never raises."""
+    try:
+        session = page.context.new_cdp_session(page)
+        session.send("Emulation.setFocusEmulationEnabled", {"enabled": True})
+        session.send("Page.setWebLifecycleState", {"state": "active"})
+    except Exception:
+        pass
 
 
 def ensure_chrome(cdp_url: str, profile_dir: str = "",

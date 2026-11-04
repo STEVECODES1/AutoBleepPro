@@ -276,6 +276,14 @@ a 4.4 GB full stream takes ~3 h to YouTube.
 - Second listen on the full stream now listens for SLURS only (`speed.second_listen_slurs_only`, default true):
   it re-transcribed muted audio and added hallucinated swears, roughly doubling the muting.
 
+## 11-03 night: AutoBleep Chrome off-screen
+
+- Owner: Rumble's browser window kept covering his screen. The 9222 Chrome now starts at x=-2600 (off the
+  single 1920x1080 monitor) with --disable-background-timer-throttling / -backgrounding-occluded-windows /
+  -renderer-backgrounding (ensure_rumble_chrome.ps1 + chrome_cdp.launch_args). page.bring_to_front() replaced by
+  `chrome_cdp.keep_awake(page)` (CDP focus emulation - page acts focused, desktop untouched). Checked: signed in,
+  hasFocus true, visible. SHOW_AUTOBLEEP_CHROME.bat / HIDE_AUTOBLEEP_CHROME.bat move it on/off screen.
+
 ## Held clips and learning
 
 - A clip held for slurs goes to Discord as a playable preview, numbered; "post held N" =
