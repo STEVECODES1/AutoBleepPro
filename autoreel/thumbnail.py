@@ -121,7 +121,10 @@ or a building: a thumbnail with no face in it does not get clicked.
 Never a frame showing a mugshot, a booking or ID photo, a document, or
 anyone's personal details on screen. The
 character must be CLOSE - their face at least a tenth of the frame's
-height - not a figure in the distance.
+height - not a figure in the distance. Their WHOLE head, hair and hat
+included, must be inside the frame with some space above it - never a
+frame where the top of the head is cut off by the edge. Best of all:
+looking toward the camera, like a movie poster or a GTA loading screen.
 
 Give two boxes as [ymin, xmin, ymax, xmax] on a 0-1000 scale of the
 frame: "face" around that character's face (forehead to chin), and

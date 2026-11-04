@@ -54,9 +54,10 @@ def _mask(img):
 def _grade(img):
     from PIL import ImageEnhance
 
-    img = ImageEnhance.Contrast(img).enhance(1.12)
-    img = ImageEnhance.Color(img).enhance(1.28)
-    img = ImageEnhance.Brightness(img).enhance(1.03)
+    # Gentler than the first try: the stream grade already lifted it, and a
+    # white shirt blew out to flat white (preview 11-04).
+    img = ImageEnhance.Contrast(img).enhance(1.06)
+    img = ImageEnhance.Color(img).enhance(1.18)
     # Cinematic split-tone: a little warmth in the highlights, teal in shadows.
     try:
         import numpy as np
