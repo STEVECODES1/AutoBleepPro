@@ -25,11 +25,27 @@ def run_once() -> None:
         pass
 
 
+def weekly_top5() -> None:
+    """The weekly ranked "Top 5" Short (utils/top5.py), when one is due."""
+    if os.environ.get("PYTEST_CURRENT_TEST"):
+        return
+    try:
+        from utils import top5
+
+        app = os.path.join(_ROOT, "auto_uploader")
+        folders = [os.path.join(app, d) for d in
+                   ("clip_queue_files", "watch_folder", "uploaded", "censored")]
+        top5.maybe_make(os.path.join(app, "watch_folder"), folders)
+    except Exception:
+        pass
+
+
 def start(first_delay_s: float = 120) -> threading.Thread:
     def loop():
         time.sleep(first_delay_s)
         while True:
             run_once()
+            weekly_top5()
             time.sleep(EVERY_S)
 
     t = threading.Thread(target=loop, name="link-cards", daemon=True)

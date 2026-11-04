@@ -1276,6 +1276,13 @@ class ClipMaker:
         for spec in specs:
             output_path = os.path.join(self.output_dir, clip_filename(basename, spec))
             caption_path = None
+            # 11-04 owner: in GTA RP he is JOHNNY COX - the burned headline says so.
+            hook_title = spec.title
+            try:
+                from autoreel.persona import hook_name, moment_is_gta
+                hook_title = hook_name(spec.title, moment_is_gta(source_path, spec.start, spec.end))
+            except Exception:
+                pass
             if not self.captions and self.burn_hook and spec.title.strip():
                 # The hook rides in the caption file, which used to be
                 # built only when captions were on - so with captions off
@@ -1288,7 +1295,7 @@ class ClipMaker:
                     [], spec.start, spec.end, 0.0,
                     style=self.caption_style,
                     uppercase=self.caption_uppercase,
-                    hook=spec.title)
+                    hook=hook_title)
             if self.captions:
                 # Line the words up with the sound before burning them in.
                 #
@@ -1310,7 +1317,7 @@ class ClipMaker:
                     segments, spec.start, spec.end, shift,
                     style=self.caption_style,
                     uppercase=self.caption_uppercase,
-                    hook=spec.title if self.burn_hook else "")
+                    hook=hook_title if self.burn_hook else "")
             # Gameplay that follows the action: measure where the frame
             # is CHANGING and walk the crop toward it, slowly. Faces are
             # the wrong signal here - GTA is full of NPC faces and none

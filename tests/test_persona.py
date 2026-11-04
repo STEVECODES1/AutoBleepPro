@@ -47,3 +47,25 @@ def test_the_caption_prompt_gets_the_johnny_cox_note():
                                       ask=ask, gta=True)
     assert "JOHNNY COX" in asked["p"]
     assert out
+
+
+def test_the_burned_headline_says_johnny_cox_in_gta():
+    assert persona.hook_name("Stackswopo drops a passenger | Stackswopo", True) == \
+        "Johnny Cox drops a passenger"
+    assert persona.hook_name("Stackswopo reacts", False) == "Stackswopo reacts"
+
+
+def test_top5_picks_only_clips_that_already_passed_strict_platforms(tmp_path, monkeypatch):
+    import os, sys
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "auto_uploader"))
+    from utils import post_refs, top5
+
+    monkeypatch.setattr(post_refs, "PATH", str(tmp_path / "refs.jsonl"))
+    for i in range(6):
+        (tmp_path / f"s - clip {i:02d}.mp4").write_bytes(b"x")
+        post_refs.record(str(tmp_path / f"s - clip {i:02d}.mp4"),
+                         "youtube_shorts" if i < 5 else "x", f"https://y/{i}")
+    monkeypatch.setattr(top5, "_length", lambda p: 30.0)
+    chosen = top5.picks([str(tmp_path)])
+    assert len(chosen) == 5
+    assert all("clip 05" not in p for p, _t, _s in chosen)   # X-only clip left out

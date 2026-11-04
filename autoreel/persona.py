@@ -78,3 +78,21 @@ CAPTION_NOTE = (
     "Stackswopo, is playing his character JOHNNY COX - call him Johnny Cox in "
     "the caption. You may mention Stackswopo once, at most, for people who "
     "know him by that name.\n")
+
+
+def hook_name(text: str, gta: bool) -> str:
+    """The headline burned on a clip: "Johnny Cox" in GTA RP, no tail."""
+    text = " ".join(str(text or "").split())
+    if not gta or not text:
+        return text
+    text = re.sub(r"\s*\|\s*stackswopo\b.*$", "", text, flags=re.I)
+    return NAME.sub("Johnny Cox", text, count=1)
+
+
+def moment_is_gta(source: str, start: float, end: float, look=None) -> bool:
+    try:
+        if look is None:
+            from autoreel.content_kind import kind_for_video as look
+        return look(source, start=(start + end) / 2.0) == "gta"
+    except Exception:
+        return False
