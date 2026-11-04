@@ -125,6 +125,9 @@ height - not a figure in the distance. Their WHOLE head, hair and hat
 included, must be inside the frame with some space above it - never a
 frame where the top of the head is cut off by the edge. Best of all:
 looking toward the camera, like a movie poster or a GTA loading screen.
+The character must be THE STREAMER'S OWN character (Johnny Cox): the one
+person who keeps appearing across these frames - same face, hair and
+clothes - not a passer-by or somebody who shows up once.
 
 Give two boxes as [ymin, xmin, ymax, xmax] on a 0-1000 scale of the
 frame: "face" around that character's face (forehead to chin), and
