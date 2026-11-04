@@ -399,17 +399,27 @@ def _model_caption(platform: str, video_path: str, headline: str,
     # Without it the captions asked Gemini first however the channel was
     # set up, and sat through its 503 retries on every clip.
     clips = (config or {}).get("clips", {}) or {}
-    written = write_captions(spoken or "", said or spoken,
-                             sorted(PLATFORM_BRIEFS),
-                             provider=str(clips.get("llm_provider", "")
-                                          or ""),
-                             model=str(clips.get("llm_model", "") or ""),
-                             frames=seen)
+    kwargs = dict(provider=str(clips.get("llm_provider", "") or ""),
+                  model=str(clips.get("llm_model", "") or ""), frames=seen)
+    try:
+        written = write_captions(spoken or "", said or spoken, sorted(PLATFORM_BRIEFS),
+                                 gta=_is_gta(video_path, said or spoken), **kwargs)
+    except TypeError:       # an older/stand-in write_captions without gta
+        written = write_captions(spoken or "", said or spoken, sorted(PLATFORM_BRIEFS),
+                                 **kwargs)
     if not written:
         return ""
     have.update(written)
     remember(video_path, have)
     return have.get(platform, "")
+
+
+def _is_gta(video_path: str, said: str = "") -> bool:
+    try:
+        from autoreel.persona import is_gta_clip
+        return is_gta_clip(video_path, said)
+    except Exception:
+        return False
 
 
 # Where to send people, per destination.

@@ -224,9 +224,14 @@ def _ask_with_frames(name: str, key: str, model: str, prompt: str,
     return reply or ""
 
 
+def _gta_note() -> str:
+    from .persona import CAPTION_NOTE
+    return CAPTION_NOTE
+
+
 def write_captions(title: str, transcript: str, platforms,
                    provider: str = "", model: str = "",
-                   ask=None, frames=None) -> dict:
+                   ask=None, frames=None, gta: bool = False) -> dict:
     """{platform: caption} from a model, or {} if none could be had.
 
     frames: JPEG stills from the clip. Sent to a provider that can see
@@ -245,14 +250,14 @@ def write_captions(title: str, transcript: str, platforms,
         "transcript": (transcript or "").strip()[:MAX_TRANSCRIPT_CHARS]
                       or "(nothing audible)",
         "briefs": briefs,
-        "seen": FRAMES_NOTE if frames else "",
+        "seen": (FRAMES_NOTE if frames else "") + (_gta_note() if gta else ""),
     }
     plain_prompt = prompt if not frames else PROMPT % {
         "title": (title or "").strip() or "(none)",
         "transcript": (transcript or "").strip()[:MAX_TRANSCRIPT_CHARS]
                       or "(nothing audible)",
         "briefs": briefs,
-        "seen": "",
+        "seen": _gta_note() if gta else "",
     }
 
     if ask is not None:

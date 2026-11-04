@@ -2759,6 +2759,13 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
             spoken = _clip_line_anywhere(cfg, video_path)
         if spoken:
             stream_title = with_his_name(spoken)
+            # 11-04: GTA RP clips are about Johnny Cox (Stackswopo kept once).
+            try:
+                from autoreel.persona import is_gta_clip, name_in_title
+                if is_gta_clip(video_path, spoken):
+                    stream_title = name_in_title(stream_title, True)
+            except Exception:
+                pass
             print(f"[Clip] Title from the clip itself: {stream_title}")
         else:
             # Clip titles never come from file names (owner, 10-28).
