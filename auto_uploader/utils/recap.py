@@ -47,7 +47,7 @@ def settings(cfg) -> dict:
             # 11-03: the same words as the full stream (ad_safe: strong
             # profanity + slurs). "all" plus the second listen left a recap
             # 21 % silent - viewers: "most of the time is mute".
-            "censor": str(raw.get("censor", "ad_safe"))}
+            "censor": str(raw.get("censor", "watchable"))}
 
 
 def pick_moments(ranges: Sequence[Tuple[float, float, float]], duration: float,

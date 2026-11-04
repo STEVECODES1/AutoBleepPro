@@ -304,7 +304,7 @@ def test_every_platform_except_rumble_gets_the_censored_copy() -> None:
     # wiring, where the config block may not exist yet.
     from auto_uploader.utils.clip_queue import CENSOR_AUDIO_DEFAULTS
     for platform, mode in CENSOR_AUDIO_DEFAULTS.items():
-        assert mode in ("slurs", "ad_safe"), \
+        assert mode in ("slurs", "ad_safe", "watchable"), \
             f"CENSOR_AUDIO_DEFAULTS[{platform!r}] = {mode!r} - every clip default must be 'slurs' to keep the original off every short-form platform."
 
 

@@ -53,8 +53,8 @@ def test_ad_safe_is_the_default_for_streams_and_shorts():
     from utils.config import GeneralConfig
 
     assert GeneralConfig.__dataclass_fields__[
-        "censor_categories"].default == "ad_safe"
-    assert CENSOR_AUDIO_DEFAULTS["youtube_shorts"] == "ad_safe"
+        "censor_categories"].default == "watchable"  # owner 11-03
+    assert CENSOR_AUDIO_DEFAULTS["youtube_shorts"] == "watchable"
 
 
 def test_a_copy_made_under_old_settings_keeps_its_cache_key():

@@ -89,6 +89,20 @@ MILD_WORDS: tuple = ("hell", "damn", "damned", "dammit", "crap", "god",
                      "stupid", "idiot", "dumb", "shut", "dang", "darn",
                      "shoot", "heck", "gosh")
 
+# Moderate profanity the "watchable" scope also lets through (owner 11-03:
+# "slurs and anything bad muted, but shit or damn or less severe words
+# pass" - viewers said a full stream was mostly mutes). YouTube's ad
+# guidelines treat these as moderate, not strong. Still MUTED in that
+# scope: slurs, the f-word family, c-word, sexual terms.
+MODERATE_WORDS: tuple = (
+    "shit", "shits", "shitty", "shitting", "shitted", "bullshit", "shitin",
+    "ass", "asses", "asshole", "assholes", "dumbass", "badass", "jackass", "smartass",
+    "bitch", "bitches", "bitching", "bitchin", "bitchy",
+    "bastard", "bastards", "piss", "pissed", "pissing",
+    "dick", "dicks", "dickhead", "hoe", "hoes", "thot", "thots",
+    "goddamn", "goddamnit", "damnit",
+)
+
 # Ordinary words a slur pattern catches through an inflection: "spic"+"y"
 # is "spicy", "tard"+"y" is "tardy". A real stream muted "spicy" twice and
 # listed it under HIGH RISK hate speech.

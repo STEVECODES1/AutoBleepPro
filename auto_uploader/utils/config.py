@@ -153,7 +153,7 @@ class GeneralConfig:
     # word, slur and flagged phrase except the mild words YouTube's
     # advertiser-friendly guidelines allow. "slurs": slurs only. "all":
     # everything, mild words included. Rumble always gets the original.
-    censor_categories: str = "ad_safe"
+    censor_categories: str = "watchable"
     # Picks a real frame near the transcript's highest-energy moment
     # instead of leaving the thumbnail to whatever the platform's own
     # algorithm lands on - see utils/thumbnail.py. Only ever runs when a
@@ -480,7 +480,7 @@ def load_config(config_path: str = "config.json", env_path: str = ".env") -> App
         censored_folder=_resolve_path(project_root, gen.get("censored_folder", "./censored")),
         censor_padding_ms=int(gen.get("censor_padding_ms", 150)),
         censor_mute_whole_segment=bool(gen.get("censor_mute_whole_segment", False)),
-        censor_categories=str(gen.get("censor_categories", "ad_safe")),
+        censor_categories=str(gen.get("censor_categories", "watchable")),
         auto_thumbnail=bool(gen.get("auto_thumbnail", True)),
         thumbnail_logo=_resolve_path(project_root, gen.get("thumbnail_logo")
                                      or "") if gen.get("thumbnail_logo")

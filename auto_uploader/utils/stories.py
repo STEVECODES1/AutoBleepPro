@@ -483,8 +483,8 @@ def _make(cfg, source, stream_title, stream_date, intro="") -> List[str]:
                                         "second_listen": False},
                                  padding_ms=cfg.general.censor_padding_ms,
                                  mute_whole_segment=cfg.general.censor_mute_whole_segment,
-                                 only_categories=scope_categories("ad_safe"),
-                                 allow_words=scope_allow("ad_safe")
+                                 only_categories=scope_categories("watchable"),
+                                 allow_words=scope_allow("watchable")
                                  ).output_path
             if getattr(cfg.youtube, "music_guard", False):
                 from autoreel.music_guard import guard

@@ -741,9 +741,20 @@ def censor_video(
                 from utils.censor_verify import merge, second_listen
 
                 around = spans
+                # 11-03: the second listen re-transcribes MUTED audio and
+                # Whisper "hears" swears in the gaps - it roughly doubled the
+                # muting ("the video is 80 percent mutes"). It only listens for
+                # SLURS now (the strike risk); everyday swears get one pass.
+                listen_engine = engine
+                if speed.get("second_listen_slurs_only", True):
+                    listen_engine = ComplianceEngine(
+                        custom_words=custom_words, padding_ms=padding_ms,
+                        mute_whole_segment=mute_whole_segment,
+                        only_categories=("hate_speech",),
+                        allow_words=tuple(allow_words))
                 for _round in range(2):
                     extra, words = second_listen(
-                        clean_audio_path, spans, engine,
+                        clean_audio_path, spans, listen_engine,
                         _get_transcriber(model_name, device,
                                          reuse=bool(speed.get("reuse_model", True))),
                         total_ms / 1000, source_wav16=raw_audio_path,

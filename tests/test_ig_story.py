@@ -63,7 +63,7 @@ def test_font_falls_back_when_the_windows_fonts_are_missing(tmp_path):
     real = str(tmp_path / "real.ttf")
     open(real, "w").close()
     assert ig_story._font(missing, missing) == ""
-    assert ig_story._font(missing, real) == real.replace(":", "\\:")
+    assert ig_story._font(missing, real) == real.replace("\\", "/").replace(":", "\\:")
 
 
 @pytest.mark.skipif(not shutil.which("ffmpeg"), reason="ffmpeg not installed")

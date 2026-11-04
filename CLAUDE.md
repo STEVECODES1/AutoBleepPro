@@ -266,6 +266,16 @@ a 4.4 GB full stream takes ~3 h to YouTube.
   uploader/rumble_watch/rumble_live exit 75 and their keepalive restarts them; the recorder only re-enters
   its folder (never stops mid-stream). Owner asked to turn off USB power saving for that drive.
 
+## 11-03 night: 'watchable' censor scope (owner)
+
+- Owner: viewers say the full stream is mostly mutes; 'slurs and anything bad muted, shit/damn/less severe words
+  pass'. New scope `watchable` = ad_safe + compliance.MODERATE_WORDS heard (shit, ass, bitch, bastard, piss,
+  dick, hoe, goddamn...). Still muted: slurs, f-word family, c-word, pussy, sexual terms. Now the default for the
+  wopovod full stream (general.censor_categories in config.json), Shorts, recaps, story episodes. 11-02 stream:
+  ad_safe 1714 word mutes (5.7 %) -> watchable 1152 (3.9 %).
+- Second listen on the full stream now listens for SLURS only (`speed.second_listen_slurs_only`, default true):
+  it re-transcribed muted audio and added hallucinated swears, roughly doubling the muting.
+
 ## Held clips and learning
 
 - A clip held for slurs goes to Discord as a playable preview, numbered; "post held N" =

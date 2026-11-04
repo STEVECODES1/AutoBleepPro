@@ -216,7 +216,7 @@ def test_shorts_and_tiktok_bleep_slurs_not_every_swear():
 
     # YouTube is the exception, by the owner's call: heavily guarded,
     # every swear muted except the mild words - see test_youtube_ad_safe.
-    assert CENSOR_AUDIO_DEFAULTS["youtube_shorts"] == "ad_safe"
+    assert CENSOR_AUDIO_DEFAULTS["youtube_shorts"] == "watchable"  # owner 11-03
     assert CENSOR_AUDIO_DEFAULTS["zernio_tiktok"] == "slurs"
 
 

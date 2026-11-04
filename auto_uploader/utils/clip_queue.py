@@ -631,7 +631,7 @@ def _char_limit(platform: str) -> int:
 # channel, and that line is still held here.
 CENSOR_AUDIO_DEFAULTS = {
     # Shorts earn from the Shorts ad pool on the same guidelines.
-    "youtube_shorts": "ad_safe",
+    "youtube_shorts": "watchable",
     "instagram": "slurs",
     "facebook": "slurs",
     "zernio_twitter": "slurs",
@@ -656,16 +656,19 @@ CENSOR_AUDIO_DEFAULTS = {
 # word, slurs included, EXCEPT the mild words YouTube's advertiser-
 # friendly guidelines allow (compliance.MILD_WORDS). Anyone who wants it
 # uncensored has Rumble.
-CENSOR_SCOPES = {"all": (), "slurs": ("hate_speech",), "ad_safe": ()}
+CENSOR_SCOPES = {"all": (), "slurs": ("hate_speech",), "ad_safe": (),
+                 # 11-03: slurs + strong words muted, moderate ones heard.
+                 "watchable": ()}
 
 
 def scope_allow(mode: str) -> tuple:
     """Words a scope leaves alone even though a list flags them."""
-    if str(mode or "").strip().lower() != "ad_safe":
+    mode = str(mode or "").strip().lower()
+    if mode not in ("ad_safe", "watchable"):
         return ()
-    from autoreel.compliance import MILD_WORDS
+    from autoreel.compliance import MILD_WORDS, MODERATE_WORDS
 
-    return MILD_WORDS
+    return MILD_WORDS + (MODERATE_WORDS if mode == "watchable" else ())
 
 # The old private name, kept because tests and callers import it.
 _CENSOR_SCOPES = CENSOR_SCOPES

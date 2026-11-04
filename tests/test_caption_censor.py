@@ -315,9 +315,9 @@ def test_every_platform_bleeps_slurs_and_leaves_the_swearing():
 
     for platform, mode in CENSOR_AUDIO_DEFAULTS.items():
         if platform == "youtube_shorts":
-            # YouTube is the heavily guarded one, by the owner's call -
-            # see test_youtube_ad_safe.py.
-            assert mode == "ad_safe"
+            # YouTube: slurs + strong words muted, moderate ones heard
+            # (owner 11-03, "watchable") - see test_watchable_scope below.
+            assert mode == "watchable"
             continue
         assert mode == "slurs", f"{platform} is back to muting everything"
         engine = ComplianceEngine(only_categories=_CENSOR_SCOPES[mode])
@@ -334,11 +334,11 @@ def test_the_stream_and_its_clips_agree_on_what_counts():
     from utils.clip_queue import scope_categories
     from utils.config import GeneralConfig
 
-    # The stream's YouTube copy and its Shorts both use "ad_safe".
+    # The stream's YouTube copy and its Shorts both use "watchable".
     from utils.clip_queue import CENSOR_AUDIO_DEFAULTS
 
-    assert GeneralConfig.censor_categories == "ad_safe"
-    assert CENSOR_AUDIO_DEFAULTS["youtube_shorts"] == "ad_safe"
+    assert GeneralConfig.censor_categories == "watchable"
+    assert CENSOR_AUDIO_DEFAULTS["youtube_shorts"] == "watchable"
     assert scope_categories("slurs") == ("hate_speech",)
     # A typo must over-censor and be noticed, never quietly publish one.
     assert scope_categories("sluurs") == ()
@@ -513,3 +513,22 @@ def test_word_scope_leaves_the_sentence_intact():
     assert ComplianceEngine().mute_whole_segment is False, \
         "the engine default should be the word, not the line"
     assert ComplianceEngine(mute_whole_segment=True).mute_whole_segment
+
+
+def test_watchable_scope_mutes_slurs_and_strong_words_only():
+    """Owner 11-03: "slurs and anything bad muted, but shit or damn or less
+    severe words pass" - viewers called the full stream mostly mutes."""
+    import sys
+
+    sys.path.insert(0, os.path.join(_REPO, "auto_uploader"))
+    from autoreel.compliance import ComplianceEngine
+    from utils.clip_queue import scope_allow, scope_categories
+
+    engine = ComplianceEngine(only_categories=scope_categories("watchable"),
+                              allow_words=scope_allow("watchable"))
+    for muted in ("nigga", "niggas", "faggot", "retard", "fuck", "fucking",
+                  "motherfucker"):
+        assert engine._flag_reason(muted), f"{muted} must stay muted"
+    for heard in ("shit", "damn", "hell", "ass", "bitch", "bullshit", "crap",
+                  "pissed", "stupid"):
+        assert engine._flag_reason(heard) is None, f"{heard} should play"
