@@ -125,15 +125,26 @@ height - not a figure in the distance. Their WHOLE head, hair and hat
 included, must be inside the frame with some space above it - never a
 frame where the top of the head is cut off by the edge. Best of all:
 looking toward the camera, like a movie poster or a GTA loading screen.
-The character must be THE STREAMER'S OWN character (Johnny Cox): the one
-person who keeps appearing across these frames - same face, hair and
-clothes - not a passer-by or somebody who shows up once.
+The character must be THE STREAMER'S OWN character (Johnny Cox): the
+PLAYER character the gameplay camera follows - in third person the one
+the camera sits behind/over the shoulder of, near the middle-bottom of
+the frame, the same person in almost every frame (same face, hair and
+clothes). Frames where the player character turns and faces the camera
+are the best. Never an NPC, another player he is talking to, or a
+passer-by - even if they are bigger in that one frame.
+FIRST work out who the player is: look at ALL the frames and find the
+one outfit that sits in the middle of the screen, back to the camera,
+in most of them (e.g. "red jacket, white cap"). Write that in "player".
+THEN pick a frame where THAT person is close and their FACE shows -
+facing the camera, or side-on. Never the back of his head: a thumbnail
+with no face does not get clicked. Only if no frame shows his face at
+all, pick the best close face of anyone in the frames.
 
 Give two boxes as [ymin, xmin, ymax, xmax] on a 0-1000 scale of the
 frame: "face" around that character's face (forehead to chin), and
 "box" around their head and upper body (head to waist).
 
-Answer as JSON: {"frame": <number from 1 to %(count)d>, "face": [ymin, xmin, ymax, xmax], "box": [ymin, xmin, ymax, xmax]}
+Answer as JSON: {"player": "<his outfit>", "frame": <number from 1 to %(count)d>, "face": [ymin, xmin, ymax, xmax], "box": [ymin, xmin, ymax, xmax]}
 No other text.
 """
 
@@ -705,6 +716,21 @@ def _make_stream(source: str, duration: float, out_path: str, ask,
                                    stream=True)
         except Exception:
             picked, box = None, None
+        # GTA: the PLAYER's face, never the back of his head (11-04).
+        if (mode or "").strip().lower() != "monkey" and picked is not None \
+                and 0 <= picked < len(candidates):
+            try:
+                from autoreel.player_face import better_pick
+                # over every lit look: the content pick's pool can leave
+                # out the one frame where he turns to the camera
+                wide = lit or looks
+                start = next((i for i, l in enumerate(wide)
+                              if l is candidates[picked]), None)
+                if start is not None:
+                    new, box = better_pick([d for _, d, _ in wide], start, box)
+                    candidates, picked = wide, new
+            except Exception:
+                pass
         if picked is None or not 0 <= picked < len(candidates):
             # No model: the brightest, most colourful look, not a fixed
             # timestamp that may well be a dark room.
@@ -725,9 +751,21 @@ def _make_stream(source: str, duration: float, out_path: str, ask,
         # sharpening, a cinematic grade, the character cut out with a white
         # glow outline (autoreel/thumb_polish.py). Before the logo, so the
         # logo stays crisp on top.
+        # Where the picked character sits in the cropped picture, so only
+        # HE gets the outline (not the people standing next to him).
+        focus = None
+        try:
+            hint = box[1] if (isinstance(box, tuple) and len(box) == 2
+                              and box[0] == "face") else box
+            if hint:
+                wx, wy, ww, wh = window
+                focus = (((hint[0] + hint[2]) / 2 - wx) / ww,
+                         ((hint[1] + hint[3]) / 2 - wy) / wh)
+        except Exception:
+            focus = None
         try:
             from autoreel.thumb_polish import polish
-            polish(out_path)
+            polish(out_path, focus=focus)
         except Exception:
             pass
         if sticker_path and os.path.isfile(sticker_path):

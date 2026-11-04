@@ -124,3 +124,4 @@ demucs>=4.0
 panns_inference>=0.1
 rembg>=2.0
 onnxruntime>=1.17
+# ultralytics: pip install ultralytics --no-deps  (with deps it swaps the CUDA torch for a CPU one)
