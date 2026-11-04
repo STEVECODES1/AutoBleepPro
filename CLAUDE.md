@@ -297,6 +297,18 @@ a 4.4 GB full stream takes ~3 h to YouTube.
   (brain cut lists) attached as .txt. FB-group paste text no longer pinged to Discord (still in manual_posts.txt).
 - A Windows task for post_links was refused by the safety check - it runs inside the uploader instead.
 
+## 11-04: research-led changes
+
+- Research (vidIQ): top Stackswopo clip formats = ranked 'Top 5 / Ranking funniest moments' Shorts (Top5Daily 2.8M),
+  'FUNNIEST Moments' compilations, drama/beef; Woper Recap's hits are reaction-topic streams. Stackswopo's own
+  top thumbnails: ONE character close-up, sharp, white glow outline, bright GTA city, GTA V logo, no text.
+- `utils/top5.py`: weekly ranked Top 5 Short (#5..#1 badge top-right of the picture) from clips that already
+  posted to a strict platform this week (post_refs) -> watch_folder like any clip. Runs from link_cards.
+- `autoreel/thumb_polish.py` (rembg u2net_human_seg, PIL): HD resize+sharpen, cinematic grade, character cut out
+  with a white glow, softened/vignetted background. Applied to every stream thumbnail before the logo.
+- `autoreel/persona.py`: GTA RP = Johnny Cox in clip titles (Stackswopo kept once: '| Stackswopo GTA RP'),
+  AI captions and the burned headline. GTA = content_kind on the clip's frames, else stream/said words.
+
 ## Held clips and learning
 
 - A clip held for slurs goes to Discord as a playable preview, numbered; "post held N" =

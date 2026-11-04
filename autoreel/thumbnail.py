@@ -715,6 +715,15 @@ def _make_stream(source: str, duration: float, out_path: str, ask,
         vf = stream_filters(window, stats[0] if stats else None)
         if not _grab(source, at, out_path, vf=vf):
             return ""
+        # 11-04: the finishing the top Stackswopo thumbnails have - HD
+        # sharpening, a cinematic grade, the character cut out with a white
+        # glow outline (autoreel/thumb_polish.py). Before the logo, so the
+        # logo stays crisp on top.
+        try:
+            from autoreel.thumb_polish import polish
+            polish(out_path)
+        except Exception:
+            pass
         if sticker_path and os.path.isfile(sticker_path):
             _stamp_sticker(out_path, sticker_path)
         # The logo is the GAME's: it goes only where the GTA RP badge would.
