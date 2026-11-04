@@ -258,6 +258,14 @@ a 4.4 GB full stream takes ~3 h to YouTube.
 - 07:35 the 9222 Chrome stopped answering CDP (connect hung) - restarted it; keeper brought it back signed in.
 - Tests: test_brain read the REAL Crashpad folder (fake 1970 clock) - isolated; Shorts cap test reads config.
 
+## 11-03 evening: USB drive reconnect
+
+- D: is a Seagate Portable USB drive. 15:04 it dropped and came back as a new volume (HarddiskVolume5 -> 6);
+  every running process kept its folder on the old volume -> WinError 433 on every relative path, all clip
+  platforms failed 5 h and tripped their breakers (cleared with --reset-failures). `utils/drive_guard.py`:
+  uploader/rumble_watch/rumble_live exit 75 and their keepalive restarts them; the recorder only re-enters
+  its folder (never stops mid-stream). Owner asked to turn off USB power saving for that drive.
+
 ## Held clips and learning
 
 - A clip held for slurs goes to Discord as a playable preview, numbered; "post held N" =

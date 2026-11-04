@@ -475,6 +475,12 @@ def _record(item, slug):
     return True
 
 def main():
+    try:  # USB drive reconnect -> restart on the live volume (11-03)
+        sys.path.insert(0, UPLOADER)
+        from utils import drive_guard
+        drive_guard.start("exit")
+    except Exception:
+        pass
     os.makedirs(os.path.dirname(LOG), exist_ok=True)
     log(f"watching Rumble: {', '.join(CHANNELS)}")
     while True:

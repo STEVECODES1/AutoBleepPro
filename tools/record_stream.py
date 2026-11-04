@@ -2849,6 +2849,13 @@ def main(argv: Optional[list] = None) -> int:
     import threading
 
     here = os.path.dirname(os.path.abspath(__file__))
+    # USB drive reconnect (11-03): re-enter the folder, never stop recording.
+    try:
+        sys.path.insert(0, os.path.join(os.path.dirname(here), "auto_uploader"))
+        from utils import drive_guard
+        drive_guard.start("chdir")
+    except Exception:
+        pass
     root = os.path.dirname(here)
 
     # The recorder's window is the other one left open all night, and it

@@ -477,6 +477,13 @@ def relay(video_id, cfg):
 
 def main():
     global ROOM
+    try:  # USB drive reconnect -> restart on the live volume (11-03)
+        sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..",
+                                        "auto_uploader"))
+        from utils import drive_guard
+        drive_guard.start("exit")
+    except Exception:
+        pass
     cfg = env()
     # OFF unless RUMBLE_LIVE_RELAY=1 in .env (10-30). The PC's line cannot
     # carry the relay next to OBS (10-29: laggy, owner ended it - "just

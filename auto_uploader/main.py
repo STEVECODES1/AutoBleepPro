@@ -5718,6 +5718,13 @@ def main(argv=None) -> int:
         # console (Instagram's 2FA): nobody is sitting at a watcher, and
         # a question it waits on stops every upload behind it.
         os.environ["AUTOBLEEP_UNATTENDED"] = "1"
+        # 11-03: the USB drive dropped and came back; this process kept the
+        # old volume and every clip failed for 5 h. Restart if that happens.
+        try:
+            from utils import drive_guard
+            drive_guard.start("exit")
+        except Exception:
+            pass
     if args.watch is not None and args.watch:
         watch_folder = os.path.abspath(os.path.expanduser(args.watch))
         if not os.path.isdir(watch_folder):
