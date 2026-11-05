@@ -702,7 +702,7 @@ def _hold_if_slurs(platform: str, video_path: str, config: dict) -> None:
             return
     except Exception:
         pass
-    held = _slur_heavy(video_path, config)
+    held = _slur_heavy(video_path, config, platform)
     if not held:
         return
     from publishers.errors import HeldBack
@@ -1239,6 +1239,10 @@ def _already_posted(queue, platform: str, video_path: str):
 # is exactly that clip. At this many, it does not go to the short-form
 # platforms at all. Set clips.max_slurs_for_social to 0 to turn it off.
 DEFAULT_MAX_SLURS_FOR_SOCIAL = 3
+# X takes a clip however often the everyday word comes up (muted there);
+# a severe slur still holds it everywhere.
+FREE_SPEECH_PLATFORMS = frozenset({"x", "buffer_x", "zernio_twitter",
+                                   "twitter"})
 
 # Held at ONE, whatever the count (see _slur_heavy).
 SEVERE_SLURS = frozenset({
@@ -1321,10 +1325,12 @@ def clip_transcript(video_path: str, config: dict) -> str:
     return " ".join(" ".join(parts).split())
 
 
-def _slur_heavy(video_path: str, config: dict) -> str:
+def _slur_heavy(video_path: str, config: dict, platform: str = "") -> str:
     """Why this clip is held back from social platforms, or "".
 
     No transcript found means no judgement - the clip is not held.
+    X (owner 11-04: "X is free speech"): the everyday word, muted, is no
+    reason to hold - only a severe slur is.
     """
     clips = (config or {}).get("clips", {}) or {}
     limit = clips.get("max_slurs_for_social", DEFAULT_MAX_SLURS_FOR_SOCIAL)
@@ -1349,7 +1355,7 @@ def _slur_heavy(video_path: str, config: dict) -> str:
     severe = sorted({_plain_word(h.word) for h in hits} & SEVERE_SLURS)
     if severe:
         return "a severe slur (" + ", ".join(w[0] + "*" * (len(w) - 1) for w in severe) + ")"
-    if len(hits) < limit:
+    if len(hits) < limit or platform in FREE_SPEECH_PLATFORMS:
         return ""
     seconds = max((float(seg.get("end", 0) or 0) for seg in segments),
                   default=0.0)
@@ -1426,12 +1432,20 @@ def offer(posting: dict, config: dict, video_path: str,
 
     held = _slur_heavy(video_path, config)
     if held:
+        # X still takes it when the only reason is the everyday word.
+        free = [p for p in platforms if p in FREE_SPEECH_PLATFORMS
+                and not _slur_heavy(video_path, config, p)]
         for platform in platforms:
-            outcome[platform] = f"skipped: held - {held}"
-        print(f"[Clips] Held back from every social platform: {held}. "
-              f"Rumble still gets it. Post it by hand if you judge it fine.")
+            if platform not in free:
+                outcome[platform] = f"skipped: held - {held}"
         _journal(config, "skip", "social", video_path, f"held: {held}")
-        return outcome
+        if not free:
+            print(f"[Clips] Held back from every social platform: {held}. "
+                  f"Rumble still gets it. Post it by hand if you judge it fine.")
+            return outcome
+        print(f"[Clips] Held back from the strict platforms: {held}. "
+              f"X still gets it (muted).")
+        platforms = free
 
     guard = PublishGuard(posting, posting.get("state_path"))
     queue = _queue(posting)

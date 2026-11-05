@@ -243,8 +243,14 @@ class JobQueue:
         for job in self._jobs.values():
             if owner_ok:
                 break          # the owner said post it: a fresh job
+            why = str(job.last_error or "")
             if (job.platform == platform and clip_key(job.clip_path) == key
-                    and str(job.last_error or "").startswith("held")):
+                    and why.startswith("held")):
+                # 11-04: X no longer holds for the everyday word - those
+                # old verdicts are void, a fresh job may post it.
+                if (platform in ("x", "buffer_x", "zernio_twitter", "twitter")
+                        and "slurs" in why and "severe" not in why):
+                    continue
                 return job
 
         job = Job(
