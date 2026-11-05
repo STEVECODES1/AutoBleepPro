@@ -2372,6 +2372,12 @@ class Recorder:
 
     def record_one_stream(self) -> Optional[str]:
         """Wait for the channel to go live, record it, deliver it."""
+        # A NEW stream: forget the last one's title and id. Kept, they
+        # skipped the title lookup ("if not self.title") and the 11-04
+        # stream was delivered under 11-03's "yoooooooooo 2026-11-03 22:18".
+        # (Reconnects inside one stream happen below and keep them.)
+        self.title = ""
+        self.video_id = ""
         if not self.primary:
             # A second channel never runs a second yt-dlp beside the main
             # one: no waiting process of its own, and nothing at all while
