@@ -395,6 +395,34 @@ def _report_risk(violations, mute_whole_segment: bool = False) -> None:
                   "YouTube judges context. Review these timestamps before publishing.")
 
 
+MUTES_LOG = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(
+    __file__))), "logs", "mutes.jsonl")
+_REAL_MUTES_LOG = MUTES_LOG
+
+
+def _remember_mutes(source_path, violations, only_categories=()) -> None:
+    """One line per censor pass: which words were muted where - read by
+    the daily report (utils/brain) so the owner sees exactly what was
+    taken out of every stream and clip. Never fails the pass."""
+    if os.environ.get("PYTEST_CURRENT_TEST") and MUTES_LOG == _REAL_MUTES_LOG:
+        return    # tests never write into the real report
+    try:
+        import json as _json
+        import time as _time
+
+        row = {"at": _time.time(),
+               "file": os.path.basename(str(source_path)),
+               "scope": ",".join(only_categories or ()) or "all",
+               "words": [{"t": round(float(v.start), 1),
+                          "word": str(v.word).strip(" ,.!?\"'"),
+                          "cat": str(v.category)} for v in violations]}
+        os.makedirs(os.path.dirname(MUTES_LOG), exist_ok=True)
+        with open(MUTES_LOG, "a", encoding="utf-8") as f:
+            f.write(_json.dumps(row) + "\n")
+    except Exception:
+        pass
+
+
 def _settings_fingerprint(padding_ms: int, mute_whole_segment: bool,
                           only_categories: tuple, custom_words: tuple,
                           allow_words: tuple = ()) -> str:
@@ -707,6 +735,7 @@ def censor_video(
             _extract_audio(source_path, raw_audio_path)   # cache hit skipped it
             timer.mark("audio extract")
         _report_risk(violations, mute_whole_segment=mute_whole_segment)
+        _remember_mutes(source_path, violations, only_categories)
 
         # The WAV above is 16 kHz mono because that is what Whisper wants.
         # It used to ALSO be the audio that got muted and put on the

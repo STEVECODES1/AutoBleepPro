@@ -125,7 +125,8 @@ def alert_channels() -> list:
 
 
 def send_alert(title: str, message: str, urgent: bool = True,
-               post: Optional[Callable] = None) -> list:
+               post: Optional[Callable] = None, details: str = "",
+               filename: str = "alert.txt") -> list:
     """Send to every configured channel. Returns the ones that took it."""
     post = post or _post
     reached = []
@@ -138,8 +139,8 @@ def send_alert(title: str, message: str, urgent: bool = True,
         from utils.discord_safe import send as safe_send
 
         if safe_send(url, title, message, username="AutoBleep brain",
-                     filename="alert.txt", mention_user=user if urgent else "",
-                     post=post):
+                     filename=filename, mention_user=user if urgent else "",
+                     post=post, details=details):
             reached.append("discord")
 
     topic = _env("NTFY_TOPIC")
@@ -699,7 +700,12 @@ class Brain:
                 where = " · ".join(f"{name} {e[key]}" for key, name in
                                    (("youtube", "YouTube"), ("rumble", "Rumble"))
                                    if str(e.get(key, "")).startswith("https://"))
-                lines.append(f"• {e.get('title', '?')} ({e.get('date', '')}) - {where or 'no links yet'}")
+                try:
+                    from utils.templating import strip_trailing_stamp
+                    name = strip_trailing_stamp(str(e.get("title", "?"))).strip() or "?"
+                except Exception:
+                    name = e.get("title", "?")
+                lines.append(f"• {name} ({e.get('date', '')}) - {where or 'no links yet'}")
         else:
             lines.append("No full stream went up in the last 24 h.")
         data = _read_json(os.path.join(self.project_root, "clip_jobs.json"), {})
@@ -749,8 +755,35 @@ class Brain:
             return False
         self.state["digest_day"] = today
         self._save()
-        self._alert("Daily report", self.digest_text(now), urgent=False)
+        text = self.digest_text(now)
+        details = self.digest_details(now, text)
+        try:
+            self._send("Daily report", text, urgent=False, details=details,
+                       filename=f"daily-report-{today}.txt")
+        except TypeError:          # a sender without attachments
+            self._alert("Daily report", text, urgent=False)
+        except Exception as exc:
+            self._say(f"[Brain] WARNING: daily report not sent: {exc}")
         return True
+
+    def digest_details(self, now: float, text: str = "") -> str:
+        """The attachment: muted words, every post with links, holds."""
+        try:
+            from utils.daily_details import build
+
+            lines = (text or self.digest_text(now)).split("\n")
+            streams, rest, seen_clips = [], [], False
+            for line in lines:
+                if line.startswith("**Clips posted"):
+                    seen_clips = True
+                (rest if seen_clips else streams).append(line)
+            disk = next((l for l in rest if l.startswith("Disk:")), "")
+            needs = next((l.replace("**", "") for l in rest
+                          if l.startswith("**Needs you") or l.startswith("Nothing needs")), "")
+            return build(now, self.logs_folder, self.project_root,
+                         [l for l in streams if l != "**Full streams**"], disk, needs)
+        except Exception as exc:
+            return f"(details unavailable: {exc})"
 
     def describe(self) -> str:
         channels = alert_channels()

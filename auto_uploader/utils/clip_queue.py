@@ -1055,8 +1055,21 @@ def publish(platform: str, video_path: str, caption: str,
     if hasattr(publisher, "post_clip"):
         from utils.keep_awake import KeepAwake
 
-        upload, temporary = (video_path, "") if dry_run else \
-            _censored_clip(platform, video_path, config)
+        source = video_path
+        if platform in FREE_SPEECH_PLATFORMS:
+            # X gets the 16:9 cut - the whole game in view - when one was
+            # made (autoreel/wide_clip); the vertical clip otherwise.
+            try:
+                from autoreel.wide_clip import find as _wide
+
+                wide = _wide(video_path)
+                if wide:
+                    source = wide
+                    print(f"[Clips] {platform}: posting the 16:9 X cut.")
+            except Exception:
+                source = video_path
+        upload, temporary = (source, "") if dry_run else \
+            _censored_clip(platform, source, config)
         if not upload:
             return False
         try:

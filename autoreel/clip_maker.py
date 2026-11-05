@@ -1424,6 +1424,15 @@ class ClipMaker:
                     jump_cut(output_path, segments, spec,
                              min_silence_s=self.jump_cut_silence_s,
                              min_seconds=self.min_seconds)
+                # The X cut: 16:9, whole game in view (autoreel/wide_clip).
+                if bool((self.config or {}).get("clips", {})
+                        .get("x_wide", True)):
+                    from autoreel import wide_clip
+
+                    wide_clip.render(source_path, spec, output_path,
+                                     segments, jump_cuts=self.jump_cuts,
+                                     silence_s=self.jump_cut_silence_s,
+                                     min_seconds=self.min_seconds)
                 if self.pick_thumbnails:
                     # After the clip exists, from the CLIP - not from the
                     # source at the same timestamp. The clip is what gets

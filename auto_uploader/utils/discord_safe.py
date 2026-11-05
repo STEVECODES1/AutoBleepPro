@@ -55,12 +55,19 @@ def clean(text: str) -> str:
 
 
 def send(url: str, title: str, body: str = "", username: str = "AutoBleep",
-         filename: str = "details.txt", mention_user: str = "", post=None) -> bool:
+         filename: str = "details.txt", mention_user: str = "", post=None,
+         details: str = "") -> bool:
+    """`details`: a separate, fuller text for the attachment (the daily
+    report's muted-word lists) - the message stays the short summary."""
     if not url:
         return False
     title, body = clean(title or ""), clean(body or "")
-    short = body if len(body) <= SHORT else body[:SHORT].rsplit("\n", 1)[0]
-    attach = body if len(body) > SHORT else ""
+    if details:
+        short = body if len(body) <= 1500 else body[:1500].rsplit("\n", 1)[0]
+        attach = clean(details).replace("**", "")
+    else:
+        short = body if len(body) <= SHORT else body[:SHORT].rsplit("\n", 1)[0]
+        attach = body if len(body) > SHORT else ""
     mention = f"<@{mention_user}> " if mention_user and mention_user.isdigit() else ""
     content = f"{mention}**{title}**" + (f"\n{short}" if short else "")
     if attach:
@@ -80,7 +87,7 @@ def send(url: str, title: str, body: str = "", username: str = "AutoBleep",
                 f"filename=\"{filename}\"\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n",
             ]
             data = (parts[0].encode("utf-8") + parts[1].encode("utf-8")
-                    + (title + "\n\n" + body).encode("utf-8")
+                    + (attach if details else (title + "\n\n" + body)).encode("utf-8")
                     + f"\r\n--{boundary}--\r\n".encode("utf-8"))
             headers = {"Content-Type": f"multipart/form-data; boundary={boundary}",
                        "User-Agent": "AutoBleep"}

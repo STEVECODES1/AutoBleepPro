@@ -848,6 +848,11 @@ def cut_clips_from_stream(cfg, video_path: str, is_clip: bool,
     # back with the generic fallback instead.
     title = title or get_stream_title(source, "", cfg, allow_prompt=False)
     try:
+        from utils.game_mode import wait_if_gaming
+        wait_if_gaming("cutting clips")
+    except Exception:
+        pass
+    try:
         run = make_clips(cfg, source, title,
                          count=clips_cfg.get("count") or None,
                          notify=notify,
@@ -3152,6 +3157,14 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
             _what = ("slurs" if _only else
                      "every swear word, slur and flagged phrase (YouTube-safe)"
                      if _allow else "profanity")
+            # 11-05: a full stream's censor is the heaviest GPU job there
+            # is - it waits while the owner is playing.
+            try:
+                if not is_clip:
+                    from utils.game_mode import wait_if_gaming
+                    wait_if_gaming("censoring the full stream")
+            except Exception:
+                pass
             print(f"[Censor] Transcribing + scanning for {_what} "
                   f"(model={cfg.general.censor_model}, device={_where})...")
             censor_result = censor_video(
@@ -3550,6 +3563,27 @@ def process_file(video_path: str, cfg, cli_title: str, dup_checker: DuplicateChe
             if kid_private[0] and not is_clip:
                 yt_privacy = "private"
                 print("[YouTube] Kid talk could not be cut - uploading PRIVATE.")
+            if (not is_clip and str(yt_privacy).lower() == "private"
+                    and str(cfg.youtube.privacy).lower() != "private"):
+                # 11-05: a stream went up private and nobody was told why.
+                _why_private = ("a gambling site on screen" if not kid_private[0]
+                                else "risky talk that could not be cut")
+                try:
+                    from utils.brain import send_alert
+                    send_alert("Full stream uploaded PRIVATE",
+                               f"{os.path.basename(video_path)} went to WOPOVOD as "
+                               f"PRIVATE - {_why_private}. Check it in Studio and make it "
+                               f"public if it is fine. Rumble has the whole stream.",
+                               urgent=True)
+                except Exception:
+                    pass
+                try:
+                    with open(os.path.join(cfg.general.logs_folder, "private_uploads.jsonl"),
+                              "a", encoding="utf-8") as _f:
+                        _f.write(json.dumps({"at": time.time(), "file": os.path.basename(video_path),
+                                             "why": _why_private}) + "\n")
+                except Exception:
+                    pass
             yt = YouTubeUploader(cfg.youtube.client_secrets_path, cfg.youtube.token_path)
 
             def yt_on_retry(attempt, delay, exc):
@@ -5737,6 +5771,12 @@ def main(argv=None) -> int:
         try:
             from utils import link_cards
             link_cards.start()
+        except Exception:
+            pass
+        # 11-05: never lag the owner's game - lowest priority while one runs.
+        try:
+            from utils import game_mode
+            game_mode.start(cfg)
         except Exception:
             pass
     if args.watch is not None and args.watch:
