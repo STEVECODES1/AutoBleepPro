@@ -229,6 +229,23 @@ class JobQueue:
         existing = self.find(platform, clip_path)
         if existing and not existing.is_terminal:
             return existing
+        # A clip HELD BACK from this platform (slurs, children, gambling,
+        # too much muted) stays held: re-offering it made a fresh job each
+        # pass - 18 jobs, 18 re-transcribes, 18 "held back" lines in a day
+        # for one clip (11-04). The verdict on the same clip does not
+        # change.
+        try:
+            from utils.held_review import approved as _owner_ok
+            owner_ok = _owner_ok(clip_path)
+        except Exception:
+            owner_ok = False
+        key = clip_key(clip_path)
+        for job in self._jobs.values():
+            if owner_ok:
+                break          # the owner said post it: a fresh job
+            if (job.platform == platform and clip_key(job.clip_path) == key
+                    and str(job.last_error or "").startswith("held")):
+                return job
 
         job = Job(
             id=uuid.uuid4().hex[:12],
