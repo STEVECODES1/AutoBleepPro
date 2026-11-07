@@ -211,12 +211,41 @@ def pick(segments, duration: float, n: int, lo: float, hi: float, askers=None,
                 reply = ask(prompt)
             except Exception:
                 reply = ""
-            found = parse(reply, duration, lo, hi)
+            found = [f for f in parse(reply, duration, lo, hi)
+                     if _true_story(f, segments)]
             if found:
                 for f in found:
                     f["model"] = label
                 return found[:n]
     return []
+
+
+_EXAMPLE_TITLES = {
+    "stackswopo responds back after someone tried to expose him",
+    "stackswopo plays scam with your friends!", "stackswopo plays scam with your friends",
+    "stackswopo reacts to reggie's last twitch stream",
+}
+
+
+def _true_story(story: dict, segments) -> bool:
+    """Not one of the prompt's examples, and its words are said inside the
+    stretch it names (11-07: invented stream titles - utils/title_hook)."""
+    title = str(story.get("title", ""))
+    if title.lower().strip() in _EXAMPLE_TITLES or "reggie" in title.lower():
+        print(f"[Stories] dropped a copied example title: {title}")
+        return False
+    try:
+        from utils.title_hook import grounded
+
+        said = " ".join(str(s.get("text", "")) for s in segments or []
+                        if story["start"] - 30 <= float(s.get("start", 0)) <= story["end"] + 30)
+        # a story title retells (BULLIED, Trolls): half its words said is enough
+        if said and not grounded(title.split("(")[0], said, need=0.5):
+            print(f"[Stories] dropped a title not said in that stretch: {title}")
+            return False
+    except Exception:
+        pass
+    return True
 
 
 def thumb_text(words: str, title: str) -> str:
@@ -511,7 +540,7 @@ def _make(cfg, source, stream_title, stream_date, intro="") -> List[str]:
                 f"▶ Full stream: {full}" if full else "",
                 f"▶ Uncut on Rumble: {uncut}" if uncut else "") if x)
             url = _upload(s["token_path"], up, title, desc, s["privacy"], thumb, comment)
-            print(f"[Stories] Uploaded \"{title}\" to STACKSWOPOVODS: {url}")
+            print(f"[Stories] Uploaded \"{title}\" ({os.path.basename(s['token_path'])}): {url}")
             urls.append(url)
     finally:
         shutil.rmtree(work, ignore_errors=True)

@@ -298,15 +298,28 @@ def run(cfg=None, force: bool = False) -> str:
     except Exception as exc:
         print(f"[BinScripts] censor failed ({exc}) - not uploading uncensored.")
         return ""
+    # The channel intro in front, like every full stream (owner 11-07).
+    intro_s = 0.0
+    try:
+        from utils.recap import _with_intro
+        with_intro, intro_s = _with_intro(cfg, final)
+        if intro_s:
+            if made and made != with_intro and os.path.isfile(made):
+                os.remove(made)
+            final = made = with_intro
+            marks = [(0.0, "Intro")] + [(s + intro_s, l) for s, l in marks]
+    except Exception as exc:
+        print(f"[BinScripts] intro skipped ({exc})")
     led = _ledger()
     n = int(led.get("n", 0) or 0) + 1
     gta = sum(1 for c in chosen if "johnny cox" in (c[1] or "").lower()) * 2 >= len(chosen)
-    k = len(marks)
+    k = len(chosen) if intro_s else len(marks)
+    k = min(k, len([m for m in marks if m[1] != "Intro"]))
     title = (f"Top {k} Johnny Cox Moments This Week #{n} | Stackswopo GTA RP" if gta
              else f"Top {k} Stackswopo Moments This Week #{n}")
     chapters = "\n".join(f"{_stamp(0 if i == 0 else s)} {label}"
                          for i, (s, label) in enumerate(marks))
-    desc = (f"The {len(marks)} best Stackswopo moments of the week, ranked - #1 is last.\n\n"
+    desc = (f"The {k} best Stackswopo moments of the week, ranked - #1 is last.\n\n"
             f"Every full stream: {WOPOVOD}\nFull streams uncut: {RUMBLE}\n\n{chapters}\n\n"
             "Fan channel - not Stackswopo's own channel. His channel: "
             "https://www.youtube.com/@stackswopo_\nGTA RP is role-play: characters, not real events.\n\n"
@@ -318,7 +331,12 @@ def run(cfg=None, force: bool = False) -> str:
                       "top 10", "Stackswopo best moments", "GTA 5 RP", "funny moments"],
                      "public", WOPOVOD,
                      comment="Every full stream: " + WOPOVOD + "\nUncut on Rumble: " + RUMBLE)
-        _thumbnail(cfg, final, url)
+        _remember(chosen, n, url, title)
+        # its own process: the thumbnail models (torch + onnx on the GPU)
+        # crashed this one natively on 11-07 right after the upload.
+        subprocess.run([sys.executable, "-X", "utf8", "-m", "utils.binscripts_weekly",
+                        "--thumb", _thumb_source(chosen) or final, url, str(k)],
+                       cwd=_APP, timeout=1800)
     except Exception as exc:
         print(f"[BinScripts] upload failed: {exc}")
         return ""
@@ -329,13 +347,7 @@ def run(cfg=None, force: bool = False) -> str:
                     os.remove(p)
                 except OSError:
                     pass
-    led.update(last=time.time(), n=n, used=sorted(set(led.get("used") or []) |
-                                                   {c[3] for c in chosen}))
-    led.setdefault("uploads", []).append({"url": url, "title": title, "at": time.time()})
-    os.makedirs(os.path.dirname(LEDGER), exist_ok=True)
-    with open(LEDGER, "w", encoding="utf-8") as f:
-        json.dump(led, f, indent=1)
-    print(f"[BinScripts] uploaded: {title} -> {url}")
+    print(f"[BinScripts] uploaded: {title} -> {url}", flush=True)
     try:
         from utils.brain import send_alert
         send_alert("BinScripts weekly is up", f"{title}\n{url}", urgent=False)
@@ -344,7 +356,53 @@ def run(cfg=None, force: bool = False) -> str:
     return url
 
 
-def _thumbnail(cfg, video: str, url: str) -> None:
+def _thumb_source(chosen) -> str:
+    """The thumbnail comes from the #1 moment itself (its 16:9 cut): one
+    scene, one cast - the whole countdown gave the picker 15 scenes and it
+    outlined a stranger (11-07)."""
+    try:
+        from autoreel.wide_clip import find as wide
+        for c in chosen:                      # best first, with a 16:9 cut
+            if wide(c[0]):
+                return wide(c[0])
+        return chosen[0][0]
+    except Exception:
+        return ""
+
+
+def _remember(chosen, n: int, url: str, title: str) -> None:
+    """Written the moment the upload is back - before anything that could
+    crash - so a re-run never uploads the same week twice."""
+    led = _ledger()
+    led.update(last=time.time(), n=n,
+               used=sorted(set(led.get("used") or []) | {c[3] for c in chosen}))
+    led.setdefault("uploads", []).append({"url": url, "title": title, "at": time.time()})
+    os.makedirs(os.path.dirname(LEDGER), exist_ok=True)
+    with open(LEDGER, "w", encoding="utf-8") as f:
+        json.dump(led, f, indent=1)
+
+
+def _countdown_text(path: str, count: int) -> None:
+    """'TOP 15' / 'THIS WEEK' on the right third - the ranked-countdown look."""
+    try:
+        from PIL import Image, ImageDraw, ImageFont
+
+        img = Image.open(path).convert("RGB")
+        w, h = img.size
+        d = ImageDraw.Draw(img)
+        big = ImageFont.truetype("C:/Windows/Fonts/impact.ttf", int(h * 0.30))
+        small = ImageFont.truetype("C:/Windows/Fonts/impact.ttf", int(h * 0.13))
+        for text, font, y, fill in ((f"TOP {count}", big, 0.50, (255, 212, 0)),
+                                    ("THIS WEEK", small, 0.80, (255, 255, 255))):
+            tw = d.textlength(text, font=font)
+            d.text((w - tw - w * 0.04, h * y - font.size / 2), text, font=font, fill=fill,
+                   stroke_width=max(4, int(font.size * 0.07)), stroke_fill=(0, 0, 0))
+        img.save(path, quality=95)
+    except Exception as exc:
+        print(f"[BinScripts] no countdown text ({exc}).")
+
+
+def _thumbnail(cfg, video: str, url: str, count: int = 15) -> None:
     """Our thumbnail (Johnny Cox close-up, outline, GTA logo) on the upload."""
     try:
         import re
@@ -363,6 +421,7 @@ def _thumbnail(cfg, video: str, url: str) -> None:
                       text="", badge="GTA RP", mode="")
         if not made:
             return
+        _countdown_text(made, count)
         from googleapiclient.http import MediaFileUpload
         svc = YouTubeUploader(os.path.join(_APP, "client_secrets.json"), TOKEN).get_service()
         svc.thumbnails().set(videoId=vid.group(1),
@@ -394,6 +453,11 @@ def start_if_due() -> None:
 if __name__ == "__main__":
     sys.path.insert(0, _APP)
     sys.path.insert(0, os.path.dirname(_APP))
+    if "--thumb" in sys.argv:
+        i = sys.argv.index("--thumb")
+        from utils.config import load_config
+        _thumbnail(load_config(os.path.join(_APP, "config.json")), sys.argv[i + 1], sys.argv[i + 2], int(sys.argv[i + 3]) if len(sys.argv) > i + 3 else 15)
+        sys.exit(0)
     try:
         run(force="--force" in sys.argv)
     finally:

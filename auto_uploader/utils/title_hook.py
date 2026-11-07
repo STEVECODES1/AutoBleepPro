@@ -113,7 +113,7 @@ _FILLER = {"stackswopo", "johnny", "cox", "gets", "gta", "with", "from", "after"
             "times", "time", "just", "really", "gone", "crazy"}
 
 
-def grounded(hook: str, transcript: str) -> bool:
+def grounded(hook: str, transcript: str, need: float = 2 / 3) -> bool:
     """True when the hook's own words are really in the stream (11-07:
     "Gets Shot Nine Times" and "Gets Robbed" were invented). At least two
     thirds of its content words must be said somewhere."""
@@ -124,7 +124,7 @@ def grounded(hook: str, transcript: str) -> bool:
         return False
     stems = lambda w: {w, w.rstrip("s"), w.rstrip("ed"), w.rstrip("ing"), w + "s"}
     found = sum(1 for w in words if stems(w) & said)
-    return found * 3 >= len(words) * 2
+    return found >= len(words) * need - 1e-9
 
 
 def junk_name(rest: str) -> str:
