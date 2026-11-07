@@ -357,12 +357,40 @@ def run(cfg=None, force: bool = False) -> str:
 
 
 def _thumb_source(chosen) -> str:
-    """The thumbnail comes from the #1 moment itself (its 16:9 cut): one
-    scene, one cast - the whole countdown gave the picker 15 scenes and it
-    outlined a stranger (11-07)."""
+    """The clip whose frames show the PLAYER's face biggest (pose model,
+    autoreel/player_face) - 11-07: the #1 clip was a car from behind."""
     try:
         from autoreel.wide_clip import find as wide
-        for c in chosen:                      # best first, with a 16:9 cut
+        from autoreel import player_face as F
+        from autoreel import thumbnail as T
+        from utils.top5 import _length
+        import tempfile
+
+        best, best_h, best_at, best_face = "", 0.0, 0.0, None
+        work = tempfile.mkdtemp(prefix="binthumb_")
+        for path, *_ in chosen[:10]:
+            src = wide(path) or path
+            for n, at in enumerate(T.timestamps(_length(src), 8)):
+                look = os.path.join(work, f"l{n}.jpg")
+                if not T._grab(src, at, look, width=512):
+                    continue
+                people = F.people(open(look, "rb").read())
+                # the biggest clearly-facing person with a face box
+                for who in people:
+                    if who["facing"] and who["face"] and who["height"] > best_h:
+                        best, best_h, best_at, best_face = src, who["height"], at, who["face"]
+        for name in os.listdir(work):
+            os.remove(os.path.join(work, name))
+        os.rmdir(work)
+        if best:
+            # one frame, face-led crop, written as a still the thumbnail
+            # code finishes (polish + logo) - no second guess by a model
+            still = os.path.join(_APP, "censored", "binscripts_face.jpg")
+            window = T.face_window(best_face)
+            at = T.sharpest_near(best, best_at, window, os.path.dirname(still))
+            if T._grab(best, at, still, vf=T.stream_filters(window, None)):
+                return still
+        for c in chosen:
             if wide(c[0]):
                 return wide(c[0])
         return chosen[0][0]
@@ -414,11 +442,22 @@ def _thumbnail(cfg, video: str, url: str, count: int = 15) -> None:
         if not vid:
             return
         out = os.path.join(_APP, "censored", "binscripts_weekly_thumb.jpg")
-        made = T.make(video, _length(video), out_path=out,
-                      logo_path=getattr(cfg.general, "thumbnail_logo", ""), style="stream",
-                      sticker_path=getattr(cfg.general, "thumbnail_sticker", ""),
-                      provider=str((cfg.clips or {}).get("llm_provider", "") or ""),
-                      text="", badge="GTA RP", mode="")
+        if video.lower().endswith(".jpg"):
+            # a chosen still (the player's face, _thumb_source): finish it
+            import shutil
+            from autoreel.thumb_polish import polish
+            shutil.copyfile(video, out)
+            polish(out)
+            logo = getattr(cfg.general, "thumbnail_logo", "")
+            if logo and os.path.isfile(logo):
+                T._stamp_logo(out, logo)
+            made = out
+        else:
+            made = T.make(video, _length(video), out_path=out,
+                          logo_path=getattr(cfg.general, "thumbnail_logo", ""), style="stream",
+                          sticker_path=getattr(cfg.general, "thumbnail_sticker", ""),
+                          provider=str((cfg.clips or {}).get("llm_provider", "") or ""),
+                          text="", badge="GTA RP", mode="")
         if not made:
             return
         _countdown_text(made, count)
