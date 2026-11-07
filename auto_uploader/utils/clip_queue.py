@@ -1068,6 +1068,18 @@ def publish(platform: str, video_path: str, caption: str,
                     print(f"[Clips] {platform}: posting the 16:9 X cut.")
             except Exception:
                 source = video_path
+        try:
+            from autoreel import clean_clip
+
+            if platform in clean_clip.NO_BANNER_PLATFORMS:
+                # TikTok: no Rumble URL in the picture (For You feed).
+                plain = clean_clip.find(video_path)
+                if plain:
+                    source = plain
+                    print(f"[Clips] {platform}: posting the copy without "
+                          f"the Rumble banner.")
+        except Exception:
+            pass
         upload, temporary = (source, "") if dry_run else \
             _censored_clip(platform, source, config)
         if not upload:

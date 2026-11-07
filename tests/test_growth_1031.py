@@ -48,7 +48,7 @@ def test_hook_is_asked_once_and_kept_for_retries(tmp_path):
 
     def asker(prompt):
         calls.append(prompt)
-        return '{"hook": "Stackswopo Gets EXPOSED By His Ex"}'
+        return '{"hook": "Stackswopo Gets EXPOSED By His Cousin"}'
 
     cfg = _cfg(tmp_path)
     a = title_hook.for_stream(cfg, "hash1", "x.ts", BASE, "TOPIC BOUL",

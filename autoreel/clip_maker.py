@@ -1414,6 +1414,9 @@ class ClipMaker:
                             else clip_strategy,
                             caption_path, self.encoder, self.preset,
                             self.crf, region,
+                            # banner drawn after (clean_clip): TikTok
+                            # gets the copy without it
+                            watermark=False,
                             motion_commands=motion_commands,
                             stack=self.stack, grade=self.grade)
             except ClipError as exc:
@@ -1424,6 +1427,12 @@ class ClipMaker:
                     jump_cut(output_path, segments, spec,
                              min_silence_s=self.jump_cut_silence_s,
                              min_seconds=self.min_seconds)
+                try:
+                    from autoreel import clean_clip
+
+                    clean_clip.keep_and_brand(output_path, watermark_filter())
+                except Exception as exc:
+                    print(f"[Clips] Clip {spec.index:02d}: banner pass failed ({exc})")
                 # The X cut: 16:9, whole game in view (autoreel/wide_clip).
                 if bool((self.config or {}).get("clips", {})
                         .get("x_wide", True)):

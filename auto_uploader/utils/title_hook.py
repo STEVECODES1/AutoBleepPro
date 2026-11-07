@@ -101,18 +101,35 @@ def clean_hook(raw: str) -> str:
     return hook
 
 
+# The prompt's own examples. 11-05 and 11-06 both came back "Johnny Cox Gets
+# Robbed In GTA RP" - a weak model copying the example, not the stream.
+EXAMPLES = {"stackswopo gets exposed by his ex", "johnny cox gets robbed in gta rp",
+            "stackswopo loses it after losing 20 games"}
+
+
+def junk_name(rest: str) -> str:
+    """'0 1 3 4 1 - 11-06-26 (FULL STREAM)' -> '11-06-26 (FULL STREAM)'.
+    A stream named in emoji/numbers says nothing; the date stays."""
+    parts = rest.split(" - ", 1)
+    if len(parts) == 2 and len(re.findall(r"[A-Za-z]", parts[0])) < 3:
+        return parts[1].strip()
+    return rest
+
+
 def hooked(base_title: str, hook: str, limit: int = MAX_TITLE) -> str:
     """'<hook> | <base without its leading "Stackswopo - ">', or base."""
     hook = clean_hook(hook)
     if not hook or not base_title:
         return base_title
-    rest = _LEAD.sub("", base_title, count=1).strip()
+    rest = junk_name(_LEAD.sub("", base_title, count=1).strip())
     out = f"{hook} | {rest}"
     return out if len(out) <= limit else base_title
 
 
-def ask(segments, stream_name: str, askers=None) -> str:
-    """One hook from the first model that gives a usable one, or ""."""
+def ask(segments, stream_name: str, askers=None, used=()) -> str:
+    """One hook from the first model that gives a usable one, or "".
+    Never one of the prompt's examples or a hook an earlier stream got."""
+    banned = EXAMPLES | {str(u).lower() for u in used if u}
     if askers is None:
         if os.environ.get("PYTEST_CURRENT_TEST"):
             return ""
@@ -133,6 +150,10 @@ def ask(segments, stream_name: str, askers=None) -> str:
             hook = clean_hook(obj.get("hook", "")) if isinstance(obj, dict) else ""
         except Exception as exc:
             print(f"[Title] {name}: no hook ({str(exc)[:80]})")
+            continue
+        if hook and hook.lower() in banned:
+            print(f"[Title] {name}: '{hook}' is a copy (example or an earlier "
+                  f"stream's title) - not used.")
             continue
         if hook:
             return hook
@@ -160,7 +181,8 @@ def for_stream(cfg, key: str, source: str, base_title: str, stream_name: str,
             segments = transcript_of(cfg, source)
         except Exception:
             segments = []
-    hook = ask(segments or [], stream_name, askers=askers)
+    used = [v.get("hook", "") for v in _load(path).values() if isinstance(v, dict)]
+    hook = ask(segments or [], stream_name, askers=askers, used=used)
     if hook and clean is not None:
         try:
             if clean(hook) != hook:      # the YouTube title cleaner had to change it
@@ -168,6 +190,11 @@ def for_stream(cfg, key: str, source: str, base_title: str, stream_name: str,
         except Exception:
             hook = ""
     title = hooked(base_title, hook) if hook else base_title
+    if title == base_title:
+        # no hook: still drop an emoji/number stream name ("0 1 3 4 1")
+        rest = _LEAD.sub("", base_title, count=1).strip()
+        if junk_name(rest) != rest:
+            title = "Stackswopo - " + junk_name(rest)
     if title == base_title:
         hook = ""
     if hook or segments:
