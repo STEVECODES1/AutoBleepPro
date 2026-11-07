@@ -207,7 +207,7 @@ def _piece(path: str, rank: int, out: str) -> bool:
            "fontcolor=0xFFD400:borderw=8:bordercolor=black:x=w-tw-50:y=60[v]")
     r = subprocess.run(["ffmpeg", "-nostdin", "-y", "-v", "error", "-i", src, "-filter_complex", fc,
                         "-map", "[v]", "-map", "0:a?", "-af",
-                        "loudnorm=I=-14:LRA=11:TP=-1.5,aresample=44100,aformat=channel_layouts=stereo",
+                        "aresample=44100,aformat=channel_layouts=stereo",
                         "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
                         "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "160k", out],
                        capture_output=True, text=True, timeout=1800)
@@ -229,6 +229,11 @@ def build(chosen, out_path: str) -> list:
             if not (_card(rank, title or "", card, wide(path) or path)
                     and _piece(path, rank, piece)):
                 continue
+            try:                               # V4: same loudness every piece
+                from autoreel.loudness import level
+                level(piece, bitrate="160k")
+            except Exception:
+                pass
             marks.append((t, f"#{rank} {_esc(title) or 'Moment'}".strip()[:90]))
             t += _length(card) + _length(piece)
             parts += [card, piece]

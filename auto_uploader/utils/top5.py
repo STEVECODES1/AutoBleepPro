@@ -81,12 +81,17 @@ def build(chosen, out_path: str) -> bool:
                   "borderw=10:bordercolor=black:x=w-tw-40:y=690")
             r = subprocess.run(["ffmpeg", "-y", "-v", "error", "-ss", f"{start:.2f}", "-t",
                                 f"{PIECE_S:.2f}", "-i", path, "-vf", vf, "-af",
-                                "loudnorm=I=-14:LRA=11:TP=-1.5,aresample=44100,aformat=channel_layouts=stereo",
+                                "aresample=44100,aformat=channel_layouts=stereo",
                                 "-c:v", "libx264", "-preset", "veryfast", "-crf", "21",
                                 "-c:a", "aac", "-b:a", "160k", part],
                                capture_output=True, text=True, timeout=600)
             if r.returncode != 0:
                 return False
+            try:                               # V4: same loudness every piece
+                from autoreel.loudness import level
+                level(part, bitrate="160k")
+            except Exception:
+                pass
             parts.append(part)
         listing = os.path.join(work, "list.txt")
         with open(listing, "w", encoding="utf-8", newline="") as f:

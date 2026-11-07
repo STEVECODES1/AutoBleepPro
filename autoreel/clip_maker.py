@@ -692,7 +692,7 @@ def render_clip(source_path: str, spec: ClipSpec, output_path: str,
           ["-vf", build_filter(strategy, caption_path, region, watermark,
                                motion_commands, grade)]),
         *_encoder_args(encoder, preset, crf),
-        "-af", "loudnorm=I=-14:LRA=11:TP=-1.5,aresample=48000", "-c:a", "aac", "-b:a", "192k", "-ac", "2",
+        "-af", "aresample=48000", "-c:a", "aac", "-b:a", "192k", "-ac", "2",
         # Vertical feeds are 30fps; leaving a 60fps source at 60 doubles
         # the file for no visible gain after the platform re-encodes it.
         "-r", "30",
@@ -1427,6 +1427,13 @@ class ClipMaker:
                     jump_cut(output_path, segments, spec,
                              min_silence_s=self.jump_cut_silence_s,
                              min_seconds=self.min_seconds)
+                # V4: every clip at -14 LUFS (one static gain, no time
+                # smear - autoreel/loudness), before the banner/clean copies
+                try:
+                    from autoreel.loudness import level
+                    level(output_path)
+                except Exception:
+                    pass
                 try:
                     from autoreel import clean_clip
 

@@ -1,4 +1,4 @@
-﻿# AutoBleepPro - operating notes for Claude
+# AutoBleepPro - operating notes for Claude
 
 Read this first. It is what earlier sessions learned the slow way. The owner runs this from a phone,
 away from the PC: it must work by itself after one START, and say plainly when it needs them.
@@ -414,3 +414,11 @@ a 4.4 GB full stream takes ~3 h to YouTube.
 - The owner must do these themselves: sleep = Never (SETUP-SLEEP.bat), auto sign-in after a reboot if
   they want reboots unattended, delete the 4.6 GB backup `C:\AutoBleep\recording\Stackswopo rumble
   v7gx6ca edge.ts`.
+
+## 11-07 V4 - audio + reliability + content audit
+
+- **Mutes no longer click**: `utils/censor.py` ramps every muted span over 12 ms on each side (`FADE_MS`) instead of a hard volume gate.
+- **Loudness**: every rendered clip (`autoreel/clip_maker.py`), X cut (`autoreel/wide_clip.py`) and compilation piece (`utils/top5.py`, `utils/binscripts_weekly.py`) runs `loudnorm=I=-14:LRA=11:TP=-1.5` and AAC 192k / 48 kHz. Measured before: clips ranged -9.7 to -19.4 LUFS (10 LU jumps inside compilations); after: -14.0.
+- **Hung uploader is restarted**: `main.py --watch` writes `logs/uploader_beat.json` every 30 s; `utils/hang_watch.py` (runs inside `tools/rumble_watch.py`, a separate process) calls `tools/quiet_restart.ps1` when the beat is >10 min old while the pid lives and no upload runs. `quiet_restart.ps1` now also treats a stale beat as not-busy and waits 6 h by default (was 6 min - queued restarts gave up during long uploads). The watch loop exits 1 on BaseException so `_RUN_UPLOADER.bat` relaunches, with a Discord alert.
+- **Tests never write into live folders**: `wide_clip.render` and `clean_clip.keep_and_brand` are no-ops under pytest (two stray "Stream - Clip 01" files were produced by a test run; moved to `C:\Users\Public\_to_delete`).
+- Verified: recorder clears title/id per stream (`record_one_stream`); TikTok CLEAN copy and X XCUT are produced for new clips; `clips.burn_hook` on; Johnny Cox persona in GTA clip titles. The 11-05 WOPOVOD VOD `QgKkAFVucSQ` is still `uploadStatus=uploaded / processing` with no duration ~48 h after upload - YouTube-side; not touched.

@@ -60,6 +60,8 @@ def keep_and_brand(clip_path: str, banner_filter: str) -> bool:
     """`clip_path` was rendered without the banner: keep a copy as the
     clean twin, then burn the banner onto clip_path itself. On any failure
     clip_path is left as it is (clean beats missing)."""
+    if os.environ.get("PYTEST_CURRENT_TEST"):
+        return False
     try:
         os.makedirs(CLEAN_DIR, exist_ok=True)
         _prune()

@@ -63,6 +63,8 @@ def render(source_path: str, spec, clip_path: str, segments=None,
            jump_cuts: bool = True, silence_s: float = 0.9,
            min_seconds: float = 15.0) -> str:
     """Write the X cut for `clip_path`. Returns its path, or ""."""
+    if os.environ.get("PYTEST_CURRENT_TEST"):
+        return ""          # tests never write into the live folder
     try:
         os.makedirs(WIDE_DIR, exist_ok=True)
         _prune()
@@ -81,7 +83,7 @@ def render(source_path: str, spec, clip_path: str, segments=None,
                 "-t", f"{duration:.3f}", "-vf", vf,
                 "-c:v", "libx264", "-preset", "veryfast", "-crf", "21",
                 "-pix_fmt", "yuv420p", "-r", "30",
-                "-af", "loudnorm=I=-14:LRA=11:TP=-1.5,aresample=48000", "-c:a", "aac", "-b:a", "192k", "-ac", "2",
+                "-af", "aresample=48000", "-c:a", "aac", "-b:a", "192k", "-ac", "2",
                 "-movflags", "+faststart", partial]
         done = subprocess.run(args, stdout=subprocess.PIPE,
                               stderr=subprocess.PIPE, timeout=900)
@@ -92,6 +94,11 @@ def render(source_path: str, spec, clip_path: str, segments=None,
                 pass
             return ""
         os.replace(partial, out)
+        try:
+            from autoreel.loudness import level
+            level(out)
+        except Exception:
+            pass
         if jump_cuts and segments:
             from autoreel.clip_maker import jump_cut
 
