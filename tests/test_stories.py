@@ -42,7 +42,7 @@ def test_pick_asks_the_model_with_the_whole_transcript():
 
     def ask(prompt):
         seen.append(prompt)
-        return json.dumps({"stories": [{"start": 300, "end": 1800, "title": "Stackswopo Reads Every Line",
+        return json.dumps({"stories": [{"start": 300, "end": 1800, "title": "Stackswopo Reads Line",
                                         "thumb": "WOW"}]})
     got = stories.pick(segs, 3600, 1, 600, 2700, askers=[("fake", ask)])
     assert got and got[0]["model"] == "fake"
