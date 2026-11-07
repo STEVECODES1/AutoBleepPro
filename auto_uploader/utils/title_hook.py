@@ -107,6 +107,26 @@ EXAMPLES = {"stackswopo gets exposed by his ex", "johnny cox gets robbed in gta 
             "stackswopo loses it after losing 20 games"}
 
 
+_FILLER = {"stackswopo", "johnny", "cox", "gets", "gta", "with", "from", "after",
+            "their", "into", "over", "about", "this", "that", "goes", "gets", "his",
+            "her", "they", "them", "while", "when", "wild", "full", "stream",
+            "times", "time", "just", "really", "gone", "crazy"}
+
+
+def grounded(hook: str, transcript: str) -> bool:
+    """True when the hook's own words are really in the stream (11-07:
+    "Gets Shot Nine Times" and "Gets Robbed" were invented). At least two
+    thirds of its content words must be said somewhere."""
+    said = set(re.findall(r"[a-z']+", str(transcript).lower()))
+    words = [w for w in re.findall(r"[a-z']+", hook.lower())
+             if len(w) > 2 and w not in _FILLER]
+    if not words:
+        return False
+    stems = lambda w: {w, w.rstrip("s"), w.rstrip("ed"), w.rstrip("ing"), w + "s"}
+    found = sum(1 for w in words if stems(w) & said)
+    return found * 3 >= len(words) * 2
+
+
 def junk_name(rest: str) -> str:
     """'0 1 3 4 1 - 11-06-26 (FULL STREAM)' -> '11-06-26 (FULL STREAM)'.
     A stream named in emoji/numbers says nothing; the date stays."""
@@ -150,6 +170,9 @@ def ask(segments, stream_name: str, askers=None, used=()) -> str:
             hook = clean_hook(obj.get("hook", "")) if isinstance(obj, dict) else ""
         except Exception as exc:
             print(f"[Title] {name}: no hook ({str(exc)[:80]})")
+            continue
+        if hook and not grounded(hook, text):
+            print(f"[Title] {name}: '{hook}' is not in the transcript - not used.")
             continue
         if hook and hook.lower() in banned:
             print(f"[Title] {name}: '{hook}' is a copy (example or an earlier "

@@ -39,7 +39,7 @@ def test_too_long_keeps_the_plain_title():
 
 
 def _segments():
-    return [{"start": i * 10.0, "text": f"line number {i} something happened here"}
+    return [{"start": i * 10.0, "text": f"line number {i} something happened here, exposed by his ex and his cousin, caught lying"}
             for i in range(60)]
 
 
@@ -179,3 +179,9 @@ def test_no_full_link_yet_means_no_change(tmp_path, monkeypatch):
     svc = _Svc("x")
     assert short_links.run(_cfg(tmp_path), service=svc, records=[rec], say=lambda *a: None) == 0
     assert not svc.updates
+
+
+def test_hook_not_in_the_transcript_is_not_used():
+    assert not title_hook.grounded('Stackswopo Gets Shot Nine Times', 'he took a drink and laughed')
+    assert title_hook.grounded('Stackswopo Talks Joe Exotic', 'you talking about joe exotic')
+
