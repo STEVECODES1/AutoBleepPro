@@ -179,11 +179,21 @@ def _mute_full_quality(source_path: str, whisper_wav: str, engine, violations,
     # ffmpeg's expression parser can't take hundreds of terms in one
     # expression ("Cannot allocate memory"), so split the spans across a
     # chain of volume filters, 40 spans each.
+    # V4 (11-07): a hard gate (volume=0 on/off) clicks at every edge. Each
+    # span now ramps down over FADE_MS before it and back up after it, so a
+    # mute sounds like a dip, not a pop. The gain is the product of one
+    # clamped ramp per span, evaluated per 10 ms frame.
     stages = []
-    for i in range(0, len(spans), 40):
-        expr = "+".join(f"between(t,{s / 1000:.3f},{e / 1000:.3f})"
-                        for s, e in spans[i:i + 40])
-        stages.append(f"volume=volume=0:enable='{expr}'")
+    f = FADE_MS / 1000.0
+    for i in range(0, len(spans), 25):
+        terms = []
+        for s, e in spans[i:i + 25]:
+            a, b = s / 1000.0, e / 1000.0
+            # 1 outside, 0 inside, linear across [a-f, a] and [b, b+f]
+            terms.append(f"max(min((({a:.3f})-t)/{f:.3f},1)\\,0)"
+                         f"+max(min((t-({b:.3f}))/{f:.3f},1)\\,0)")
+        expr = "*".join(f"min({t}\\,1)" for t in terms)
+        stages.append(f"volume=volume='{expr}':eval=frame")
     script = out_wav + ".af.txt"
     try:
         with open(script, "w", encoding="utf-8") as fh:
@@ -220,6 +230,7 @@ def _mute_full_quality(source_path: str, whisper_wav: str, engine, violations,
 # Below this the grade is quick anyway, and a clip is not worth a second
 # ffmpeg running alongside Whisper.
 PRERENDER_MIN_SECONDS = 600
+FADE_MS = 12          # ramp on each side of a mute (no click)
 
 
 def _start_prerender(source_path: str, output_video_path: str, speed: dict):

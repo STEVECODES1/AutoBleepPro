@@ -3,7 +3,9 @@
 # no clip post in progress, and no ffmpeg / ffprobe / python / node child.
 # 10-16: node.exe (the Playwright driver) was not counted and the marker did
 # not exist, so this killed a full-stream upload at 75%. Gives up after 6 min.
-param([int]$Minutes = 6)
+param([int]$Minutes = 360)
+# V4 (11-07): default 6 h, not 6 min - a restart queued during a full-stream
+# upload used to give up and the new code never went live.
 $root = 'D:\AutoBleepPro-git\auto_uploader'
 $deadline = (Get-Date).AddMinutes($Minutes)
 while ((Get-Date) -lt $deadline) {
@@ -25,7 +27,15 @@ while ((Get-Date) -lt $deadline) {
     # no marker in sight. Uploads touch this every 15 s (utils/upload_beat).
     $beat = "$root\logs\uploading.json"
     if ((Test-Path $beat) -and (((Get-Date) - (Get-Item $beat).LastWriteTime).TotalMinutes -lt 10)) { $processing = $true }
-    if ([int]$busy -eq 0 -and $kids.Count -eq 0 -and -not $processing -and $main) {
+    # V4 (11-07): a HUNG watch loop (heartbeat older than 10 min while the
+    # process lives, no upload running) is restarted whatever else says.
+    $hung = $false
+    $beatf = "$root\logs\uploader_beat.json"
+    if ($main -and (Test-Path $beatf) -and -not $processing) {
+        $age = ((Get-Date) - (Get-Item $beatf).LastWriteTime).TotalMinutes
+        if ($age -gt 10) { $hung = $true; "$(Get-Date -Format HH:mm:ss) heartbeat is $([int]$age) min old - the loop is hung" }
+    }
+    if ($hung -or ([int]$busy -eq 0 -and $kids.Count -eq 0 -and -not $processing -and $main)) {
         foreach ($p in @($main)) { Stop-Process -Id $p.ProcessId -Force }
         "$(Get-Date -Format HH:mm:ss) stopped uploader; keepalive restarts it"
         exit 0

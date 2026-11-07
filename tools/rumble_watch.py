@@ -481,6 +481,11 @@ def main():
         drive_guard.start("exit")
     except Exception:
         pass
+    try:  # V4 (11-07): restart a HUNG uploader from outside it
+        from utils import hang_watch
+        hang_watch.start()
+    except Exception:
+        pass
     os.makedirs(os.path.dirname(LOG), exist_ok=True)
     log(f"watching Rumble: {', '.join(CHANNELS)}")
     while True:

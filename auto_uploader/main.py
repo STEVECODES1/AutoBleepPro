@@ -6087,8 +6087,21 @@ def main(argv=None) -> int:
             next_retry_sweep = time.time() + RETRY_SWEEP_SECONDS
             next_brain = time.time() + 30
             next_live = time.time() + 30
+            _beat_path = os.path.join(cfg.general.logs_folder, "uploader_beat.json")
+            _next_beat = 0.0
             while True:
                 time.sleep(1)
+                # V4 (11-07): a heartbeat every 30 s. utils/brain alerts when
+                # it goes stale and tools/quiet_restart treats a stale beat
+                # as "not busy" - a HUNG loop (not a dead one; the keepalive
+                # already restarts a dead one) never went noticed before.
+                if time.time() >= _next_beat:
+                    _next_beat = time.time() + 30
+                    try:
+                        with open(_beat_path, "w", encoding="utf-8") as _fh:
+                            json.dump({"pid": os.getpid(), "at": time.time()}, _fh)
+                    except OSError:
+                        pass
                 # Clips cut while the stream is still LIVE - see
                 # utils/live_clipper. On its own thread: a window takes
                 # minutes and the queue must keep posting meanwhile.
@@ -6184,6 +6197,22 @@ def main(argv=None) -> int:
         except KeyboardInterrupt:
             print("\nStopping...")
             watcher.stop()
+        except BaseException as exc:          # MemoryError, a C-level crash...
+            # Say so and exit non-zero: _RUN_UPLOADER.bat relaunches.
+            import traceback
+            print(f"[Watch] FATAL: the watch loop died: {exc!r}")
+            traceback.print_exc()
+            try:
+                from utils.brain import send_alert
+                send_alert("Uploader crashed - restarting",
+                           f"{type(exc).__name__}: {str(exc)[:300]}", urgent=True)
+            except Exception:
+                pass
+            try:
+                watcher.stop()
+            except Exception:
+                pass
+            return 1
         return 0
 
     parser.print_help()

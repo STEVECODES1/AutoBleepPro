@@ -207,7 +207,7 @@ def _piece(path: str, rank: int, out: str) -> bool:
            "fontcolor=0xFFD400:borderw=8:bordercolor=black:x=w-tw-50:y=60[v]")
     r = subprocess.run(["ffmpeg", "-nostdin", "-y", "-v", "error", "-i", src, "-filter_complex", fc,
                         "-map", "[v]", "-map", "0:a?", "-af",
-                        "aresample=44100,aformat=channel_layouts=stereo",
+                        "loudnorm=I=-14:LRA=11:TP=-1.5,aresample=44100,aformat=channel_layouts=stereo",
                         "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
                         "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "160k", out],
                        capture_output=True, text=True, timeout=1800)

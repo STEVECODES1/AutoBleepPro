@@ -692,7 +692,7 @@ def render_clip(source_path: str, spec: ClipSpec, output_path: str,
           ["-vf", build_filter(strategy, caption_path, region, watermark,
                                motion_commands, grade)]),
         *_encoder_args(encoder, preset, crf),
-        "-c:a", "aac", "-b:a", "128k", "-ac", "2",
+        "-af", "loudnorm=I=-14:LRA=11:TP=-1.5,aresample=48000", "-c:a", "aac", "-b:a", "192k", "-ac", "2",
         # Vertical feeds are 30fps; leaving a 60fps source at 60 doubles
         # the file for no visible gain after the platform re-encodes it.
         "-r", "30",

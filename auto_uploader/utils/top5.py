@@ -81,7 +81,7 @@ def build(chosen, out_path: str) -> bool:
                   "borderw=10:bordercolor=black:x=w-tw-40:y=690")
             r = subprocess.run(["ffmpeg", "-y", "-v", "error", "-ss", f"{start:.2f}", "-t",
                                 f"{PIECE_S:.2f}", "-i", path, "-vf", vf, "-af",
-                                "aresample=44100,aformat=channel_layouts=stereo",
+                                "loudnorm=I=-14:LRA=11:TP=-1.5,aresample=44100,aformat=channel_layouts=stereo",
                                 "-c:v", "libx264", "-preset", "veryfast", "-crf", "21",
                                 "-c:a", "aac", "-b:a", "160k", part],
                                capture_output=True, text=True, timeout=600)
