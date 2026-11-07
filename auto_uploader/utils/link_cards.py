@@ -46,6 +46,11 @@ def start(first_delay_s: float = 120) -> threading.Thread:
         while True:
             run_once()
             weekly_top5()
+            try:
+                from utils.binscripts_weekly import start_if_due
+                start_if_due()
+            except Exception:
+                pass
             time.sleep(EVERY_S)
 
     t = threading.Thread(target=loop, name="link-cards", daemon=True)
